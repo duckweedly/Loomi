@@ -1,22 +1,16 @@
-import { type CSSProperties, type PointerEvent, useState } from 'react'
+import { type CSSProperties, type PointerEvent } from 'react'
 import { ConfigProvider, ThemeProvider } from '@lobehub/ui'
 import { AlertCircle, PanelLeft, PanelRight, Search } from 'lucide-react'
 import { motion } from 'motion/react'
-import type { RightPanelItemId } from './rightPanelItems'
 import { ChatCanvas } from './components/ChatCanvas'
 import { RunTimeline } from './components/RunTimeline'
 import { ThreadSidebar } from './components/ThreadSidebar'
 import { useWorkspaceState } from './state'
+import { filterThreadsByMode } from './threadFilters'
+import { useWorkspaceShellState } from './useWorkspaceShellState'
 
 export default function App() {
-  const [runDetailsOpen, setRunDetailsOpen] = useState(false)
-  const [rightPanelMenuOpen, setRightPanelMenuOpen] = useState(false)
-  const [rightPanelOpen, setRightPanelOpen] = useState(false)
-  const [artifactOpen, setArtifactOpen] = useState(false)
-  const [selectedRightPanelId, setSelectedRightPanelId] = useState<RightPanelItemId>('preview')
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
-  const [sidebarWidth, setSidebarWidth] = useState(292)
-  const [theme, setTheme] = useState<'dark' | 'light'>('dark')
+  const shell = useWorkspaceShellState()
   const {
     threads,
     selectedThread,
@@ -24,25 +18,37 @@ export default function App() {
     messages,
     run,
     loading,
+    error,
+    dataSourceMode,
+    backendCapability,
+    backendUnavailableAttempted,
+    selectedRuntimeScript,
+    selectRuntimeScript,
     refresh,
     selectThread,
+    createThread,
+    renameThread,
+    archiveThread,
     sendMessage,
+    stopRun,
   } = useWorkspaceState()
 
-  const workspaceStyle = { '--sidebar-width': `${sidebarWidth}px` } as CSSProperties
+  const selectedMode = selectedThread?.mode ?? 'chat'
+  const visibleThreads = filterThreadsByMode(threads, selectedMode)
+  const workspaceStyle = { '--sidebar-width': `${shell.sidebarWidth}px` } as CSSProperties
   const workspaceClass = [
     'workspace-grid',
-    sidebarCollapsed ? 'sidebar-collapsed' : '',
-    rightPanelOpen ? 'right-tools-open' : '',
+    shell.sidebarCollapsed ? 'sidebar-collapsed' : '',
+    shell.rightPanelOpen ? 'right-tools-open' : '',
   ].filter(Boolean).join(' ')
 
   const handleSidebarResize = (event: PointerEvent<HTMLDivElement>) => {
     const startX = event.clientX
-    const startWidth = sidebarWidth
+    const startWidth = shell.sidebarWidth
     event.currentTarget.setPointerCapture(event.pointerId)
 
     const handlePointerMove = (moveEvent: globalThis.PointerEvent) => {
-      setSidebarWidth(Math.min(380, Math.max(248, startWidth + moveEvent.clientX - startX)))
+      shell.setSidebarWidth(Math.min(380, Math.max(248, startWidth + moveEvent.clientX - startX)))
     }
 
     const handlePointerUp = () => {
@@ -57,18 +63,18 @@ export default function App() {
   return (
     <ConfigProvider motion={motion}>
       <ThemeProvider
-        appearance={theme}
+        appearance={shell.theme}
         customTheme={{
           primaryColor: 'purple',
           neutralColor: 'slate',
         }}
       >
-        <div className="app-shell" data-theme={theme}>
+        <div className="app-shell" data-theme={shell.theme}>
           <main className={workspaceClass} style={workspaceStyle}>
-            {!sidebarCollapsed && (
+            {!shell.sidebarCollapsed && (
               <aside className="sidebar-shell glass-panel">
                 <div className="sidebar-titlebar">
-                  <button className="titlebar-button" aria-label="Collapse sidebar" onClick={() => setSidebarCollapsed(true)}>
+                  <button className="titlebar-button" aria-label="Collapse sidebar" onClick={() => shell.setSidebarCollapsed(true)}>
                     <PanelLeft size={15} strokeWidth={1.7} />
                   </button>
                   <button className="titlebar-button" aria-label="Search">
@@ -76,23 +82,26 @@ export default function App() {
                   </button>
                 </div>
                 <ThreadSidebar
-                  collapsed={sidebarCollapsed}
-                  threads={threads}
+                  collapsed={shell.sidebarCollapsed}
+                  threads={visibleThreads}
                   selectedThreadId={selectedThreadId}
-                  run={run}
-                  theme={theme}
+                  selectedMode={selectedMode}
+                  theme={shell.theme}
                   onRefresh={() => void refresh()}
                   onSelectThread={selectThread}
-                  onToggleTheme={() => setTheme((value) => value === 'dark' ? 'light' : 'dark')}
+                  onCreateThread={() => void createThread()}
+                  onRenameThread={(threadId, title) => void renameThread(threadId, title)}
+                  onArchiveThread={(threadId) => void archiveThread(threadId)}
+                  onToggleTheme={shell.toggleTheme}
                 />
               </aside>
             )}
-            {!sidebarCollapsed && <div className="sidebar-resizer" role="separator" aria-orientation="vertical" onPointerDown={handleSidebarResize} />}
+            {!shell.sidebarCollapsed && <div className="sidebar-resizer" role="separator" aria-orientation="vertical" onPointerDown={handleSidebarResize} />}
             <section className="main-region">
               <header className="main-titlebar">
                 <div className="titlebar-left">
-                  {sidebarCollapsed && (
-                    <button className="titlebar-button" aria-label="Open sidebar" onClick={() => setSidebarCollapsed(false)}>
+                  {shell.sidebarCollapsed && (
+                    <button className="titlebar-button" aria-label="Open sidebar" onClick={() => shell.setSidebarCollapsed(false)}>
                       <PanelRight size={15} strokeWidth={1.7} />
                     </button>
                   )}
@@ -121,57 +130,43 @@ export default function App() {
                   <button
                     className="titlebar-button"
                     aria-label="Open run details"
-                    onClick={() => {
-                      setRunDetailsOpen((value) => !value)
-                      setRightPanelMenuOpen(false)
-                      setRightPanelOpen(false)
-                    }}
+                    onClick={shell.toggleRunDetails}
                   >
                     <AlertCircle size={15} strokeWidth={1.7} />
                   </button>
                   <button
                     className="titlebar-button"
                     aria-label="Open right tools"
-                    onClick={() => {
-                      setRightPanelMenuOpen((value) => !value)
-                      setRunDetailsOpen(false)
-                      setArtifactOpen(false)
-                    }}
+                    onClick={shell.toggleRightPanelMenu}
                   >
                     <PanelRight size={15} strokeWidth={1.7} />
                   </button>
                 </div>
               </header>
               <ChatCanvas
-                sidebarCollapsed={sidebarCollapsed}
+                sidebarCollapsed={shell.sidebarCollapsed}
                 thread={selectedThread}
                 messages={messages}
                 run={run}
                 loading={loading}
+                error={error}
+                dataSourceMode={dataSourceMode}
+                backendCapability={backendCapability}
+                backendUnavailableAttempted={backendUnavailableAttempted}
                 onSendMessage={(content) => void sendMessage(content)}
               />
             </section>
             <RunTimeline
               run={run}
-              runDetailsOpen={runDetailsOpen}
-              rightPanelMenuOpen={rightPanelMenuOpen}
-              rightToolsOpen={rightPanelOpen}
-              artifactOpen={artifactOpen}
-              selectedPanelId={selectedRightPanelId}
-              onSelectPanel={(panelId) => {
-                setSelectedRightPanelId(panelId)
-                setRightPanelOpen(true)
-                setRightPanelMenuOpen(false)
-                setRunDetailsOpen(false)
-                setArtifactOpen(false)
-              }}
-              onCloseRunDetails={() => setRunDetailsOpen(false)}
-              onCloseRightTools={() => setRightPanelOpen(false)}
-              onOpenArtifact={() => {
-                setArtifactOpen(true)
-                setRightPanelOpen(false)
-              }}
-              onCloseArtifact={() => setArtifactOpen(false)}
+              runDetailsOpen={shell.runDetailsOpen}
+              rightPanelMenuOpen={shell.rightPanelMenuOpen}
+              rightToolsOpen={shell.rightPanelOpen}
+              selectedPanelId={shell.selectedRightPanelId}
+              onSelectPanel={shell.openRightPanel}
+              onOpenArtifact={shell.openArtifact}
+              onStopRun={() => void stopRun()}
+              selectedRuntimeScript={selectedRuntimeScript}
+              onSelectRuntimeScript={selectRuntimeScript}
             />
           </main>
         </div>

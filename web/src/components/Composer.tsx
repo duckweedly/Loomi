@@ -4,10 +4,11 @@ import { ArrowUp, Paperclip } from 'lucide-react'
 
 type Props = {
   disabled?: boolean
+  placeholder?: string
   onSubmit: (content: string) => void
 }
 
-export function Composer({ disabled, onSubmit }: Props) {
+export function Composer({ disabled, placeholder = 'Message Loomi', onSubmit }: Props) {
   const [value, setValue] = useState('')
 
   function handleSubmit(event: FormEvent) {
@@ -28,7 +29,7 @@ export function Composer({ disabled, onSubmit }: Props) {
         onKeyDown={(event) => {
           if (event.key === 'Enter' && !event.shiftKey) handleSubmit(event)
         }}
-        placeholder="Message Loomi"
+        placeholder={placeholder}
         rows={1}
         value={value}
       />
