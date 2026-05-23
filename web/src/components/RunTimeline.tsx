@@ -1,4 +1,4 @@
-import type { Run } from '../domain'
+import type { Run, RuntimeScriptId } from '../domain'
 import type { RightPanelItemId } from '../rightPanelItems'
 import { RightPanelMenu } from './RightPanelMenu'
 import { RightToolDrawer } from './RightToolDrawer'
@@ -12,6 +12,9 @@ type Props = {
   selectedPanelId: RightPanelItemId
   onSelectPanel: (panelId: RightPanelItemId) => void
   onOpenArtifact: () => void
+  onStopRun?: () => void
+  selectedRuntimeScript?: RuntimeScriptId
+  onSelectRuntimeScript?: (scriptId: RuntimeScriptId) => void
 }
 
 export function RunTimeline({
@@ -22,10 +25,13 @@ export function RunTimeline({
   selectedPanelId,
   onSelectPanel,
   onOpenArtifact,
+  onStopRun,
+  selectedRuntimeScript,
+  onSelectRuntimeScript,
 }: Props) {
   return (
     <>
-      <RunRail run={run} open={runDetailsOpen} onOpenArtifact={onOpenArtifact} />
+      <RunRail run={run} open={runDetailsOpen} onOpenArtifact={onOpenArtifact} onStopRun={onStopRun} selectedRuntimeScript={selectedRuntimeScript} onSelectRuntimeScript={onSelectRuntimeScript} />
       <RightPanelMenu open={rightPanelMenuOpen} selectedPanelId={selectedPanelId} onSelectPanel={onSelectPanel} />
       <RightToolDrawer open={rightToolsOpen} selectedPanelId={selectedPanelId} />
     </>

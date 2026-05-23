@@ -1,15 +1,30 @@
 import { useState } from 'react'
-import { Check, ChevronDown, FileText, Folder, Globe2 } from 'lucide-react'
-import type { Run } from '../domain'
+import { Check, ChevronDown, FileText, Folder, Globe2, Minus } from 'lucide-react'
+import type { Run, RuntimeScriptId } from '../domain'
 import { AgentStateMotion } from './AgentStateMotion'
 
 type Props = {
   run: Run | null
   open: boolean
   onOpenArtifact: () => void
+  onStopRun?: () => void
+  selectedRuntimeScript?: RuntimeScriptId
+  onSelectRuntimeScript?: (scriptId: RuntimeScriptId) => void
 }
 
-export function RunRail({ run, open, onOpenArtifact }: Props) {
+function getEventClassName(status: Run['events'][number]['status']) {
+  if (status === 'running') return 'progress-row active'
+  if (status === 'failed' || status === 'stopped') return 'progress-row failed'
+  return 'progress-row done'
+}
+
+function getEventMark(event: Run['events'][number], index: number) {
+  if (event.status === 'running') return index + 1
+  if (event.status === 'failed' || event.status === 'stopped') return <Minus size={10} />
+  return <Check size={11} />
+}
+
+export function RunRail({ run, open, onOpenArtifact, onStopRun, selectedRuntimeScript = 'success', onSelectRuntimeScript }: Props) {
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set())
   const toggleSection = (section: string) => {
     setCollapsedSections((current) => {
@@ -28,11 +43,18 @@ export function RunRail({ run, open, onOpenArtifact }: Props) {
           <ChevronDown size={18} />
         </button>
         <div className="rail-card-body progress-list">
-          <AgentStateMotion run={run} />
-          {run?.status === 'stopped' && <div className="progress-row done"><span className="progress-mark"><Check size={15} /></span><span>stopped</span><small>Now</small></div>}
+          <AgentStateMotion run={run} compact />
+          {onSelectRuntimeScript && (
+            <div className="runtime-script-switch compact" aria-label="Mock runtime script">
+              <span>Scenario</span>
+              <button className={selectedRuntimeScript === 'success' ? 'selected' : undefined} onClick={() => onSelectRuntimeScript('success')}>Success</button>
+              <button className={selectedRuntimeScript === 'failure' ? 'selected' : undefined} onClick={() => onSelectRuntimeScript('failure')}>Fail</button>
+            </div>
+          )}
+          {run?.status === 'running' && onStopRun && <button className="runtime-stop-button ghost" onClick={onStopRun}>Stop run</button>}
           {run?.events.map((event, index) => (
-            <div key={event.id} className={event.status === 'running' ? 'progress-row active' : 'progress-row done'}>
-              <span className="progress-mark">{event.status === 'running' ? index + 1 : <Check size={15} />}</span>
+            <div key={event.id} className={getEventClassName(event.status)}>
+              <span className="progress-mark">{getEventMark(event, index)}</span>
               <span>{event.detail}</span>
               <small>{event.time}</small>
             </div>

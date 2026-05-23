@@ -1,11 +1,13 @@
 import type { ApiClient } from './apiClient'
-import type { Message, Run } from './domain'
+import type { Message, Run, RuntimeScriptId } from './domain'
 import { messages, runs, threads } from './mockData'
+import { mockExecutionAdapter } from './runtime/mockExecutionAdapter'
 
 let mockId = 0
 let threadStore = [...threads]
 let messageStore = [...messages]
 let runStore = runs.map((run) => ({ ...run, events: [...run.events] }))
+let selectedRuntimeScriptId: RuntimeScriptId = 'success'
 
 function nextMockId(prefix: string) {
   mockId += 1
@@ -13,7 +15,7 @@ function nextMockId(prefix: string) {
 }
 
 function cloneRun(run: Run): Run {
-  return { ...run, events: [...run.events] }
+  return { ...run, events: [...run.events], assistantDraft: run.assistantDraft ? { ...run.assistantDraft } : undefined }
 }
 
 function createIdleRun(threadId: string): Run {
@@ -25,6 +27,15 @@ function createIdleRun(threadId: string): Run {
     context: 'Ready',
     events: [],
   }
+}
+
+function updateRunStore(run: Run) {
+  const exists = runStore.some((item) => item.id === run.id || item.threadId === run.threadId)
+  runStore = exists ? runStore.map((item) => (item.id === run.id || item.threadId === run.threadId ? cloneRun(run) : item)) : [cloneRun(run), ...runStore]
+}
+
+export function setMockRuntimeScript(scriptId: RuntimeScriptId) {
+  selectedRuntimeScriptId = scriptId
 }
 
 export const mockApiClient: ApiClient = {
@@ -78,90 +89,46 @@ export const mockApiClient: ApiClient = {
   },
 
   async sendMessage(threadId: string, content: string) {
-    const now = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    const userMessage: Message = {
-      id: `msg-${nextMockId('mock')}`,
-      threadId,
-      role: 'user',
-      content,
-      createdAt: now,
-    }
-    const assistantMessage: Message = {
-      id: `msg-${nextMockId('mock')}-assistant`,
-      threadId,
-      role: 'assistant',
-      content: 'Queued. I will align the shell, update the run rail, and keep the workspace compact.',
-      createdAt: now,
-      toolCalls: [
-        {
-          id: `tool-${nextMockId('mock')}`,
-          name: 'compose_workspace',
-          status: 'running',
-          summary: 'Updating mock workspace state.',
-          input: content,
-          output: 'Pending',
-        },
-      ],
-    }
-    messageStore = [...messageStore, userMessage, assistantMessage]
+    const userMessage = await mockExecutionAdapter.sendMessage(threadId, content)
+    messageStore = [...messageStore, userMessage]
 
-    const currentRun = runStore.find((run) => run.threadId === threadId)
-    const run: Run = currentRun
-      ? {
-          ...currentRun,
-          status: 'running',
-          events: [
-            ...currentRun.events,
-            {
-              id: `evt-${nextMockId('mock')}`,
-              type: 'message.queued',
-              label: 'Queued',
-              detail: 'New message received',
-              time: 'Now',
-              status: 'running',
-            },
-          ],
-        }
-      : {
-          ...createIdleRun(threadId),
-          status: 'running',
-          context: '12k / 128k',
-          events: [
-            {
-              id: `evt-${nextMockId('mock')}`,
-              type: 'message.queued',
-              label: 'Queued',
-              detail: 'New message received',
-              time: 'Now',
-              status: 'running',
-            },
-          ],
-        }
-    runStore = currentRun ? runStore.map((item) => (item.threadId === threadId ? run : item)) : [run, ...runStore]
-    threadStore = threadStore.map((thread) => (thread.id === threadId ? { ...thread, runStatus: 'running', updatedAt: 'Now' } : thread))
+    const run = await mockExecutionAdapter.createRun(threadId, userMessage.id, selectedRuntimeScriptId)
+    updateRunStore(run)
+    await mockExecutionAdapter.subscribeRunEvents(threadId, run.id, (event) => {
+      const current = runStore.find((item) => item.id === run.id) ?? run
+      const next: Run = {
+        ...current,
+        status: event.status,
+        events: [...current.events, event],
+        assistantDraft: event.assistantDelta
+          ? { content: `${current.assistantDraft?.content ?? ''}${event.assistantDelta}`, status: 'drafting' }
+          : current.assistantDraft,
+        completedAt: event.status === 'completed' || event.status === 'failed' || event.status === 'stopped' ? event.time : current.completedAt,
+      }
+      updateRunStore(next)
+    })
 
-    return { messages: await this.getThreadMessages(threadId), run: cloneRun(run) }
+    const scriptRun = runStore.find((item) => item.id === run.id) ?? run
+    let finalRun = scriptRun
+    if (selectedRuntimeScriptId === 'success') {
+      const completed = await mockExecutionAdapter.completeRun(threadId, run.id, scriptRun.assistantDraft?.content || '已完成一次模拟执行。')
+      messageStore = [...messageStore, completed.message]
+      finalRun = completed.run
+      updateRunStore(finalRun)
+    } else if (selectedRuntimeScriptId === 'failure') {
+      finalRun = { ...scriptRun, assistantDraft: { content: scriptRun.assistantDraft?.content ?? '', status: 'failed' } }
+      updateRunStore(finalRun)
+    }
+
+    threadStore = threadStore.map((thread) => (thread.id === threadId ? { ...thread, runStatus: finalRun.status, updatedAt: 'Now' } : thread))
+    return { messages: await this.getThreadMessages(threadId), run: cloneRun(finalRun) }
   },
 
   async stopRun(runId: string) {
     const run = runStore.find((item) => item.id === runId)
     if (!run) throw new Error('Run not found')
-    const stopped: Run = {
-      ...run,
-      status: 'stopped',
-      events: [
-        ...run.events,
-        {
-          id: `evt-${nextMockId('mock')}`,
-          type: 'run.stopped',
-          label: 'Stopped',
-          detail: 'Stopped by user',
-          time: 'Now',
-          status: 'stopped',
-        },
-      ],
-    }
-    runStore = runStore.map((item) => (item.id === runId ? stopped : item))
+    const stopped = await mockExecutionAdapter.stopRun(run.threadId, runId)
+    updateRunStore(stopped)
     threadStore = threadStore.map((thread) => (thread.id === stopped.threadId ? { ...thread, runStatus: 'stopped' } : thread))
     return cloneRun(stopped)
   },

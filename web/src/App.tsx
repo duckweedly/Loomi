@@ -21,6 +21,10 @@ export default function App() {
     loading,
     error,
     dataSourceMode,
+    backendCapability,
+    backendUnavailableAttempted,
+    selectedRuntimeScript,
+    selectRuntimeScript,
     refresh,
     selectThread,
     createThread,
@@ -149,6 +153,8 @@ export default function App() {
                 error={error}
                 dataSourceMode={dataSourceMode}
                 streamState={streamState}
+                backendCapability={backendCapability}
+                backendUnavailableAttempted={backendUnavailableAttempted}
                 onSendMessage={(content) => void sendMessage(content)}
                 onStopRun={() => void stopRun()}
               />
@@ -161,6 +167,9 @@ export default function App() {
               selectedPanelId={shell.selectedRightPanelId}
               onSelectPanel={shell.openRightPanel}
               onOpenArtifact={shell.openArtifact}
+              onStopRun={() => void stopRun()}
+              selectedRuntimeScript={selectedRuntimeScript}
+              onSelectRuntimeScript={dataSourceMode === 'mock' ? selectRuntimeScript : undefined}
             />
           </main>
         </div>

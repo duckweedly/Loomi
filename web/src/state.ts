@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { apiClient } from './apiClient'
-import type { Message, Run, RunEvent, StreamState, Thread } from './domain'
+import { apiClient, executionAdapter } from './apiClient'
+import { setMockRuntimeScript } from './mockApiClient'
+import type { BackendCapabilityState, Message, Run, RunEvent, RuntimeEvent, RuntimeScriptId, StaleEventGuard, StreamState, Thread, ThreadRuntimeState } from './domain'
 import { createNextThreadTitle } from './threadTitles'
 
 type RefreshResult = {
@@ -21,6 +22,10 @@ export function shouldApplyWorkspaceRefresh(result: RefreshResult) {
   return result.requestedThreadId === result.currentSelectedThreadId
 }
 
+export function shouldSelectWorkspaceRefreshThread({ requestedThreadId, resolvedThreadId, currentSelectedThreadId }: { requestedThreadId: string; resolvedThreadId: string; currentSelectedThreadId: string }) {
+  return Boolean(resolvedThreadId) && resolvedThreadId !== requestedThreadId && requestedThreadId === currentSelectedThreadId
+}
+
 export function shouldApplySendMessageResult({ requestedThreadId, currentSelectedThreadId }: { requestedThreadId: string; currentSelectedThreadId: string }) {
   return requestedThreadId === currentSelectedThreadId
 }
@@ -37,6 +42,58 @@ export function mergeRunEvents(existing: RunEvent[], incoming: RunEvent[]) {
   return [...byKey.values()].sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0))
 }
 
+export function createThreadRuntimeState(input: Partial<ThreadRuntimeState> = {}): ThreadRuntimeState {
+  return {
+    activeRunId: input.activeRunId ?? null,
+    runsById: input.runsById ?? {},
+    selectedScriptId: input.selectedScriptId ?? 'success',
+    backendCapability: input.backendCapability ?? 'available',
+    lastFailureReason: input.lastFailureReason,
+  }
+}
+
+export function getActiveRuntimeRun(runtimeState: ThreadRuntimeState | null | undefined) {
+  if (!runtimeState?.activeRunId) return null
+  return runtimeState.runsById[runtimeState.activeRunId] ?? null
+}
+
+export function shouldApplyRuntimeEvent(guard: StaleEventGuard) {
+  return guard.requestedThreadId === guard.currentSelectedThreadId && guard.runId === guard.activeRunId
+}
+
+export function createRuntimeStateForThread(backendCapability: BackendCapabilityState = 'available', selectedScriptId: RuntimeScriptId = 'success') {
+  return createThreadRuntimeState({ backendCapability, selectedScriptId })
+}
+
+export function shouldBlockRuntimeSubmit(run: Run | null) {
+  return run?.status === 'pending' || run?.status === 'running'
+}
+
+export function appendRuntimeEventToRun(run: Run, event: RuntimeEvent): Run {
+  return {
+    ...run,
+    status: event.status,
+    events: [...run.events, event],
+    completedAt: event.status === 'completed' || event.status === 'failed' || event.status === 'stopped' ? event.time : run.completedAt,
+  }
+}
+
+export function applyAssistantDeltaToRun(run: Run, delta: string): Run {
+  const current = run.assistantDraft?.content ?? ''
+  return {
+    ...run,
+    assistantDraft: {
+      ...run.assistantDraft,
+      content: `${current}${delta}`,
+      status: 'drafting',
+    },
+  }
+}
+
+export function shouldIgnoreTerminalRuntimeEvent(run: Run) {
+  return run.status === 'completed' || run.status === 'failed' || run.status === 'stopped'
+}
+
 export function useWorkspaceState() {
   const [threads, setThreads] = useState<Thread[]>([])
   const [selectedThreadId, setSelectedThreadId] = useState('thread-brief')
@@ -45,6 +102,8 @@ export function useWorkspaceState() {
   const [streamState, setStreamState] = useState<StreamState>('closed')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [backendUnavailableAttempted, setBackendUnavailableAttempted] = useState(false)
+  const [selectedRuntimeScript, setSelectedRuntimeScript] = useState<RuntimeScriptId>('success')
   const selectedThreadIdRef = useRef(selectedThreadId)
   const runRef = useRef<Run | null>(run)
 
@@ -71,6 +130,7 @@ export function useWorkspaceState() {
       setRun(nextRun)
       setStreamState(nextRun?.status === 'running' ? 'connecting' : 'closed')
       if (!threadId && nextThreadId) setSelectedThreadId(nextThreadId)
+      else if (shouldSelectWorkspaceRefreshThread({ requestedThreadId: threadId, resolvedThreadId: nextThreadId, currentSelectedThreadId: selectedThreadIdRef.current })) setSelectedThreadId(nextThreadId)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'API request failed')
       setMessages([])
@@ -114,6 +174,7 @@ export function useWorkspaceState() {
     if (!trimmed) return
     const requestedThreadId = selectedThreadId
     setError(null)
+    setBackendUnavailableAttempted(false)
     try {
       const result = await apiClient.sendMessage(requestedThreadId, trimmed)
       const nextThreads = await apiClient.listThreads()
@@ -169,6 +230,11 @@ export function useWorkspaceState() {
     setThreads(await apiClient.listThreads())
   }, [run])
 
+  const selectRuntimeScript = useCallback((scriptId: RuntimeScriptId) => {
+    setSelectedRuntimeScript(scriptId)
+    setMockRuntimeScript(scriptId)
+  }, [])
+
   return {
     threads,
     selectedThread,
@@ -179,6 +245,10 @@ export function useWorkspaceState() {
     loading,
     error,
     dataSourceMode: apiClient.mode,
+    backendCapability: executionAdapter.runtimeCapability,
+    backendUnavailableAttempted,
+    selectedRuntimeScript,
+    selectRuntimeScript,
     refresh,
     selectThread,
     createThread,

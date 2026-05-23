@@ -17,7 +17,7 @@ export function deriveAgentMotionState(run: Run | null): AgentMotionState {
   if (!run) return 'idle'
   if (run.status === 'completed' && run.events.length === 0) return 'idle'
   if (run.status === 'completed') return 'done'
-  if (run.status === 'stopped') return 'error'
+  if (run.status === 'failed' || run.status === 'stopped') return 'error'
 
   const currentEvent = [...run.events].reverse().find((event) => event.status === 'running') ?? run.events.at(-1)
   const eventText = `${currentEvent?.type ?? ''} ${currentEvent?.label ?? ''}`.toLowerCase()
@@ -29,13 +29,14 @@ export function deriveAgentMotionState(run: Run | null): AgentMotionState {
 
 type Props = {
   run: Run | null
+  compact?: boolean
 }
 
-export function AgentStateMotion({ run }: Props) {
+export function AgentStateMotion({ run, compact = false }: Props) {
   const state = deriveAgentMotionState(run)
 
   return (
-    <div className="agent-motion-card" data-state={state} aria-label={`Agent state: ${stateLabels[state]}`}>
+    <div className={compact ? 'agent-motion-card compact' : 'agent-motion-card'} data-state={state} aria-label={`Agent state: ${stateLabels[state]}`}>
       <div className="agent-motion-stage">
         <div className="agent-motion-ring" />
         <div className="agent-motion-shadow" />

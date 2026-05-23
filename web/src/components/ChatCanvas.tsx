@@ -1,4 +1,5 @@
-import type { Message, Run, StreamState, Thread } from '../domain'
+import type { ChatCanvasState, Message, Run, StreamState, Thread } from '../domain'
+import { deriveChatCanvasState } from '../runtime/chatCanvasState'
 import { Composer } from './Composer'
 import { ToolCallCard } from './ToolCallCard'
 
@@ -11,13 +12,62 @@ type Props = {
   error?: string | null
   dataSourceMode: 'mock' | 'real_api'
   streamState: StreamState
+  backendCapability?: 'available' | 'unavailable'
+  backendUnavailableAttempted?: boolean
   onSendMessage: (content: string) => void
   onStopRun: () => void
 }
 
-export function ChatCanvas({ sidebarCollapsed, thread, messages, run, loading, error, dataSourceMode, streamState, onSendMessage, onStopRun }: Props) {
+const stateCopy: Record<Exclude<ChatCanvasState, 'history'>, { title: string; detail: string }> = {
+  'no-thread': { title: '未选择会话', detail: '创建新对话' },
+  'empty-thread': { title: '新对话', detail: '输入第一条消息' },
+  loading: { title: '加载中', detail: '同步会话' },
+  error: { title: '加载失败', detail: '重试' },
+  'waiting-run': { title: '等待执行', detail: '消息已发送' },
+  running: { title: '执行中', detail: '查看右侧时间线' },
+  completed: { title: '已完成', detail: '回复已生成' },
+  failed: { title: '执行失败', detail: '未生成成功回复' },
+  'backend-unavailable': { title: '后端能力未接入', detail: '等待 M4/M5 run/event' },
+}
+
+function MessageHistory({ messages }: { messages: Message[] }) {
+  return messages.map((message) => (
+    <article key={message.id} className={`message-row ${message.role}`}>
+      <div className="message-avatar">{message.role === 'assistant' ? 'L' : 'U'}</div>
+      <div className="message-bubble">
+        <div className="message-meta">{message.role === 'assistant' ? 'Loomi' : 'You'} · {message.createdAt}</div>
+        <p className="message-markdown">{message.content}</p>
+        {message.toolCalls?.map((toolCall) => <ToolCallCard key={toolCall.id} toolCall={toolCall} />)}
+      </div>
+    </article>
+  ))
+}
+
+function StatePanel({ state, error }: { state: Exclude<ChatCanvasState, 'history'>; error?: string | null }) {
+  const copy = stateCopy[state]
   return (
-    <section className="chat-shell glass-panel">
+    <div className={`empty-state chat-state ${state}`}>
+      <strong>{copy.title}</strong>
+      <span>{error ?? copy.detail}</span>
+    </div>
+  )
+}
+
+export function ChatCanvas({ sidebarCollapsed, thread, messages, run, loading, error, dataSourceMode, streamState, backendCapability = 'available', backendUnavailableAttempted = false, onSendMessage, onStopRun }: Props) {
+  const state = deriveChatCanvasState({
+    loading,
+    error,
+    backendCapability,
+    backendUnavailableAttempted,
+    selectedThreadId: thread?.id ?? null,
+    messageCount: messages.length,
+    run,
+  })
+  const composerDisabled = state === 'loading' || state === 'error' || state === 'no-thread' || state === 'backend-unavailable' || state === 'waiting-run' || state === 'running'
+  const composerPlaceholder = state === 'history' ? 'Message Loomi' : stateCopy[state].title
+
+  return (
+    <section className="chat-shell glass-panel" data-chat-state={state}>
       <div className="context-bar">
         <span>Context</span>
         <strong>{run?.context === 'local_simulated' ? 'Local simulated' : run?.context ?? '-'}</strong>
@@ -32,21 +82,17 @@ export function ChatCanvas({ sidebarCollapsed, thread, messages, run, loading, e
       {error && <div className="api-error">{error}</div>}
 
       <div className="message-list">
-        {loading ? (
-          <div className="empty-state">Loading</div>
-        ) : messages.map((message) => (
-          <article key={message.id} className={`message-row ${message.role}`}>
-            <div className="message-avatar">{message.role === 'assistant' ? 'L' : 'U'}</div>
-            <div className="message-bubble">
-              <div className="message-meta">{message.role === 'assistant' ? 'Loomi' : 'You'} · {message.createdAt}</div>
-              <p className="message-markdown">{message.content}</p>
-              {message.toolCalls?.map((toolCall) => <ToolCallCard key={toolCall.id} toolCall={toolCall} />)}
-            </div>
-          </article>
-        ))}
+        {state === 'history' ? (
+          <MessageHistory messages={messages} />
+        ) : (
+          <>
+            {(state === 'waiting-run' || state === 'running' || state === 'completed' || state === 'failed') && <MessageHistory messages={messages} />}
+            <StatePanel state={state} error={state === 'error' ? error : null} />
+          </>
+        )}
       </div>
 
-      <Composer disabled={loading} onSubmit={onSendMessage} />
+      <Composer disabled={composerDisabled} placeholder={composerPlaceholder} onSubmit={onSendMessage} />
     </section>
   )
 }

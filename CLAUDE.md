@@ -1,7 +1,7 @@
 <!-- SPECKIT START -->
 For Spec Kit workflows, use the project skills in `.claude/skills/`.
 
-Current plan: `specs/003-m4-run-event-sse/plan.md`.
+Current plan: `specs/004-frontend-agent-runtime/plan.md`.
 
 Always read `.specify/memory/constitution.md` before non-trivial Loomi work and follow it over ad-hoc preferences. Documentation is part of done: when changing code, architecture, workflow, APIs, data models, runtime behavior, tools, workers, UI flows, or safety boundaries, update the Starlight documentation site under `docs-site/src/content/docs/` in the same work session. Do not wait for a separate user reminder.
 

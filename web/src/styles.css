@@ -1080,6 +1080,14 @@ button, textarea, input, .sidebar, .chat-shell, .run-dock, .right-panel-menu, .r
   background: color-mix(in srgb, var(--pane-surface) 74%, transparent);
 }
 
+.agent-motion-card.compact {
+  grid-template-columns: 54px 1fr;
+  gap: 10px;
+  border-radius: 12px;
+  padding: 8px;
+  background: color-mix(in srgb, var(--pane-surface) 54%, transparent);
+}
+
 .agent-motion-stage {
   position: relative;
   height: 70px;
@@ -1087,6 +1095,11 @@ button, textarea, input, .sidebar, .chat-shell, .run-dock, .right-panel-menu, .r
   border: 1px solid color-mix(in srgb, var(--agent-honey-dark) 22%, transparent);
   border-radius: 12px;
   background: radial-gradient(75% 70% at 50% 42%, var(--agent-cream), #d8c7ac);
+}
+
+.agent-motion-card.compact .agent-motion-stage {
+  height: 48px;
+  border-radius: 10px;
 }
 
 .agent-motion-ring {
@@ -1122,6 +1135,12 @@ button, textarea, input, .sidebar, .chat-shell, .run-dock, .right-panel-menu, .r
   height: 46px;
   margin: -23px 0 0 -23px;
   will-change: transform;
+}
+
+.agent-motion-card.compact .agent-motion-actor {
+  width: 34px;
+  height: 34px;
+  margin: -17px 0 0 -17px;
 }
 
 .agent-motion-hog {
@@ -1215,6 +1234,15 @@ button, textarea, input, .sidebar, .chat-shell, .run-dock, .right-panel-menu, .r
   letter-spacing: -0.01em;
 }
 
+.agent-motion-card.compact .agent-motion-meta strong {
+  font-size: 13px;
+}
+
+.agent-motion-card.compact .agent-motion-kicker {
+  font-size: 9px;
+  letter-spacing: 0.08em;
+}
+
 @keyframes agent-float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-5px); } }
 @keyframes agent-blink { 0%, 93%, 100% { opacity: 0; } 95% { opacity: 1; } }
 @keyframes agent-tilt { 0%, 100% { transform: scale(1) rotate(0); } 50% { transform: scale(1.02) rotate(-5deg); } }
@@ -1266,46 +1294,131 @@ button, textarea, input, .sidebar, .chat-shell, .run-dock, .right-panel-menu, .r
 .file-row {
   display: grid;
   min-width: 0;
-  grid-template-columns: 26px 1fr auto;
+  grid-template-columns: 18px 1fr auto;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   color: var(--text-primary);
-  font-size: 15px;
+  font-size: 13px;
   line-height: 1.35;
+}
+
+.progress-row {
+  position: relative;
+}
+
+.progress-row::before {
+  position: absolute;
+  left: 8px;
+  top: -11px;
+  bottom: calc(50% + 7px);
+  width: 1px;
+  background: var(--pane-divider);
+  content: '';
+}
+
+.progress-row:first-of-type::before {
+  display: none;
 }
 
 .progress-row.done {
   color: var(--text-secondary);
+}
+
+.progress-row.done > span:nth-child(2) {
   text-decoration: line-through;
+  text-decoration-color: color-mix(in srgb, var(--text-secondary) 55%, transparent);
 }
 
 .progress-row small {
   color: var(--pane-muted);
-  font-size: 11px;
+  font-size: 10px;
 }
 
 .progress-mark,
 .file-icon {
   display: grid;
-  width: 26px;
-  height: 26px;
+  width: 22px;
+  height: 22px;
   place-items: center;
-  border-radius: 7px;
+  border-radius: 6px;
   background: color-mix(in srgb, var(--pane-surface) 86%, var(--text-primary));
   color: var(--text-secondary);
 }
 
-.progress-row.done .progress-mark,
-.progress-row.active .progress-mark {
+.progress-mark {
+  width: 7px;
+  height: 7px;
   border-radius: 999px;
-  background: #2d7be8;
-  color: white;
+  background: color-mix(in srgb, var(--text-muted) 45%, transparent);
+  color: transparent;
+  justify-self: center;
+}
+
+.progress-mark svg {
+  display: none;
+}
+
+.progress-row.done .progress-mark {
+  background: color-mix(in srgb, var(--text-secondary) 56%, transparent);
 }
 
 .progress-row.active .progress-mark {
-  border: 1px solid #2d7be8;
+  width: 9px;
+  height: 9px;
+  border: 1px solid color-mix(in srgb, var(--accent-2) 82%, transparent);
   background: transparent;
-  color: #2d7be8;
+  color: transparent;
+}
+
+.progress-row.failed .progress-mark {
+  width: 7px;
+  height: 7px;
+  background: color-mix(in srgb, var(--orange) 72%, transparent);
+}
+
+.runtime-script-switch.compact {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 0 4px;
+  color: var(--pane-muted);
+  font-size: 11px;
+}
+
+.runtime-script-switch.compact span {
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.runtime-script-switch.compact button,
+.runtime-stop-button.ghost {
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.runtime-script-switch.compact button {
+  padding: 3px 7px;
+}
+
+.runtime-script-switch.compact button.selected {
+  background: color-mix(in srgb, var(--text-primary) 8%, transparent);
+  color: var(--text-secondary);
+}
+
+.runtime-stop-button.ghost {
+  width: fit-content;
+  padding: 3px 0;
+  color: color-mix(in srgb, var(--orange) 78%, var(--text-muted));
+}
+
+.runtime-stop-button.ghost:hover,
+.runtime-script-switch.compact button:hover {
+  color: var(--text-primary);
 }
 
 .rail-card-kicker {

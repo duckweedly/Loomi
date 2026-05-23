@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { mockApiClient } from './mockApiClient'
+import { mockApiClient, setMockRuntimeScript } from './mockApiClient'
 
 describe('mockApiClient thread runs', () => {
   test('creates a retrievable idle run for a new mock thread', async () => {
@@ -17,17 +17,26 @@ describe('mockApiClient thread runs', () => {
     })
   })
 
-  test('persists the run event created by the first message in a new mock thread', async () => {
+  test('persists the completed M3.5 mock run created by the first message in a new mock thread', async () => {
     const thread = await mockApiClient.createThread?.('New thread', 'chat')
 
     await mockApiClient.sendMessage(thread!.id, 'hello')
     const run = await mockApiClient.getThreadRun(thread!.id)
 
-    expect(run.status).toBe('running')
-    expect(run.events.at(-1)).toMatchObject({
-      type: 'message.queued',
-      status: 'running',
-    })
+    expect(run.status).toBe('completed')
+    expect(run.events.map((event) => event.type)).toContain('run.completed')
+  })
+
+  test('runs the failure script without duplicate failed terminal events or assistant success replies', async () => {
+    const thread = await mockApiClient.createThread?.('Failure script thread', 'chat')
+
+    setMockRuntimeScript('failure')
+    const result = await mockApiClient.sendMessage(thread!.id, 'fail please')
+    setMockRuntimeScript('success')
+
+    expect(result.run.status).toBe('failed')
+    expect(result.run.events.filter((event) => event.type === 'run.failed')).toHaveLength(1)
+    expect(result.messages.filter((message) => message.role === 'assistant' && message.threadId === thread!.id)).toHaveLength(0)
   })
 
   test('lists only active mock threads after archiving', async () => {

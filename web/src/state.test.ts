@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { Message, Run, Thread } from './domain'
-import { mergeRunEvents, shouldApplyRunStreamEvent, getWorkspaceRefreshThreadId, shouldApplySendMessageResult, shouldApplyWorkspaceRefresh } from './state'
+import { mergeRunEvents, shouldApplyRunStreamEvent, getWorkspaceRefreshThreadId, shouldApplySendMessageResult, shouldApplyWorkspaceRefresh, shouldSelectWorkspaceRefreshThread } from './state'
 
 const threadA: Thread = {
   id: 'thread-a',
@@ -42,6 +42,16 @@ describe('getWorkspaceRefreshThreadId', () => {
 
   test('keeps the requested thread when it exists in returned threads', () => {
     expect(getWorkspaceRefreshThreadId('thread-b', [threadA, threadB])).toBe('thread-b')
+  })
+})
+
+describe('shouldSelectWorkspaceRefreshThread', () => {
+  test('selects the resolved thread when the requested id is missing but still current', () => {
+    expect(shouldSelectWorkspaceRefreshThread({ requestedThreadId: 'thread-brief', resolvedThreadId: 'thread-a', currentSelectedThreadId: 'thread-brief' })).toBe(true)
+  })
+
+  test('does not replace selection after the user has switched threads', () => {
+    expect(shouldSelectWorkspaceRefreshThread({ requestedThreadId: 'thread-brief', resolvedThreadId: 'thread-a', currentSelectedThreadId: 'thread-b' })).toBe(false)
   })
 })
 

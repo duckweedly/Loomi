@@ -21,5 +21,6 @@ web/vite.config.js
 web/vite.config.d.ts
 
 *.exe
+*.test
 vendor/
 *.out

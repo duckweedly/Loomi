@@ -1,6 +1,9 @@
 import type { Message, Run, Thread } from './domain'
 import { mockApiClient } from './mockApiClient'
 import { hasRealApiBase, realApiClient } from './realApiClient'
+import type { ExecutionAdapter } from './runtime/executionAdapter'
+import { mockExecutionAdapter } from './runtime/mockExecutionAdapter'
+import { realExecutionAdapter } from './runtime/realExecutionAdapter'
 
 export type ApiClient = {
   mode: 'mock' | 'real_api'
@@ -17,4 +20,13 @@ export type ApiClient = {
   stopRun(runId: string): Promise<Run>
 }
 
+export function selectExecutionAdapter(realApiMode: boolean): ExecutionAdapter {
+  return realApiMode ? realExecutionAdapter : mockExecutionAdapter
+}
+
+export function createExecutionAdapter(): ExecutionAdapter {
+  return selectExecutionAdapter(hasRealApiBase())
+}
+
 export const apiClient: ApiClient = hasRealApiBase() ? realApiClient : mockApiClient
+export const executionAdapter = createExecutionAdapter()
