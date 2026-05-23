@@ -6,6 +6,7 @@ import { ChatCanvas } from './components/ChatCanvas'
 import { RunTimeline } from './components/RunTimeline'
 import { ThreadSidebar } from './components/ThreadSidebar'
 import { useWorkspaceState } from './state'
+import { filterThreadsByMode } from './threadFilters'
 import { useWorkspaceShellState } from './useWorkspaceShellState'
 
 export default function App() {
@@ -17,11 +18,18 @@ export default function App() {
     messages,
     run,
     loading,
+    error,
+    dataSourceMode,
     refresh,
     selectThread,
+    createThread,
+    renameThread,
+    archiveThread,
     sendMessage,
   } = useWorkspaceState()
 
+  const selectedMode = selectedThread?.mode ?? 'chat'
+  const visibleThreads = filterThreadsByMode(threads, selectedMode)
   const workspaceStyle = { '--sidebar-width': `${shell.sidebarWidth}px` } as CSSProperties
   const workspaceClass = [
     'workspace-grid',
@@ -70,12 +78,15 @@ export default function App() {
                 </div>
                 <ThreadSidebar
                   collapsed={shell.sidebarCollapsed}
-                  threads={threads}
+                  threads={visibleThreads}
                   selectedThreadId={selectedThreadId}
-                  run={run}
+                  selectedMode={selectedMode}
                   theme={shell.theme}
                   onRefresh={() => void refresh()}
                   onSelectThread={selectThread}
+                  onCreateThread={() => void createThread()}
+                  onRenameThread={(threadId, title) => void renameThread(threadId, title)}
+                  onArchiveThread={(threadId) => void archiveThread(threadId)}
                   onToggleTheme={shell.toggleTheme}
                 />
               </aside>
@@ -133,6 +144,8 @@ export default function App() {
                 messages={messages}
                 run={run}
                 loading={loading}
+                error={error}
+                dataSourceMode={dataSourceMode}
                 onSendMessage={(content) => void sendMessage(content)}
               />
             </section>
@@ -141,13 +154,9 @@ export default function App() {
               runDetailsOpen={shell.runDetailsOpen}
               rightPanelMenuOpen={shell.rightPanelMenuOpen}
               rightToolsOpen={shell.rightPanelOpen}
-              artifactOpen={shell.artifactOpen}
               selectedPanelId={shell.selectedRightPanelId}
               onSelectPanel={shell.openRightPanel}
-              onCloseRunDetails={shell.closeRunDetails}
-              onCloseRightTools={shell.closeRightPanel}
               onOpenArtifact={shell.openArtifact}
-              onCloseArtifact={shell.closeArtifact}
             />
           </main>
         </div>

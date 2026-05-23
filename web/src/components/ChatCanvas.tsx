@@ -8,10 +8,12 @@ type Props = {
   messages: Message[]
   run: Run | null
   loading: boolean
+  error?: string | null
+  dataSourceMode: 'mock' | 'real_api'
   onSendMessage: (content: string) => void
 }
 
-export function ChatCanvas({ sidebarCollapsed, thread, messages, run, loading, onSendMessage }: Props) {
+export function ChatCanvas({ sidebarCollapsed, thread, messages, run, loading, error, dataSourceMode, onSendMessage }: Props) {
   return (
     <section className="chat-shell glass-panel">
       <div className="context-bar">
@@ -20,7 +22,10 @@ export function ChatCanvas({ sidebarCollapsed, thread, messages, run, loading, o
         <span className="context-line" />
         {sidebarCollapsed && <strong>{thread?.title ?? 'Untitled'}</strong>}
         <span>{thread?.mode ?? 'work'}</span>
+        <span>{dataSourceMode === 'real_api' ? 'Real API' : 'Mock'}</span>
       </div>
+
+      {error && <div className="api-error">{error}</div>}
 
       <div className="message-list">
         {loading ? (

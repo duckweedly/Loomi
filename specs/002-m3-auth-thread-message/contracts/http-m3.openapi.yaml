@@ -1,0 +1,373 @@
+openapi: 3.1.0
+info:
+  title: Loomi M3 Auth, Thread, and Message API
+  version: 0.1.0
+  description: Local-development API contract for M3 identity, threads, and user-authored messages.
+servers:
+  - url: http://127.0.0.1:8080
+    description: Local Loomi API service
+paths:
+  /v1/me:
+    get:
+      summary: Return the fixed local identity
+      operationId: getCurrentIdentity
+      responses:
+        '200':
+          description: Fixed local user identity
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IdentityResponse'
+              examples:
+                localIdentity:
+                  value:
+                    user:
+                      id: user_local_dev
+                      display_name: Local Developer
+                      created_at: '2026-05-23T00:00:00Z'
+                      updated_at: '2026-05-23T00:00:00Z'
+                    request_id: req_000000000000000000000000
+  /v1/threads:
+    get:
+      summary: List active threads for the fixed local identity
+      operationId: listThreads
+      parameters:
+        - name: include_archived
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: false
+          description: When true, include archived durable threads. Default active list excludes archived threads.
+      responses:
+        '200':
+          description: Thread list ordered by most recently updated first
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ThreadListResponse'
+    post:
+      summary: Create a thread for the fixed local identity
+      operationId: createThread
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateThreadRequest'
+      responses:
+        '201':
+          description: Created thread
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ThreadResponse'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+  /v1/threads/{thread_id}:
+    get:
+      summary: Retrieve one owned thread, including archived durable state
+      operationId: getThread
+      parameters:
+        - $ref: '#/components/parameters/ThreadId'
+      responses:
+        '200':
+          description: Owned thread
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ThreadResponse'
+        '404':
+          $ref: '#/components/responses/ThreadNotFound'
+    patch:
+      summary: Update an owned thread title or mode
+      operationId: updateThread
+      parameters:
+        - $ref: '#/components/parameters/ThreadId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateThreadRequest'
+      responses:
+        '200':
+          description: Updated thread
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ThreadResponse'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '404':
+          $ref: '#/components/responses/ThreadNotFound'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+  /v1/threads/{thread_id}/archive:
+    post:
+      summary: Archive an owned thread
+      operationId: archiveThread
+      parameters:
+        - $ref: '#/components/parameters/ThreadId'
+      responses:
+        '200':
+          description: Archived thread
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ThreadResponse'
+        '404':
+          $ref: '#/components/responses/ThreadNotFound'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+  /v1/threads/{thread_id}/messages:
+    get:
+      summary: List messages for an owned thread in stable creation order
+      operationId: listMessages
+      parameters:
+        - $ref: '#/components/parameters/ThreadId'
+      responses:
+        '200':
+          description: Message list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageListResponse'
+        '404':
+          $ref: '#/components/responses/ThreadNotFound'
+    post:
+      summary: Create or return an idempotent user-authored message
+      description: Persists a complete user text message only. Does not create assistant placeholders, run events, streaming deltas, tool calls, model outputs, worker jobs, or LLM requests.
+      operationId: createMessage
+      parameters:
+        - $ref: '#/components/parameters/ThreadId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateMessageRequest'
+      responses:
+        '201':
+          description: Created message
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+        '200':
+          description: Existing message returned for duplicate client_message_id
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '404':
+          $ref: '#/components/responses/ThreadNotFound'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+components:
+  parameters:
+    ThreadId:
+      name: thread_id
+      in: path
+      required: true
+      schema:
+        type: string
+        minLength: 1
+  responses:
+    InvalidRequest:
+      description: Invalid client request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            emptyMessage:
+              value:
+                error:
+                  code: invalid_request
+                  message: Message content is required.
+                  request_id: req_000000000000000000000001
+    ThreadNotFound:
+      description: Thread is absent or not owned by the fixed local identity
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            notFound:
+              value:
+                error:
+                  code: thread_not_found
+                  message: Thread not found.
+                  request_id: req_000000000000000000000002
+    MethodNotAllowed:
+      description: HTTP method is not supported for this endpoint
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            unsupported:
+              value:
+                error:
+                  code: method_not_allowed
+                  message: Unsupported method.
+                  request_id: req_000000000000000000000003
+  schemas:
+    IdentityResponse:
+      type: object
+      required: [user, request_id]
+      properties:
+        user:
+          $ref: '#/components/schemas/User'
+        request_id:
+          type: string
+    ThreadListResponse:
+      type: object
+      required: [threads, request_id]
+      properties:
+        threads:
+          type: array
+          items:
+            $ref: '#/components/schemas/Thread'
+        request_id:
+          type: string
+    ThreadResponse:
+      type: object
+      required: [thread, request_id]
+      properties:
+        thread:
+          $ref: '#/components/schemas/Thread'
+        request_id:
+          type: string
+    MessageListResponse:
+      type: object
+      required: [messages, request_id]
+      properties:
+        messages:
+          type: array
+          items:
+            $ref: '#/components/schemas/Message'
+        request_id:
+          type: string
+    MessageResponse:
+      type: object
+      required: [message, request_id]
+      properties:
+        message:
+          $ref: '#/components/schemas/Message'
+        request_id:
+          type: string
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message, request_id]
+          properties:
+            code:
+              type: string
+              enum: [invalid_request, thread_not_found, method_not_allowed, internal_error]
+            message:
+              type: string
+            request_id:
+              type: string
+    CreateThreadRequest:
+      type: object
+      required: [title, mode]
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 120
+        mode:
+          type: string
+          enum: [chat, work]
+      additionalProperties: false
+    UpdateThreadRequest:
+      type: object
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 120
+        mode:
+          type: string
+          enum: [chat, work]
+      minProperties: 1
+      additionalProperties: false
+    CreateMessageRequest:
+      type: object
+      required: [content]
+      properties:
+        content:
+          type: string
+          minLength: 1
+        client_message_id:
+          type: string
+          minLength: 1
+          maxLength: 120
+      additionalProperties: false
+    User:
+      type: object
+      required: [id, display_name, created_at, updated_at]
+      properties:
+        id:
+          type: string
+        display_name:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    Thread:
+      type: object
+      required: [id, title, mode, lifecycle_status, created_at, updated_at]
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        mode:
+          type: string
+          enum: [chat, work]
+        lifecycle_status:
+          type: string
+          enum: [active, archived]
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        archived_at:
+          type: [string, 'null']
+          format: date-time
+    Message:
+      type: object
+      required: [id, thread_id, role, content, metadata, created_at]
+      properties:
+        id:
+          type: string
+        thread_id:
+          type: string
+        role:
+          type: string
+          enum: [user]
+        content:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+        client_message_id:
+          type: [string, 'null']
+        created_at:
+          type: string
+          format: date-time

@@ -14,27 +14,24 @@ describe('createWorkspaceShellState', () => {
       runDetailsOpen: true,
       rightPanelMenuOpen: false,
       rightPanelOpen: false,
-      artifactOpen: false,
-      selectedRightPanelId: 'terminal' satisfies RightPanelItemId,
-    })
-  })
-
-  test('opens artifact while closing run details and the right drawer', () => {
-    const shell = createWorkspaceShellState()
-
-    shell.toggleRunDetails()
-    shell.openRightPanel('preview')
-    shell.openArtifact()
-
-    expect(shell.snapshot()).toMatchObject({
-      runDetailsOpen: false,
-      rightPanelOpen: false,
-      artifactOpen: true,
       selectedRightPanelId: 'preview' satisfies RightPanelItemId,
     })
   })
 
-  test('selects a right panel while closing the menu, run details, and artifact drawer', () => {
+  test('opens artifact previews in the narrow right panel', () => {
+    const shell = createWorkspaceShellState()
+
+    shell.toggleRunDetails()
+    shell.openArtifact()
+
+    expect(shell.snapshot()).toMatchObject({
+      runDetailsOpen: false,
+      rightPanelOpen: true,
+      selectedRightPanelId: 'preview' satisfies RightPanelItemId,
+    })
+  })
+
+  test('selects a right panel while closing the menu and run details', () => {
     const shell = createWorkspaceShellState()
 
     shell.toggleRightPanelMenu()
@@ -46,7 +43,6 @@ describe('createWorkspaceShellState', () => {
       runDetailsOpen: false,
       rightPanelMenuOpen: false,
       rightPanelOpen: true,
-      artifactOpen: false,
       selectedRightPanelId: 'files' satisfies RightPanelItemId,
     })
   })
@@ -60,7 +56,19 @@ describe('createWorkspaceShellState', () => {
       runDetailsOpen: false,
       rightPanelMenuOpen: true,
       rightPanelOpen: false,
-      artifactOpen: false,
+    })
+  })
+
+  test('uses the titlebar right panel button to close an open detail panel', () => {
+    const shell = createWorkspaceShellState()
+
+    shell.openRightPanel('preview')
+    shell.toggleRightPanelMenu()
+
+    expect(shell.snapshot()).toMatchObject({
+      rightPanelMenuOpen: false,
+      rightPanelOpen: false,
+      selectedRightPanelId: 'preview' satisfies RightPanelItemId,
     })
   })
 })

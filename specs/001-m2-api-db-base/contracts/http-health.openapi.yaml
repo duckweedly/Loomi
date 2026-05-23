@@ -1,0 +1,135 @@
+openapi: 3.1.0
+info:
+  title: Loomi M2 Health and Readiness Contract
+  version: 0.1.0
+  description: Local-development health contract for the M2 API and database base.
+servers:
+  - url: http://127.0.0.1:8080
+    description: Local M2 API service
+paths:
+  /healthz:
+    get:
+      summary: Report process liveness
+      description: Confirms the API process can respond. Does not require PostgreSQL to be available.
+      operationId: getHealthz
+      responses:
+        '200':
+          description: Process is alive
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthStatus'
+              examples:
+                alive:
+                  value:
+                    status: alive
+                    service: loomi-api
+                    environment: local
+                    request_id: req_01jz0000000000000000000000
+  /readyz:
+    get:
+      summary: Report service readiness
+      description: Reports ready only when config, database connectivity, and schema version baseline are usable.
+      operationId: getReadyz
+      responses:
+        '200':
+          description: Service is ready for M2-dependent behavior
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadinessStatus'
+              examples:
+                ready:
+                  value:
+                    status: ready
+                    service: loomi-api
+                    environment: local
+                    request_id: req_01jz0000000000000000000001
+                    checks:
+                      - name: config
+                        status: ok
+                      - name: database
+                        status: ok
+                      - name: schema
+                        status: ok
+        '503':
+          description: Service is alive but not ready
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadinessStatus'
+              examples:
+                databaseUnavailable:
+                  value:
+                    status: not_ready
+                    service: loomi-api
+                    environment: local
+                    request_id: req_01jz0000000000000000000002
+                    checks:
+                      - name: config
+                        status: ok
+                      - name: database
+                        status: failed
+                        reason: database ping failed
+                      - name: schema
+                        status: failed
+                        reason: schema version unavailable
+components:
+  schemas:
+    HealthStatus:
+      type: object
+      required:
+        - status
+        - service
+        - environment
+        - request_id
+      properties:
+        status:
+          type: string
+          enum: [alive]
+        service:
+          type: string
+          const: loomi-api
+        environment:
+          type: string
+        request_id:
+          type: string
+    ReadinessStatus:
+      type: object
+      required:
+        - status
+        - service
+        - environment
+        - request_id
+        - checks
+      properties:
+        status:
+          type: string
+          enum: [ready, not_ready]
+        service:
+          type: string
+          const: loomi-api
+        environment:
+          type: string
+        request_id:
+          type: string
+        checks:
+          type: array
+          minItems: 3
+          items:
+            $ref: '#/components/schemas/ReadinessCheck'
+    ReadinessCheck:
+      type: object
+      required:
+        - name
+        - status
+      properties:
+        name:
+          type: string
+          enum: [config, database, schema]
+        status:
+          type: string
+          enum: [ok, failed]
+        reason:
+          type: string
+          description: Non-secret failure reason. Must not include credentials or full connection URLs.

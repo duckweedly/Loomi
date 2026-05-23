@@ -6,7 +6,8 @@ export type Thread = {
   project: string
   mode: 'chat' | 'work'
   updatedAt: string
-  status: RunStatus
+  lifecycleStatus?: 'active' | 'archived'
+  runStatus: RunStatus
 }
 
 export type ToolCall = {

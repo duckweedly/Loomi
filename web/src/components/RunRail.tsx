@@ -1,69 +1,75 @@
-import { Button, Tag } from '@lobehub/ui'
-import { Box, Braces, FileText, GitBranch, Layers3, X } from 'lucide-react'
+import { useState } from 'react'
+import { Check, ChevronDown, FileText, Folder, Globe2 } from 'lucide-react'
 import type { Run } from '../domain'
+import { AgentStateMotion } from './AgentStateMotion'
 
 type Props = {
   run: Run | null
   open: boolean
-  onClose: () => void
   onOpenArtifact: () => void
 }
 
-export function RunRail({ run, open, onClose, onOpenArtifact }: Props) {
+export function RunRail({ run, open, onOpenArtifact }: Props) {
+  const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set())
+  const toggleSection = (section: string) => {
+    setCollapsedSections((current) => {
+      const next = new Set(current)
+      if (next.has(section)) next.delete(section)
+      else next.add(section)
+      return next
+    })
+  }
+
   return (
     <aside className={open ? 'floating-rail open' : 'floating-rail'}>
-      <div className="floating-head">
-        <div>
-          <strong>Run</strong>
-          <span>{run?.model ?? '-'}</span>
-        </div>
-        <Button aria-label="Close run details" icon={<X size={14} />} onClick={onClose} size="small" />
-      </div>
-
-      <div className="rail-strip">
-        <span>Status</span>
-        <strong>{run?.status ?? 'idle'}</strong>
-        <span>Context</span>
-        <strong>{run?.context ?? '-'}</strong>
-      </div>
-
-      <div className="floating-section">
-        <div className="rail-title">Timeline</div>
-        <div className="timeline-list">
-          {run?.events.map((event) => (
-            <div key={event.id} className={`timeline-item ${event.status}`}>
-              <span className="timeline-pin" />
-              <div>
-                <div className="timeline-head">
-                  <strong>{event.label}</strong>
-                  <span>{event.time}</span>
-                </div>
-                <p>{event.detail}</p>
-                <code>{event.type}</code>
-              </div>
+      <section className={collapsedSections.has('progress') ? 'rail-card progress-card collapsed' : 'rail-card progress-card'}>
+        <button className="rail-card-head" onClick={() => toggleSection('progress')}>
+          <h2>Progress</h2>
+          <ChevronDown size={18} />
+        </button>
+        <div className="rail-card-body progress-list">
+          <AgentStateMotion run={run} />
+          {run?.events.map((event, index) => (
+            <div key={event.id} className={event.status === 'running' ? 'progress-row active' : 'progress-row done'}>
+              <span className="progress-mark">{event.status === 'running' ? index + 1 : <Check size={15} />}</span>
+              <span>{event.detail}</span>
+              <small>{event.time}</small>
             </div>
           ))}
         </div>
-      </div>
+      </section>
 
-      <div className="floating-section">
-        <div className="rail-title">Panel</div>
-        <div className="panel-tabs">
-          <Tag variant="filled"><Layers3 size={12} /> Context</Tag>
-          <Tag variant="filled"><FileText size={12} /> Files</Tag>
-          <Tag variant="filled"><Braces size={12} /> Events</Tag>
-        </div>
-        <button className="artifact-preview" onClick={onOpenArtifact}>
-          <div className="artifact-icon"><Box size={17} /></div>
-          <div>
-            <strong>Workspace artifact</strong>
-            <span>UI shell · mock</span>
+      <section className={collapsedSections.has('files') ? 'rail-card files-card collapsed' : 'rail-card files-card'}>
+        <button className="rail-card-head" onClick={() => toggleSection('files')}>
+          <h2>Loomi</h2>
+          <div className="rail-card-actions">
+            <Folder size={17} />
+            <ChevronDown size={18} />
           </div>
         </button>
-        <div className="dispatch-preview">
-          <GitBranch size={14} /> Dispatch placeholder
+        <div className="rail-card-body file-list">
+          {['Instructions · CLAUDE.md', 'compose.yaml', 'tasks.md', 'data-model.md', 'spec.md', 'plan.md'].map((file) => (
+            <div className="file-row" key={file}>
+              <span className="file-icon"><FileText size={16} /></span>
+              <span>{file}</span>
+            </div>
+          ))}
         </div>
-      </div>
+      </section>
+
+      <section className={collapsedSections.has('context') ? 'rail-card context-card collapsed' : 'rail-card context-card'}>
+        <button className="rail-card-head" onClick={() => toggleSection('context')}>
+          <h2>Context</h2>
+          <ChevronDown size={18} />
+        </button>
+        <div className="rail-card-body">
+        <span className="rail-card-kicker">Connectors</span>
+        <button className="file-row context-row" onClick={onOpenArtifact}>
+          <span className="file-icon"><Globe2 size={16} /></span>
+          <span>Web search</span>
+        </button>
+        </div>
+      </section>
     </aside>
   )
 }

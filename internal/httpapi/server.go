@@ -1,0 +1,67 @@
+package httpapi
+
+import (
+	"net/http"
+	"net/url"
+	"strings"
+
+	"github.com/sheridiany/loomi/internal/config"
+	"github.com/sheridiany/loomi/internal/db"
+	"github.com/sheridiany/loomi/internal/productdata"
+)
+
+type Server struct {
+	cfg     config.Config
+	checker db.Checker
+	product productdata.Service
+	mux     *http.ServeMux
+}
+
+func NewServer(cfg config.Config, checker db.Checker) *Server {
+	return NewServerWithProduct(cfg, checker, productdata.NewMemoryService())
+}
+
+func NewServerWithProduct(cfg config.Config, checker db.Checker, product productdata.Service) *Server {
+	s := &Server{cfg: cfg, checker: checker, product: product, mux: http.NewServeMux()}
+	s.mux.HandleFunc("GET /healthz", s.handleHealthz)
+	s.mux.HandleFunc("GET /readyz", s.handleReadyz)
+	s.mux.HandleFunc("GET /v1/me", s.handleCurrentIdentity)
+	s.mux.HandleFunc("/v1/threads", s.handleThreads)
+	s.mux.HandleFunc("/v1/threads/", s.handleThreadByID)
+	return s
+}
+
+func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if strings.HasPrefix(r.URL.Path, "/v1/") || r.URL.Path == "/v1" {
+		setCORSHeaders(w, r)
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+	}
+	s.mux.ServeHTTP(w, r)
+}
+
+func setCORSHeaders(w http.ResponseWriter, r *http.Request) {
+	origin := r.Header.Get("Origin")
+	if origin == "" || !isLocalOrigin(origin) {
+		return
+	}
+	w.Header().Set("Access-Control-Allow-Origin", origin)
+	w.Header().Set("Vary", "Origin")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+}
+
+func isLocalOrigin(origin string) bool {
+	parsed, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	switch parsed.Hostname() {
+	case "127.0.0.1", "localhost", "::1":
+		return parsed.Scheme == "http"
+	default:
+		return false
+	}
+}

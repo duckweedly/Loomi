@@ -1,0 +1,19 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - "127.0.0.1:55433:5432"
+    environment:
+      POSTGRES_USER: loomi
+      POSTGRES_PASSWORD: loomi
+      POSTGRES_DB: loomi_m2
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U loomi -d loomi_m2"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    volumes:
+      - loomi-m2-postgres-data:/var/lib/postgresql/data
+
+volumes:
+  loomi-m2-postgres-data:

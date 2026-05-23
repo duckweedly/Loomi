@@ -5,7 +5,6 @@ type WorkspaceShellSnapshot = {
   runDetailsOpen: boolean
   rightPanelMenuOpen: boolean
   rightPanelOpen: boolean
-  artifactOpen: boolean
   selectedRightPanelId: RightPanelItemId
   sidebarCollapsed: boolean
   sidebarWidth: number
@@ -16,7 +15,6 @@ const initialShellState: WorkspaceShellSnapshot = {
   runDetailsOpen: false,
   rightPanelMenuOpen: false,
   rightPanelOpen: false,
-  artifactOpen: false,
   selectedRightPanelId: 'preview',
   sidebarCollapsed: false,
   sidebarWidth: 292,
@@ -31,9 +29,7 @@ type WorkspaceShellAction =
   | { type: 'toggleRightPanelMenu' }
   | { type: 'openRightPanel'; selectedRightPanelId: RightPanelItemId }
   | { type: 'closeRunDetails' }
-  | { type: 'closeRightPanel' }
   | { type: 'openArtifact' }
-  | { type: 'closeArtifact' }
 
 function reduceWorkspaceShellState(state: WorkspaceShellSnapshot, action: WorkspaceShellAction): WorkspaceShellSnapshot {
   switch (action.type) {
@@ -49,14 +45,15 @@ function reduceWorkspaceShellState(state: WorkspaceShellSnapshot, action: Worksp
         runDetailsOpen: !state.runDetailsOpen,
         rightPanelMenuOpen: false,
         rightPanelOpen: false,
-        artifactOpen: false,
       }
     case 'toggleRightPanelMenu':
+      if (state.rightPanelOpen) {
+        return { ...state, rightPanelOpen: false, rightPanelMenuOpen: false }
+      }
       return {
         ...state,
         rightPanelMenuOpen: !state.rightPanelMenuOpen,
         runDetailsOpen: false,
-        artifactOpen: false,
       }
     case 'openRightPanel':
       return {
@@ -65,16 +62,17 @@ function reduceWorkspaceShellState(state: WorkspaceShellSnapshot, action: Worksp
         rightPanelOpen: true,
         rightPanelMenuOpen: false,
         runDetailsOpen: false,
-        artifactOpen: false,
       }
     case 'closeRunDetails':
       return { ...state, runDetailsOpen: false }
-    case 'closeRightPanel':
-      return { ...state, rightPanelOpen: false }
     case 'openArtifact':
-      return { ...state, artifactOpen: true, rightPanelOpen: false, runDetailsOpen: false }
-    case 'closeArtifact':
-      return { ...state, artifactOpen: false }
+      return {
+        ...state,
+        selectedRightPanelId: 'preview',
+        rightPanelOpen: true,
+        rightPanelMenuOpen: false,
+        runDetailsOpen: false,
+      }
   }
 }
 
@@ -88,9 +86,7 @@ function bindWorkspaceShellActions(getState: () => WorkspaceShellSnapshot, dispa
     toggleRightPanelMenu: () => dispatch({ type: 'toggleRightPanelMenu' }),
     openRightPanel: (selectedRightPanelId: RightPanelItemId) => dispatch({ type: 'openRightPanel', selectedRightPanelId }),
     closeRunDetails: () => dispatch({ type: 'closeRunDetails' }),
-    closeRightPanel: () => dispatch({ type: 'closeRightPanel' }),
     openArtifact: () => dispatch({ type: 'openArtifact' }),
-    closeArtifact: () => dispatch({ type: 'closeArtifact' }),
   }
 }
 

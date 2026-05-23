@@ -1,15 +1,20 @@
 import { useState } from 'react'
-import { ChevronRight, Clock3, FolderKanban, HelpCircle, LogOut, Moon, RefreshCw, Settings, Sun } from 'lucide-react'
-import type { Run, Thread } from '../domain'
+import { Archive, Check, Clock3, FolderKanban, MessageSquarePlus, MonitorCog, RefreshCw, Settings } from 'lucide-react'
+import type { Thread } from '../domain'
+import { createSettingsMenuItems, type SettingsMenuItemId } from './settingsMenuItems'
+import { createSidebarModeMenuItems, type SidebarMode } from './sidebarModeMenuItems'
 
 type Props = {
   collapsed: boolean
   threads: Thread[]
   selectedThreadId: string
-  run: Run | null
+  selectedMode: SidebarMode
   theme: 'dark' | 'light'
   onRefresh: () => void
   onSelectThread: (threadId: string) => void
+  onCreateThread: () => void
+  onRenameThread: (threadId: string, title: string) => void
+  onArchiveThread: (threadId: string) => void
   onToggleTheme: () => void
 }
 
@@ -17,74 +22,96 @@ export function ThreadSidebar({
   collapsed,
   threads,
   selectedThreadId,
-  run,
+  selectedMode,
   theme,
   onRefresh,
   onSelectThread,
+  onCreateThread,
+  onRenameThread,
+  onArchiveThread,
   onToggleTheme,
 }: Props) {
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const settingsItems = createSettingsMenuItems(theme)
+  const modeMenuItems = createSidebarModeMenuItems(selectedMode)
+
+  const handleSettingsAction = (itemId: SettingsMenuItemId) => {
+    if (itemId === 'theme') onToggleTheme()
+    if (itemId === 'update') onRefresh()
+  }
 
   if (collapsed) return null
 
   return (
     <aside className="sidebar">
       <div className="sidebar-section nav-stack compact-nav">
-        <button className="nav-item"><FolderKanban size={15} /> Projects</button>
-        <button className="nav-item"><Clock3 size={15} /> Scheduled</button>
+        {modeMenuItems.map((item) => (
+          <button className="nav-item" key={item.id} onClick={item.action === 'create-thread' ? onCreateThread : undefined}>
+            {item.id === 'new-chat' && <MessageSquarePlus size={15} />}
+            {item.id === 'projects' && <FolderKanban size={15} />}
+            {item.id === 'scheduled' && <Clock3 size={15} />}
+            {item.label}
+          </button>
+        ))}
       </div>
 
       <div className="sidebar-divider" />
 
       <div className="sidebar-section">
-        <div className="section-label">Threads</div>
+        <div className="section-label">
+          <span>Threads</span>
+        </div>
         <div className="thread-list">
           {threads.map((thread) => (
-            <button
-              key={thread.id}
-              className={thread.id === selectedThreadId ? 'thread-card selected' : 'thread-card'}
-              onClick={() => onSelectThread(thread.id)}
-            >
-              <span className={`run-dot ${thread.status}`} />
-              <span className="thread-title">{thread.title}</span>
-            </button>
+            <div className="thread-row" key={thread.id}>
+              <button
+                className={thread.id === selectedThreadId ? 'thread-card selected' : 'thread-card'}
+                onClick={() => onSelectThread(thread.id)}
+              >
+                <span className={`run-dot ${thread.runStatus}`} />
+                <span className="thread-title" onDoubleClick={(event) => {
+                  event.stopPropagation()
+                  const title = window.prompt('Rename thread', thread.title)
+                  if (title) onRenameThread(thread.id, title)
+                }}>{thread.title}</span>
+              </button>
+              <button className="thread-action" aria-label="Archive thread" onClick={() => onArchiveThread(thread.id)}><Archive size={12} /></button>
+            </div>
           ))}
         </div>
       </div>
 
       <div className="sidebar-footer">
-        <div className="run-compact">
-          <span className={`run-dot ${run?.status ?? 'completed'}`} />
-          <div>
-            <strong>{run?.status ?? 'idle'}</strong>
-            <span>{run?.model ?? 'Mock'}</span>
-          </div>
-        </div>
         <div className="settings-wrap">
           {settingsOpen && (
             <div className="settings-popover">
-              <div className="settings-popover-title">设置</div>
-              <button onClick={onToggleTheme}>
-                <span>{theme === 'dark' ? '深色主题' : '浅色主题'}</span>
-                {theme === 'dark' ? <Moon size={16} /> : <Sun size={16} />}
-              </button>
-              <button>
-                <span>帮助与反馈</span>
-                <HelpCircle size={15} />
-              </button>
-              <button onClick={onRefresh}>
-                <span>检查更新</span>
-                <RefreshCw size={15} />
-              </button>
-              <button className="settings-logout">
-                <span>退出登录</span>
-                <LogOut size={15} />
-              </button>
-              <button className="settings-user">
-                <span className="settings-avatar">雪</span>
-                <span>雪安</span>
-                <ChevronRight size={16} />
-              </button>
+              {settingsItems.map((item) => (
+                <button
+                  className={item.id === 'theme' ? 'settings-menu-row theme-row' : 'settings-menu-row'}
+                  key={item.id}
+                  onClick={() => handleSettingsAction(item.id)}
+                >
+                  <span className="settings-menu-label">
+                    {item.id === 'settings' && <Settings size={15} />}
+                    {item.id === 'theme' && <MonitorCog size={15} />}
+                    {item.id === 'update' && <RefreshCw size={15} />}
+                    {item.label}
+                  </span>
+                  {item.id === 'settings' && <span className="settings-menu-value">›</span>}
+                  {item.id === 'theme' && (
+                    <span className="theme-segment" aria-label="Theme mode">
+                      <span className={theme === 'light' ? 'selected' : ''}>Light</span>
+                      <span className={theme === 'dark' ? 'selected' : ''}>Dark</span>
+                    </span>
+                  )}
+                  {item.id === 'update' && (
+                    <span className="settings-menu-value">
+                      {item.value}
+                      <Check size={13} />
+                    </span>
+                  )}
+                </button>
+              ))}
             </div>
           )}
           <button
