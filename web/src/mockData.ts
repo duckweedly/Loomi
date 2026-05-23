@@ -7,7 +7,8 @@ export const threads: Thread[] = [
     project: 'Loomi',
     mode: 'work',
     updatedAt: '2m',
-    status: 'running',
+    lifecycleStatus: 'active',
+    runStatus: 'running',
   },
   {
     id: 'thread-docs',
@@ -15,7 +16,8 @@ export const threads: Thread[] = [
     project: 'Planning',
     mode: 'work',
     updatedAt: '18m',
-    status: 'completed',
+    lifecycleStatus: 'active',
+    runStatus: 'completed',
   },
   {
     id: 'thread-agent',
@@ -23,7 +25,8 @@ export const threads: Thread[] = [
     project: 'Lab',
     mode: 'chat',
     updatedAt: '1h',
-    status: 'stopped',
+    lifecycleStatus: 'active',
+    runStatus: 'stopped',
   },
 ]
 

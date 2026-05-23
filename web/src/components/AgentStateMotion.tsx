@@ -29,13 +29,14 @@ export function deriveAgentMotionState(run: Run | null): AgentMotionState {
 
 type Props = {
   run: Run | null
+  compact?: boolean
 }
 
-export function AgentStateMotion({ run }: Props) {
+export function AgentStateMotion({ run, compact = false }: Props) {
   const state = deriveAgentMotionState(run)
 
   return (
-    <div className="agent-motion-card" data-state={state} aria-label={`Agent state: ${stateLabels[state]}`}>
+    <div className={compact ? 'agent-motion-card compact' : 'agent-motion-card'} data-state={state} aria-label={`Agent state: ${stateLabels[state]}`}>
       <div className="agent-motion-stage">
         <div className="agent-motion-ring" />
         <div className="agent-motion-shadow" />

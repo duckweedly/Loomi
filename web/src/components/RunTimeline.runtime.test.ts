@@ -21,6 +21,7 @@ describe('RunTimeline runtime linkage', () => {
     const source = readFileSync(resolve(import.meta.dir, 'RunRail.tsx'), 'utf8')
 
     expect(source).toContain('onSelectRuntimeScript')
-    expect(source).toContain('失败剧本')
+    expect(source).toContain('Scenario')
+    expect(source).toContain('Fail')
   })
 })

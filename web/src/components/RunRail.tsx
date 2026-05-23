@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Check, ChevronDown, FileText, Folder, Globe2 } from 'lucide-react'
+import { Check, ChevronDown, FileText, Folder, Globe2, Minus } from 'lucide-react'
 import type { Run, RuntimeScriptId } from '../domain'
 import { AgentStateMotion } from './AgentStateMotion'
 
@@ -20,8 +20,8 @@ function getEventClassName(status: Run['events'][number]['status']) {
 
 function getEventMark(event: Run['events'][number], index: number) {
   if (event.status === 'running') return index + 1
-  if (event.status === 'failed' || event.status === 'stopped') return '!'
-  return <Check size={15} />
+  if (event.status === 'failed' || event.status === 'stopped') return <Minus size={10} />
+  return <Check size={11} />
 }
 
 export function RunRail({ run, open, onOpenArtifact, onStopRun, selectedRuntimeScript = 'success', onSelectRuntimeScript }: Props) {
@@ -43,14 +43,15 @@ export function RunRail({ run, open, onOpenArtifact, onStopRun, selectedRuntimeS
           <ChevronDown size={18} />
         </button>
         <div className="rail-card-body progress-list">
-          <AgentStateMotion run={run} />
+          <AgentStateMotion run={run} compact />
           {onSelectRuntimeScript && (
-            <div className="runtime-script-switch" aria-label="Mock runtime script">
-              <button className={selectedRuntimeScript === 'success' ? 'selected' : undefined} onClick={() => onSelectRuntimeScript('success')}>成功剧本</button>
-              <button className={selectedRuntimeScript === 'failure' ? 'selected' : undefined} onClick={() => onSelectRuntimeScript('failure')}>失败剧本</button>
+            <div className="runtime-script-switch compact" aria-label="Mock runtime script">
+              <span>Scenario</span>
+              <button className={selectedRuntimeScript === 'success' ? 'selected' : undefined} onClick={() => onSelectRuntimeScript('success')}>Success</button>
+              <button className={selectedRuntimeScript === 'failure' ? 'selected' : undefined} onClick={() => onSelectRuntimeScript('failure')}>Fail</button>
             </div>
           )}
-          {run?.status === 'running' && onStopRun && <button className="runtime-stop-button" onClick={onStopRun}>停止</button>}
+          {run?.status === 'running' && onStopRun && <button className="runtime-stop-button ghost" onClick={onStopRun}>Stop run</button>}
           {run?.events.map((event, index) => (
             <div key={event.id} className={getEventClassName(event.status)}>
               <span className="progress-mark">{getEventMark(event, index)}</span>
