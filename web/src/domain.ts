@@ -1,4 +1,8 @@
-export type RunStatus = 'running' | 'completed' | 'stopped'
+export type RunStatus = 'pending' | 'running' | 'completed' | 'failed' | 'stopped'
+
+export type RunEventCategory = 'lifecycle' | 'progress' | 'message' | 'error' | 'final'
+
+export type StreamState = 'connecting' | 'live' | 'recoverable_error' | 'closed'
 
 export type Thread = {
   id: string
@@ -30,11 +34,16 @@ export type Message = {
 
 export type RunEvent = {
   id: string
+  runId?: string
+  threadId?: string
+  sequence?: number
+  category?: RunEventCategory
   type: string
   label: string
   detail: string
+  content?: string | null
   time: string
-  status: 'pending' | 'running' | 'completed' | 'stopped'
+  status: RunStatus
 }
 
 export type Run = {

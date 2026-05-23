@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { apiClient } from './apiClient'
-import type { Message, Run, Thread } from './domain'
+import type { Message, Run, RunEvent, StreamState, Thread } from './domain'
 import { createNextThreadTitle } from './threadTitles'
 
 type RefreshResult = {
@@ -25,16 +25,31 @@ export function shouldApplySendMessageResult({ requestedThreadId, currentSelecte
   return requestedThreadId === currentSelectedThreadId
 }
 
+export function shouldApplyRunStreamEvent({ eventThreadId, eventRunId, selectedThreadId, currentRunId }: { eventThreadId: string; eventRunId: string; selectedThreadId: string; currentRunId: string }) {
+  return eventThreadId === selectedThreadId && eventRunId === currentRunId
+}
+
+export function mergeRunEvents(existing: RunEvent[], incoming: RunEvent[]) {
+  const byKey = new Map<string, RunEvent>()
+  for (const event of [...existing, ...incoming]) {
+    byKey.set(event.id || String(event.sequence), event)
+  }
+  return [...byKey.values()].sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0))
+}
+
 export function useWorkspaceState() {
   const [threads, setThreads] = useState<Thread[]>([])
   const [selectedThreadId, setSelectedThreadId] = useState('thread-brief')
   const [messages, setMessages] = useState<Message[]>([])
   const [run, setRun] = useState<Run | null>(null)
+  const [streamState, setStreamState] = useState<StreamState>('closed')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const selectedThreadIdRef = useRef(selectedThreadId)
+  const runRef = useRef<Run | null>(run)
 
   selectedThreadIdRef.current = selectedThreadId
+  runRef.current = run
 
   const selectedThread = useMemo(
     () => threads.find((thread) => thread.id === selectedThreadId) ?? null,
@@ -54,6 +69,7 @@ export function useWorkspaceState() {
       setThreads(nextThreads)
       setMessages(nextMessages)
       setRun(nextRun)
+      setStreamState(nextRun?.status === 'running' ? 'connecting' : 'closed')
       if (!threadId && nextThreadId) setSelectedThreadId(nextThreadId)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'API request failed')
@@ -67,6 +83,27 @@ export function useWorkspaceState() {
   useEffect(() => {
     void refresh(selectedThreadId)
   }, [refresh, selectedThreadId])
+
+  useEffect(() => {
+    if (!run || run.status !== 'running' || !apiClient.subscribeRunEvents) {
+      setStreamState(run?.status === 'running' ? 'recoverable_error' : 'closed')
+      return
+    }
+    setStreamState('connecting')
+    const afterSequence = run.events.at(-1)?.sequence ?? 0
+    const unsubscribe = apiClient.subscribeRunEvents(
+      run.id,
+      afterSequence,
+      (event) => {
+        const currentRun = runRef.current
+        if (!currentRun || !shouldApplyRunStreamEvent({ eventThreadId: event.threadId ?? '', eventRunId: event.runId ?? '', selectedThreadId: selectedThreadIdRef.current, currentRunId: currentRun.id })) return
+        setStreamState(event.status === 'running' ? 'live' : 'closed')
+        setRun({ ...currentRun, status: event.status === 'running' ? currentRun.status : event.status, events: mergeRunEvents(currentRun.events, [event]) })
+      },
+      () => setStreamState('recoverable_error'),
+    )
+    return unsubscribe
+  }, [run?.id, run?.status, run?.events.length])
 
   const selectThread = useCallback((threadId: string) => {
     setSelectedThreadId(threadId)
@@ -83,6 +120,7 @@ export function useWorkspaceState() {
       if (!shouldApplySendMessageResult({ requestedThreadId, currentSelectedThreadId: selectedThreadIdRef.current })) return
       setMessages(result.messages)
       setRun(result.run)
+      setStreamState(result.run.status === 'running' ? 'connecting' : 'closed')
       setThreads(nextThreads)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'API request failed')
@@ -125,7 +163,9 @@ export function useWorkspaceState() {
 
   const stopRun = useCallback(async () => {
     if (!run || run.status !== 'running') return
-    setRun(await apiClient.stopRun(run.id))
+    const stopped = await apiClient.stopRun(run.id)
+    setRun(stopped)
+    setStreamState('closed')
     setThreads(await apiClient.listThreads())
   }, [run])
 
@@ -135,6 +175,7 @@ export function useWorkspaceState() {
     selectedThreadId,
     messages,
     run,
+    streamState,
     loading,
     error,
     dataSourceMode: apiClient.mode,

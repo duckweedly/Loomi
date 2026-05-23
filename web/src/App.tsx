@@ -17,6 +17,7 @@ export default function App() {
     selectedThreadId,
     messages,
     run,
+    streamState,
     loading,
     error,
     dataSourceMode,
@@ -26,6 +27,7 @@ export default function App() {
     renameThread,
     archiveThread,
     sendMessage,
+    stopRun,
   } = useWorkspaceState()
 
   const selectedMode = selectedThread?.mode ?? 'chat'
@@ -146,7 +148,9 @@ export default function App() {
                 loading={loading}
                 error={error}
                 dataSourceMode={dataSourceMode}
+                streamState={streamState}
                 onSendMessage={(content) => void sendMessage(content)}
+                onStopRun={() => void stopRun()}
               />
             </section>
             <RunTimeline

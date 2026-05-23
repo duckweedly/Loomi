@@ -1,4 +1,4 @@
-import type { Message, Run, Thread } from '../domain'
+import type { Message, Run, StreamState, Thread } from '../domain'
 import { Composer } from './Composer'
 import { ToolCallCard } from './ToolCallCard'
 
@@ -10,19 +10,23 @@ type Props = {
   loading: boolean
   error?: string | null
   dataSourceMode: 'mock' | 'real_api'
+  streamState: StreamState
   onSendMessage: (content: string) => void
+  onStopRun: () => void
 }
 
-export function ChatCanvas({ sidebarCollapsed, thread, messages, run, loading, error, dataSourceMode, onSendMessage }: Props) {
+export function ChatCanvas({ sidebarCollapsed, thread, messages, run, loading, error, dataSourceMode, streamState, onSendMessage, onStopRun }: Props) {
   return (
     <section className="chat-shell glass-panel">
       <div className="context-bar">
         <span>Context</span>
-        <strong>{run?.context ?? '-'}</strong>
+        <strong>{run?.context === 'local_simulated' ? 'Local simulated' : run?.context ?? '-'}</strong>
         <span className="context-line" />
         {sidebarCollapsed && <strong>{thread?.title ?? 'Untitled'}</strong>}
         <span>{thread?.mode ?? 'work'}</span>
         <span>{dataSourceMode === 'real_api' ? 'Real API' : 'Mock'}</span>
+        <span>{streamState}</span>
+        {run?.status === 'running' && <button className="titlebar-button" onClick={onStopRun}>Stop</button>}
       </div>
 
       {error && <div className="api-error">{error}</div>}

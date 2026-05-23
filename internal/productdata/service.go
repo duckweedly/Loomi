@@ -18,6 +18,12 @@ type Service interface {
 	ArchiveThread(context.Context, identity.LocalIdentity, string) (Thread, error)
 	CreateMessage(context.Context, identity.LocalIdentity, string, CreateMessageInput) (Message, bool, error)
 	ListMessages(context.Context, identity.LocalIdentity, string) ([]Message, error)
+	StartRun(context.Context, identity.LocalIdentity, string, StartRunInput) (Run, error)
+	GetRun(context.Context, identity.LocalIdentity, string) (Run, error)
+	GetCurrentRun(context.Context, identity.LocalIdentity, string) (Run, error)
+	ListRunEvents(context.Context, identity.LocalIdentity, string, int) ([]RunEvent, error)
+	AppendRunEvent(context.Context, identity.LocalIdentity, string, AppendRunEventInput) (RunEvent, error)
+	StopRun(context.Context, identity.LocalIdentity, string) (StopRunOutput, error)
 }
 
 type SeedService interface {
@@ -31,19 +37,23 @@ type Repository interface {
 }
 
 type MemoryService struct {
-	mu       sync.Mutex
-	now      func() time.Time
-	users    map[string]User
-	threads  map[string]Thread
-	messages map[string][]Message
+	mu        sync.Mutex
+	now       func() time.Time
+	users     map[string]User
+	threads   map[string]Thread
+	messages  map[string][]Message
+	runs      map[string]Run
+	runEvents map[string][]RunEvent
 }
 
 func NewMemoryService() *MemoryService {
 	return &MemoryService{
-		now:      time.Now,
-		users:    map[string]User{},
-		threads:  map[string]Thread{},
-		messages: map[string][]Message{},
+		now:       time.Now,
+		users:     map[string]User{},
+		threads:   map[string]Thread{},
+		messages:  map[string][]Message{},
+		runs:      map[string]Run{},
+		runEvents: map[string][]RunEvent{},
 	}
 }
 
@@ -197,6 +207,127 @@ func (s *MemoryService) ListMessages(_ context.Context, ident identity.LocalIden
 	return messages, nil
 }
 
+func (s *MemoryService) StartRun(_ context.Context, ident identity.LocalIdentity, threadID string, input StartRunInput) (Run, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user := s.ensureUserLocked(ident)
+	thread, ok := s.threads[threadID]
+	if !ok || thread.UserID != user.ID || thread.LifecycleStatus != ThreadLifecycleActive {
+		return Run{}, NewError(CodeThreadNotFound, "Thread not found.")
+	}
+	for _, run := range s.runs {
+		if run.ThreadID == threadID && run.UserID == user.ID && IsRunActive(run.Status) {
+			return Run{}, NewError(CodeActiveRunExists, "Thread already has an active run.")
+		}
+	}
+	now := s.now()
+	run := Run{ID: NewRunID(), ThreadID: threadID, UserID: user.ID, Status: RunStatusRunning, Source: RunSourceLocalSimulated, Title: "Local simulated run", CreatedAt: now, UpdatedAt: now}
+	s.runs[run.ID] = run
+	s.runEvents[run.ID] = append(s.runEvents[run.ID], RunEvent{ID: NewRunEventID(), RunID: run.ID, ThreadID: threadID, UserID: user.ID, Sequence: 1, Category: RunEventCategoryLifecycle, Type: "run_created", Summary: "Run created", Metadata: RedactEventMetadata(map[string]any{"script_name": NormalizeScriptName(input.ScriptName)}), CreatedAt: now})
+	thread.UpdatedAt = now
+	s.threads[threadID] = thread
+	return run, nil
+}
+
+func (s *MemoryService) GetRun(_ context.Context, ident identity.LocalIdentity, runID string) (Run, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user := s.ensureUserLocked(ident)
+	run, ok := s.runs[runID]
+	if !ok || run.UserID != user.ID {
+		return Run{}, NewError(CodeRunNotFound, "Run not found.")
+	}
+	return run, nil
+}
+
+func (s *MemoryService) GetCurrentRun(_ context.Context, ident identity.LocalIdentity, threadID string) (Run, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user := s.ensureUserLocked(ident)
+	var latest *Run
+	for _, run := range s.runs {
+		if run.ThreadID != threadID || run.UserID != user.ID {
+			continue
+		}
+		candidate := run
+		if latest == nil || candidate.UpdatedAt.After(latest.UpdatedAt) {
+			latest = &candidate
+		}
+	}
+	if latest == nil {
+		return Run{}, NewError(CodeRunNotFound, "Run not found.")
+	}
+	return *latest, nil
+}
+
+func (s *MemoryService) ListRunEvents(_ context.Context, ident identity.LocalIdentity, runID string, afterSequence int) ([]RunEvent, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user := s.ensureUserLocked(ident)
+	run, ok := s.runs[runID]
+	if !ok || run.UserID != user.ID {
+		return nil, NewError(CodeRunNotFound, "Run not found.")
+	}
+	events := make([]RunEvent, 0, len(s.runEvents[runID]))
+	for _, event := range s.runEvents[runID] {
+		if event.Sequence > afterSequence {
+			events = append(events, event)
+		}
+	}
+	sort.SliceStable(events, func(i, j int) bool { return events[i].Sequence < events[j].Sequence })
+	return events, nil
+}
+
+func (s *MemoryService) AppendRunEvent(_ context.Context, ident identity.LocalIdentity, runID string, input AppendRunEventInput) (RunEvent, error) {
+	input, err := NormalizeRunEventInput(input)
+	if err != nil {
+		return RunEvent{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user := s.ensureUserLocked(ident)
+	run, ok := s.runs[runID]
+	if !ok || run.UserID != user.ID {
+		return RunEvent{}, NewError(CodeRunNotFound, "Run not found.")
+	}
+	if IsRunTerminal(run.Status) {
+		return RunEvent{}, NewError(CodeInvalidRequest, "Terminal run cannot accept new events.")
+	}
+	now := s.now()
+	event := RunEvent{ID: NewRunEventID(), RunID: run.ID, ThreadID: run.ThreadID, UserID: user.ID, Sequence: len(s.runEvents[run.ID]) + 1, Category: input.Category, Type: input.Type, Summary: input.Summary, Content: input.Content, Metadata: input.Metadata, CreatedAt: now}
+	s.runEvents[run.ID] = append(s.runEvents[run.ID], event)
+	run.UpdatedAt = now
+	if input.Category == RunEventCategoryFinal {
+		run.Status = statusFromFinalType(input.Type)
+		run.CompletedAt = &now
+	}
+	s.runs[run.ID] = run
+	return event, nil
+}
+
+func (s *MemoryService) StopRun(_ context.Context, ident identity.LocalIdentity, runID string) (StopRunOutput, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user := s.ensureUserLocked(ident)
+	run, ok := s.runs[runID]
+	if !ok || run.UserID != user.ID {
+		return StopRunOutput{}, NewError(CodeRunNotFound, "Run not found.")
+	}
+	if IsRunTerminal(run.Status) {
+		return StopRunOutput{Run: run, Result: StopRunResultAlreadyTerminal}, nil
+	}
+	now := s.now()
+	run.Status = RunStatusStopped
+	run.UpdatedAt = now
+	run.CompletedAt = &now
+	s.runs[run.ID] = run
+	lifecycle := RunEvent{ID: NewRunEventID(), RunID: run.ID, ThreadID: run.ThreadID, UserID: user.ID, Sequence: len(s.runEvents[run.ID]) + 1, Category: RunEventCategoryLifecycle, Type: "run_stopped", Summary: "Run stopped", Metadata: map[string]any{}, CreatedAt: now}
+	s.runEvents[run.ID] = append(s.runEvents[run.ID], lifecycle)
+	final := RunEvent{ID: NewRunEventID(), RunID: run.ID, ThreadID: run.ThreadID, UserID: user.ID, Sequence: len(s.runEvents[run.ID]) + 1, Category: RunEventCategoryFinal, Type: "run_stopped", Summary: "Run stopped", Metadata: map[string]any{}, CreatedAt: now}
+	s.runEvents[run.ID] = append(s.runEvents[run.ID], final)
+	return StopRunOutput{Run: run, Result: StopRunResultStopped, Events: []RunEvent{lifecycle, final}}, nil
+}
+
 func (s *MemoryService) ensureUserLocked(ident identity.LocalIdentity) User {
 	if user, ok := s.users[ident.UserID]; ok {
 		return user
@@ -220,6 +351,17 @@ func (s *MemoryService) upsertThreadLocked(id string, userID string, title strin
 	thread.UpdatedAt = now
 	s.threads[thread.ID] = thread
 	return thread
+}
+
+func statusFromFinalType(eventType string) RunStatus {
+	switch eventType {
+	case "run_failed":
+		return RunStatusFailed
+	case "run_stopped":
+		return RunStatusStopped
+	default:
+		return RunStatusCompleted
+	}
 }
 
 func (s *MemoryService) upsertMessageLocked(id string, threadID string, userID string, content string, clientMessageID *string) (Message, bool, error) {
