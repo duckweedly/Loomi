@@ -1,4 +1,6 @@
-docs/
+/docs/
+.worktrees
+.worktrees/
 
 .DS_Store
 .env

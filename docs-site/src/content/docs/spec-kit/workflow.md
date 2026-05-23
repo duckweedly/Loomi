@@ -1,0 +1,64 @@
+---
+title: Spec Kit 工作流
+description: Loomi 使用 Spec Kit 管理需求、计划、任务和实现。
+---
+
+Loomi 使用 Spec Kit 作为 AI 开发前的对齐层。它的作用不是简单生成代码，而是让每个非平凡功能都有可审查的需求、技术计划和任务拆分。
+
+## 推荐顺序
+
+```text
+/speckit.specify
+/speckit.clarify
+/speckit.plan
+/speckit.tasks
+/speckit.analyze
+/speckit.implement
+```
+
+Claude Code 项目内命令使用横线格式：
+
+```text
+/speckit-specify
+/speckit-clarify
+/speckit-plan
+/speckit-tasks
+/speckit-implement
+```
+
+`/speckit-specify` 关注用户目标、功能边界、验收标准和非目标，不应提前写实现细节。
+
+`/speckit-clarify` 用来收敛影响实现的模糊点，避免 AI 自行猜测产品决策。
+
+`/speckit-plan` 把需求翻译成技术方案，并说明依赖、约束、数据模型、接口和验证方式。
+
+`/speckit-tasks` 将计划拆成可独立完成、可验证的任务。
+
+`/speckit-implement` 按任务实现，并在必要时回到 spec 或 plan 修正前提。
+
+## 当前功能：M3 Auth、Thread 与 Message
+
+当前 Spec Kit 功能目录：
+
+```text
+specs/002-m3-auth-thread-message/
+```
+
+关键产物：
+
+- `spec.md`：定义 M3 范围，明确只做本地 identity、users、threads、messages、real/mock API 切换、M3 readiness、seed 与文档边界。
+- `plan.md`：确定复用 M2 Go API/PostgreSQL/migration/diagnostics 基座，并新增 `internal/identity`、`internal/productdata` 与 `/v1` thread/message API。
+- `research.md`：记录为什么继续使用 Go stdlib HTTP、pgxpool、显式 migration、固定本地用户、partial unique idempotency、`VITE_LOOMI_API_BASE_URL` 与显式 seed 命令。
+- `data-model.md`：定义 Local Identity、User、Thread、Message、Client Message Identifier、API Error、Schema Revision、Seed Data Set 与 Frontend Data Source Mode。
+- `contracts/http-m3.openapi.yaml`：定义 `/v1/me`、`/v1/threads` 和 `/v1/threads/{thread_id}/messages` 响应契约。
+- `contracts/migration-cli.md`：定义 M3 schema 的 apply/version/rollback/reapply 命令契约。
+- `contracts/seed-cli.md`：定义显式本地 seed 命令、固定 demo IDs 和幂等 demo data 行为。
+- `contracts/frontend-data-source.md`：定义前端 mock/real API 切换、real API 失败不自动 fallback 和 stale response guard 的规则。
+- `quickstart.md`：记录本地 M3 readiness、CRUD、idempotency、seed、前端 mock/real 和 docs 验证流程。
+- `tasks.md`：下一步由 `/speckit-tasks` 按 user story 拆分实现任务和验证门。
+
+## 与文档站的关系
+
+Spec Kit 产物是开发事实来源之一，文档站是面向阅读和检索的长期知识库。开发时应把关键规格、架构设计、接口变化、验证结果和技术取舍同步到 `docs-site/src/content/docs/`。
+
+M2 实现同步更新了 API 文档、架构说明、runbook、Spec Kit 入口和 devlog。后续 M3/M4 应继续沿用相同模式，把 thread/message、run/event/SSE 的规格、契约和验证结果写入 Spec Kit 与文档站。

@@ -1,0 +1,43 @@
+---
+title: Loomi 文档站
+description: Loomi 的路线、架构、规格、开发日志和技术决策入口。
+template: splash
+hero:
+  tagline: 用文档驱动每一步 Agent 平台开发，让规格、实现和技术细节始终同步。
+  actions:
+    - text: 查看路线图
+      link: /roadmap/staged-roadmap/
+      icon: right-arrow
+    - text: 开发同步规则
+      link: /workflow/documentation-sync/
+      icon: document
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+## 文档结构
+
+<CardGrid stagger>
+	<Card title="路线图" icon="rocket">
+		记录 Loomi 从 Web 壳、API/DB 基座、Run/Event/SSE 到 Worker、工具调用和桌面运行时的阶段推进。
+	</Card>
+	<Card title="架构" icon="setting">
+		沉淀模块边界、数据流、运行状态、事件模型、权限边界和可观测性设计。
+	</Card>
+	<Card title="Spec Kit" icon="document">
+		链接和解释每个功能的 `spec.md`、`plan.md`、`tasks.md`，让需求、计划和实现保持一致。
+	</Card>
+	<Card title="开发日志" icon="pencil">
+		每次非平凡开发都记录本轮实现、验证结果、遗留问题和下一步建议。
+	</Card>
+	<Card title="技术决策" icon="open-book">
+		用 ADR 记录为什么选择某个方案，避免未来只看到代码却不知道取舍背景。
+	</Card>
+</CardGrid>
+
+## 当前项目原则
+
+Loomi 的目标是学习和复刻 Agent 平台的核心机制，但坚持机制对标、表达自研。项目优先构建可运行、可测试、可解释的薄片；先完成核心链路，再逐步扩展复杂桌面运行时、插件、Channels、Activity Recorder 和多 Agent 能力。
+
+开发时默认要求同步更新本文档站。除非只是修拼写、格式化或无行为变化的小改动，否则代码、规格、架构说明、开发日志和验证结果应该一起更新。
