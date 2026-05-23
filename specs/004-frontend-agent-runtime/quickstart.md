@@ -2,13 +2,13 @@
 
 ## Goal
 
-Validate that M3.5 provides a frontend-only Agent runtime skeleton before backend run/event/SSE exists.
+Validate that M3.5 provides a frontend Agent runtime skeleton that supports deterministic mock scripts and preserves M4 real API run/event/SSE.
 
 ## Prerequisites
 
 - Repository dependencies installed.
 - Use mock mode by leaving `VITE_LOOMI_API_BASE_URL` unset for the web renderer.
-- Use real API mode only to verify backend capability unavailable behavior.
+- Use real API mode with a ready local API to verify M4 run/event/SSE behavior.
 
 ## Automated validation
 
@@ -33,8 +33,8 @@ Expected results:
 3. Verify a new empty thread shows a clear empty-thread state rather than a blank canvas.
 4. Force or simulate loading state and verify the main area shows loading.
 5. Force or simulate error state and verify the main area shows a concise Chinese failure state and retry action.
-6. Configure real API mode without runtime support and attempt runtime execution.
-7. Verify the main area shows backend capability unavailable instead of mock execution.
+6. Configure real API mode with a ready local API and attempt runtime execution.
+7. Verify the main area shows Real API, stream state, and local simulated run context instead of mock execution.
 
 ## Browser smoke: mock success script
 

@@ -98,12 +98,13 @@ describe('run stream state helpers', () => {
     expect(shouldApplyRunStreamEvent({ eventThreadId: 'thread-a', eventRunId: 'run-a', selectedThreadId: 'thread-a', currentRunId: 'run-a' })).toBe(true)
   })
 
-  test('state hook wires the real stream subscription and recoverable error state', () => {
+  test('state hook wires one real stream subscription per active run', () => {
     const source = Bun.file(new URL('./state.ts', import.meta.url)).text()
     return Promise.all([
       expect(source).resolves.toContain('apiClient.subscribeRunEvents'),
       expect(source).resolves.toContain('recoverable_error'),
       expect(source).resolves.toContain('mergeRunEvents'),
+      expect(source).resolves.not.toContain('run?.events.length'),
     ])
   })
 

@@ -4,7 +4,7 @@
 
 **Created**: 2026-05-23
 
-**Status**: Draft
+**Status**: Implemented
 
 **Input**: User description: "M3.5 Frontend Agent Runtime Skeleton：在后端 M4/M5 未完成前，为 Loomi 前端设计 Agent 交互骨架，包括 Chat Canvas 状态机、mock run/event 成功/失败剧本、Chat/Run Timeline/Agent 状态徽章联动，以及 future real adapter 接入点 sendMessage/createRun/subscribeRunEvents/appendAssistantDelta/completeRun/failRun/stopRun。要求 mock 和 real 共用同一 UI 状态机，中文学习文档，避免继续只做 UI 外观抛光。"
 
@@ -30,7 +30,7 @@
 
 ### User Story 2 - 用 mock 剧本体验一次完整 Agent 执行 (Priority: P1)
 
-作为产品设计和开发者，我需要在后端 M4/M5 未完成时，通过 mock 剧本体验一次完整 Agent 执行：发送消息后立即看到用户消息、run 创建、上下文加载、思考、草拟、助手回复和完成结果。失败剧本也必须能展示失败路径。
+作为产品设计和开发者，我需要通过 mock 剧本体验一次完整 Agent 执行，并在 real API mode 下保留 M4 run/event/SSE：发送消息后立即看到用户消息、run 创建、上下文加载、思考、草拟、助手回复和完成结果。失败剧本也必须能展示失败路径。
 
 **Why this priority**: 这让前端可以提前验证 Agent 产品体验，而不是等待后端完成后才发现 Chat、Timeline 和状态徽章无法联动。
 
@@ -64,7 +64,7 @@
 
 ### User Story 4 - 为真实后端接入预留同一套状态机 (Priority: P2)
 
-作为开发者，我需要 mock 和未来真实后端共用同一套 UI 状态机。后端 M4/M5 完成后，替换数据来源即可接入真实 run/event/SSE，不需要重写 Chat Canvas、Timeline 或 Agent 状态徽章。
+作为开发者，我需要 mock 和真实后端共用同一套 UI 状态机。M4 real API run/event/SSE 接入后，Chat Canvas、Timeline 和 Agent 状态徽章不需要重写即可消费真实事件。
 
 **Why this priority**: 如果 mock 和 real 各自走一套逻辑，前端现在做的体验验证会在后端完成后被推翻。统一状态机能保护当前投入。
 
@@ -73,8 +73,8 @@
 **Acceptance Scenarios**:
 
 1. **Given** mock adapter 提供成功 run 剧本，**When** UI 消费其状态，**Then** UI 使用同一套状态机渲染 Chat、Timeline 和 Agent 徽章。
-2. **Given** real adapter 暂时不支持 run/event 能力，**When** 用户尝试触发执行，**Then** UI 进入“后端能力未接入”状态，而不是走独立 mock-only 逻辑。
-3. **Given** 未来 real adapter 提供 run/event 流，**When** 它产生与 mock adapter 同语义的事件，**Then** UI 不需要改变用户可见行为。
+2. **Given** real API mode 已配置且 API ready，**When** 用户尝试触发执行，**Then** UI 使用 M4 run/event/SSE，而不是走独立 mock-only 逻辑。
+3. **Given** 后续 real adapter 或 LLM gateway 提供更丰富事件，**When** 它产生与 mock adapter 同语义的事件，**Then** UI 不需要改变用户可见行为。
 
 ---
 
@@ -85,7 +85,7 @@
 - 用户快速切换 thread 时，旧 thread 的 mock run 后续事件不得污染当前 thread。
 - 用户在 run 执行中再次发送消息：系统必须给出明确状态，避免两个 run 的事件混在同一个 timeline 中。
 - mock 成功剧本和失败剧本都必须可重复触发，且每次执行都能产生独立 run 记录。
-- 后端真实 API 已配置但 run/event 能力不可用时，系统必须显示能力未接入，而不是静默 fallback 到 mock。
+- 后端真实 API 已配置且 ready 时，系统必须使用 M4 run/event/SSE，而不是静默 fallback 到 mock。
 - assistant delta 为空或中断时，系统必须保留用户消息和失败/停止状态。
 - 停止 run 后，后续事件不得继续推进到 completed。
 
@@ -115,8 +115,8 @@
 - **Runtime Script**: A deterministic mock execution scenario that describes how a submitted user message becomes ordered run events and, for success, a final assistant response.
 - **Run Event**: A user-visible execution milestone such as run created, context loading, thinking, drafting, assistant message completed, completed, failed, or stopped.
 - **Assistant Draft**: The in-progress assistant response content shown while a run is drafting. It may be empty, partial, complete, stopped, or failed.
-- **Execution Adapter**: A source of runtime actions and events. The mock adapter and future real adapter must expose the same user-visible semantics.
-- **Backend Capability State**: Whether the currently selected data source can provide run/event behavior. Unsupported capability is a visible state, not an invisible fallback.
+- **Execution Adapter**: A source of runtime actions and events. The mock adapter and real API boundary must expose the same user-visible semantics.
+- **Backend Capability State**: Whether the currently selected data source can provide a runtime capability. Unsupported future capability is a visible state, not an invisible fallback.
 
 ## Success Criteria *(mandatory)*
 
@@ -128,14 +128,14 @@
 - **SC-004**: In mock failure mode, one submitted message visibly progresses to a failed state and does not append a successful assistant reply.
 - **SC-005**: Chat Canvas, Timeline, and Agent state motion reflect the same selected run state for 100% of mock success, failure, and stopped script checks.
 - **SC-006**: Switching threads during a mock run results in 0 stale event updates being applied to the newly selected thread.
-- **SC-007**: When real API mode lacks run/event support, users see a backend capability unavailable state within 1 second of attempting an execution.
-- **SC-008**: Future real adapter planning can point to the same execution boundary used by mock without defining a second UI state model.
+- **SC-007**: When real API mode is configured with M4 readiness, users see real run/event/SSE state instead of hidden mock execution.
+- **SC-008**: Future LLM/tool adapter planning can point to the same execution boundary used by mock and M4 without defining a second UI state model.
 
 ## Assumptions
 
-- This is an M3.5 frontend milestone that sits between M3 thread/message persistence and M4 run/event/SSE.
-- The feature does not require real backend run/event/SSE, LLM gateway, worker queue, tool execution, or desktop runtime changes.
+- This is an M3.5 frontend milestone that now sits alongside M4 run/event/SSE.
+- The feature does not require LLM gateway, worker queue, tool execution, or desktop runtime changes.
 - Mock scripts are deterministic by default so frontend behavior is reproducible in tests and screenshots.
 - User-facing UI state labels and learning documentation should be Chinese; code identifiers and public technical contracts remain English.
 - The first implementation focuses on Chat mode. Work mode keeps separate recent threads and can adopt the same runtime model later when work-specific execution flows are designed.
-- Real API mode must stay honest: if backend capability is missing, it shows a capability state instead of pretending to execute with mock data.
+- Real API mode must stay honest: if M4 backend capability is available, it uses M4 run/event/SSE; if future capabilities are missing, it shows a capability state instead of pretending to execute with mock data.

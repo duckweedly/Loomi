@@ -258,13 +258,5 @@ func writeSSEEvent(w http.ResponseWriter, event productdata.RunEvent) {
 }
 
 func splitRunPath(path string) (string, string) {
-	trimmed := strings.TrimPrefix(path, "/v1/runs/")
-	parts := strings.Split(trimmed, "/")
-	if len(parts) == 0 {
-		return "", ""
-	}
-	if len(parts) == 1 {
-		return parts[0], ""
-	}
-	return parts[0], strings.Join(parts[1:], "/")
+	return splitResourcePath(path, "/v1/runs/")
 }

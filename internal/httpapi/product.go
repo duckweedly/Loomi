@@ -3,7 +3,6 @@ package httpapi
 import (
 	"encoding/json"
 	"net/http"
-	"strings"
 
 	"github.com/sheridiany/loomi/internal/diagnostics"
 	"github.com/sheridiany/loomi/internal/identity"
@@ -209,13 +208,5 @@ func (s *Server) productAvailable(w http.ResponseWriter) bool {
 }
 
 func splitThreadPath(path string) (string, string) {
-	trimmed := strings.TrimPrefix(path, "/v1/threads/")
-	parts := strings.Split(trimmed, "/")
-	if len(parts) == 0 {
-		return "", ""
-	}
-	if len(parts) == 1 {
-		return parts[0], ""
-	}
-	return parts[0], strings.Join(parts[1:], "/")
+	return splitResourcePath(path, "/v1/threads/")
 }

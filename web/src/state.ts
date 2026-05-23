@@ -146,24 +146,34 @@ export function useWorkspaceState() {
 
   useEffect(() => {
     if (!run || run.status !== 'running' || !apiClient.subscribeRunEvents) {
-      setStreamState(run?.status === 'running' ? 'recoverable_error' : 'closed')
+      setStreamState((current) => {
+        const next = run?.status === 'running' ? 'recoverable_error' : 'closed'
+        return current === next ? current : next
+      })
       return
     }
-    setStreamState('connecting')
+    setStreamState((current) => (current === 'connecting' ? current : 'connecting'))
     const afterSequence = run.events.at(-1)?.sequence ?? 0
     const unsubscribe = apiClient.subscribeRunEvents(
       run.id,
       afterSequence,
       (event) => {
-        const currentRun = runRef.current
-        if (!currentRun || !shouldApplyRunStreamEvent({ eventThreadId: event.threadId ?? '', eventRunId: event.runId ?? '', selectedThreadId: selectedThreadIdRef.current, currentRunId: currentRun.id })) return
-        setStreamState(event.status === 'running' ? 'live' : 'closed')
-        setRun({ ...currentRun, status: event.status === 'running' ? currentRun.status : event.status, events: mergeRunEvents(currentRun.events, [event]) })
+        setRun((currentRun) => {
+          if (!currentRun || !shouldApplyRunStreamEvent({ eventThreadId: event.threadId ?? '', eventRunId: event.runId ?? '', selectedThreadId: selectedThreadIdRef.current, currentRunId: currentRun.id })) return currentRun
+          const status = event.status === 'running' ? currentRun.status : event.status
+          const nextRun = { ...currentRun, status, events: mergeRunEvents(currentRun.events, [event]) }
+          runRef.current = nextRun
+          return nextRun
+        })
+        setStreamState((current) => {
+          const next = event.status === 'running' ? 'live' : 'closed'
+          return current === next ? current : next
+        })
       },
-      () => setStreamState('recoverable_error'),
+      () => setStreamState((current) => (current === 'recoverable_error' ? current : 'recoverable_error')),
     )
     return unsubscribe
-  }, [run?.id, run?.status, run?.events.length])
+  }, [run?.id, run?.status])
 
   const selectThread = useCallback((threadId: string) => {
     setSelectedThreadId(threadId)

@@ -13,6 +13,12 @@ const run = (input: Partial<Run>): Run => ({
 })
 
 describe('deriveAgentMotionState', () => {
+  test('does not copy and reverse the event list on render', () => {
+    const source = Bun.file(new URL('./AgentStateMotion.tsx', import.meta.url)).text()
+
+    return expect(source).resolves.not.toContain('[...run.events].reverse()')
+  })
+
   test('uses idle when no run is selected', () => {
     expect(deriveAgentMotionState(null)).toBe('idle')
   })

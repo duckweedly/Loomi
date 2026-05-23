@@ -19,7 +19,13 @@ export function deriveAgentMotionState(run: Run | null): AgentMotionState {
   if (run.status === 'completed') return 'done'
   if (run.status === 'failed' || run.status === 'stopped') return 'error'
 
-  const currentEvent = [...run.events].reverse().find((event) => event.status === 'running') ?? run.events.at(-1)
+  let currentEvent = run.events.at(-1)
+  for (let index = run.events.length - 1; index >= 0; index -= 1) {
+    if (run.events[index].status === 'running') {
+      currentEvent = run.events[index]
+      break
+    }
+  }
   const eventText = `${currentEvent?.type ?? ''} ${currentEvent?.label ?? ''}`.toLowerCase()
   if (eventText.includes('tool')) return 'tool'
   if (eventText.includes('message') || eventText.includes('draft') || eventText.includes('reply')) return 'speaking'
