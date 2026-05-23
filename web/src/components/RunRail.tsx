@@ -29,6 +29,7 @@ export function RunRail({ run, open, onOpenArtifact }: Props) {
         </button>
         <div className="rail-card-body progress-list">
           <AgentStateMotion run={run} />
+          {run?.status === 'stopped' && <div className="progress-row done"><span className="progress-mark"><Check size={15} /></span><span>stopped</span><small>Now</small></div>}
           {run?.events.map((event, index) => (
             <div key={event.id} className={event.status === 'running' ? 'progress-row active' : 'progress-row done'}>
               <span className="progress-mark">{event.status === 'running' ? index + 1 : <Check size={15} />}</span>

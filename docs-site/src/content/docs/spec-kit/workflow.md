@@ -36,9 +36,27 @@ Claude Code 项目内命令使用横线格式：
 
 `/speckit-implement` 按任务实现，并在必要时回到 spec 或 plan 修正前提。
 
-## 当前功能：M3 Auth、Thread 与 Message
+## 当前功能：M4 Run、Event 与 SSE
 
 当前 Spec Kit 功能目录：
+
+```text
+specs/003-m4-run-event-sse/
+```
+
+关键产物：
+
+- `spec.md`：定义本地 run/event/SSE 用户故事和明确 deferred 的后续平台能力。
+- `plan.md`：确定使用 deterministic local simulation、PostgreSQL persistence 和 history-first SSE。
+- `data-model.md`：定义 Run、Run Event、Event Stream Cursor、Stop Request、Deterministic Local Simulation、Stream State 和 M4 Schema Revision。
+- `contracts/`：记录 HTTP、SSE、migration 与 frontend data-source 契约。
+- `tasks.md`：记录 M4 实现任务状态。
+
+2026-05-23 状态：M4 core run/event/SSE slice 已实现，验证结果记录在 M4 devlog。
+
+## 近期已完成：M3 Auth、Thread 与 Message
+
+Spec Kit 功能目录：
 
 ```text
 specs/002-m3-auth-thread-message/
@@ -55,10 +73,10 @@ specs/002-m3-auth-thread-message/
 - `contracts/seed-cli.md`：定义显式本地 seed 命令、固定 demo IDs 和幂等 demo data 行为。
 - `contracts/frontend-data-source.md`：定义前端 mock/real API 切换、real API 失败不自动 fallback 和 stale response guard 的规则。
 - `quickstart.md`：记录本地 M3 readiness、CRUD、idempotency、seed、前端 mock/real 和 docs 验证流程。
-- `tasks.md`：下一步由 `/speckit-tasks` 按 user story 拆分实现任务和验证门。
+- `tasks.md`：记录 M3 任务拆分与验证门。
 
 ## 与文档站的关系
 
 Spec Kit 产物是开发事实来源之一，文档站是面向阅读和检索的长期知识库。开发时应把关键规格、架构设计、接口变化、验证结果和技术取舍同步到 `docs-site/src/content/docs/`。
 
-M2 实现同步更新了 API 文档、架构说明、runbook、Spec Kit 入口和 devlog。后续 M3/M4 应继续沿用相同模式，把 thread/message、run/event/SSE 的规格、契约和验证结果写入 Spec Kit 与文档站。
+M2/M3/M4 实现都应同步更新 API 文档、架构说明、runbook、Spec Kit 入口和 devlog。后续 LLM Gateway、工具调用、Worker、Pipeline、桌面运行时和多 Agent 能力也应沿用相同模式。

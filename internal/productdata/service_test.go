@@ -159,4 +159,205 @@ func TestMessageValidationAndThreadNotFound(t *testing.T) {
 	}
 }
 
+func TestRunValidation(t *testing.T) {
+	if err := ValidateRunStatus(RunStatusRunning); err != nil {
+		t.Fatalf("ValidateRunStatus(running) error = %v", err)
+	}
+	if err := ValidateRunEventCategory(RunEventCategoryFinal); err != nil {
+		t.Fatalf("ValidateRunEventCategory(final) error = %v", err)
+	}
+	if err := ValidateRunStatus(RunStatus("queued")); err == nil || ErrorCode(err) != CodeInvalidRequest {
+		t.Fatalf("invalid status err = %v", err)
+	}
+	if err := ValidateRunEventCategory(RunEventCategory("tool")); err == nil || ErrorCode(err) != CodeInvalidRequest {
+		t.Fatalf("invalid category err = %v", err)
+	}
+	if !IsRunActive(RunStatusRunning) || IsRunActive(RunStatusCompleted) {
+		t.Fatalf("active status helpers returned wrong result")
+	}
+	if !IsRunTerminal(RunStatusStopped) || IsRunTerminal(RunStatusPending) {
+		t.Fatalf("terminal status helpers returned wrong result")
+	}
+}
+
+func TestStartRunCreatesInitialLifecycleEvent(t *testing.T) {
+	svc := NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, CreateThreadInput{Title: "Run", Mode: ThreadModeChat})
+	if err != nil {
+		t.Fatalf("CreateThread() error = %v", err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, StartRunInput{ScriptName: "m4_smoke token"})
+	if err != nil {
+		t.Fatalf("StartRun() error = %v", err)
+	}
+	if run.ThreadID != thread.ID || run.Status != RunStatusRunning || run.Source != RunSourceLocalSimulated {
+		t.Fatalf("run = %+v", run)
+	}
+	events, err := svc.ListRunEvents(context.Background(), ident, run.ID, 0)
+	if err != nil {
+		t.Fatalf("ListRunEvents() error = %v", err)
+	}
+	if len(events) != 1 || events[0].Sequence != 1 || events[0].Type != "run_created" {
+		t.Fatalf("events = %+v", events)
+	}
+	if events[0].Metadata["script_name"] != "[redacted]" {
+		t.Fatalf("metadata = %+v", events[0].Metadata)
+	}
+}
+
+func TestStartRunRejectsSecondActiveRunForThread(t *testing.T) {
+	svc := NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, CreateThreadInput{Title: "Run", Mode: ThreadModeChat})
+	if err != nil {
+		t.Fatalf("CreateThread() error = %v", err)
+	}
+	if _, err := svc.StartRun(context.Background(), ident, thread.ID, StartRunInput{}); err != nil {
+		t.Fatalf("StartRun() error = %v", err)
+	}
+	_, err = svc.StartRun(context.Background(), ident, thread.ID, StartRunInput{})
+	if err == nil || ErrorCode(err) != CodeActiveRunExists {
+		t.Fatalf("second active run err = %v", err)
+	}
+}
+
+func TestStopRunRecordsStoppedTerminalEvents(t *testing.T) {
+	svc := NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, CreateThreadInput{Title: "Run", Mode: ThreadModeChat})
+	if err != nil {
+		t.Fatalf("CreateThread() error = %v", err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, StartRunInput{})
+	if err != nil {
+		t.Fatalf("StartRun() error = %v", err)
+	}
+	stopped, err := svc.StopRun(context.Background(), ident, run.ID)
+	if err != nil {
+		t.Fatalf("StopRun() error = %v", err)
+	}
+	if stopped.Result != StopRunResultStopped || stopped.Run.Status != RunStatusStopped || stopped.Run.CompletedAt == nil {
+		t.Fatalf("stopped = %+v", stopped)
+	}
+	events, err := svc.ListRunEvents(context.Background(), ident, run.ID, 0)
+	if err != nil {
+		t.Fatalf("ListRunEvents() error = %v", err)
+	}
+	if len(events) != 3 || events[1].Type != "run_stopped" || events[2].Category != RunEventCategoryFinal {
+		t.Fatalf("events = %+v", events)
+	}
+}
+
+func TestStopRunReturnsAlreadyTerminalWithoutChangingOutcome(t *testing.T) {
+	svc := NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, CreateThreadInput{Title: "Run", Mode: ThreadModeChat})
+	if err != nil {
+		t.Fatalf("CreateThread() error = %v", err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, StartRunInput{})
+	if err != nil {
+		t.Fatalf("StartRun() error = %v", err)
+	}
+	if _, err := svc.AppendRunEvent(context.Background(), ident, run.ID, AppendRunEventInput{Category: RunEventCategoryFinal, Type: "run_completed", Summary: "Run completed"}); err != nil {
+		t.Fatalf("AppendRunEvent(final) error = %v", err)
+	}
+	output, err := svc.StopRun(context.Background(), ident, run.ID)
+	if err != nil {
+		t.Fatalf("StopRun() error = %v", err)
+	}
+	if output.Result != StopRunResultAlreadyTerminal || output.Run.Status != RunStatusCompleted {
+		t.Fatalf("output = %+v", output)
+	}
+	events, err := svc.ListRunEvents(context.Background(), ident, run.ID, 0)
+	if err != nil {
+		t.Fatalf("ListRunEvents() error = %v", err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("events = %+v", events)
+	}
+}
+
+func TestAppendRunEventRejectsTerminalRun(t *testing.T) {
+	svc := NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, CreateThreadInput{Title: "Run", Mode: ThreadModeChat})
+	if err != nil {
+		t.Fatalf("CreateThread() error = %v", err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, StartRunInput{})
+	if err != nil {
+		t.Fatalf("StartRun() error = %v", err)
+	}
+	if _, err := svc.AppendRunEvent(context.Background(), ident, run.ID, AppendRunEventInput{Category: RunEventCategoryFinal, Type: "run_completed", Summary: "Run completed"}); err != nil {
+		t.Fatalf("AppendRunEvent(final) error = %v", err)
+	}
+	_, err = svc.AppendRunEvent(context.Background(), ident, run.ID, AppendRunEventInput{Category: RunEventCategoryProgress, Type: "late", Summary: "Late"})
+	if err == nil || ErrorCode(err) != CodeInvalidRequest {
+		t.Fatalf("late append err = %v", err)
+	}
+}
+
+func TestRunEventRedactsSecretText(t *testing.T) {
+	svc := NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, CreateThreadInput{Title: "Run", Mode: ThreadModeChat})
+	if err != nil {
+		t.Fatalf("CreateThread() error = %v", err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, StartRunInput{})
+	if err != nil {
+		t.Fatalf("StartRun() error = %v", err)
+	}
+	content := "postgres://loomi:secret@localhost/db"
+	event, err := svc.AppendRunEvent(context.Background(), ident, run.ID, AppendRunEventInput{Category: RunEventCategoryError, Type: "run_failed", Summary: "token leaked", Content: &content, Metadata: map[string]any{"database_url": "postgresql://user:password=secret@localhost/db", "nested": map[string]any{"bearer": "Bearer abc"}}})
+	if err != nil {
+		t.Fatalf("AppendRunEvent(error) error = %v", err)
+	}
+	if event.Summary != "[redacted]" || event.Content == nil || *event.Content != "[redacted]" {
+		t.Fatalf("event = %+v", event)
+	}
+	if event.Metadata["database_url"] != "[redacted]" {
+		t.Fatalf("metadata = %+v", event.Metadata)
+	}
+}
+
+func TestAppendRunEventOrdersPersistedEvents(t *testing.T) {
+	svc := NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, CreateThreadInput{Title: "Run", Mode: ThreadModeChat})
+	if err != nil {
+		t.Fatalf("CreateThread() error = %v", err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, StartRunInput{})
+	if err != nil {
+		t.Fatalf("StartRun() error = %v", err)
+	}
+	if _, err := svc.AppendRunEvent(context.Background(), ident, run.ID, AppendRunEventInput{Category: RunEventCategoryProgress, Type: "context_loaded", Summary: "Context loaded"}); err != nil {
+		t.Fatalf("AppendRunEvent(progress) error = %v", err)
+	}
+	final, err := svc.AppendRunEvent(context.Background(), ident, run.ID, AppendRunEventInput{Category: RunEventCategoryFinal, Type: "run_completed", Summary: "Run completed"})
+	if err != nil {
+		t.Fatalf("AppendRunEvent(final) error = %v", err)
+	}
+	if final.Sequence != 3 {
+		t.Fatalf("final sequence = %d", final.Sequence)
+	}
+	events, err := svc.ListRunEvents(context.Background(), ident, run.ID, 1)
+	if err != nil {
+		t.Fatalf("ListRunEvents(after=1) error = %v", err)
+	}
+	if len(events) != 2 || events[0].Sequence != 2 || events[1].Sequence != 3 {
+		t.Fatalf("events = %+v", events)
+	}
+	got, err := svc.GetRun(context.Background(), ident, run.ID)
+	if err != nil {
+		t.Fatalf("GetRun() error = %v", err)
+	}
+	if got.Status != RunStatusCompleted || got.CompletedAt == nil {
+		t.Fatalf("run after final = %+v", got)
+	}
+}
+
 func ptr[T any](v T) *T { return &v }

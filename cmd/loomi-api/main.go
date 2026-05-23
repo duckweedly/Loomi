@@ -13,6 +13,7 @@ import (
 	"github.com/sheridiany/loomi/internal/diagnostics"
 	"github.com/sheridiany/loomi/internal/httpapi"
 	"github.com/sheridiany/loomi/internal/productdata"
+	productruntime "github.com/sheridiany/loomi/internal/runtime"
 )
 
 func main() {
@@ -43,7 +44,9 @@ func main() {
 		defer pool.Close()
 	}
 
-	server := httpapi.NewServerWithProduct(cfg, db.PostgresChecker{Pool: pool}, productServiceForPool(pool))
+	product := productServiceForPool(pool)
+	broadcaster := productruntime.NewBroadcaster()
+	server := httpapi.NewServerWithRuntime(cfg, db.PostgresChecker{Pool: pool}, product, broadcaster, productruntime.NewLocalRunner(product, broadcaster))
 	logger.Info("loomi api starting", "operation_id", opID, "addr", cfg.HTTPAddr, "env", cfg.AppEnv)
 
 	if err := http.ListenAndServe(cfg.HTTPAddr, server); err != nil {

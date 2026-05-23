@@ -18,11 +18,11 @@
 
 **Purpose**: Prepare M4 schema, route registration points, and shared domain placeholders.
 
-- [ ] T001 Create M4 migration files in `migrations/000003_m4_run_event_sse.up.sql` and `migrations/000003_m4_run_event_sse.down.sql`
-- [ ] T002 [P] Add M4 run/event type constants and validation placeholders in `internal/productdata/models.go`
-- [ ] T003 [P] Create runtime package skeleton in `internal/runtime/simulator.go` and `internal/runtime/stream.go`
-- [ ] T004 [P] Create HTTP runtime handler skeleton in `internal/httpapi/runtime.go`
-- [ ] T005 Register M4 runtime routes in `internal/httpapi/server.go`
+- [X] T001 Create M4 migration files in `migrations/000003_m4_run_event_sse.up.sql` and `migrations/000003_m4_run_event_sse.down.sql`
+- [X] T002 [P] Add M4 run/event type constants and validation placeholders in `internal/productdata/models.go`
+- [X] T003 [P] Create runtime package skeleton in `internal/runtime/simulator.go` and `internal/runtime/stream.go`
+- [X] T004 [P] Create HTTP runtime handler skeleton in `internal/httpapi/runtime.go`
+- [X] T005 Register M4 runtime routes in `internal/httpapi/server.go`
 
 ---
 
@@ -34,23 +34,23 @@
 
 ### Tests for Foundational Behavior
 
-- [ ] T006 [P] Add migration/readiness tests for schema version 3 in `internal/db/readiness_test.go`
-- [ ] T007 [P] Add run/event validation tests in `internal/productdata/service_test.go`
-- [ ] T008 [P] Add deterministic simulator tests in `internal/runtime/simulator_test.go`
-- [ ] T009 [P] Add history-then-live stream broadcaster tests in `internal/runtime/stream_test.go`
-- [ ] T010 [P] Add structured runtime error mapping tests in `internal/httpapi/errors_test.go`
+- [X] T006 [P] Add migration/readiness tests for schema version 3 in `internal/db/readiness_test.go`
+- [X] T007 [P] Add run/event validation tests in `internal/productdata/service_test.go`
+- [X] T008 [P] Add deterministic simulator tests in `internal/runtime/simulator_test.go`
+- [X] T009 [P] Add history-then-live stream broadcaster tests in `internal/runtime/stream_test.go`
+- [X] T010 [P] Add structured runtime error mapping tests in `internal/httpapi/errors_test.go`
 
 ### Implementation for Foundational Behavior
 
-- [ ] T011 Implement M4 migration up/down schema for `runs` and `run_events` in `migrations/000003_m4_run_event_sse.up.sql` and `migrations/000003_m4_run_event_sse.down.sql`
-- [ ] T012 Update schema readiness requirement from version 2 to version 3 in `internal/db/readiness.go`
-- [ ] T013 Implement Run, RunEvent, status/category constants, and validation helpers in `internal/productdata/models.go`
-- [ ] T014 Extend productdata service and repository interfaces for run/event operations in `internal/productdata/service.go`
-- [ ] T015 Implement in-memory run/event persistence helpers for tests in `internal/productdata/service.go`
-- [ ] T016 Implement pgx-backed run/event persistence and active-run constraints in `internal/productdata/repository.go`
-- [ ] T017 Implement deterministic local simulator step generation in `internal/runtime/simulator.go`
-- [ ] T018 Implement in-process history-then-live broadcaster in `internal/runtime/stream.go`
-- [ ] T019 Add runtime error codes `run_not_found` and `active_run_exists` in `internal/productdata/models.go` and `internal/httpapi/errors.go`
+- [X] T011 Implement M4 migration up/down schema for `runs` and `run_events` in `migrations/000003_m4_run_event_sse.up.sql` and `migrations/000003_m4_run_event_sse.down.sql`
+- [X] T012 Update schema readiness requirement from version 2 to version 3 in `internal/db/readiness.go`
+- [X] T013 Implement Run, RunEvent, status/category constants, and validation helpers in `internal/productdata/models.go`
+- [X] T014 Extend productdata service and repository interfaces for run/event operations in `internal/productdata/service.go`
+- [X] T015 Implement in-memory run/event persistence helpers for tests in `internal/productdata/service.go`
+- [X] T016 Implement pgx-backed run/event persistence and active-run constraints in `internal/productdata/repository.go`
+- [X] T017 Implement deterministic local simulator step generation in `internal/runtime/simulator.go`
+- [X] T018 Implement in-process history-then-live broadcaster in `internal/runtime/stream.go`
+- [X] T019 Add runtime error codes `run_not_found` and `active_run_exists` in `internal/productdata/models.go` and `internal/httpapi/errors.go`
 
 **Checkpoint**: M4 schema, domain, persistence, simulator, stream broadcaster, and errors are testable without HTTP or UI.
 
@@ -64,19 +64,19 @@
 
 ### Tests for User Story 1
 
-- [ ] T020 [P] [US1] Add service test for starting a run on an active thread in `internal/productdata/service_test.go`
-- [ ] T021 [P] [US1] Add service test rejecting a second active run for the same thread in `internal/productdata/service_test.go`
-- [ ] T022 [P] [US1] Add HTTP contract test for `POST /v1/threads/{thread_id}/runs` in `internal/httpapi/runtime_test.go`
-- [ ] T023 [P] [US1] Add frontend type/mapping test for M4 run status in `web/src/realApiClient.test.ts`
+- [X] T020 [P] [US1] Add service test for starting a run on an active thread in `internal/productdata/service_test.go`
+- [X] T021 [P] [US1] Add service test rejecting a second active run for the same thread in `internal/productdata/service_test.go`
+- [X] T022 [P] [US1] Add HTTP contract test for `POST /v1/threads/{thread_id}/runs` in `internal/httpapi/runtime_test.go`
+- [X] T023 [P] [US1] Add frontend type/mapping test for M4 run status in `web/src/realApiClient.test.ts`
 
 ### Implementation for User Story 1
 
-- [ ] T024 [US1] Implement `StartRun` use case and active-run conflict handling in `internal/productdata/service.go`
-- [ ] T025 [US1] Implement repository start-run transaction and first lifecycle event persistence in `internal/productdata/repository.go`
-- [ ] T026 [US1] Implement `POST /v1/threads/{thread_id}/runs` handler in `internal/httpapi/runtime.go`
-- [ ] T027 [US1] Wire deterministic simulator start trigger from API startup/service wiring in `cmd/loomi-api/main.go`
-- [ ] T028 [US1] Add M4 run types to frontend domain in `web/src/domain.ts`
-- [ ] T029 [US1] Add `startRun` real API client method in `web/src/realApiClient.ts`
+- [X] T024 [US1] Implement `StartRun` use case and active-run conflict handling in `internal/productdata/service.go`
+- [X] T025 [US1] Implement repository start-run transaction and first lifecycle event persistence in `internal/productdata/repository.go`
+- [X] T026 [US1] Implement `POST /v1/threads/{thread_id}/runs` handler in `internal/httpapi/runtime.go`
+- [X] T027 [US1] Wire deterministic simulator start trigger from API startup/service wiring in `cmd/loomi-api/main.go`
+- [X] T028 [US1] Add M4 run types to frontend domain in `web/src/domain.ts`
+- [X] T029 [US1] Add `startRun` real API client method in `web/src/realApiClient.ts`
 
 **Checkpoint**: User Story 1 can be demonstrated through API start-run smoke and frontend type/client coverage.
 
@@ -90,19 +90,19 @@
 
 ### Tests for User Story 2
 
-- [ ] T030 [P] [US2] Add service test for ordered persisted events in `internal/productdata/service_test.go`
-- [ ] T031 [P] [US2] Add repository test for unique `(run_id, sequence)` event ordering in `internal/productdata/repository_test.go`
-- [ ] T032 [P] [US2] Add HTTP contract test for `GET /v1/runs/{run_id}/events` in `internal/httpapi/runtime_test.go`
-- [ ] T033 [P] [US2] Add frontend event mapping test for lifecycle/progress/message/error/final categories in `web/src/realApiClient.test.ts`
+- [X] T030 [P] [US2] Add service test for ordered persisted events in `internal/productdata/service_test.go`
+- [X] T031 [P] [US2] Add repository test for unique `(run_id, sequence)` event ordering in `internal/productdata/repository_test.go`
+- [X] T032 [P] [US2] Add HTTP contract test for `GET /v1/runs/{run_id}/events` in `internal/httpapi/runtime_test.go`
+- [X] T033 [P] [US2] Add frontend event mapping test for lifecycle/progress/message/error/final categories in `web/src/realApiClient.test.ts`
 
 ### Implementation for User Story 2
 
-- [ ] T034 [US2] Implement event append/list use cases with stable ordering in `internal/productdata/service.go`
-- [ ] T035 [US2] Implement pgx event insert/list queries in `internal/productdata/repository.go`
-- [ ] T036 [US2] Implement `GET /v1/runs/{run_id}` and `GET /v1/runs/{run_id}/events` handlers in `internal/httpapi/runtime.go`
-- [ ] T037 [US2] Connect simulator step persistence to run/event service in `internal/runtime/simulator.go`
-- [ ] T038 [US2] Add `getRun` and `getRunEvents` real API client methods in `web/src/realApiClient.ts`
-- [ ] T039 [US2] Render real M4 event categories in `web/src/components/RunTimeline.tsx`
+- [X] T034 [US2] Implement event append/list use cases with stable ordering in `internal/productdata/service.go`
+- [X] T035 [US2] Implement pgx event insert/list queries in `internal/productdata/repository.go`
+- [X] T036 [US2] Implement `GET /v1/runs/{run_id}` and `GET /v1/runs/{run_id}/events` handlers in `internal/httpapi/runtime.go`
+- [X] T037 [US2] Connect simulator step persistence to run/event service in `internal/runtime/simulator.go`
+- [X] T038 [US2] Add `getRun` and `getRunEvents` real API client methods in `web/src/realApiClient.ts`
+- [X] T039 [US2] Render real M4 event categories in `web/src/components/RunTimeline.tsx`
 
 **Checkpoint**: User Story 2 can be demonstrated by API history read and UI timeline reload after refresh.
 
@@ -116,19 +116,19 @@
 
 ### Tests for User Story 3
 
-- [ ] T040 [P] [US3] Add SSE handler test for history-before-live delivery in `internal/httpapi/runtime_test.go`
-- [ ] T041 [P] [US3] Add SSE reconnect test with `after_sequence` in `internal/httpapi/runtime_test.go`
-- [ ] T042 [P] [US3] Add frontend stale stream guard test in `web/src/state.test.ts`
-- [ ] T043 [P] [US3] Add frontend stream state mapping test in `web/src/state.test.ts`
+- [X] T040 [P] [US3] Add SSE handler test for history-before-live delivery in `internal/httpapi/runtime_test.go`
+- [X] T041 [P] [US3] Add SSE reconnect test with `after_sequence` in `internal/httpapi/runtime_test.go`
+- [X] T042 [P] [US3] Add frontend stale stream guard test in `web/src/state.test.ts`
+- [X] T043 [P] [US3] Add frontend stream state mapping test in `web/src/state.test.ts`
 
 ### Implementation for User Story 3
 
-- [ ] T044 [US3] Implement SSE `GET /v1/runs/{run_id}/events/stream` handler in `internal/httpapi/runtime.go`
-- [ ] T045 [US3] Publish persisted events to broadcaster after simulator append in `internal/runtime/stream.go`
-- [ ] T046 [US3] Add `subscribeRunEvents` real API client method using EventSource-compatible behavior in `web/src/realApiClient.ts`
-- [ ] T047 [US3] Update workspace state to select current run, subscribe to stream, dedupe events, and ignore stale stream updates in `web/src/state.ts`
-- [ ] T048 [US3] Update `web/src/components/RunRail.tsx` to bind agent state motion to real M4 run/event state
-- [ ] T049 [US3] Update `web/src/components/ChatCanvas.tsx` to show running/recoverable stream states from real run events
+- [X] T044 [US3] Implement SSE `GET /v1/runs/{run_id}/events/stream` handler in `internal/httpapi/runtime.go`
+- [X] T045 [US3] Publish persisted events to broadcaster after simulator append in `internal/runtime/stream.go`
+- [X] T046 [US3] Add `subscribeRunEvents` real API client method using EventSource-compatible behavior in `web/src/realApiClient.ts`
+- [X] T047 [US3] Update workspace state to select current run, subscribe to stream, dedupe events, and ignore stale stream updates in `web/src/state.ts`
+- [X] T048 [US3] Update `web/src/components/RunRail.tsx` to bind agent state motion to real M4 run/event state
+- [X] T049 [US3] Update `web/src/components/ChatCanvas.tsx` to show running/recoverable stream states from real run events
 
 **Checkpoint**: User Story 3 can be demonstrated by live timeline updates and reconnect history recovery.
 
@@ -142,19 +142,19 @@
 
 ### Tests for User Story 4
 
-- [ ] T050 [P] [US4] Add service test for cooperative stop on active run in `internal/productdata/service_test.go`
-- [ ] T051 [P] [US4] Add service test for stop on already-terminal run in `internal/productdata/service_test.go`
-- [ ] T052 [P] [US4] Add HTTP contract test for `POST /v1/runs/{run_id}/stop` in `internal/httpapi/runtime_test.go`
-- [ ] T053 [P] [US4] Add frontend stop-run state test in `web/src/state.test.ts`
+- [X] T050 [P] [US4] Add service test for cooperative stop on active run in `internal/productdata/service_test.go`
+- [X] T051 [P] [US4] Add service test for stop on already-terminal run in `internal/productdata/service_test.go`
+- [X] T052 [P] [US4] Add HTTP contract test for `POST /v1/runs/{run_id}/stop` in `internal/httpapi/runtime_test.go`
+- [X] T053 [P] [US4] Add frontend stop-run state test in `web/src/state.test.ts`
 
 ### Implementation for User Story 4
 
-- [ ] T054 [US4] Implement stop-run use case and terminal-state guard in `internal/productdata/service.go`
-- [ ] T055 [US4] Implement repository stop transaction and stop/final events in `internal/productdata/repository.go`
-- [ ] T056 [US4] Make deterministic simulator check cooperative stop at step boundaries in `internal/runtime/simulator.go`
-- [ ] T057 [US4] Implement `POST /v1/runs/{run_id}/stop` handler in `internal/httpapi/runtime.go`
-- [ ] T058 [US4] Add `stopRun` real API client behavior in `web/src/realApiClient.ts`
-- [ ] T059 [US4] Update Chat Canvas, Run Timeline, and Run Rail stopped state rendering in `web/src/components/ChatCanvas.tsx`, `web/src/components/RunTimeline.tsx`, and `web/src/components/RunRail.tsx`
+- [X] T054 [US4] Implement stop-run use case and terminal-state guard in `internal/productdata/service.go`
+- [X] T055 [US4] Implement repository stop transaction and stop/final events in `internal/productdata/repository.go`
+- [X] T056 [US4] Make deterministic simulator check cooperative stop at step boundaries in `internal/runtime/simulator.go`
+- [X] T057 [US4] Implement `POST /v1/runs/{run_id}/stop` handler in `internal/httpapi/runtime.go`
+- [X] T058 [US4] Add `stopRun` real API client behavior in `web/src/realApiClient.ts`
+- [X] T059 [US4] Update Chat Canvas, Run Timeline, and Run Rail stopped state rendering in `web/src/components/ChatCanvas.tsx`, `web/src/components/RunTimeline.tsx`, and `web/src/components/RunRail.tsx`
 
 **Checkpoint**: User Story 4 can be demonstrated by cooperative stop API and consistent frontend stopped state.
 
@@ -168,19 +168,19 @@
 
 ### Tests for User Story 5
 
-- [ ] T060 [P] [US5] Add test that simulator source is always labeled `local_simulated` in `internal/runtime/simulator_test.go`
-- [ ] T061 [P] [US5] Add event redaction/error test in `internal/productdata/service_test.go`
-- [ ] T062 [P] [US5] Add frontend test that real run labels do not claim LLM/tool/worker execution in `web/src/components/RunTimeline.tsx` tests or `web/src/realApiClient.test.ts`
+- [X] T060 [P] [US5] Add test that simulator source is always labeled `local_simulated` in `internal/runtime/simulator_test.go`
+- [X] T061 [P] [US5] Add event redaction/error test in `internal/productdata/service_test.go`
+- [X] T062 [P] [US5] Add frontend test that real run labels do not claim LLM/tool/worker execution in `web/src/components/RunTimeline.tsx` tests or `web/src/realApiClient.test.ts`
 
 ### Implementation for User Story 5
 
-- [ ] T063 [US5] Ensure run/event responses label `source: local_simulated` and avoid model/tool/worker terminology in `internal/productdata/models.go` and `internal/httpapi/runtime.go`
-- [ ] T064 [US5] Ensure event summaries/content are redacted before persistence or response in `internal/productdata/service.go`
-- [ ] T065 [US5] Document M4 architecture boundaries in `docs-site/src/content/docs/architecture/run-event-sse.md`
-- [ ] T066 [US5] Document M4 endpoint and SSE contracts in `docs-site/src/content/docs/api/run-event-sse.md`
-- [ ] T067 [US5] Document local M4 setup, validation, stream troubleshooting, and rollback in `docs-site/src/content/docs/runbooks/local-m4.md`
-- [ ] T068 [US5] Update Spec Kit workflow status for M4 in `docs-site/src/content/docs/spec-kit/workflow.md`
-- [ ] T069 [US5] Add M4 devlog with validation results and deferred capability notes in `docs-site/src/content/docs/devlog/2026-05-23-m4-run-event-sse.md`
+- [X] T063 [US5] Ensure run/event responses label `source: local_simulated` and avoid model/tool/worker terminology in `internal/productdata/models.go` and `internal/httpapi/runtime.go`
+- [X] T064 [US5] Ensure event summaries/content are redacted before persistence or response in `internal/productdata/service.go`
+- [X] T065 [US5] Document M4 architecture boundaries in `docs-site/src/content/docs/architecture/run-event-sse.md`
+- [X] T066 [US5] Document M4 endpoint and SSE contracts in `docs-site/src/content/docs/api/run-event-sse.md`
+- [X] T067 [US5] Document local M4 setup, validation, stream troubleshooting, and rollback in `docs-site/src/content/docs/runbooks/local-m4.md`
+- [X] T068 [US5] Update Spec Kit workflow status for M4 in `docs-site/src/content/docs/spec-kit/workflow.md`
+- [X] T069 [US5] Add M4 devlog with validation results and deferred capability notes in `docs-site/src/content/docs/devlog/2026-05-23-m4-run-event-sse.md`
 
 **Checkpoint**: User Story 5 can be verified by docs review, redaction tests, and absence of LLM/tool/worker claims in M4 runtime outputs.
 
@@ -190,14 +190,14 @@
 
 **Purpose**: Validate the complete M4 slice and keep documentation, contracts, and code aligned.
 
-- [ ] T070 [P] Update `specs/003-m4-run-event-sse/quickstart.md` if implementation commands differ from planned smoke commands
-- [ ] T071 [P] Verify `specs/003-m4-run-event-sse/contracts/http-m4.openapi.yaml`, `specs/003-m4-run-event-sse/contracts/sse-run-events.md`, and `docs-site/src/content/docs/api/run-event-sse.md` agree on endpoint names, event categories, and error codes
-- [ ] T072 Run `go test ./...` and record the result in `docs-site/src/content/docs/devlog/2026-05-23-m4-run-event-sse.md`
-- [ ] T073 Run `bun test ./web/src/*.test.ts ./web/src/components/*.test.ts` and record the result in `docs-site/src/content/docs/devlog/2026-05-23-m4-run-event-sse.md`
-- [ ] T074 Run `bun run --cwd web build` and record the result in `docs-site/src/content/docs/devlog/2026-05-23-m4-run-event-sse.md`
-- [ ] T075 Run M4 API/SSE smoke from `specs/003-m4-run-event-sse/quickstart.md` and record the result in `docs-site/src/content/docs/devlog/2026-05-23-m4-run-event-sse.md`
-- [ ] T076 Run browser smoke for real API run/event mode, or document exact blocker and API/SSE fallback evidence in `docs-site/src/content/docs/devlog/2026-05-23-m4-run-event-sse.md`
-- [ ] T077 Run `bun run --cwd docs-site build` and record the result in `docs-site/src/content/docs/devlog/2026-05-23-m4-run-event-sse.md`
+- [X] T070 [P] Update `specs/003-m4-run-event-sse/quickstart.md` if implementation commands differ from planned smoke commands
+- [X] T071 [P] Verify `specs/003-m4-run-event-sse/contracts/http-m4.openapi.yaml`, `specs/003-m4-run-event-sse/contracts/sse-run-events.md`, and `docs-site/src/content/docs/api/run-event-sse.md` agree on endpoint names, event categories, and error codes
+- [X] T072 Run `go test ./...` and record the result in `docs-site/src/content/docs/devlog/2026-05-23-m4-run-event-sse.md`
+- [X] T073 Run `bun test ./web/src/*.test.ts ./web/src/components/*.test.ts` and record the result in `docs-site/src/content/docs/devlog/2026-05-23-m4-run-event-sse.md`
+- [X] T074 Run `bun run --cwd web build` and record the result in `docs-site/src/content/docs/devlog/2026-05-23-m4-run-event-sse.md`
+- [X] T075 Run M4 API/SSE smoke from `specs/003-m4-run-event-sse/quickstart.md` and record the result in `docs-site/src/content/docs/devlog/2026-05-23-m4-run-event-sse.md`
+- [X] T076 Run browser smoke for real API run/event mode, or document exact blocker and API/SSE fallback evidence in `docs-site/src/content/docs/devlog/2026-05-23-m4-run-event-sse.md`
+- [X] T077 Run `bun run --cwd docs-site build` and record the result in `docs-site/src/content/docs/devlog/2026-05-23-m4-run-event-sse.md`
 
 ---
 
