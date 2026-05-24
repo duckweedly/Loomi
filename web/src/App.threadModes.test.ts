@@ -10,6 +10,7 @@ describe('App thread mode sidebar wiring', () => {
     expect(source).toContain('const visibleThreads = filterThreadsByMode(threads, selectedMode)')
     expect(source).toContain('threads={visibleThreads}')
     expect(source).not.toContain('threads={threads}')
+    expect(source).toContain('useWorkspaceState(shell.defaultWorkspaceMode)')
   })
 
   test('passes selected thread loading error and latest run state to canvas sidebar and timeline', () => {

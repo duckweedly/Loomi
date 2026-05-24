@@ -4,6 +4,7 @@ import { resolve } from 'node:path'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { ThreadSidebar } from './ThreadSidebar'
+import { getDictionary } from '../i18n'
 import { createSidebarModeMenuItems } from './sidebarModeMenuItems'
 
 describe('ThreadSidebar action menu items', () => {
@@ -18,7 +19,7 @@ describe('ThreadSidebar action menu items', () => {
   test('does not render a duplicate create button beside the Threads label', () => {
     const source = readFileSync(resolve(import.meta.dir, 'ThreadSidebar.tsx'), 'utf8')
 
-    expect(source).toContain('<span>Threads</span>')
+    expect(source).toContain('<span>{copy.threads}</span>')
     expect(source).not.toContain('aria-label="Create thread"')
   })
 
@@ -28,7 +29,7 @@ describe('ThreadSidebar action menu items', () => {
     expect(source).toContain('className="thread-row"')
     expect(source).toContain('className={thread.id === selectedThreadId ? \'thread-card selected\' : \'thread-card\'}')
     expect(source).toContain('<button className="thread-action"')
-    expect(source).not.toContain('role="button" aria-label="Archive thread"')
+    expect(source).not.toContain('role="button" aria-label={copy.archiveThread}')
   })
 })
 
@@ -43,6 +44,7 @@ describe('ThreadSidebar loading and retry states', () => {
       theme: 'dark',
       loading: true,
       error: 'load failed',
+      copy: getDictionary('en').sidebar,
       onRefresh: () => {},
       onSelectThread: () => {},
       onCreateThread: () => {},

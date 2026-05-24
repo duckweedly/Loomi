@@ -71,4 +71,47 @@ describe('createWorkspaceShellState', () => {
       selectedRightPanelId: 'preview' satisfies RightPanelItemId,
     })
   })
+
+  test('opens and closes Settings without losing workspace context', () => {
+    const shell = createWorkspaceShellState()
+
+    shell.openRightPanel('files')
+    shell.openSettings()
+    shell.setSettingsCategory('providers')
+    shell.closeSettings()
+
+    expect(shell.snapshot()).toMatchObject({
+      settingsOpen: false,
+      settingsCategoryId: 'providers',
+      rightPanelOpen: true,
+      selectedRightPanelId: 'files' satisfies RightPanelItemId,
+    })
+  })
+
+  test('opens Settings with General selected without mutating transient shell surfaces', () => {
+    const shell = createWorkspaceShellState({ settingsCategoryId: 'tools' })
+
+    shell.toggleRunDetails()
+    shell.openSettings()
+
+    expect(shell.snapshot()).toMatchObject({
+      settingsOpen: true,
+      settingsCategoryId: 'general',
+      rightPanelMenuOpen: false,
+      runDetailsOpen: true,
+    })
+  })
+
+  test('stores current-session settings without persistence dependencies', () => {
+    const shell = createWorkspaceShellState()
+
+    shell.setDefaultWorkspaceMode('work')
+    shell.setLocale('en')
+    shell.setProviderDraftSettings({ baseUrl: 'https://gateway.example.test/v1', model: 'gpt-5.5', apiKeySet: true })
+
+    expect(shell.snapshot().defaultWorkspaceMode).toBe('work')
+    expect(shell.snapshot().locale).toBe('en')
+    expect(shell.snapshot().providerDraftSettings).toMatchObject({ model: 'gpt-5.5', apiKeySet: true })
+    expect(createWorkspaceShellState().snapshot()).toMatchObject({ defaultWorkspaceMode: 'chat', locale: 'zh', providerDraftSettings: { baseUrl: '', model: '', apiKeySet: false } })
+  })
 })

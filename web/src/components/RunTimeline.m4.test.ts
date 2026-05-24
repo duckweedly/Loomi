@@ -8,7 +8,7 @@ describe('M4 run UI labels', () => {
     const runRail = readFileSync(resolve(import.meta.dir, 'RunRail.tsx'), 'utf8')
     const eventGroups = readFileSync(resolve(import.meta.dir, '../runtime/runtimeEventGroups.ts'), 'utf8')
 
-    expect(chatCanvas).toContain('Local simulated')
+    expect(chatCanvas).toContain('copy.localSimulated')
     expect(runRail).toContain('stopped')
     expect(chatCanvas).not.toContain('LLM')
     expect(eventGroups).toContain("title: 'Worker/job'")

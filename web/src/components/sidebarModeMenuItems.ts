@@ -6,13 +6,13 @@ export type SidebarModeMenuItem = {
   action?: 'create-thread'
 }
 
-export function createSidebarModeMenuItems(mode: SidebarMode): SidebarModeMenuItem[] {
+export function createSidebarModeMenuItems(mode: SidebarMode, copy = { newChat: 'New Chat', projects: 'Projects', scheduled: 'Scheduled' }): SidebarModeMenuItem[] {
   if (mode === 'chat') {
-    return [{ id: 'new-chat', label: 'New Chat', action: 'create-thread' }]
+    return [{ id: 'new-chat', label: copy.newChat, action: 'create-thread' }]
   }
 
   return [
-    { id: 'projects', label: 'Projects' },
-    { id: 'scheduled', label: 'Scheduled' },
+    { id: 'projects', label: copy.projects },
+    { id: 'scheduled', label: copy.scheduled },
   ]
 }

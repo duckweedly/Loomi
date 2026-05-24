@@ -6,10 +6,10 @@ export type SettingsMenuItem = {
   value?: string
 }
 
-export function createSettingsMenuItems(theme: 'dark' | 'light'): SettingsMenuItem[] {
+export function createSettingsMenuItems(theme: 'dark' | 'light', copy = { settings: 'Settings', theme: 'Theme', update: 'Update', current: 'Current', dark: 'Dark', light: 'Light' }): SettingsMenuItem[] {
   return [
-    { id: 'settings', label: 'Settings' },
-    { id: 'theme', label: 'Theme', value: theme === 'dark' ? 'Dark' : 'Light' },
-    { id: 'update', label: 'Update', value: 'Current' },
+    { id: 'settings', label: copy.settings },
+    { id: 'theme', label: copy.theme, value: theme === 'dark' ? copy.dark : copy.light },
+    { id: 'update', label: copy.update, value: copy.current },
   ]
 }
