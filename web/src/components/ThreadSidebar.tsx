@@ -4,18 +4,36 @@ import type { Thread } from '../domain'
 import { createSettingsMenuItems, type SettingsMenuItemId } from './settingsMenuItems'
 import { createSidebarModeMenuItems, type SidebarMode } from './sidebarModeMenuItems'
 
+type SidebarCopy = {
+  newChat: string
+  projects: string
+  scheduled: string
+  threads: string
+  settings: string
+  theme: string
+  update: string
+  current: string
+  open: string
+  light: string
+  dark: string
+  archiveThread: string
+  renameThread: string
+}
+
 type Props = {
   collapsed: boolean
   threads: Thread[]
   selectedThreadId: string
   selectedMode: SidebarMode
   theme: 'dark' | 'light'
+  copy: SidebarCopy
   onRefresh: () => void
   onSelectThread: (threadId: string) => void
   onCreateThread: () => void
   onRenameThread: (threadId: string, title: string) => void
   onArchiveThread: (threadId: string) => void
   onToggleTheme: () => void
+  onOpenSettings: () => void
 }
 
 export function ThreadSidebar({
@@ -24,18 +42,24 @@ export function ThreadSidebar({
   selectedThreadId,
   selectedMode,
   theme,
+  copy,
   onRefresh,
   onSelectThread,
   onCreateThread,
   onRenameThread,
   onArchiveThread,
   onToggleTheme,
+  onOpenSettings,
 }: Props) {
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const settingsItems = createSettingsMenuItems(theme)
-  const modeMenuItems = createSidebarModeMenuItems(selectedMode)
+  const settingsItems = createSettingsMenuItems(theme, copy)
+  const modeMenuItems = createSidebarModeMenuItems(selectedMode, copy)
 
   const handleSettingsAction = (itemId: SettingsMenuItemId) => {
+    if (itemId === 'settings') {
+      setSettingsOpen(false)
+      onOpenSettings()
+    }
     if (itemId === 'theme') onToggleTheme()
     if (itemId === 'update') onRefresh()
   }
@@ -59,7 +83,7 @@ export function ThreadSidebar({
 
       <div className="sidebar-section">
         <div className="section-label">
-          <span>Threads</span>
+          <span>{copy.threads}</span>
         </div>
         <div className="thread-list">
           {threads.map((thread) => (
@@ -71,11 +95,11 @@ export function ThreadSidebar({
                 <span className={`run-dot ${thread.runStatus}`} />
                 <span className="thread-title" onDoubleClick={(event) => {
                   event.stopPropagation()
-                  const title = window.prompt('Rename thread', thread.title)
+                  const title = window.prompt(copy.renameThread, thread.title)
                   if (title) onRenameThread(thread.id, title)
                 }}>{thread.title}</span>
               </button>
-              <button className="thread-action" aria-label="Archive thread" onClick={() => onArchiveThread(thread.id)}><Archive size={12} /></button>
+              <button className="thread-action" aria-label={copy.archiveThread} onClick={() => onArchiveThread(thread.id)}><Archive size={12} /></button>
             </div>
           ))}
         </div>
@@ -97,11 +121,11 @@ export function ThreadSidebar({
                     {item.id === 'update' && <RefreshCw size={15} />}
                     {item.label}
                   </span>
-                  {item.id === 'settings' && <span className="settings-menu-value">›</span>}
+                  {item.id === 'settings' && <span className="settings-menu-value">{copy.open}</span>}
                   {item.id === 'theme' && (
-                    <span className="theme-segment" aria-label="Theme mode">
-                      <span className={theme === 'light' ? 'selected' : ''}>Light</span>
-                      <span className={theme === 'dark' ? 'selected' : ''}>Dark</span>
+                    <span className="theme-segment" aria-label={copy.theme}>
+                      <span className={theme === 'light' ? 'selected' : ''}>{copy.light}</span>
+                      <span className={theme === 'dark' ? 'selected' : ''}>{copy.dark}</span>
                     </span>
                   )}
                   {item.id === 'update' && (
@@ -117,10 +141,10 @@ export function ThreadSidebar({
           <button
             className={settingsOpen ? 'settings-entry open' : 'settings-entry'}
             aria-expanded={settingsOpen}
-            aria-label="Settings"
+            aria-label={copy.settings}
             onClick={() => setSettingsOpen((value) => !value)}
           >
-            <Settings size={15} /> Settings
+            <Settings size={15} /> {copy.settings}
           </button>
         </div>
       </div>

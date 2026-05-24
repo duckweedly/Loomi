@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { Message, Run } from './domain'
-import { appendRuntimeEventToRun, applyAssistantDeltaToRun, applyModelGatewayEventToRun, shouldApplyIncomingRunEvent, shouldBlockRuntimeSubmit, shouldIgnoreTerminalRuntimeEvent, shouldUpdateStreamStateForRunEvent } from './state'
+import { appendRuntimeEventToRun, applyAssistantDeltaToRun, applyModelGatewayEventToRun, createWorkspaceSettingsState, shouldApplyIncomingRunEvent, shouldBlockRuntimeSubmit, shouldIgnoreTerminalRuntimeEvent, shouldUpdateStreamStateForRunEvent } from './state'
 
 const run: Run = {
   id: 'run-a',
@@ -21,6 +21,11 @@ const message: Message = {
 }
 
 describe('runtime state orchestration helpers', () => {
+  test('creates session-local settings defaults', () => {
+    expect(createWorkspaceSettingsState()).toEqual({ defaultWorkspaceMode: 'chat', selectedRuntimeScript: 'success' })
+    expect(createWorkspaceSettingsState({ defaultWorkspaceMode: 'work', selectedRuntimeScript: 'failure' })).toEqual({ defaultWorkspaceMode: 'work', selectedRuntimeScript: 'failure' })
+  })
+
   test('blocks a second submit while a selected run is pending or running', () => {
     expect(shouldBlockRuntimeSubmit({ ...run, status: 'pending' })).toBe(true)
     expect(shouldBlockRuntimeSubmit({ ...run, status: 'running' })).toBe(true)

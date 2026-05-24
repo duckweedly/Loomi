@@ -1,27 +1,52 @@
 import { useState } from 'react'
+import type { Thread } from './domain'
+import type { Locale } from './i18n'
+import type { SettingsCategoryId } from './components/settingsCatalog'
 import type { RightPanelItemId } from './rightPanelItems'
 
+export type ProviderDraftSettings = {
+  baseUrl: string
+  model: string
+  apiKeySet: boolean
+}
+
 type WorkspaceShellSnapshot = {
+  defaultWorkspaceMode: Thread['mode']
+  locale: Locale
+  providerDraftSettings: ProviderDraftSettings
   runDetailsOpen: boolean
   rightPanelMenuOpen: boolean
   rightPanelOpen: boolean
   selectedRightPanelId: RightPanelItemId
+  settingsCategoryId: SettingsCategoryId
+  settingsOpen: boolean
   sidebarCollapsed: boolean
   sidebarWidth: number
   theme: 'dark' | 'light'
 }
 
 const initialShellState: WorkspaceShellSnapshot = {
+  defaultWorkspaceMode: 'chat',
+  locale: 'zh',
+  providerDraftSettings: { baseUrl: '', model: '', apiKeySet: false },
   runDetailsOpen: false,
   rightPanelMenuOpen: false,
   rightPanelOpen: false,
   selectedRightPanelId: 'preview',
+  settingsCategoryId: 'general',
+  settingsOpen: false,
   sidebarCollapsed: false,
   sidebarWidth: 292,
   theme: 'dark',
 }
 
 type WorkspaceShellAction =
+  | { type: 'setDefaultWorkspaceMode'; defaultWorkspaceMode: Thread['mode'] }
+  | { type: 'setLocale'; locale: Locale }
+  | { type: 'setProviderDraftSettings'; providerDraftSettings: ProviderDraftSettings }
+  | { type: 'setSettingsCategory'; settingsCategoryId: SettingsCategoryId }
+  | { type: 'openSettings' }
+  | { type: 'closeSettings' }
   | { type: 'setSidebarWidth'; sidebarWidth: number }
   | { type: 'setSidebarCollapsed'; sidebarCollapsed: boolean }
   | { type: 'toggleTheme' }
@@ -33,6 +58,22 @@ type WorkspaceShellAction =
 
 function reduceWorkspaceShellState(state: WorkspaceShellSnapshot, action: WorkspaceShellAction): WorkspaceShellSnapshot {
   switch (action.type) {
+    case 'setDefaultWorkspaceMode':
+      return { ...state, defaultWorkspaceMode: action.defaultWorkspaceMode }
+    case 'setLocale':
+      return { ...state, locale: action.locale }
+    case 'setProviderDraftSettings':
+      return { ...state, providerDraftSettings: action.providerDraftSettings }
+    case 'setSettingsCategory':
+      return { ...state, settingsCategoryId: action.settingsCategoryId }
+    case 'openSettings':
+      return {
+        ...state,
+        settingsOpen: true,
+        settingsCategoryId: 'general',
+      }
+    case 'closeSettings':
+      return { ...state, settingsOpen: false }
     case 'setSidebarWidth':
       return { ...state, sidebarWidth: action.sidebarWidth }
     case 'setSidebarCollapsed':
@@ -79,6 +120,12 @@ function reduceWorkspaceShellState(state: WorkspaceShellSnapshot, action: Worksp
 function bindWorkspaceShellActions(getState: () => WorkspaceShellSnapshot, dispatch: (action: WorkspaceShellAction) => void) {
   return {
     snapshot: getState,
+    setDefaultWorkspaceMode: (defaultWorkspaceMode: Thread['mode']) => dispatch({ type: 'setDefaultWorkspaceMode', defaultWorkspaceMode }),
+    setLocale: (locale: Locale) => dispatch({ type: 'setLocale', locale }),
+    setProviderDraftSettings: (providerDraftSettings: ProviderDraftSettings) => dispatch({ type: 'setProviderDraftSettings', providerDraftSettings }),
+    setSettingsCategory: (settingsCategoryId: SettingsCategoryId) => dispatch({ type: 'setSettingsCategory', settingsCategoryId }),
+    openSettings: () => dispatch({ type: 'openSettings' }),
+    closeSettings: () => dispatch({ type: 'closeSettings' }),
     setSidebarWidth: (sidebarWidth: number) => dispatch({ type: 'setSidebarWidth', sidebarWidth }),
     setSidebarCollapsed: (sidebarCollapsed: boolean) => dispatch({ type: 'setSidebarCollapsed', sidebarCollapsed }),
     toggleTheme: () => dispatch({ type: 'toggleTheme' }),

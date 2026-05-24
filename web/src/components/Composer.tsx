@@ -6,9 +6,10 @@ type Props = {
   disabled?: boolean
   placeholder?: string
   onSubmit: (content: string) => void
+  attachLabel?: string
 }
 
-export function Composer({ disabled, placeholder = 'Message Loomi', onSubmit }: Props) {
+export function Composer({ disabled, placeholder = 'Message Loomi', onSubmit, attachLabel = 'Attach' }: Props) {
   const [value, setValue] = useState('')
 
   function handleSubmit(event: FormEvent) {
@@ -21,7 +22,7 @@ export function Composer({ disabled, placeholder = 'Message Loomi', onSubmit }: 
 
   return (
     <form className="composer glass-panel" onSubmit={handleSubmit}>
-      <Button aria-label="Attach" icon={<Paperclip size={15} />} size="small" />
+      <Button aria-label={attachLabel} icon={<Paperclip size={15} />} size="small" />
       <textarea
         className="composer-input"
         disabled={disabled}

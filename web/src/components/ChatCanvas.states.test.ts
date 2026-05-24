@@ -3,8 +3,8 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
 describe('ChatCanvas state copy', () => {
-  test('contains sparse Chinese labels for explicit workspace states', () => {
-    const source = readFileSync(resolve(import.meta.dir, 'ChatCanvas.tsx'), 'utf8')
+  test('gets sparse Chinese labels from the i18n dictionary', () => {
+    const source = readFileSync(resolve(import.meta.dir, '../i18n.ts'), 'utf8')
 
     expect(source).toContain('未选择会话')
     expect(source).toContain('新对话')

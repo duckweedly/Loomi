@@ -7,7 +7,7 @@ describe('M4 run UI labels', () => {
     const chatCanvas = readFileSync(resolve(import.meta.dir, 'ChatCanvas.tsx'), 'utf8')
     const runRail = readFileSync(resolve(import.meta.dir, 'RunRail.tsx'), 'utf8')
 
-    expect(chatCanvas).toContain('Local simulated')
+    expect(chatCanvas).toContain('copy.localSimulated')
     expect(runRail).toContain('stopped')
     expect(chatCanvas).not.toContain('LLM')
     expect(runRail).not.toContain('worker')
