@@ -1,5 +1,6 @@
 import type { ApiClient } from './apiClient'
 import type { Message, ProviderCapability, ProviderFamily, Run, RunEvent, RunSource, RunStatus, Thread } from './domain'
+import { isRuntimeTerminal } from './runtime/executionAdapter'
 
 const apiBaseUrl = (import.meta.env.VITE_LOOMI_API_BASE_URL ?? '').replace(/\/$/, '')
 
@@ -24,6 +25,8 @@ type ApiMessage = {
   content: string
   created_at: string
   client_message_id?: string | null
+  run_id?: string | null
+  attempt_of_message_id?: string | null
 }
 
 export type ApiRun = {
@@ -103,19 +106,80 @@ function mapMessage(message: ApiMessage): Message {
     role: message.role,
     content: message.content,
     createdAt: message.created_at,
+    runId: message.run_id ?? undefined,
+    attemptOfMessageId: message.attempt_of_message_id ?? undefined,
   }
 }
 
+function restoreAssistantDraftFromEvents(run: Run, events: RunEvent[]): Run {
+  return events.reduce((current, event) => {
+    if (isRuntimeTerminal(current.status)) return current
+    if (current.events.some((existing) => existing.id === event.id)) return current
+
+    const lastSequence = current.events.at(-1)?.sequence ?? -1
+    const shouldApplyAssistantDelta = !event.assistantDelta || event.sequence === undefined || lastSequence <= event.sequence
+    const events = [...current.events, event].sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0))
+    const content = event.assistantDelta && shouldApplyAssistantDelta ? `${current.assistantDraft?.content ?? ''}${event.assistantDelta}` : current.assistantDraft?.content ?? ''
+    const assistantContent = event.type === 'assistant.message.completed' && event.content ? event.content : content
+
+    if (event.status === 'completed') {
+      return { ...current, status: 'completed', events, completedAt: event.time, assistantDraft: { content: event.content ?? assistantContent, status: 'completed', lastEventId: event.id } }
+    }
+    if (event.status === 'failed' || event.status === 'stopped') {
+      return { ...current, status: event.status, events, completedAt: event.time, assistantDraft: { content, status: event.status, lastEventId: event.id } }
+    }
+    if (event.status === 'recovering') {
+      return { ...current, status: 'recovering', events, assistantDraft: { content, status: 'recovering', lastEventId: event.id } }
+    }
+    if (event.type === 'assistant.message.completed' && event.content) {
+      return { ...current, status: event.status, events, assistantDraft: { content: event.content, status: 'completed', lastEventId: event.id } }
+    }
+    return { ...current, status: event.status, events, assistantDraft: event.assistantDelta && shouldApplyAssistantDelta ? { content, status: 'streaming', lastEventId: event.id } : current.assistantDraft }
+  }, run)
+}
+
 export function mapApiRun(run: ApiRun, events: RunEvent[] = []): Run {
-  return {
+  const assistantDraft = run.status === 'pending' || run.status === 'running' || run.status === 'recovering'
+    ? { content: '', status: run.status === 'recovering' ? 'recovering' as const : 'pending' as const }
+    : undefined
+  const mappedRun: Run = {
     id: run.id,
     threadId: run.thread_id,
     status: run.status,
     model: run.source === 'model_gateway' ? 'Model gateway' : 'Local simulated',
     context: run.source,
     source: run.source,
-    events,
+    events: [],
+    assistantDraft,
   }
+  return restoreAssistantDraftFromEvents(mappedRun, events)
+}
+
+function metadataString(metadata: Record<string, unknown>) {
+  const usageKeys = new Set(['input_tokens', 'output_tokens', 'total_tokens'])
+  return Object.entries(metadata)
+    .filter(([key, value]) => !usageKeys.has(key) && (typeof value === 'string' || typeof value === 'number'))
+    .map(([key, value]) => `${key}: ${value}`)
+    .join(' · ')
+}
+
+function tokenUsage(metadata: Record<string, unknown>) {
+  const inputTokens = typeof metadata.input_tokens === 'number' ? metadata.input_tokens : undefined
+  const outputTokens = typeof metadata.output_tokens === 'number' ? metadata.output_tokens : undefined
+  const totalTokens = typeof metadata.total_tokens === 'number' ? metadata.total_tokens : undefined
+  return inputTokens !== undefined || outputTokens !== undefined || totalTokens !== undefined
+    ? { inputTokens, outputTokens, totalTokens }
+    : undefined
+}
+
+function canonicalRunEventType(event: ApiRunEvent) {
+  if (event.type.includes('.')) return event.type
+  if (event.category === 'progress' && event.type === 'drafting') return 'assistant.drafting'
+  if (event.category === 'message' && event.type === 'assistant_message') return 'assistant.message.completed'
+  if (event.category === 'final' && event.type === 'run_completed') return 'run.completed'
+  if (event.category === 'final' && event.type === 'run_stopped') return 'run.stopped'
+  if (event.category === 'final' && event.type === 'run_failed') return 'run.failed'
+  return `${event.category}.${event.type}`
 }
 
 export function mapApiProviderCapability(provider: ApiProviderCapability): ProviderCapability {
@@ -130,7 +194,10 @@ export function mapApiProviderCapability(provider: ApiProviderCapability): Provi
 }
 
 export function mapApiRunEvent(event: ApiRunEvent): RunEvent {
-  const type = `${event.category}.${event.type}`
+  const type = canonicalRunEventType(event)
+  const metadataDetail = metadataString(event.metadata)
+  const isError = /(^|\.)(error|failed|unavailable|timeout)$/.test(type) || event.category === 'error'
+  const isModelStream = type.startsWith('model.') || type.startsWith('assistant.') || type === 'message.model_output_delta' || type === 'message.model_output_completed'
   return {
     id: event.id,
     runId: event.run_id,
@@ -139,18 +206,29 @@ export function mapApiRunEvent(event: ApiRunEvent): RunEvent {
     category: event.category,
     type,
     label: event.category,
-    detail: event.summary,
+    detail: metadataDetail ? `${event.summary} · ${metadataDetail}` : event.summary,
     content: event.content ?? null,
     time: event.created_at,
     status: statusFromApiEvent(event),
-    assistantDelta: type === 'message.model_output_delta' ? event.content ?? '' : undefined,
+    group: isError
+      ? 'error'
+      : isModelStream
+        ? 'model-stream'
+        : type.startsWith('worker.') || type.startsWith('job.')
+          ? 'worker-job'
+          : 'run-lifecycle',
+    severity: isError ? 'error' : type === 'model.delta' || type === 'assistant.drafting' || type === 'message.model_output_delta' ? 'progress' : 'info',
+    usage: tokenUsage(event.metadata),
+    assistantDelta: type === 'model.delta' || type === 'message.model_output_delta' ? event.content ?? undefined : undefined,
   }
 }
 
 function statusFromApiEvent(event: ApiRunEvent): RunStatus {
+  if (event.type === 'run.recovering' || event.type === 'run_recovering') return 'recovering'
+  if (event.type === 'run.stopped' || event.type === 'run_stopped' || event.type === 'run_stopped') return 'stopped'
+  if (event.type === 'run.failed' || event.type === 'run_failed') return 'failed'
+  if (event.type === 'run.cancelled' || event.type === 'run_cancelled') return 'cancelled'
   if (event.category !== 'final') return event.category === 'error' ? 'failed' : 'running'
-  if (event.type === 'run_stopped') return 'stopped'
-  if (event.type === 'run_failed') return 'failed'
   return 'completed'
 }
 

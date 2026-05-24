@@ -18,6 +18,10 @@ export function deriveAgentMotionState(run: Run | null): AgentMotionState {
   if (run.status === 'completed' && run.events.length === 0) return 'idle'
   if (run.status === 'completed') return 'done'
   if (run.status === 'failed' || run.status === 'stopped') return 'error'
+  if (run.status === 'recovering') return 'thinking'
+  if (run.assistantDraft?.status === 'streaming') return 'speaking'
+  if (run.assistantDraft?.status === 'failed' || run.assistantDraft?.status === 'stopped') return 'error'
+  if (run.assistantDraft?.status === 'recovering') return 'thinking'
 
   let currentEvent = run.events.at(-1)
   for (let index = run.events.length - 1; index >= 0; index -= 1) {
@@ -28,7 +32,7 @@ export function deriveAgentMotionState(run: Run | null): AgentMotionState {
   }
   const eventText = `${currentEvent?.type ?? ''} ${currentEvent?.label ?? ''}`.toLowerCase()
   if (eventText.includes('tool')) return 'tool'
-  if (eventText.includes('message') || eventText.includes('draft') || eventText.includes('reply')) return 'speaking'
+  if (eventText.includes('model.delta') || eventText.includes('message') || eventText.includes('draft') || eventText.includes('reply')) return 'speaking'
   if (eventText.includes('confirm')) return 'confirm'
   return 'thinking'
 }

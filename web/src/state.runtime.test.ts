@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import type { Message, Run } from './domain'
-import { appendRuntimeEventToRun, applyAssistantDeltaToRun, applyModelGatewayEventToRun, shouldApplyIncomingRunEvent, shouldBlockRuntimeSubmit, shouldIgnoreTerminalRuntimeEvent, shouldUpdateStreamStateForRunEvent } from './state'
+import { createRuntimeEvent, getRuntimeScriptSteps } from './runtime/runtimeScripts'
+import { appendRuntimeEventToRun, applyAssistantDeltaToRun, applyModelGatewayEventToRun, applyRunStreamEventToRun, createRegenerateAttemptRun, createRetryAttemptRun, shouldApplyIncomingRunEvent, shouldBlockRuntimeSubmit, shouldIgnoreTerminalRuntimeEvent, shouldUpdateStreamStateForRunEvent } from './state'
 
 const run: Run = {
   id: 'run-a',
@@ -21,10 +22,13 @@ const message: Message = {
 }
 
 describe('runtime state orchestration helpers', () => {
-  test('blocks a second submit while a selected run is pending or running', () => {
+  test('blocks a second submit while a selected run is pending, running, retrying, or recovering', () => {
     expect(shouldBlockRuntimeSubmit({ ...run, status: 'pending' })).toBe(true)
     expect(shouldBlockRuntimeSubmit({ ...run, status: 'running' })).toBe(true)
+    expect(shouldBlockRuntimeSubmit({ ...run, status: 'retrying' })).toBe(true)
+    expect(shouldBlockRuntimeSubmit({ ...run, status: 'recovering' })).toBe(true)
     expect(shouldBlockRuntimeSubmit({ ...run, status: 'completed' })).toBe(false)
+    expect(shouldBlockRuntimeSubmit({ ...run, status: 'cancelled' })).toBe(false)
     expect(shouldBlockRuntimeSubmit(null)).toBe(false)
   })
 
@@ -39,7 +43,21 @@ describe('runtime state orchestration helpers', () => {
     const next = applyAssistantDeltaToRun(run, '片段')
 
     expect(message.content).toBe('hello')
-    expect(next.assistantDraft).toMatchObject({ content: '片段', status: 'drafting' })
+    expect(next.assistantDraft).toMatchObject({ content: '片段', status: 'streaming' })
+  })
+
+  test('ignores out-of-order model deltas that arrive after a later sequence', () => {
+    const runningRun: Run = {
+      ...run,
+      status: 'running',
+      events: [{ id: 'evt-2', runId: run.id, threadId: run.threadId, sequence: 2, type: 'model.delta', label: 'Model', detail: 'later', time: 'Now', status: 'running', assistantDelta: 'later' }],
+      assistantDraft: { content: 'later', status: 'streaming', lastEventId: 'evt-2' },
+    }
+
+    const next = applyRunStreamEventToRun(runningRun, { id: 'evt-1', runId: run.id, threadId: run.threadId, sequence: 1, type: 'model.delta', label: 'Model', detail: 'earlier', time: 'Earlier', status: 'running', assistantDelta: 'earlier' })
+
+    expect(next.assistantDraft?.content).toBe('later')
+    expect(next.events.map((event) => event.id)).toEqual(['evt-1', 'evt-2'])
   })
 
   test('preserves normalized event identity when applying model gateway events', () => {
@@ -54,7 +72,7 @@ describe('runtime state orchestration helpers', () => {
     const drafting = applyModelGatewayEventToRun(run, { id: 'evt-delta', runId: run.id, threadId: run.threadId, type: 'message.model_output_delta', label: 'message', detail: 'Model output delta', content: 'hel', assistantDelta: 'hel', time: 'Now', status: 'running' })
     const completed = applyModelGatewayEventToRun(drafting, { id: 'evt-complete', runId: run.id, threadId: run.threadId, type: 'message.model_output_completed', label: 'message', detail: 'Model output completed', content: 'hello', time: 'Now', status: 'running' })
 
-    expect(drafting.assistantDraft).toMatchObject({ content: 'hel', status: 'drafting' })
+    expect(drafting.assistantDraft).toMatchObject({ content: 'hel', status: 'streaming', lastEventId: 'evt-delta' })
     expect(completed.assistantDraft).toMatchObject({ content: 'hello', status: 'completed' })
   })
 
@@ -74,6 +92,94 @@ describe('runtime state orchestration helpers', () => {
   test('ignores later script events after a terminal run event', () => {
     expect(shouldIgnoreTerminalRuntimeEvent({ ...run, status: 'failed' })).toBe(true)
     expect(shouldIgnoreTerminalRuntimeEvent({ ...run, status: 'stopped' })).toBe(true)
+    expect(shouldIgnoreTerminalRuntimeEvent({ ...run, status: 'cancelled' })).toBe(true)
+    expect(shouldIgnoreTerminalRuntimeEvent({ ...run, status: 'retrying' })).toBe(false)
+    expect(shouldIgnoreTerminalRuntimeEvent({ ...run, status: 'recovering' })).toBe(false)
     expect(shouldIgnoreTerminalRuntimeEvent({ ...run, status: 'running' })).toBe(false)
+  })
+
+  test('does not append deltas or stale completion events to terminal runs', () => {
+    const stoppedRun: Run = { ...run, status: 'stopped', assistantDraft: { content: 'partial', status: 'stopped' } }
+    const withDelta = applyAssistantDeltaToRun(stoppedRun, ' stale')
+    const withFinal = appendRuntimeEventToRun(stoppedRun, {
+      id: 'evt-final',
+      runId: stoppedRun.id,
+      threadId: stoppedRun.threadId,
+      type: 'model.final',
+      label: 'Final',
+      detail: 'stale final',
+      time: 'Later',
+      status: 'completed',
+    })
+
+    expect(withDelta.assistantDraft).toEqual(stoppedRun.assistantDraft)
+    expect(withFinal.status).toBe('stopped')
+    expect(withFinal.events).toEqual(stoppedRun.events)
+  })
+
+  test('keeps terminal runs unchanged when applying live stream events', () => {
+    const stoppedRun: Run = { ...run, status: 'stopped' }
+    const staleEvent = {
+      id: 'evt-final',
+      runId: stoppedRun.id,
+      threadId: stoppedRun.threadId,
+      type: 'model.final' as const,
+      label: 'Final',
+      detail: 'stale final',
+      time: 'Later',
+      status: 'completed' as const,
+    }
+
+    expect(applyRunStreamEventToRun(stoppedRun, staleEvent)).toBe(stoppedRun)
+  })
+
+  test('merges live stream events into non-terminal runs', () => {
+    const runningRun: Run = { ...run, status: 'running' }
+    const event = {
+      id: 'evt-completed',
+      runId: runningRun.id,
+      threadId: runningRun.threadId,
+      type: 'run.completed' as const,
+      label: 'Run',
+      detail: 'completed',
+      time: 'Later',
+      status: 'completed' as const,
+    }
+
+    const next = applyRunStreamEventToRun(runningRun, event)
+
+    expect(next).not.toBe(runningRun)
+    expect(next.status).toBe('completed')
+    expect(next.events).toEqual([event])
+  })
+
+  test('keeps model final and run completed when applying model stream events', () => {
+    const applied = getRuntimeScriptSteps('model-stream').reduce((current, step, index) => {
+      return applyRunStreamEventToRun(current, createRuntimeEvent({ threadId: current.threadId, runId: current.id, sequence: index, step }))
+    }, { ...run, status: 'running' } as Run)
+
+    expect(applied.status).toBe('completed')
+    expect(applied.events.map((event) => event.type)).toEqual(['run.created', 'job.queued', 'worker.claimed', 'job.retrying', 'model.delta', 'model.delta', 'model.final', 'run.completed'])
+  })
+
+  test('keeps model error and run failed when applying model error events', () => {
+    const applied = getRuntimeScriptSteps('model-error').reduce((current, step, index) => {
+      return applyRunStreamEventToRun(current, createRuntimeEvent({ threadId: current.threadId, runId: current.id, sequence: index, step }))
+    }, { ...run, status: 'running' } as Run)
+
+    expect(applied.status).toBe('failed')
+    expect(applied.events.map((event) => event.type)).toEqual(['run.created', 'model.delta', 'provider.error', 'model.error', 'run.failed'])
+  })
+
+  test('creates retry and regenerate attempts without clearing prior context', () => {
+    const failedRun: Run = { ...run, status: 'failed', assistantDraft: { content: 'partial', status: 'failed' } }
+    const retryRun = createRetryAttemptRun(failedRun)
+    const regenerateRun = createRegenerateAttemptRun(run, 'msg-a')
+
+    expect(retryRun.status).toBe('pending')
+    expect(retryRun.assistantDraft).toEqual({ content: '', status: 'pending' })
+    expect(failedRun.assistantDraft).toEqual({ content: 'partial', status: 'failed' })
+    expect(regenerateRun.attemptOfMessageId).toBe('msg-a')
+    expect(regenerateRun.status).toBe('pending')
   })
 })

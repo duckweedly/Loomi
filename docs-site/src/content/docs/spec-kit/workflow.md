@@ -56,6 +56,16 @@ specs/005-llm-gateway/
 - `quickstart.md`：记录 provider 配置、API/SSE、failure、tool-boundary、frontend 和验证命令。
 - `tasks.md`：按 foundation、US1、US2、US3 和 polish 拆分并跟踪实现任务。
 
+## 近期已完成：006 Streaming Chat Runtime
+
+Spec Kit 功能目录：
+
+```text
+specs/006-streaming-chat-runtime/
+```
+
+US1-US5 are implemented: streaming Chat Canvas draft bubbles, grouped Timeline/debug events, backend capability status, composer stop/retry/regenerate/continue controls, and synchronized thread/message loading/error/history states. Final validation is tracked in tasks T060-T063.
+
 ## 近期已完成：M3.5 Frontend Agent Runtime Skeleton
 
 Spec Kit 功能目录：

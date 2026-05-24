@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { RuntimeEvent } from '../domain'
-import { applyRealRunEvent } from './realExecutionAdapter'
+import { applyRealRunEvent, mapRealRuntimeCapabilitySignal } from './realExecutionAdapter'
 
 describe('applyRealRunEvent', () => {
   test('applies model gateway delta and completion events', () => {
@@ -12,7 +12,7 @@ describe('applyRealRunEvent', () => {
     const final = applyRealRunEvent(drafting, completed)
 
     expect(drafting.assistantDraft?.content).toBe('hel')
-    expect(final.assistantDraft).toEqual({ content: 'hello', status: 'completed' })
+    expect(final.assistantDraft).toMatchObject({ content: 'hello', status: 'completed', lastEventId: 'evt-2' })
     expect(final.events.map((event) => event.id)).toEqual(['evt-1', 'evt-2'])
   })
 
@@ -44,5 +44,12 @@ describe('applyRealRunEvent', () => {
 
     expect(next.events).toHaveLength(1)
     expect(next.events[0].type).toBe('progress.tool_call_blocked')
+  })
+
+  test('maps backend setup provider and stream failures to capability signals', () => {
+    expect(mapRealRuntimeCapabilitySignal(new Error('Failed to fetch'))).toEqual({ backendUnavailable: true })
+    expect(mapRealRuntimeCapabilitySignal(Object.assign(new Error('model setup missing'), { code: 'model_setup_missing' }))).toEqual({ modelSetupMissing: true })
+    expect(mapRealRuntimeCapabilitySignal(Object.assign(new Error('provider unavailable'), { code: 'provider_unavailable' }))).toEqual({ providerUnavailable: true })
+    expect(mapRealRuntimeCapabilitySignal(Object.assign(new Error('stream disconnected'), { code: 'stream_disconnected' }))).toEqual({ streamDisconnected: true })
   })
 })

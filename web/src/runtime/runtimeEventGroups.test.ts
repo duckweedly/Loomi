@@ -1,0 +1,52 @@
+import { describe, expect, test } from 'bun:test'
+import type { RunEvent } from '../domain'
+import { groupRuntimeEvents, mapRuntimeEventGroup } from './runtimeEventGroups'
+
+function event(overrides: Partial<RunEvent>): RunEvent {
+  return {
+    id: overrides.id ?? `evt-${overrides.type ?? 'run.created'}`,
+    runId: 'run-a',
+    threadId: 'thread-a',
+    type: overrides.type ?? 'run.created',
+    label: overrides.label ?? 'Run',
+    detail: overrides.detail ?? 'detail',
+    time: overrides.time ?? 'Now',
+    status: overrides.status ?? 'running',
+    severity: overrides.severity,
+    group: overrides.group,
+    usage: overrides.usage,
+    sequence: overrides.sequence,
+  }
+}
+
+describe('runtime event groups', () => {
+  test('maps lifecycle, model stream, worker job, error, and unknown events', () => {
+    expect(mapRuntimeEventGroup(event({ type: 'run.created' }))).toBe('run-lifecycle')
+    expect(mapRuntimeEventGroup(event({ type: 'model.delta' }))).toBe('model-stream')
+    expect(mapRuntimeEventGroup(event({ type: 'worker.claimed' }))).toBe('worker-job')
+    expect(mapRuntimeEventGroup(event({ type: 'provider.error', status: 'failed' }))).toBe('error')
+    expect(mapRuntimeEventGroup(event({ type: 'backend.unavailable' }))).toBe('error')
+    expect(mapRuntimeEventGroup(event({ type: 'provider.timeout' }))).toBe('error')
+    expect(mapRuntimeEventGroup(event({ type: 'custom.telemetry' }))).toBe('run-lifecycle')
+  })
+
+  test('gives error semantics precedence over explicit groups', () => {
+    expect(mapRuntimeEventGroup(event({ type: 'run.failed', status: 'failed', group: 'run-lifecycle' }))).toBe('error')
+    expect(mapRuntimeEventGroup(event({ type: 'provider.timeout', severity: 'error', group: 'model-stream' }))).toBe('error')
+  })
+
+  test('returns stable groups with chronological events and usage detail', () => {
+    const grouped = groupRuntimeEvents([
+      event({ id: 'evt-model', sequence: 2, type: 'model.usage', usage: { inputTokens: 7, outputTokens: 11 } }),
+      event({ id: 'evt-run', sequence: 1, type: 'run.created' }),
+      event({ id: 'evt-worker', sequence: 3, type: 'job.queued' }),
+      event({ id: 'evt-error', sequence: 4, type: 'stream.error', status: 'failed' }),
+    ])
+
+    expect(grouped.map((group) => group.id)).toEqual(['run-lifecycle', 'model-stream', 'worker-job', 'error'])
+    expect(grouped[0].events.map((item) => item.id)).toEqual(['evt-run'])
+    expect(grouped[1].events[0].usage).toEqual({ inputTokens: 7, outputTokens: 11 })
+    expect(grouped[2].events.map((item) => item.id)).toEqual(['evt-worker'])
+    expect(grouped[3].events.map((item) => item.id)).toEqual(['evt-error'])
+  })
+})

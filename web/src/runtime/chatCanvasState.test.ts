@@ -26,7 +26,16 @@ describe('deriveChatCanvasState', () => {
     expect(deriveChatCanvasState({ loading: false, selectedThreadId: 'thread-a', messageCount: 1, run: baseRun })).toBe('running')
     expect(deriveChatCanvasState({ loading: false, selectedThreadId: 'thread-a', messageCount: 2, run: { ...baseRun, status: 'completed' } })).toBe('completed')
     expect(deriveChatCanvasState({ loading: false, selectedThreadId: 'thread-a', messageCount: 1, run: { ...baseRun, status: 'failed' } })).toBe('failed')
-    expect(deriveChatCanvasState({ loading: false, selectedThreadId: 'thread-a', messageCount: 1, run: { ...baseRun, status: 'stopped' } })).toBe('failed')
+    expect(deriveChatCanvasState({ loading: false, selectedThreadId: 'thread-a', messageCount: 1, run: { ...baseRun, status: 'stopped' } })).toBe('stopped')
+  })
+
+  test('derives assistant draft states from the selected run draft', () => {
+    expect(deriveChatCanvasState({ loading: false, selectedThreadId: 'thread-a', messageCount: 1, run: { ...baseRun, status: 'pending', events: [], assistantDraft: { content: '', status: 'pending' } } })).toBe('waiting-run')
+    expect(deriveChatCanvasState({ loading: false, selectedThreadId: 'thread-a', messageCount: 1, run: { ...baseRun, assistantDraft: { content: 'Partial', status: 'streaming' } } })).toBe('running')
+    expect(deriveChatCanvasState({ loading: false, selectedThreadId: 'thread-a', messageCount: 2, run: { ...baseRun, status: 'completed', assistantDraft: { content: 'Final', status: 'completed', messageId: 'msg-final' } } })).toBe('completed')
+    expect(deriveChatCanvasState({ loading: false, selectedThreadId: 'thread-a', messageCount: 1, run: { ...baseRun, status: 'failed', assistantDraft: { content: 'Partial', status: 'failed' } } })).toBe('failed')
+    expect(deriveChatCanvasState({ loading: false, selectedThreadId: 'thread-a', messageCount: 1, run: { ...baseRun, status: 'stopped', assistantDraft: { content: 'Partial', status: 'stopped' } } })).toBe('stopped')
+    expect(deriveChatCanvasState({ loading: false, selectedThreadId: 'thread-a', messageCount: 1, run: { ...baseRun, status: 'recovering', assistantDraft: { content: 'Restored', status: 'recovering' } } })).toBe('recovering')
   })
 
   test('keeps idle completed runs as history instead of a completed runtime state', () => {

@@ -734,6 +734,38 @@ button, textarea, input, .sidebar, .chat-shell, .run-dock, .right-panel-menu, .r
   background: linear-gradient(90deg, var(--border-subtle), transparent);
 }
 
+.capability-chip,
+.capability-rail {
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  padding: 2px 8px;
+  background: color-mix(in srgb, var(--bg-glass-soft) 72%, transparent);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.capability-chip.backend-unavailable,
+.capability-chip.model-setup-missing,
+.capability-chip.provider-unavailable,
+.capability-chip.stream-disconnected,
+.capability-chip.run-recovering,
+.capability-rail.backend-unavailable,
+.capability-rail.model-setup-missing,
+.capability-rail.provider-unavailable,
+.capability-rail.stream-disconnected,
+.capability-rail.run-recovering {
+  border-color: color-mix(in srgb, var(--orange) 34%, var(--border-subtle));
+  color: color-mix(in srgb, var(--orange) 82%, var(--text-primary));
+}
+
+.capability-detail {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .api-error {
   margin: 10px 18px 0;
   padding: 10px 12px;
@@ -786,6 +818,22 @@ button, textarea, input, .sidebar, .chat-shell, .run-dock, .right-panel-menu, .r
 .message-row.assistant .message-avatar {
   background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 78%, transparent), color-mix(in srgb, var(--accent-2) 42%, transparent));
   color: white;
+}
+
+.message-row.assistant-draft .message-bubble {
+  border: 1px solid var(--border-subtle);
+  border-radius: 14px;
+  padding: 10px 12px;
+  background: color-mix(in srgb, var(--bg-glass-soft) 68%, transparent);
+}
+
+.message-row.assistant-draft[data-draft-status='failed'],
+.message-row.assistant-draft[data-draft-status='stopped'] {
+  color: color-mix(in srgb, var(--orange) 84%, var(--text-primary));
+}
+
+.message-row.assistant-draft[data-draft-status='recovering'] .message-bubble {
+  border-color: color-mix(in srgb, var(--accent-2) 34%, var(--border-subtle));
 }
 
 .message-bubble {
@@ -889,6 +937,29 @@ button, textarea, input, .sidebar, .chat-shell, .run-dock, .right-panel-menu, .r
     inset 0 -1px 0 rgba(255, 255, 255, 0.04);
   backdrop-filter: blur(48px) saturate(115%) brightness(1.04);
   -webkit-backdrop-filter: blur(48px) saturate(115%) brightness(1.04);
+}
+
+.composer-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-self: stretch;
+  justify-content: flex-start;
+}
+
+.composer-action {
+  border: 1px solid var(--border-subtle);
+  border-radius: 9px;
+  padding: 5px 9px;
+  background: color-mix(in srgb, var(--bg-glass-soft) 70%, transparent);
+  color: var(--composer-button-text);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.composer-action:hover {
+  background: var(--composer-button-hover);
+  color: var(--text-primary);
 }
 
 .composer-input {
@@ -1058,10 +1129,36 @@ button, textarea, input, .sidebar, .chat-shell, .run-dock, .right-panel-menu, .r
 }
 
 .progress-list,
-.file-list {
+.file-list,
+.runtime-event-group,
+.thread-state {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+.runtime-event-group {
+  border: 1px solid var(--pane-divider);
+  border-radius: 12px;
+  padding: 12px;
+  background: color-mix(in srgb, var(--pane-surface) 58%, transparent);
+}
+
+.runtime-event-group h3 {
+  margin: 0 0 8px;
+  color: var(--text-primary);
+  font-size: 13px;
+  letter-spacing: -0.01em;
+}
+
+.runtime-event-group p,
+.thread-state {
+  color: var(--pane-muted);
+  font-size: 12px;
+}
+
+.runtime-event-group.error {
+  border-color: color-mix(in srgb, var(--orange) 30%, var(--pane-divider));
 }
 
 .agent-motion-card {

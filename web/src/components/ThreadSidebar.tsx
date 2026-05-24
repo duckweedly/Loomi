@@ -10,6 +10,8 @@ type Props = {
   selectedThreadId: string
   selectedMode: SidebarMode
   theme: 'dark' | 'light'
+  loading?: boolean
+  error?: string | null
   onRefresh: () => void
   onSelectThread: (threadId: string) => void
   onCreateThread: () => void
@@ -24,6 +26,8 @@ export function ThreadSidebar({
   selectedThreadId,
   selectedMode,
   theme,
+  loading = false,
+  error = null,
   onRefresh,
   onSelectThread,
   onCreateThread,
@@ -62,6 +66,9 @@ export function ThreadSidebar({
           <span>Threads</span>
         </div>
         <div className="thread-list">
+          {loading && <div className="thread-state">Loading threads</div>}
+          {error && <div className="thread-state error"><span>{error}</span><button type="button" onClick={onRefresh}>Retry</button></div>}
+          {threads.length === 0 && <div className="thread-state empty">No {selectedMode} threads</div>}
           {threads.map((thread) => (
             <div className="thread-row" key={thread.id}>
               <button

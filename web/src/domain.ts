@@ -1,6 +1,16 @@
-export type RunStatus = 'pending' | 'running' | 'completed' | 'failed' | 'stopped'
+export type RunStatus = 'pending' | 'running' | 'completed' | 'failed' | 'stopped' | 'cancelled' | 'retrying' | 'recovering'
 
 export type RuntimeStatus = RunStatus
+
+export type RuntimeEventGroup = 'run-lifecycle' | 'model-stream' | 'worker-job' | 'error'
+
+export type RuntimeEventSeverity = 'info' | 'progress' | 'warning' | 'error'
+
+export type RuntimeUsage = {
+  inputTokens?: number
+  outputTokens?: number
+  totalTokens?: number
+}
 
 export type RunEventCategory = 'lifecycle' | 'progress' | 'message' | 'error' | 'final'
 
@@ -30,6 +40,8 @@ export type ChatCanvasState =
   | 'completed'
   | 'failed'
   | 'backend-unavailable'
+  | 'stopped'
+  | 'recovering'
 
 export type Thread = {
   id: string
@@ -56,6 +68,8 @@ export type Message = {
   role: 'user' | 'assistant'
   content: string
   createdAt: string
+  runId?: string
+  attemptOfMessageId?: string
   toolCalls?: ToolCall[]
 }
 
@@ -76,6 +90,9 @@ export type RuntimeEvent = {
   threadId: string
   sequence?: number
   category?: RunEventCategory
+  group?: RuntimeEventGroup
+  severity?: RuntimeEventSeverity
+  usage?: RuntimeUsage
   type: RuntimeEventType
   label: string
   detail: string
@@ -92,8 +109,9 @@ export type RunEvent = Omit<RuntimeEvent, 'runId' | 'threadId'> & {
 
 export type AssistantDraft = {
   content: string
-  status: 'empty' | 'drafting' | 'completed' | 'failed' | 'stopped'
+  status: 'empty' | 'drafting' | 'pending' | 'streaming' | 'completed' | 'failed' | 'stopped' | 'recovering'
   messageId?: string
+  lastEventId?: string
 }
 
 export type RunSource = 'local_simulated' | 'model_gateway'
@@ -107,18 +125,22 @@ export type Run = {
   source?: RunSource
   events: RunEvent[]
   scriptId?: RuntimeScriptId
+  attemptOfMessageId?: string
   assistantDraft?: AssistantDraft
   createdAt?: string
   completedAt?: string
 }
 
-export type RuntimeScriptId = 'success' | 'failure'
+export type RuntimeScriptId = 'success' | 'failure' | 'model-stream' | 'model-error' | 'stopped' | 'replayed'
 
 export type RuntimeScriptStep = {
   type: RuntimeEventType
   label: string
   detail: string
   status: RuntimeStatus
+  group?: RuntimeEventGroup
+  severity?: RuntimeEventSeverity
+  usage?: RuntimeUsage
   assistantDelta?: string
 }
 
@@ -127,7 +149,7 @@ export type RuntimeScript = {
   name: string
   steps: RuntimeScriptStep[]
   finalAssistantMessage?: string
-  terminalStatus: Extract<RuntimeStatus, 'completed' | 'failed'>
+  terminalStatus: Extract<RuntimeStatus, 'completed' | 'failed' | 'stopped'>
 }
 
 export type ThreadRuntimeState = {
