@@ -1,0 +1,302 @@
+openapi: 3.1.0
+info:
+  title: Loomi M6 Worker Job Pipeline API
+  version: 0.1.0
+  description: >
+    Contract for the M6 background run execution slice. It layers queued,
+    worker-owned execution and diagnostics on top of existing thread, run,
+    stop, history, and event-stream contracts.
+servers:
+  - url: http://127.0.0.1:8080
+paths:
+  /v1/threads/{thread_id}/runs:
+    post:
+      summary: Start a background-capable run for a thread
+      description: >
+        Creates a run and durable background job, then returns quickly with
+        queued or running status. A thread may not have more than one active run.
+      parameters:
+        - $ref: '#/components/parameters/ThreadId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StartRunRequest'
+      responses:
+        '202':
+          description: Run accepted and queued or already claimed for background processing
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Run'
+        '409':
+          description: Thread already has an active run
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Queue is unavailable or paused in a mode that rejects new work
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /v1/runs/{run_id}:
+    get:
+      summary: Read one run
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '200':
+          description: Run state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Run'
+        '404':
+          description: Run not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /v1/runs/{run_id}/stop:
+    post:
+      summary: Request cancellation for a queued or running background run
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '202':
+          description: Stop request recorded or already reflected in a terminal run
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StopRunResponse'
+        '404':
+          description: Run not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /v1/runs/{run_id}/events:
+    get:
+      summary: Read persisted run event history
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '200':
+          description: Ordered persisted events for the run
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [events]
+                properties:
+                  events:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/RunEvent'
+  /v1/runs/{run_id}/events/stream:
+    get:
+      summary: Stream run events using history-then-live delivery
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+        - name: Last-Event-ID
+          in: header
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Server-sent event stream of persisted history followed by live events
+          content:
+            text/event-stream:
+              schema:
+                type: string
+  /v1/diagnostics/worker-queue:
+    get:
+      summary: Read local worker and queue diagnostic state
+      description: >
+        Returns redacted local validation information for queue readiness,
+        worker status, stale work, retrying jobs, and terminal failures.
+      responses:
+        '200':
+          description: Worker queue diagnostics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkerQueueDiagnostics'
+components:
+  parameters:
+    ThreadId:
+      name: thread_id
+      in: path
+      required: true
+      schema:
+        type: string
+    RunId:
+      name: run_id
+      in: path
+      required: true
+      schema:
+        type: string
+  schemas:
+    StartRunRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        message_id:
+          type: string
+          description: User message that triggered the run, when already created
+        mode:
+          type: string
+          enum: [default]
+      required: []
+    Run:
+      type: object
+      required: [id, thread_id, status, source, created_at, updated_at]
+      properties:
+        id:
+          type: string
+        thread_id:
+          type: string
+        status:
+          type: string
+          enum: [pending, queued, running, recovering, completed, failed, stopped]
+        source:
+          type: string
+        title:
+          type: string
+        stop_requested_at:
+          type: string
+          format: date-time
+          nullable: true
+        completed_at:
+          type: string
+          format: date-time
+          nullable: true
+        error_code:
+          type: string
+          nullable: true
+        error_message:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    RunEvent:
+      type: object
+      required: [id, run_id, sequence, category, type, summary, created_at]
+      properties:
+        id:
+          type: string
+        run_id:
+          type: string
+        sequence:
+          type: integer
+          minimum: 1
+        category:
+          type: string
+          enum: [lifecycle, progress, message, error, final]
+        type:
+          type: string
+          enum:
+            - run_created
+            - run_queued
+            - run_started
+            - job_claimed
+            - lease_renewed
+            - pipeline_step_started
+            - pipeline_step_completed
+            - job_recovering
+            - job_retry_scheduled
+            - stop_requested
+            - model_request_started
+            - model_output_delta
+            - model_output_completed
+            - job_attempt_failed
+            - job_retry_exhausted
+            - provider_error
+            - provider_timeout
+            - provider_rate_limited
+            - run_completed
+            - run_failed
+            - run_stopped
+        summary:
+          type: string
+        content:
+          type: string
+          nullable: true
+        metadata:
+          type: object
+          additionalProperties: true
+        created_at:
+          type: string
+          format: date-time
+    StopRunResponse:
+      type: object
+      required: [run]
+      properties:
+        run:
+          $ref: '#/components/schemas/Run'
+        stop_requested:
+          type: boolean
+        already_terminal:
+          type: boolean
+    WorkerQueueDiagnostics:
+      type: object
+      required:
+        - queue_status
+        - worker_status
+        - queued_count
+        - leased_count
+        - stale_count
+        - retrying_count
+        - dead_count
+        - updated_at
+      properties:
+        queue_status:
+          type: string
+          enum: [ready, paused, unhealthy, degraded]
+        worker_status:
+          type: string
+          enum: [ready, paused, unhealthy, degraded, stopped]
+        queued_count:
+          type: integer
+          minimum: 0
+        leased_count:
+          type: integer
+          minimum: 0
+        stale_count:
+          type: integer
+          minimum: 0
+        retrying_count:
+          type: integer
+          minimum: 0
+        dead_count:
+          type: integer
+          minimum: 0
+        active_worker_id:
+          type: string
+          nullable: true
+        last_error_code:
+          type: string
+          nullable: true
+        updated_at:
+          type: string
+          format: date-time
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+            message:
+              type: string

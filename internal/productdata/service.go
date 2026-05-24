@@ -3,6 +3,7 @@ package productdata
 import (
 	"context"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -25,6 +26,12 @@ type Service interface {
 	ListRunEvents(context.Context, identity.LocalIdentity, string, int) ([]RunEvent, error)
 	AppendRunEvent(context.Context, identity.LocalIdentity, string, AppendRunEventInput) (RunEvent, error)
 	StopRun(context.Context, identity.LocalIdentity, string) (StopRunOutput, error)
+	ClaimBackgroundJob(context.Context, identity.LocalIdentity, ClaimBackgroundJobInput) (BackgroundJob, Run, bool, error)
+	RenewBackgroundJobLease(context.Context, identity.LocalIdentity, RenewBackgroundJobLeaseInput) (BackgroundJob, bool, error)
+	RecoverBackgroundJobs(context.Context, identity.LocalIdentity, RecoverBackgroundJobsInput) ([]BackgroundJobRecovery, error)
+	CompleteBackgroundJob(context.Context, identity.LocalIdentity, CompleteBackgroundJobInput) (BackgroundJob, bool, error)
+	FailBackgroundJob(context.Context, identity.LocalIdentity, FailBackgroundJobInput) (BackgroundJob, bool, error)
+	WorkerQueueDiagnostics(context.Context, identity.LocalIdentity) (WorkerQueueDiagnostics, error)
 }
 
 type SeedService interface {
@@ -38,23 +45,25 @@ type Repository interface {
 }
 
 type MemoryService struct {
-	mu        sync.Mutex
-	now       func() time.Time
-	users     map[string]User
-	threads   map[string]Thread
-	messages  map[string][]Message
-	runs      map[string]Run
-	runEvents map[string][]RunEvent
+	mu             sync.Mutex
+	now            func() time.Time
+	users          map[string]User
+	threads        map[string]Thread
+	messages       map[string][]Message
+	runs           map[string]Run
+	runEvents      map[string][]RunEvent
+	backgroundJobs map[string]BackgroundJob
 }
 
 func NewMemoryService() *MemoryService {
 	return &MemoryService{
-		now:       time.Now,
-		users:     map[string]User{},
-		threads:   map[string]Thread{},
-		messages:  map[string][]Message{},
-		runs:      map[string]Run{},
-		runEvents: map[string][]RunEvent{},
+		now:            time.Now,
+		users:          map[string]User{},
+		threads:        map[string]Thread{},
+		messages:       map[string][]Message{},
+		runs:           map[string]Run{},
+		runEvents:      map[string][]RunEvent{},
+		backgroundJobs: map[string]BackgroundJob{},
 	}
 }
 
@@ -249,9 +258,10 @@ func (s *MemoryService) StartRun(_ context.Context, ident identity.LocalIdentity
 		return Run{}, err
 	}
 	now := s.now()
-	run := Run{ID: NewRunID(), ThreadID: threadID, UserID: user.ID, Status: RunStatusRunning, Source: source, Title: TitleForRunSource(source), CreatedAt: now, UpdatedAt: now}
+	run := Run{ID: NewRunID(), ThreadID: threadID, UserID: user.ID, Status: RunStatusQueued, Source: source, Title: TitleForRunSource(source), CreatedAt: now, UpdatedAt: now}
 	s.runs[run.ID] = run
-	metadata := map[string]any{"source": string(source)}
+	jobID := NewBackgroundJobID()
+	metadata := map[string]any{"source": string(source), "job_id": jobID}
 	if source == RunSourceLocalSimulated {
 		metadata["script_name"] = NormalizeScriptName(input.ScriptName)
 	} else {
@@ -259,7 +269,11 @@ func (s *MemoryService) StartRun(_ context.Context, ident identity.LocalIdentity
 		metadata["provider_id"] = input.ProviderID
 		metadata["model"] = input.Model
 	}
-	s.runEvents[run.ID] = append(s.runEvents[run.ID], RunEvent{ID: NewRunEventID(), RunID: run.ID, ThreadID: threadID, UserID: user.ID, Sequence: 1, Category: RunEventCategoryLifecycle, Type: "run_created", Summary: "Run created", Metadata: RedactEventMetadata(metadata), CreatedAt: now})
+	metadata = RedactEventMetadata(metadata)
+	job := BackgroundJob{ID: jobID, RunID: run.ID, ThreadID: threadID, UserID: user.ID, Kind: BackgroundJobKindRunExecution, Status: BackgroundJobStatusQueued, Priority: 100, MaxAttempts: 3, ScheduledAt: now, Metadata: metadata, CreatedAt: now, UpdatedAt: now}
+	s.backgroundJobs[job.ID] = job
+	s.runEvents[run.ID] = append(s.runEvents[run.ID], RunEvent{ID: NewRunEventID(), RunID: run.ID, ThreadID: threadID, UserID: user.ID, Sequence: 1, Category: RunEventCategoryLifecycle, Type: "run_created", Summary: "Run created", Metadata: metadata, CreatedAt: now})
+	s.runEvents[run.ID] = append(s.runEvents[run.ID], RunEvent{ID: NewRunEventID(), RunID: run.ID, ThreadID: threadID, UserID: user.ID, Sequence: 2, Category: RunEventCategoryLifecycle, Type: EventRunQueued, Summary: "Run queued", Metadata: RedactEventMetadata(map[string]any{"job_id": job.ID}), CreatedAt: now})
 	thread.UpdatedAt = now
 	s.threads[threadID] = thread
 	return run, nil
@@ -359,15 +373,255 @@ func (s *MemoryService) StopRun(_ context.Context, ident identity.LocalIdentity,
 		return StopRunOutput{Run: run, Result: StopRunResultAlreadyTerminal}, nil
 	}
 	now := s.now()
+	run.StopRequestedAt = &now
 	run.Status = RunStatusStopped
 	run.UpdatedAt = now
 	run.CompletedAt = &now
 	s.runs[run.ID] = run
-	lifecycle := RunEvent{ID: NewRunEventID(), RunID: run.ID, ThreadID: run.ThreadID, UserID: user.ID, Sequence: len(s.runEvents[run.ID]) + 1, Category: RunEventCategoryLifecycle, Type: "run_stopped", Summary: "Run stopped", Metadata: map[string]any{}, CreatedAt: now}
-	s.runEvents[run.ID] = append(s.runEvents[run.ID], lifecycle)
-	final := RunEvent{ID: NewRunEventID(), RunID: run.ID, ThreadID: run.ThreadID, UserID: user.ID, Sequence: len(s.runEvents[run.ID]) + 1, Category: RunEventCategoryFinal, Type: "run_stopped", Summary: "Run stopped", Metadata: map[string]any{}, CreatedAt: now}
-	s.runEvents[run.ID] = append(s.runEvents[run.ID], final)
+	for id, job := range s.backgroundJobs {
+		if job.RunID == run.ID && job.UserID == user.ID && !IsBackgroundJobTerminal(job.Status) {
+			job.Status = BackgroundJobStatusCancelled
+			job.UpdatedAt = now
+			s.backgroundJobs[id] = job
+		}
+	}
+	lifecycle := s.appendRunEventLocked(run, RunEventCategoryProgress, EventStopRequested, "Stop requested", nil, map[string]any{}, now)
+	final := s.appendRunEventLocked(run, RunEventCategoryFinal, EventRunStopped, "Run stopped", nil, map[string]any{}, now)
 	return StopRunOutput{Run: run, Result: StopRunResultStopped, Events: []RunEvent{lifecycle, final}}, nil
+}
+
+func (s *MemoryService) ClaimBackgroundJob(_ context.Context, ident identity.LocalIdentity, input ClaimBackgroundJobInput) (BackgroundJob, Run, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user := s.ensureUserLocked(ident)
+	workerID := strings.TrimSpace(input.WorkerID)
+	if workerID == "" {
+		return BackgroundJob{}, Run{}, false, NewError(CodeInvalidRequest, "Worker id is required.")
+	}
+	leaseSeconds := input.LeaseSeconds
+	if leaseSeconds <= 0 {
+		leaseSeconds = 30
+	}
+	now := s.now()
+	for id, job := range s.backgroundJobs {
+		if job.UserID != user.ID || job.Status != BackgroundJobStatusQueued || job.ScheduledAt.After(now) {
+			continue
+		}
+		run, ok := s.runs[job.RunID]
+		if !ok || run.UserID != user.ID || IsRunTerminal(run.Status) {
+			continue
+		}
+		if run.StopRequestedAt != nil {
+			job.Status = BackgroundJobStatusCancelled
+			job.UpdatedAt = now
+			s.backgroundJobs[id] = job
+			continue
+		}
+		leaseExpiresAt := now.Add(time.Duration(leaseSeconds) * time.Second)
+		job.Status = BackgroundJobStatusLeased
+		job.LeasedBy = &workerID
+		job.LeaseExpiresAt = &leaseExpiresAt
+		job.AttemptCount++
+		job.OwnershipVersion++
+		job.UpdatedAt = now
+		s.backgroundJobs[id] = job
+		run.Status = RunStatusRunning
+		run.UpdatedAt = now
+		s.runs[run.ID] = run
+		s.appendRunEventLocked(run, RunEventCategoryProgress, EventJobClaimed, "Job claimed", nil, map[string]any{"job_id": job.ID, "worker_id": workerID, "attempt": job.AttemptCount}, now)
+		return job, run, true, nil
+	}
+	return BackgroundJob{}, Run{}, false, nil
+}
+
+func (s *MemoryService) RenewBackgroundJobLease(_ context.Context, ident identity.LocalIdentity, input RenewBackgroundJobLeaseInput) (BackgroundJob, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user := s.ensureUserLocked(ident)
+	job, ok := s.backgroundJobs[input.JobID]
+	if !ok || job.UserID != user.ID {
+		return BackgroundJob{}, false, NewError(CodeInvalidRequest, "Background job not found.")
+	}
+	if !jobOwnedBy(job, input.WorkerID, input.OwnershipVersion) || IsBackgroundJobTerminal(job.Status) {
+		return job, false, nil
+	}
+	run, ok := s.runs[job.RunID]
+	if !ok || IsRunTerminal(run.Status) {
+		return job, false, nil
+	}
+	leaseSeconds := input.LeaseSeconds
+	if leaseSeconds <= 0 {
+		leaseSeconds = 30
+	}
+	now := s.now()
+	leaseExpiresAt := now.Add(time.Duration(leaseSeconds) * time.Second)
+	job.LeaseExpiresAt = &leaseExpiresAt
+	job.UpdatedAt = now
+	s.backgroundJobs[job.ID] = job
+	s.appendRunEventLocked(run, RunEventCategoryProgress, EventLeaseRenewed, "Lease renewed", nil, map[string]any{"job_id": job.ID, "worker_id": input.WorkerID, "ownership_version": input.OwnershipVersion}, now)
+	return job, true, nil
+}
+
+func (s *MemoryService) RecoverBackgroundJobs(_ context.Context, ident identity.LocalIdentity, input RecoverBackgroundJobsInput) ([]BackgroundJobRecovery, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user := s.ensureUserLocked(ident)
+	now := s.now()
+	limit := input.Limit
+	if limit <= 0 {
+		limit = 10
+	}
+	code := strings.TrimSpace(input.ErrorCode)
+	if code == "" {
+		code = "worker_lease_expired"
+	}
+	message := RedactEventText(strings.TrimSpace(input.ErrorMessage))
+	if message == "" {
+		message = "Worker lease expired."
+	}
+	recoveries := []BackgroundJobRecovery{}
+	for id, job := range s.backgroundJobs {
+		if len(recoveries) >= limit || job.UserID != user.ID || IsBackgroundJobTerminal(job.Status) || job.LeaseExpiresAt == nil || job.LeaseExpiresAt.After(now) {
+			continue
+		}
+		run, ok := s.runs[job.RunID]
+		if !ok || IsRunTerminal(run.Status) {
+			continue
+		}
+		previousWorkerID := ""
+		if job.LeasedBy != nil {
+			previousWorkerID = *job.LeasedBy
+		}
+		job.LastErrorCode = &code
+		job.LastError = &message
+		job.UpdatedAt = now
+		run.UpdatedAt = now
+		if job.AttemptCount >= job.MaxAttempts {
+			job.Status = BackgroundJobStatusDead
+			job.LeasedBy = nil
+			job.LeaseExpiresAt = nil
+			run.Status = RunStatusFailed
+			run.CompletedAt = &now
+			run.ErrorCode = &code
+			run.ErrorMessage = &message
+			event := s.appendRunEventLocked(run, RunEventCategoryError, EventJobRetryExhausted, message, nil, map[string]any{"job_id": job.ID, "attempt_count": job.AttemptCount, "error_code": code}, now)
+			final := s.appendRunEventLocked(run, RunEventCategoryFinal, EventRunFailed, message, nil, map[string]any{"job_id": job.ID, "error_code": code}, now)
+			s.runs[run.ID] = run
+			s.backgroundJobs[id] = job
+			recoveries = append(recoveries, BackgroundJobRecovery{Job: job, Run: run, Events: []RunEvent{event, final}, Exhausted: true})
+			continue
+		}
+		job.Status = BackgroundJobStatusQueued
+		job.LeasedBy = nil
+		job.LeaseExpiresAt = nil
+		run.Status = RunStatusRecovering
+		recovering := s.appendRunEventLocked(run, RunEventCategoryProgress, EventJobRecovering, "Job recovering", nil, map[string]any{"job_id": job.ID, "previous_worker_id": previousWorkerID, "attempt": job.AttemptCount}, now)
+		retry := s.appendRunEventLocked(run, RunEventCategoryProgress, EventJobRetryScheduled, "Job retry scheduled", nil, map[string]any{"job_id": job.ID, "next_attempt": job.AttemptCount + 1, "scheduled_at": now}, now)
+		s.runs[run.ID] = run
+		s.backgroundJobs[id] = job
+		recoveries = append(recoveries, BackgroundJobRecovery{Job: job, Run: run, Events: []RunEvent{recovering, retry}})
+	}
+	return recoveries, nil
+}
+
+func (s *MemoryService) CompleteBackgroundJob(_ context.Context, ident identity.LocalIdentity, input CompleteBackgroundJobInput) (BackgroundJob, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user := s.ensureUserLocked(ident)
+	job, ok := s.backgroundJobs[input.JobID]
+	if !ok || job.UserID != user.ID {
+		return BackgroundJob{}, false, NewError(CodeInvalidRequest, "Background job not found.")
+	}
+	if IsBackgroundJobTerminal(job.Status) {
+		return job, false, nil
+	}
+	if !jobOwnedBy(job, input.WorkerID, input.OwnershipVersion) {
+		return job, false, nil
+	}
+	now := s.now()
+	job.Status = BackgroundJobStatusCompleted
+	job.UpdatedAt = now
+	s.backgroundJobs[job.ID] = job
+	return job, true, nil
+}
+
+func (s *MemoryService) FailBackgroundJob(_ context.Context, ident identity.LocalIdentity, input FailBackgroundJobInput) (BackgroundJob, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user := s.ensureUserLocked(ident)
+	job, ok := s.backgroundJobs[input.JobID]
+	if !ok || job.UserID != user.ID {
+		return BackgroundJob{}, false, NewError(CodeInvalidRequest, "Background job not found.")
+	}
+	if IsBackgroundJobTerminal(job.Status) {
+		return job, false, nil
+	}
+	if !jobOwnedBy(job, input.WorkerID, input.OwnershipVersion) {
+		return job, false, nil
+	}
+	now := s.now()
+	code := strings.TrimSpace(input.ErrorCode)
+	message := RedactEventText(strings.TrimSpace(input.ErrorMessage))
+	job.Status = BackgroundJobStatusFailed
+	job.LastErrorCode = &code
+	job.LastError = &message
+	job.UpdatedAt = now
+	s.backgroundJobs[job.ID] = job
+	if run, ok := s.runs[job.RunID]; ok && !IsRunTerminal(run.Status) {
+		run.Status = RunStatusFailed
+		run.CompletedAt = &now
+		run.UpdatedAt = now
+		run.ErrorCode = &code
+		run.ErrorMessage = &message
+		s.runs[run.ID] = run
+		s.appendRunEventLocked(run, RunEventCategoryError, EventJobAttemptFailed, message, nil, map[string]any{"job_id": job.ID, "attempt": job.AttemptCount, "error_code": code}, now)
+		s.appendRunEventLocked(run, RunEventCategoryFinal, EventRunFailed, message, nil, map[string]any{"job_id": job.ID, "error_code": code}, now)
+	}
+	return job, true, nil
+}
+
+func (s *MemoryService) WorkerQueueDiagnostics(_ context.Context, ident identity.LocalIdentity) (WorkerQueueDiagnostics, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user := s.ensureUserLocked(ident)
+	now := s.now()
+	diagnostics := WorkerQueueDiagnostics{QueueStatus: WorkerQueueStatusReady, WorkerStatus: WorkerStatusReady, UpdatedAt: now}
+	for _, job := range s.backgroundJobs {
+		if job.UserID != user.ID {
+			continue
+		}
+		switch job.Status {
+		case BackgroundJobStatusQueued:
+			diagnostics.QueuedCount++
+		case BackgroundJobStatusLeased:
+			diagnostics.LeasedCount++
+			if job.LeaseExpiresAt != nil && job.LeaseExpiresAt.Before(now) {
+				diagnostics.StaleCount++
+			}
+		case BackgroundJobStatusRetrying:
+			diagnostics.RetryingCount++
+		case BackgroundJobStatusDead:
+			diagnostics.DeadCount++
+		}
+	}
+	if diagnostics.StaleCount > 0 || diagnostics.RetryingCount > 0 || diagnostics.DeadCount > 0 {
+		diagnostics.QueueStatus = WorkerQueueStatusDegraded
+		diagnostics.WorkerStatus = WorkerStatusDegraded
+	}
+	return diagnostics, nil
+}
+
+func (s *MemoryService) appendRunEventLocked(run Run, category RunEventCategory, eventType string, summary string, content *string, metadata map[string]any, createdAt time.Time) RunEvent {
+	event := RunEvent{ID: NewRunEventID(), RunID: run.ID, ThreadID: run.ThreadID, UserID: run.UserID, Sequence: len(s.runEvents[run.ID]) + 1, Category: category, Type: eventType, Summary: RedactEventText(summary), Content: content, Metadata: RedactEventMetadata(metadata), CreatedAt: createdAt}
+	s.runEvents[run.ID] = append(s.runEvents[run.ID], event)
+	return event
+}
+
+func jobOwnedBy(job BackgroundJob, workerID string, ownershipVersion int) bool {
+	if job.LeasedBy == nil || *job.LeasedBy != strings.TrimSpace(workerID) {
+		return false
+	}
+	return job.OwnershipVersion == ownershipVersion
 }
 
 func (s *MemoryService) ensureUserLocked(ident identity.LocalIdentity) User {

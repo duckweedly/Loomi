@@ -36,6 +36,32 @@ describe('RunTimeline runtime linkage', () => {
     expect(source).toContain('Fail')
   })
 
+  test('renders safe worker diagnostic metadata without secret-looking fields', () => {
+    const html = renderToStaticMarkup(createElement(RunTimeline, {
+      runDetailsOpen: true,
+      rightPanelMenuOpen: false,
+      rightToolsOpen: false,
+      selectedPanelId: 'activity',
+      onSelectPanel: () => {},
+      onOpenArtifact: () => {},
+      run: {
+        id: 'run-a',
+        threadId: 'thread-a',
+        status: 'recovering',
+        model: 'Local simulated',
+        context: 'local_simulated',
+        events: [
+          { id: 'evt-worker', runId: 'run-a', threadId: 'thread-a', sequence: 1, type: 'job.recovering', label: 'Worker', detail: 'Job recovering · stale_count: 1 · dead_count: 0', time: 'Now', status: 'recovering' },
+        ],
+      },
+    }))
+
+    expect(html).toContain('Worker/job')
+    expect(html).toContain('stale_count: 1')
+    expect(html).not.toContain('password')
+    expect(html).not.toContain('token')
+  })
+
   test('renders mixed lifecycle model worker and error groups through RunTimeline', () => {
     const html = renderToStaticMarkup(createElement(RunTimeline, {
       runDetailsOpen: true,
@@ -54,6 +80,7 @@ describe('RunTimeline runtime linkage', () => {
           { id: 'evt-run', runId: 'run-a', threadId: 'thread-a', sequence: 1, type: 'run.created', label: 'Run', detail: 'created', time: 'Now', status: 'running' },
           { id: 'evt-model', runId: 'run-a', threadId: 'thread-a', sequence: 2, type: 'model.delta', label: 'Model', detail: 'delta', time: 'Now', status: 'running' },
           { id: 'evt-worker', runId: 'run-a', threadId: 'thread-a', sequence: 3, type: 'job.retrying', label: 'Job', detail: 'retrying', time: 'Now', status: 'retrying' },
+          { id: 'evt-pipeline', runId: 'run-a', threadId: 'thread-a', sequence: 3.5, type: 'pipeline.step.started', label: 'Pipeline', detail: 'invoke runtime', time: 'Now', status: 'running' },
           { id: 'evt-error', runId: 'run-a', threadId: 'thread-a', sequence: 4, type: 'stream.error', label: 'Stream', detail: 'stream failed', time: 'Now', status: 'failed' },
         ],
       },
@@ -64,6 +91,7 @@ describe('RunTimeline runtime linkage', () => {
     expect(html).toContain('Worker/job')
     expect(html).toContain('Error')
     expect(html).toContain('retrying')
+    expect(html).toContain('invoke runtime')
     expect(html).toContain('stream failed')
   })
 })

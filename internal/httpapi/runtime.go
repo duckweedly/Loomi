@@ -117,14 +117,7 @@ func (s *Server) handleThreadRuns(w http.ResponseWriter, r *http.Request, thread
 		writeAPIError(w, err)
 		return
 	}
-	if run.Source == productdata.RunSourceModelGateway {
-		if s.gatewayRunner != nil {
-			s.gatewayRunner.RunAsync(r.Context(), run, productruntime.GatewayRunInput{ThreadID: threadID, MessageID: req.MessageID, ProviderID: req.ProviderID, Model: req.Model})
-		}
-	} else if s.runner != nil {
-		s.runner.RunAsync(run, req.ScriptName)
-	}
-	writeJSON(w, http.StatusCreated, runResponse{Run: run, RequestID: diagnostics.NewRequestID()})
+	writeJSON(w, http.StatusAccepted, runResponse{Run: run, RequestID: diagnostics.NewRequestID()})
 }
 
 func (s *Server) handleRunByID(w http.ResponseWriter, r *http.Request) {

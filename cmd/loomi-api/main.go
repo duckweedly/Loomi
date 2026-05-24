@@ -48,7 +48,14 @@ func main() {
 	broadcaster := productruntime.NewBroadcaster()
 	providers := productruntime.NewHTTPProviders(productruntime.ProviderConfigsFromConfig(cfg), http.DefaultClient)
 	gateway := productruntime.NewGateway(product, broadcaster, providers)
-	server := httpapi.NewServerWithRuntimes(cfg, db.PostgresChecker{Pool: pool}, product, broadcaster, productruntime.NewLocalRunner(product, broadcaster), gateway)
+	localRunner := productruntime.NewLocalRunner(product, broadcaster)
+	if product != nil && cfg.WorkerQueueEnabled && !cfg.WorkerQueuePaused {
+		worker := productruntime.NewWorker(product, broadcaster, productruntime.QueuedRunRouter{Local: localRunner, Gateway: gateway})
+		worker.LeaseSeconds = cfg.WorkerLeaseSeconds
+		worker.PollInterval = time.Duration(cfg.WorkerPollMillis) * time.Millisecond
+		worker.Start(context.Background())
+	}
+	server := httpapi.NewServerWithRuntimes(cfg, db.PostgresChecker{Pool: pool}, product, broadcaster, localRunner, gateway)
 	logger.Info("loomi api starting", "operation_id", opID, "addr", cfg.HTTPAddr, "env", cfg.AppEnv)
 
 	if err := http.ListenAndServe(cfg.HTTPAddr, server); err != nil {

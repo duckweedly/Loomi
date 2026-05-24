@@ -47,6 +47,9 @@ export function applyRealRunEvent(run: Run, event: RuntimeEvent): Run {
       },
     }
   }
+  if (event.status === 'completed') {
+    return { ...run, status: 'completed', events, completedAt }
+  }
   if (event.status === 'failed' || event.status === 'stopped') {
     return {
       ...run,
@@ -61,15 +64,15 @@ export function applyRealRunEvent(run: Run, event: RuntimeEvent): Run {
       },
     }
   }
-  if (event.status === 'recovering') {
+  if (event.status === 'recovering' || event.status === 'queued' || event.status === 'stopping') {
     return {
       ...run,
-      status: 'recovering',
+      status: event.status,
       events,
       assistantDraft: {
         ...run.assistantDraft,
         content: run.assistantDraft?.content ?? event.content ?? '',
-        status: 'recovering',
+        status: event.status,
         lastEventId: event.id,
       },
     }

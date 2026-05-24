@@ -45,6 +45,7 @@ function createStateCopy(locale: Locale): Record<Exclude<ChatCanvasState, 'histo
     failed: { title: copy.failedTitle, detail: copy.failedDetail },
     stopped: { title: copy.stoppedTitle, detail: copy.stoppedDetail },
     recovering: { title: copy.recoveringTitle, detail: copy.recoveringDetail },
+    stopping: { title: copy.stoppingTitle, detail: copy.stoppingDetail },
     'backend-unavailable': { title: copy.backendUnavailableTitle, detail: copy.backendUnavailableDetail },
   }
 }
@@ -68,6 +69,7 @@ function draftFallback(status: AssistantDraftState['status'], locale: Locale) {
   if (status === 'failed') return copy.failedDetail
   if (status === 'stopped') return copy.stoppedDraft
   if (status === 'recovering') return copy.recoveringDraft
+  if (status === 'stopping') return copy.stoppingDetail
   return copy.modelDrafting
 }
 
@@ -78,6 +80,7 @@ function draftStatusLabel(status: AssistantDraftState['status'], locale: Locale)
   if (status === 'failed') return copy.failedTitle
   if (status === 'stopped') return copy.stoppedTitle
   if (status === 'recovering') return copy.recoveringTitle
+  if (status === 'stopping') return copy.stoppingTitle
   return copy.waitingRunTitle
 }
 
@@ -124,7 +127,7 @@ export function ChatCanvas({ sidebarCollapsed, thread, messages, run, loading, e
   })
   const copy = getDictionary(locale).chatCanvas
   const stateCopy = createStateCopy(locale)
-  const composerDisabled = state === 'loading' || state === 'error' || state === 'no-thread' || state === 'backend-unavailable' || state === 'waiting-run' || state === 'running' || state === 'recovering'
+  const composerDisabled = state === 'loading' || state === 'error' || state === 'no-thread' || state === 'backend-unavailable' || state === 'waiting-run' || state === 'running' || state === 'recovering' || state === 'stopping'
   const composerPlaceholder = state === 'history' ? copy.messageLoomi : stateCopy[state].title
   const providerUnavailableBeforeSend = shouldShowProviderUnavailableWarning(dataSourceMode, providerCapabilities)
   const capabilityStatus = deriveBackendCapabilityStatus({
@@ -133,8 +136,8 @@ export function ChatCanvas({ sidebarCollapsed, thread, messages, run, loading, e
     backendUnavailable: backendCapability === 'unavailable' || backendUnavailableAttempted || capabilitySignals?.backendUnavailable,
     modelSetupMissing: capabilitySignals?.modelSetupMissing,
     providerUnavailable: capabilitySignals?.providerUnavailable || providerUnavailableBeforeSend,
-    activeRun: Boolean(run && (run.status === 'pending' || run.status === 'running' || run.status === 'retrying' || run.status === 'recovering')),
-    streamDisconnected: Boolean(run && (run.status === 'pending' || run.status === 'running' || run.status === 'retrying' || run.status === 'recovering') && (capabilitySignals?.streamDisconnected || streamState === 'recoverable_error')),
+    activeRun: Boolean(run && (run.status === 'pending' || run.status === 'queued' || run.status === 'running' || run.status === 'retrying' || run.status === 'recovering' || run.status === 'stopping')),
+    streamDisconnected: Boolean(run && (run.status === 'pending' || run.status === 'queued' || run.status === 'running' || run.status === 'retrying' || run.status === 'recovering' || run.status === 'stopping') && (capabilitySignals?.streamDisconnected || streamState === 'recoverable_error')),
     runRecovering: run?.status === 'recovering' || run?.assistantDraft?.status === 'recovering',
   })
   const capabilityCopy = getBackendCapabilityCopy(capabilityStatus, locale)
@@ -146,7 +149,7 @@ export function ChatCanvas({ sidebarCollapsed, thread, messages, run, loading, e
     )
   ))
   const shouldShowAssistantDraft = Boolean(run && !hasPersistedCompletedDraftMessage)
-  const shouldShowHistory = state === 'history' || state === 'waiting-run' || state === 'running' || state === 'completed' || state === 'failed' || state === 'stopped' || state === 'recovering'
+  const shouldShowHistory = state === 'history' || state === 'waiting-run' || state === 'running' || state === 'completed' || state === 'failed' || state === 'stopped' || state === 'recovering' || state === 'stopping'
 
   return (
     <section className="chat-shell glass-panel" data-chat-state={state}>
@@ -159,7 +162,7 @@ export function ChatCanvas({ sidebarCollapsed, thread, messages, run, loading, e
         <span className={`capability-chip ${capabilityStatus}`}>{capabilityCopy.title}</span>
         <span className="capability-detail">{capabilityCopy.detail}</span>
         <span>{streamState}</span>
-        {run?.status === 'running' && <button className="titlebar-button" onClick={onStopRun}>{copy.stop}</button>}
+        {(run?.status === 'queued' || run?.status === 'running' || run?.status === 'retrying' || run?.status === 'recovering') && <button className="titlebar-button" onClick={onStopRun}>{copy.stop}</button>}
       </div>
 
       {error && <div className="api-error">{error}</div>}

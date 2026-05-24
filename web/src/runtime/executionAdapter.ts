@@ -16,3 +16,7 @@ export type ExecutionAdapterMode = 'mock' | 'real_api'
 export function isRuntimeTerminal(status: Run['status']) {
   return status === 'completed' || status === 'failed' || status === 'stopped' || status === 'cancelled'
 }
+
+export function isRuntimeActive(status: Run['status']) {
+  return status === 'pending' || status === 'queued' || status === 'running' || status === 'retrying' || status === 'recovering' || status === 'stopping'
+}

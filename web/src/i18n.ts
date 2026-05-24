@@ -66,6 +66,8 @@ type Dictionary = {
     stoppedDetail: string
     recoveringTitle: string
     recoveringDetail: string
+    stoppingTitle: string
+    stoppingDetail: string
     backendUnavailableTitle: string
     backendUnavailableDetail: string
     assistant: string
@@ -241,6 +243,8 @@ export const dictionaries: Record<Locale, Dictionary> = {
       stoppedDetail: '保留已生成内容',
       recoveringTitle: '恢复中',
       recoveringDetail: '正在恢复运行状态',
+      stoppingTitle: '停止中',
+      stoppingDetail: '等待后台 worker 确认',
       backendUnavailableTitle: '后端能力未接入',
       backendUnavailableDetail: '等待 M4/M5 run/event',
       assistant: 'Loomi',
@@ -414,6 +418,8 @@ export const dictionaries: Record<Locale, Dictionary> = {
       stoppedDetail: 'Generated content was preserved',
       recoveringTitle: 'Recovering',
       recoveringDetail: 'Recovering the latest run state',
+      stoppingTitle: 'Stopping',
+      stoppingDetail: 'Waiting for the background worker to confirm',
       backendUnavailableTitle: 'Backend capability unavailable',
       backendUnavailableDetail: 'Waiting for M4/M5 run/event',
       assistant: 'Loomi',
