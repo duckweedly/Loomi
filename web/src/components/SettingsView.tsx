@@ -1,6 +1,7 @@
 import { ArrowLeft, ChevronRight } from 'lucide-react'
 import type { ReactNode } from 'react'
 import type { BackendCapabilityState, ProviderCapability, RunStatus, RuntimeScriptId, StreamState, Thread } from '../domain'
+import type { ProviderCheckResult } from '../state'
 import type { ProviderDraftSettings } from '../useWorkspaceShellState'
 import type { Locale } from '../i18n'
 import { getDictionary } from '../i18n'
@@ -17,12 +18,14 @@ type Props = {
   selectedThreadTitle?: string
   selectedRunStatus?: RunStatus
   providerCapabilities: ProviderCapability[]
+  providerCheckResults: Record<string, ProviderCheckResult>
   providerDraftSettings: ProviderDraftSettings
   onSelectLocale: (locale: Locale) => void
   onSelectCategory: (categoryId: SettingsCategoryId) => void
   onSelectDefaultWorkspaceMode: (mode: Thread['mode']) => void
   onSelectRuntimeScript: (scriptId: RuntimeScriptId) => void
   onProviderDraftSettingsChange: (settings: ProviderDraftSettings) => void
+  onCheckProvider: (providerId: string) => void
   onBack: () => void
 }
 
@@ -96,6 +99,45 @@ function ProviderCapabilityList({ providerCapabilities, t }: { providerCapabilit
   )
 }
 
+function ProviderCheckConsole({ providerCapabilities, providerCheckResults, onCheckProvider, t }: Pick<Props, 'providerCapabilities' | 'providerCheckResults' | 'onCheckProvider'> & { t: ReturnType<typeof getDictionary>['settings'] }) {
+  if (!providerCapabilities.length) {
+    return (
+      <div className="provider-console-empty">
+        <strong>{t.providerConsoleEmpty}</strong>
+        <span>{t.providerConsoleEnvGuide}</span>
+      </div>
+    )
+  }
+
+  return (
+    <div className="provider-console-list">
+      {providerCapabilities.map((provider) => {
+        const result = providerCheckResults[provider.id]
+        const checking = result?.status === 'checking'
+        const resultText = result?.status ? t.providerCheckResult(result.status, result.message) : provider.message
+        return (
+          <article className="provider-console-card" key={provider.id}>
+            <div className="provider-console-main">
+              <div className="provider-console-title">
+                <strong>{provider.id}</strong>
+                <span className={`setting-status-badge ${provider.status}`}>{capabilityLabel(provider.status, t)}</span>
+              </div>
+              <div className="provider-console-meta">
+                <span>{provider.family}</span>
+                <span>{provider.model}</span>
+              </div>
+              {resultText && <p className={`provider-check-result ${result?.status ?? 'idle'}`}>{resultText}</p>}
+            </div>
+            <button className="provider-test-button" disabled={checking} onClick={() => onCheckProvider(provider.id)}>
+              {checking ? t.providerChecking : t.providerTestConnection}
+            </button>
+          </article>
+        )
+      })}
+    </div>
+  )
+}
+
 function RuntimeStatusRows({ dataSourceMode, backendCapability, streamState, selectedThreadTitle, selectedRunStatus, providerCapabilities, t }: Pick<Props, 'dataSourceMode' | 'backendCapability' | 'streamState' | 'selectedThreadTitle' | 'selectedRunStatus' | 'providerCapabilities'> & { t: ReturnType<typeof getDictionary>['settings'] }) {
   return (
     <>
@@ -141,12 +183,14 @@ export function SettingsView({
   selectedThreadTitle,
   selectedRunStatus,
   providerCapabilities,
+  providerCheckResults,
   providerDraftSettings,
   onSelectLocale,
   onSelectCategory,
   onSelectDefaultWorkspaceMode,
   onSelectRuntimeScript,
   onProviderDraftSettingsChange,
+  onCheckProvider,
   onBack,
 }: Props) {
   const dictionary = getDictionary(locale)
@@ -248,10 +292,26 @@ export function SettingsView({
           <div className="settings-card-stack">
             <section className="settings-card">
               <div className="settings-card-head">
-                <h2>{t.providerSummaryTitle}</h2>
-                <p>{t.providerSummaryDescription}</p>
+                <h2>{t.providerConsoleTitle}</h2>
+                <p>{t.providerConsoleDescription}</p>
               </div>
-              <SettingRow label={t.providerCapability} helperText={t.providerCapabilityHelper} status="read_only" t={t} control={<ProviderCapabilityList providerCapabilities={providerCapabilities} t={t} />} />
+              <div className="setting-row provider-console-row">
+                <div className="setting-row-copy">
+                  <div className="setting-row-title">
+                    <span>{t.providerConfiguredProviders}</span>
+                    <span className="setting-status-badge read_only">{t.readOnly}</span>
+                  </div>
+                  <p>{t.providerConfiguredProvidersHelper}</p>
+                </div>
+                <ProviderCheckConsole providerCapabilities={providerCapabilities} providerCheckResults={providerCheckResults} onCheckProvider={onCheckProvider} t={t} />
+              </div>
+            </section>
+
+            <section className="settings-card">
+              <div className="settings-card-head">
+                <h2>{t.providerLocalDraftTitle}</h2>
+                <p>{t.providerLocalDraftDescription}</p>
+              </div>
               <SettingRow
                 label={t.providerBaseUrl}
                 helperText={t.providerBaseUrlHelper}
@@ -295,7 +355,6 @@ export function SettingsView({
                   </div>
                 )}
               />
-              <SettingRow label={t.providerManagement} helperText={t.providerManagementHelper} status="mock" t={t} control={<StatusValue>{t.previewOnly}</StatusValue>} />
             </section>
           </div>
         )}

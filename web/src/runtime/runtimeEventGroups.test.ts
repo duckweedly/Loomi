@@ -50,3 +50,16 @@ describe('runtime event groups', () => {
     expect(grouped[3].events.map((item) => item.id)).toEqual(['evt-error'])
   })
 })
+
+describe('localized runtime event groups', () => {
+  test('returns Chinese group titles when requested', () => {
+    const grouped = groupRuntimeEvents([
+      event({ id: 'evt-run', sequence: 1, type: 'run.created' }),
+      event({ id: 'evt-model', sequence: 2, type: 'model.delta' }),
+      event({ id: 'evt-worker', sequence: 3, type: 'worker.claimed' }),
+      event({ id: 'evt-error', sequence: 4, type: 'provider.error', status: 'failed' }),
+    ], 'zh')
+
+    expect(grouped.map((group) => group.title)).toEqual(['运行生命周期', '模型流', 'Worker/Job', '错误'])
+  })
+})

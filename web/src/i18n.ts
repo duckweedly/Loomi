@@ -1,3 +1,6 @@
+import type { RuntimeEventGroup } from './domain'
+import type { BackendCapabilityStatus } from './runtime/backendCapabilityStatus'
+
 export type Locale = 'zh' | 'en'
 
 type Dictionary = {
@@ -28,6 +31,20 @@ type Dictionary = {
     retry: string
     emptyThreads: (mode: string) => string
   }
+  runtime: {
+    eventGroups: Record<RuntimeEventGroup, string>
+    workerJob: {
+      queued: string
+      claimed: string
+      running: string
+      retrying: string
+      recovered: string
+      exhausted: string
+      cancelled: string
+      failed: string
+    }
+  }
+  backendCapability: Record<BackendCapabilityStatus, { title: string; detail: string }>
   chatCanvas: {
     noThreadTitle: string
     noThreadDetail: string
@@ -62,6 +79,8 @@ type Dictionary = {
     regenerate: string
     attach: string
     messageLoomi: string
+    providerUnavailableWarning: string
+    openProviderSettings: string
     stoppedDraft: string
     recoveringDraft: string
     modelDrafting: string
@@ -109,10 +128,17 @@ type Dictionary = {
     selectedRunStatusHelper: string
     providerCapability: string
     providerCapabilityHelper: string
-    providerSummaryTitle: string
-    providerSummaryDescription: string
-    providerManagement: string
-    providerManagementHelper: string
+    providerConsoleTitle: string
+    providerConsoleDescription: string
+    providerConfiguredProviders: string
+    providerConfiguredProvidersHelper: string
+    providerConsoleEmpty: string
+    providerConsoleEnvGuide: string
+    providerTestConnection: string
+    providerChecking: string
+    providerCheckResult: (status: string, message?: string) => string
+    providerLocalDraftTitle: string
+    providerLocalDraftDescription: string
     providerBaseUrl: string
     providerBaseUrlHelper: string
     providerModel: string
@@ -166,6 +192,34 @@ export const dictionaries: Record<Locale, Dictionary> = {
       retry: '重试',
       emptyThreads: (mode) => `暂无 ${mode} 会话`,
     },
+    runtime: {
+      eventGroups: {
+        'run-lifecycle': '运行生命周期',
+        'model-stream': '模型流',
+        'worker-job': 'Worker/Job',
+        error: '错误',
+      },
+      workerJob: {
+        queued: '已排队',
+        claimed: '已领取',
+        running: '运行中',
+        retrying: '重试中',
+        recovered: '已恢复',
+        exhausted: '已耗尽',
+        cancelled: '已取消',
+        failed: '失败',
+      },
+    },
+    backendCapability: {
+      mock: { title: 'Mock', detail: '确定性的本地行为；不是真实模型输出。' },
+      'local-simulated': { title: '本地模拟', detail: 'Real API 路径已连接，但生成仍是模拟。' },
+      'model-gateway': { title: '模型网关', detail: '真实 provider 执行可用。' },
+      'backend-unavailable': { title: '后端不可用', detail: '后端无法提供 runtime 执行能力。' },
+      'model-setup-missing': { title: '模型设置缺失', detail: '生成前需要配置模型设置或凭证。' },
+      'provider-unavailable': { title: 'Provider 不可用', detail: 'Provider 拒绝或未能完成生成。' },
+      'stream-disconnected': { title: '流已断开', detail: '事件流在终态确认前断开。' },
+      'run-recovering': { title: '运行恢复中', detail: '界面正在恢复最近已知的运行状态。' },
+    },
     chatCanvas: {
       noThreadTitle: '未选择会话',
       noThreadDetail: '创建新对话',
@@ -200,6 +254,8 @@ export const dictionaries: Record<Locale, Dictionary> = {
       regenerate: '重新生成',
       attach: '附件',
       messageLoomi: '给 Loomi 发消息',
+      providerUnavailableWarning: '模型 Provider 未配置或不可用',
+      openProviderSettings: '打开设置',
       stoppedDraft: '已停止生成，保留已生成内容',
       recoveringDraft: '恢复中…',
       modelDrafting: '模型正在生成回复',
@@ -247,16 +303,23 @@ export const dictionaries: Record<Locale, Dictionary> = {
       selectedRunStatusHelper: '显示当前运行状态，不修改运行。',
       providerCapability: 'Provider 能力',
       providerCapabilityHelper: '可用时只显示已脱敏的 provider id、family、model 和 status。',
-      providerSummaryTitle: 'Provider 能力摘要',
-      providerSummaryDescription: '只读显示模型网关能力；密钥管理留到后续里程碑。',
-      providerManagement: 'Provider 配置草稿',
-      providerManagementHelper: '仅保存在当前浏览器会话，用于记录中转站配置草稿；不会写入后端。',
+      providerConsoleTitle: 'Configured providers',
+      providerConsoleDescription: '读取后端已配置的 provider，并可安全触发一次连接测试。',
+      providerConfiguredProviders: '已配置 Provider',
+      providerConfiguredProvidersHelper: '这些 provider 来自后端环境变量；页面只显示脱敏能力，不显示密钥。',
+      providerConsoleEmpty: '暂无已配置 provider',
+      providerConsoleEnvGuide: '在本地 API 环境变量中配置 provider 后重启后端，再刷新 Settings。',
+      providerTestConnection: '测试连接',
+      providerChecking: '测试中',
+      providerCheckResult: (status, message) => `${status === 'success' ? '成功' : status === 'failed' ? '失败' : '测试中'}${message ? ` · ${message}` : ''}`,
+      providerLocalDraftTitle: '本地草稿',
+      providerLocalDraftDescription: 'Base URL、模型和 API Key 输入只保存在当前浏览器会话，用于记录草稿；不会保存，也不会改变真实模型调用。',
       providerBaseUrl: 'Base URL',
-      providerBaseUrlHelper: '填写 OpenAI-compatible 中转站地址。',
+      providerBaseUrlHelper: '填写 OpenAI-compatible 中转站地址，仅作为本地草稿。',
       providerModel: '模型 ID',
-      providerModelHelper: '填写后续真实调用要使用的模型名称。',
+      providerModelHelper: '填写模型名称，仅作为本地草稿，不影响后端调用。',
       providerApiKey: 'API Key',
-      providerApiKeyHelper: '仅显示是否已填写，不回显密钥内容。',
+      providerApiKeyHelper: '仅显示是否已填写，不回显密钥内容，也不写入后端。',
       providerConfigured: '已填写',
       providerNotConfigured: '未填写',
       aboutLocalApp: '本地应用状态',
@@ -302,6 +365,34 @@ export const dictionaries: Record<Locale, Dictionary> = {
       retry: 'Retry',
       emptyThreads: (mode) => `No ${mode} threads`,
     },
+    runtime: {
+      eventGroups: {
+        'run-lifecycle': 'Run lifecycle',
+        'model-stream': 'Model stream',
+        'worker-job': 'Worker/job',
+        error: 'Error',
+      },
+      workerJob: {
+        queued: 'Queued',
+        claimed: 'Claimed',
+        running: 'Running',
+        retrying: 'Retrying',
+        recovered: 'Recovered',
+        exhausted: 'Exhausted',
+        cancelled: 'Cancelled',
+        failed: 'Failed',
+      },
+    },
+    backendCapability: {
+      mock: { title: 'Mock', detail: 'Deterministic local behavior; not real model output.' },
+      'local-simulated': { title: 'Local simulated', detail: 'Real API path is connected, but generation is simulated.' },
+      'model-gateway': { title: 'Model gateway', detail: 'Real provider execution is available.' },
+      'backend-unavailable': { title: 'Backend unavailable', detail: 'The backend cannot provide runtime execution.' },
+      'model-setup-missing': { title: 'Model setup missing', detail: 'Model setup or credentials are required before generation.' },
+      'provider-unavailable': { title: 'Provider unavailable', detail: 'The provider rejected or failed generation.' },
+      'stream-disconnected': { title: 'Stream disconnected', detail: 'The event stream disconnected before terminal reconciliation.' },
+      'run-recovering': { title: 'Run recovering', detail: 'The UI is recovering the latest known run state.' },
+    },
     chatCanvas: {
       noThreadTitle: 'No thread selected',
       noThreadDetail: 'Create a new conversation',
@@ -336,6 +427,8 @@ export const dictionaries: Record<Locale, Dictionary> = {
       regenerate: 'Regenerate',
       attach: 'Attach',
       messageLoomi: 'Message Loomi',
+      providerUnavailableWarning: 'Model provider is not configured or unavailable',
+      openProviderSettings: 'Open Settings',
       stoppedDraft: 'Generation stopped; generated content was preserved',
       recoveringDraft: 'Recovering…',
       modelDrafting: 'Model is drafting a reply',
@@ -383,16 +476,23 @@ export const dictionaries: Record<Locale, Dictionary> = {
       selectedRunStatusHelper: 'Shows the current run state without changing the run.',
       providerCapability: 'Provider capability',
       providerCapabilityHelper: 'Shows redacted provider id, family, model, and status when available.',
-      providerSummaryTitle: 'Provider capability summary',
-      providerSummaryDescription: 'Read-only model gateway capability; secret management is deferred.',
-      providerManagement: 'Provider configuration draft',
-      providerManagementHelper: 'Stored only in the current browser session for OpenAI-compatible gateway notes; it is not written to the backend.',
+      providerConsoleTitle: 'Configured providers',
+      providerConsoleDescription: 'Reads backend-configured providers and safely triggers a connection test.',
+      providerConfiguredProviders: 'Configured providers',
+      providerConfiguredProvidersHelper: 'These providers come from backend environment variables; Settings only shows redacted capability and never shows keys.',
+      providerConsoleEmpty: 'No configured providers',
+      providerConsoleEnvGuide: 'Configure providers in the local API environment, restart the backend, then refresh Settings.',
+      providerTestConnection: 'Test connection',
+      providerChecking: 'Checking',
+      providerCheckResult: (status, message) => `${status === 'success' ? 'Success' : status === 'failed' ? 'Failed' : 'Checking'}${message ? ` · ${message}` : ''}`,
+      providerLocalDraftTitle: 'Local draft',
+      providerLocalDraftDescription: 'Base URL, model, and API key inputs stay in the current browser session as notes only; they are not saved and do not change real model calls.',
       providerBaseUrl: 'Base URL',
-      providerBaseUrlHelper: 'Enter the OpenAI-compatible gateway URL.',
+      providerBaseUrlHelper: 'Enter the OpenAI-compatible gateway URL as a local draft only.',
       providerModel: 'Model ID',
-      providerModelHelper: 'Enter the model name to use for a later real call path.',
+      providerModelHelper: 'Enter a model name as a local draft only; it does not affect backend calls.',
       providerApiKey: 'API Key',
-      providerApiKeyHelper: 'Only whether a key was entered is shown; the key itself is not echoed back.',
+      providerApiKeyHelper: 'Only whether a key was entered is shown; it is not echoed back or written to the backend.',
       providerConfigured: 'Set',
       providerNotConfigured: 'Not set',
       aboutLocalApp: 'Local app status',

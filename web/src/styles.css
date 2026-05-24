@@ -776,6 +776,33 @@ button, textarea, input, .sidebar, .chat-shell, .run-dock, .right-panel-menu, .r
   font-size: 12px;
 }
 
+.provider-warning {
+  display: flex;
+  width: var(--content-column-width);
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 12px auto 0;
+  border: 1px solid color-mix(in srgb, var(--orange) 34%, var(--border-subtle));
+  border-radius: 14px;
+  padding: 10px 12px;
+  background: color-mix(in srgb, var(--orange) 10%, transparent);
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.provider-warning button {
+  flex: 0 0 auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: 9px;
+  padding: 6px 9px;
+  background: var(--segment-selected);
+  color: var(--text-primary);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 650;
+}
+
 .message-list {
   display: flex;
   width: 100%;
@@ -1994,6 +2021,85 @@ button, textarea, input, .sidebar, .chat-shell, .run-dock, .right-panel-menu, .r
   justify-items: end;
   color: var(--text-secondary);
   font-size: 12px;
+}
+
+.provider-console-row {
+  align-items: start;
+}
+
+.provider-console-list,
+.provider-console-empty {
+  display: grid;
+  width: min(520px, 44vw);
+  gap: 10px;
+}
+
+.provider-console-empty,
+.provider-console-card {
+  border: 1px solid var(--border-subtle);
+  border-radius: 14px;
+  padding: 12px;
+  background: var(--segment-bg);
+}
+
+.provider-console-empty {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.provider-console-empty strong,
+.provider-console-card strong {
+  color: var(--text-primary);
+}
+
+.provider-console-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+}
+
+.provider-console-title,
+.provider-console-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.provider-console-meta,
+.provider-check-result {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.provider-console-meta {
+  margin-top: 5px;
+}
+
+.provider-check-result {
+  margin: 8px 0 0;
+  line-height: 1.45;
+}
+
+.provider-check-result.success { color: var(--green); }
+.provider-check-result.failed { color: var(--orange); }
+
+.provider-test-button {
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  padding: 7px 10px;
+  background: var(--segment-selected);
+  color: var(--text-primary);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.provider-test-button:disabled {
+  cursor: wait;
+  opacity: 0.62;
 }
 
 .placeholder-panel {

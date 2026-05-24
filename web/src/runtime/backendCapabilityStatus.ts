@@ -1,3 +1,7 @@
+import type { ProviderCapability } from '../domain'
+import type { Locale } from '../i18n'
+import { getDictionary } from '../i18n'
+
 export type BackendCapabilityStatus =
   | 'mock'
   | 'local-simulated'
@@ -19,15 +23,8 @@ export type BackendCapabilityInput = {
   runRecovering?: boolean
 }
 
-const capabilityCopy: Record<BackendCapabilityStatus, { title: string; detail: string }> = {
-  mock: { title: 'Mock', detail: 'Deterministic local behavior; not real model output.' },
-  'local-simulated': { title: 'Local simulated', detail: 'Real API path is connected, but generation is simulated.' },
-  'model-gateway': { title: 'Model gateway', detail: 'Real provider execution is available.' },
-  'backend-unavailable': { title: 'Backend unavailable', detail: 'The backend cannot provide runtime execution.' },
-  'model-setup-missing': { title: 'Model setup missing', detail: 'Model setup or credentials are required before generation.' },
-  'provider-unavailable': { title: 'Provider unavailable', detail: 'The provider rejected or failed generation.' },
-  'stream-disconnected': { title: 'Stream disconnected', detail: 'The event stream disconnected before terminal reconciliation.' },
-  'run-recovering': { title: 'Run recovering', detail: 'The UI is recovering the latest known run state.' },
+export function shouldShowProviderUnavailableWarning(dataSourceMode: 'mock' | 'real_api', providerCapabilities: ProviderCapability[]) {
+  return dataSourceMode === 'real_api' && !providerCapabilities.some((provider) => provider.status === 'available')
 }
 
 export function deriveBackendCapabilityStatus(input: BackendCapabilityInput): BackendCapabilityStatus {
@@ -49,6 +46,6 @@ export function deriveCapabilitySignalFromEvent(event: { type: string; detail?: 
   return {}
 }
 
-export function getBackendCapabilityCopy(status: BackendCapabilityStatus) {
-  return capabilityCopy[status]
+export function getBackendCapabilityCopy(status: BackendCapabilityStatus, locale: Locale = 'en') {
+  return getDictionary(locale).backendCapability[status]
 }

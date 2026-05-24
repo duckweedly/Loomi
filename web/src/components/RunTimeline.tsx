@@ -1,4 +1,5 @@
 import type { Run, RuntimeScriptId } from '../domain'
+import type { Locale } from '../i18n'
 import type { BackendCapabilityStatus } from '../runtime/backendCapabilityStatus'
 import type { RightPanelItemId } from '../rightPanelItems'
 import { RightPanelMenu } from './RightPanelMenu'
@@ -16,6 +17,7 @@ type Props = {
   onStopRun?: () => void
   selectedRuntimeScript?: RuntimeScriptId
   capabilityStatus?: BackendCapabilityStatus
+  locale: Locale
   onSelectRuntimeScript?: (scriptId: RuntimeScriptId) => void
 }
 
@@ -30,11 +32,12 @@ export function RunTimeline({
   onStopRun,
   selectedRuntimeScript,
   capabilityStatus,
+  locale,
   onSelectRuntimeScript,
 }: Props) {
   return (
     <>
-      <RunRail run={run} open={runDetailsOpen} onOpenArtifact={onOpenArtifact} onStopRun={onStopRun} selectedRuntimeScript={selectedRuntimeScript} capabilityStatus={capabilityStatus} onSelectRuntimeScript={onSelectRuntimeScript} />
+      <RunRail run={run} open={runDetailsOpen} onOpenArtifact={onOpenArtifact} onStopRun={onStopRun} selectedRuntimeScript={selectedRuntimeScript} capabilityStatus={capabilityStatus} locale={locale} onSelectRuntimeScript={onSelectRuntimeScript} />
       <RightPanelMenu open={rightPanelMenuOpen} selectedPanelId={selectedPanelId} onSelectPanel={onSelectPanel} />
       <RightToolDrawer open={rightToolsOpen} selectedPanelId={selectedPanelId} />
     </>

@@ -25,7 +25,32 @@ describe('SettingsView runtime rows', () => {
 
     expect(source).toContain('isProviders')
     expect(source).toContain('isAbout')
-    expect(source).toContain('t.providerSummaryTitle')
+    expect(source).toContain('t.providerConsoleTitle')
+    expect(source).toContain('t.providerLocalDraftTitle')
     expect(source).toContain('t.aboutLocalApp')
+  })
+})
+
+describe('SettingsView provider test console', () => {
+  test('renders configured providers, test action, and check states', async () => {
+    const source = await Bun.file(new URL('./SettingsView.tsx', import.meta.url)).text()
+
+    expect(source).toContain('ProviderCheckConsole')
+    expect(source).toContain('t.providerConfiguredProviders')
+    expect(source).toContain('t.providerTestConnection')
+    expect(source).toContain('t.providerChecking')
+    expect(source).toContain('providerCheckResults[provider.id]')
+    expect(source).toContain('disabled={checking}')
+    expect(source).toContain('onCheckProvider(provider.id)')
+  })
+
+  test('labels provider draft as local and separate from real provider calls', async () => {
+    const source = await Bun.file(new URL('./SettingsView.tsx', import.meta.url)).text()
+
+    expect(source).toContain('t.providerLocalDraftTitle')
+    expect(source).toContain('t.providerLocalDraftDescription')
+    expect(source).toContain('providerDraftSettings.baseUrl')
+    expect(source).toContain('providerDraftSettings.model')
+    expect(source).toContain('apiKeySet')
   })
 })

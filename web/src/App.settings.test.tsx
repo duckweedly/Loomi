@@ -17,6 +17,10 @@ describe('App settings surface wiring', () => {
     expect(source).toContain('onSelectLocale={shell.setLocale}')
     expect(source).toContain('providerDraftSettings={shell.providerDraftSettings}')
     expect(source).toContain('onProviderDraftSettingsChange={shell.setProviderDraftSettings}')
+    expect(source).toContain('providerCheckResults={providerCheckResults}')
+    expect(source).toContain('onCheckProvider={(providerId) => void checkProvider(providerId)}')
+    expect(source).toContain('providerCapabilities={providerCapabilities}')
+    expect(source).toContain("onOpenProviderSettings={() => shell.openSettings('providers')}")
     expect(source).toContain('getDictionary(shell.locale)')
   })
 

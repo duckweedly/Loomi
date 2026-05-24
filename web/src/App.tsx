@@ -7,7 +7,7 @@ import { RunTimeline } from './components/RunTimeline'
 import { SettingsView } from './components/SettingsView'
 import { ThreadSidebar } from './components/ThreadSidebar'
 import { getDictionary } from './i18n'
-import { deriveBackendCapabilityStatus } from './runtime/backendCapabilityStatus'
+import { deriveBackendCapabilityStatus, shouldShowProviderUnavailableWarning } from './runtime/backendCapabilityStatus'
 import { useWorkspaceState } from './state'
 import { filterThreadsByMode } from './threadFilters'
 import { useWorkspaceShellState } from './useWorkspaceShellState'
@@ -39,17 +39,20 @@ export default function App() {
     retryRun,
     regenerateRun,
     providerCapabilities,
+    providerCheckResults,
+    checkProvider,
   } = useWorkspaceState(shell.defaultWorkspaceMode)
 
   const dictionary = getDictionary(shell.locale)
   const selectedMode = selectedThread?.mode ?? 'chat'
   const visibleThreads = filterThreadsByMode(threads, selectedMode)
+  const providerUnavailableBeforeSend = shouldShowProviderUnavailableWarning(dataSourceMode, providerCapabilities)
   const capabilityStatus = deriveBackendCapabilityStatus({
     dataSourceMode,
     runtimeSource: run?.context === 'model_gateway' ? 'model_gateway' : 'local_simulated',
     backendUnavailable: backendCapability === 'unavailable' || backendUnavailableAttempted || capabilitySignals.backendUnavailable,
     modelSetupMissing: capabilitySignals.modelSetupMissing,
-    providerUnavailable: capabilitySignals.providerUnavailable,
+    providerUnavailable: capabilitySignals.providerUnavailable || providerUnavailableBeforeSend,
     activeRun: Boolean(run && (run.status === 'pending' || run.status === 'running' || run.status === 'retrying' || run.status === 'recovering')),
     streamDisconnected: Boolean(run && (run.status === 'pending' || run.status === 'running' || run.status === 'retrying' || run.status === 'recovering') && (capabilitySignals.streamDisconnected || streamState === 'recoverable_error')),
     runRecovering: run?.status === 'recovering' || run?.assistantDraft?.status === 'recovering',
@@ -178,12 +181,14 @@ export default function App() {
                   selectedThreadTitle={selectedThread?.title}
                   selectedRunStatus={run?.status}
                   providerCapabilities={providerCapabilities}
+                  providerCheckResults={providerCheckResults}
                   providerDraftSettings={shell.providerDraftSettings}
                   onSelectLocale={shell.setLocale}
                   onSelectCategory={shell.setSettingsCategory}
                   onSelectDefaultWorkspaceMode={shell.setDefaultWorkspaceMode}
                   onSelectRuntimeScript={selectRuntimeScript}
                   onProviderDraftSettingsChange={shell.setProviderDraftSettings}
+                  onCheckProvider={(providerId) => void checkProvider(providerId)}
                   onBack={shell.closeSettings}
                 />
               ) : (
@@ -199,6 +204,8 @@ export default function App() {
                   backendCapability={backendCapability}
                   backendUnavailableAttempted={backendUnavailableAttempted}
                   capabilitySignals={capabilitySignals}
+                  providerCapabilities={providerCapabilities}
+                  onOpenProviderSettings={() => shell.openSettings('providers')}
                   onSendMessage={(content) => void sendMessage(content)}
                   onStopRun={() => void stopRun()}
                   onRetryRun={retryRun}
@@ -218,6 +225,7 @@ export default function App() {
               onStopRun={() => void stopRun()}
               selectedRuntimeScript={selectedRuntimeScript}
               capabilityStatus={capabilityStatus}
+              locale={shell.locale}
               onSelectRuntimeScript={dataSourceMode === 'mock' ? selectRuntimeScript : undefined}
             />
           </main>

@@ -37,14 +37,40 @@ func TestStartRunHandlerCreatesLocalSimulatedRun(t *testing.T) {
 	}
 }
 
+func TestModelProviderPreflightAllowsBrowserReads(t *testing.T) {
+	srv := NewServerWithProduct(config.Config{AppEnv: "local"}, fakeChecker{}, productdata.NewMemoryService())
+	req := httptest.NewRequest(http.MethodOptions, "/v1/model-providers", nil)
+	req.Header.Set("Origin", "http://127.0.0.1:5173")
+	req.Header.Set("Access-Control-Request-Method", http.MethodGet)
+	res := httptest.NewRecorder()
+
+	srv.ServeHTTP(res, req)
+
+	if res.Code != http.StatusNoContent {
+		t.Fatalf("status = %d body=%s", res.Code, res.Body.String())
+	}
+	if res.Header().Get("Access-Control-Allow-Origin") != "http://127.0.0.1:5173" {
+		t.Fatalf("allow origin = %q", res.Header().Get("Access-Control-Allow-Origin"))
+	}
+	if res.Header().Get("Access-Control-Allow-Methods") != "GET, POST, PATCH, OPTIONS" {
+		t.Fatalf("allow methods = %q", res.Header().Get("Access-Control-Allow-Methods"))
+	}
+}
+
 func TestModelProviderHandlersExposeRedactedCapability(t *testing.T) {
 	svc := productdata.NewMemoryService()
 	cfg := config.Config{AppEnv: "local", ModelProviders: []config.ModelProvider{{ID: "custom", Family: "openai_compatible", BaseURL: "https://user:secret@example.test/v1?token=secret", APIKey: "key", Model: "gpt-5.5", Enabled: true}}}
 	srv := NewServerWithProduct(cfg, fakeChecker{}, svc)
 
-	res := requestJSON(t, srv, http.MethodGet, "/v1/model-providers", "")
+	req := httptest.NewRequest(http.MethodGet, "/v1/model-providers", nil)
+	req.Header.Set("Origin", "http://127.0.0.1:5173")
+	res := httptest.NewRecorder()
+	srv.ServeHTTP(res, req)
 	if res.Code != http.StatusOK {
 		t.Fatalf("status = %d body=%s", res.Code, res.Body.String())
+	}
+	if res.Header().Get("Access-Control-Allow-Origin") != "http://127.0.0.1:5173" {
+		t.Fatalf("allow origin = %q", res.Header().Get("Access-Control-Allow-Origin"))
 	}
 	if strings.Contains(res.Body.String(), "secret") || !strings.Contains(res.Body.String(), "gpt-5.5") {
 		t.Fatalf("body = %s", res.Body.String())

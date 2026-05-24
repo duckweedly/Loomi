@@ -26,7 +26,11 @@ Open the sidebar Settings entry and choose Settings. The main workspace should s
 - Change Default workspace mode and confirm future local thread creation uses that mode.
 - Change Mock runtime scenario and confirm future mock sends use the selected script only.
 - Confirm data source, backend capability, stream state, selected run status, and provider capability are read-only.
-- Open Providers and fill a gateway Base URL and model ID; confirm they remain draft UI values for the current session.
+- Open Providers and confirm Configured providers shows backend provider id, family, model, status, and any safe detail message.
+- Click Test connection for a configured provider and confirm the button is disabled while checking, then shows success or failed without secrets.
+- If no providers are configured, confirm the page shows local API environment configuration guidance.
+- Confirm the Base URL, model ID, and API key inputs are under Local draft and clearly state they are not saved and do not affect real model calls.
+- Fill a gateway Base URL and model ID; confirm they remain draft UI values for the current session.
 - Type a throwaway value into the API key field and confirm the input is masked and only key presence is shown.
 
 ## Placeholder safety smoke
@@ -44,7 +48,11 @@ If the local API is running, start the web app with:
 VITE_LOOMI_API_BASE_URL=http://127.0.0.1:8080 bun run --cwd web dev
 ```
 
-Open Settings and confirm Data source mode shows Real API. Backend and provider capability status should remain read-only and secret-free. Provider draft fields may be filled locally, but they must not trigger a backend write or provider request.
+Open Settings and confirm Data source mode shows Real API. Backend and provider capability status should remain read-only and secret-free. In Providers, Configured providers should list backend provider capability and Test connection should call the backend provider check endpoint. Provider draft fields may be filled locally, but they must not trigger a backend write or provider request.
+
+When the local API has no available model provider, Chat should show “模型 Provider 未配置或不可用” / “Model provider is not configured or unavailable” before sending. Click Open Settings / 打开设置 and confirm Settings opens directly to Providers.
+
+Local API CORS is available only when the API runs in `APP_ENV=local` or `APP_ENV=development`, and only for `http://127.0.0.1:5173` / `http://localhost:5173`. From those origins, browser requests to `/v1/threads` and `/v1/model-providers` should pass OPTIONS preflight and normal GET responses should include the matching `Access-Control-Allow-Origin` header.
 
 ## Validation commands
 

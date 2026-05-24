@@ -45,7 +45,7 @@ type WorkspaceShellAction =
   | { type: 'setLocale'; locale: Locale }
   | { type: 'setProviderDraftSettings'; providerDraftSettings: ProviderDraftSettings }
   | { type: 'setSettingsCategory'; settingsCategoryId: SettingsCategoryId }
-  | { type: 'openSettings' }
+  | { type: 'openSettings'; settingsCategoryId?: SettingsCategoryId }
   | { type: 'closeSettings' }
   | { type: 'setSidebarWidth'; sidebarWidth: number }
   | { type: 'setSidebarCollapsed'; sidebarCollapsed: boolean }
@@ -70,7 +70,7 @@ function reduceWorkspaceShellState(state: WorkspaceShellSnapshot, action: Worksp
       return {
         ...state,
         settingsOpen: true,
-        settingsCategoryId: 'general',
+        settingsCategoryId: action.settingsCategoryId ?? 'general',
       }
     case 'closeSettings':
       return { ...state, settingsOpen: false }
@@ -124,7 +124,7 @@ function bindWorkspaceShellActions(getState: () => WorkspaceShellSnapshot, dispa
     setLocale: (locale: Locale) => dispatch({ type: 'setLocale', locale }),
     setProviderDraftSettings: (providerDraftSettings: ProviderDraftSettings) => dispatch({ type: 'setProviderDraftSettings', providerDraftSettings }),
     setSettingsCategory: (settingsCategoryId: SettingsCategoryId) => dispatch({ type: 'setSettingsCategory', settingsCategoryId }),
-    openSettings: () => dispatch({ type: 'openSettings' }),
+    openSettings: (settingsCategoryId?: SettingsCategoryId) => dispatch({ type: 'openSettings', settingsCategoryId }),
     closeSettings: () => dispatch({ type: 'closeSettings' }),
     setSidebarWidth: (sidebarWidth: number) => dispatch({ type: 'setSidebarWidth', sidebarWidth }),
     setSidebarCollapsed: (sidebarCollapsed: boolean) => dispatch({ type: 'setSidebarCollapsed', sidebarCollapsed }),

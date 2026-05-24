@@ -15,6 +15,27 @@ type RefreshResult = {
   run: Run | null
 }
 
+export type ProviderCheckStatus = 'idle' | 'checking' | 'success' | 'failed'
+
+export type ProviderCheckResult = {
+  status: ProviderCheckStatus
+  message?: string
+}
+
+export function redactProviderCheckMessage(message: string) {
+  const trimmed = message.trim()
+  if (!trimmed) return 'Provider check failed'
+  return trimmed
+    .replace(/(authorization\s*[:=]\s*)(bearer\s+)?[^\s,;]+/gi, '$1[redacted]')
+    .replace(/(api[_-]?key\s*[:=]\s*)[^\s,;]+/gi, '$1[redacted]')
+    .replace(/(token\s*[:=]\s*)[^\s,;]+/gi, '$1[redacted]')
+    .replace(/sk-[A-Za-z0-9_-]{8,}/g, '[redacted]')
+}
+
+function redactProviderCapabilityMessage(provider: ProviderCapability) {
+  return provider.message ? { ...provider, message: redactProviderCheckMessage(provider.message) } : provider
+}
+
 export function getWorkspaceRefreshThreadId(requestedThreadId: string, threads: Thread[]) {
   if (!requestedThreadId) return threads[0]?.id || ''
   return threads.some((thread) => thread.id === requestedThreadId) ? requestedThreadId : threads[0]?.id || ''
@@ -207,6 +228,7 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
   const [capabilitySignals, setCapabilitySignals] = useState({ backendUnavailable: false, modelSetupMissing: false, providerUnavailable: false, streamDisconnected: false })
   const [selectedRuntimeScript, setSelectedRuntimeScript] = useState<RuntimeScriptId>('success')
   const [providerCapabilities, setProviderCapabilities] = useState<ProviderCapability[]>([])
+  const [providerCheckResults, setProviderCheckResults] = useState<Record<string, ProviderCheckResult>>({})
   const selectedThreadIdRef = useRef(selectedThreadId)
   const runRef = useRef<Run | null>(run)
 
@@ -257,7 +279,7 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
     let cancelled = false
     apiClient.listModelProviders()
       .then((providers) => {
-        if (!cancelled) setProviderCapabilities(providers)
+        if (!cancelled) setProviderCapabilities(providers.map(redactProviderCapabilityMessage))
       })
       .catch(() => {
         if (!cancelled) setProviderCapabilities([])
@@ -412,6 +434,30 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
     setMockRuntimeScript(scriptId)
   }, [])
 
+  const checkProvider = useCallback(async (providerId: string) => {
+    if (!apiClient.checkModelProvider) return
+    setProviderCheckResults((current) => ({ ...current, [providerId]: { status: 'checking' } }))
+    try {
+      const provider = redactProviderCapabilityMessage(await apiClient.checkModelProvider(providerId))
+      setProviderCapabilities((current) => current.map((candidate) => (candidate.id === provider.id ? provider : candidate)))
+      setProviderCheckResults((current) => ({
+        ...current,
+        [providerId]: {
+          status: provider.status === 'available' ? 'success' : 'failed',
+          message: provider.message ?? provider.status,
+        },
+      }))
+    } catch (err) {
+      setProviderCheckResults((current) => ({
+        ...current,
+        [providerId]: {
+          status: 'failed',
+          message: redactProviderCheckMessage(err instanceof Error ? err.message : 'Provider check failed'),
+        },
+      }))
+    }
+  }, [])
+
   return {
     threads,
     selectedThread,
@@ -427,7 +473,9 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
     capabilitySignals,
     selectedRuntimeScript,
     providerCapabilities,
+    providerCheckResults,
     selectRuntimeScript,
+    checkProvider,
     refresh,
     selectThread,
     createThread,
