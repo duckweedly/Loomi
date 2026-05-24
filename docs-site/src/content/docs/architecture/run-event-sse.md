@@ -33,7 +33,9 @@ SSE streams use one recovery model for first load, refresh, and reconnect:
 4. Subscribe to live published events for the same run.
 5. Close after a terminal event or terminal run snapshot.
 
-The frontend dedupes by event id/sequence and ignores stale stream events if the selected thread or run changes.
+The frontend dedupes by event id/sequence and ignores stale stream events if the selected thread or run changes. Out-of-order lower-sequence deltas are retained in the timeline ordering but do not append stale text to the visible assistant draft. `model.delta` appends to the selected run assistant draft, `model.final` marks the draft completed without appending provider metadata to chat text, and `model.error` drives the failed draft state while preserving partial output. Once a run reaches `completed`, `failed`, `stopped`, or `cancelled`, later stream events cannot promote it into another terminal state in the visible run model.
+
+Timeline/debug rendering maps every event into one stable group: Run lifecycle, Model stream, Worker/job, or Error. Error-like types, failed statuses, and error severity override explicit group metadata. Token usage and provider metadata stay in event detail rows rather than assistant message text. This grouping is frontend-owned so M4 local simulated events and future M5 model/provider events share the same readability rules.
 
 ## Stop model
 

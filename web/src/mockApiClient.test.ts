@@ -17,14 +17,30 @@ describe('mockApiClient thread runs', () => {
     })
   })
 
-  test('persists the completed M3.5 mock run created by the first message in a new mock thread', async () => {
+  test('starts a mock run before terminal script events complete', async () => {
     const thread = await mockApiClient.createThread?.('New thread', 'chat')
 
-    await mockApiClient.sendMessage(thread!.id, 'hello')
-    const run = await mockApiClient.getThreadRun(thread!.id)
+    const result = await mockApiClient.sendMessage(thread!.id, 'hello')
 
-    expect(run.status).toBe('completed')
-    expect(run.events.map((event) => event.type)).toContain('run.completed')
+    expect(result.run.status).toBe('running')
+    expect(result.run.assistantDraft).toMatchObject({ content: '', status: 'pending' })
+    expect(result.messages.filter((message) => message.role === 'assistant' && message.threadId === thread!.id)).toHaveLength(0)
+  })
+
+  test('starts a subscribable mock run for retry and regenerate flows', async () => {
+    const thread = await mockApiClient.createThread?.('Regenerate thread', 'chat')
+    const run = await mockApiClient.startRun?.(thread!.id)
+    const eventTypes: string[] = []
+
+    mockApiClient.subscribeRunEvents?.(run!.id, 0, (event) => eventTypes.push(event.type), () => {})
+    await new Promise((resolve) => setTimeout(resolve, 140))
+    const storedRun = await mockApiClient.getThreadRun(thread!.id)
+
+    expect(run?.status).toBe('running')
+    expect(run?.id).not.toBe('run-1')
+    expect(eventTypes).toContain('run.completed')
+    expect(storedRun.id).toBe(run?.id)
+    expect(storedRun.status).toBe('completed')
   })
 
   test('runs the failure script without duplicate failed terminal events or assistant success replies', async () => {
@@ -32,11 +48,16 @@ describe('mockApiClient thread runs', () => {
 
     setMockRuntimeScript('failure')
     const result = await mockApiClient.sendMessage(thread!.id, 'fail please')
+    mockApiClient.subscribeRunEvents?.(result.run.id, 0, () => {}, () => {})
+    await new Promise((resolve) => setTimeout(resolve, 80))
     setMockRuntimeScript('success')
+    const run = await mockApiClient.getThreadRun(thread!.id)
+    const messages = await mockApiClient.getThreadMessages(thread!.id)
 
-    expect(result.run.status).toBe('failed')
-    expect(result.run.events.filter((event) => event.type === 'run.failed')).toHaveLength(1)
-    expect(result.messages.filter((message) => message.role === 'assistant' && message.threadId === thread!.id)).toHaveLength(0)
+    expect(result.run.status).toBe('running')
+    expect(run.status).toBe('failed')
+    expect(run.events.filter((event) => event.type === 'run.failed')).toHaveLength(1)
+    expect(messages.filter((message) => message.role === 'assistant' && message.threadId === thread!.id)).toHaveLength(0)
   })
 
   test('lists only active mock threads after archiving', async () => {

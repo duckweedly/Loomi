@@ -1,6 +1,9 @@
 import { useState } from 'react'
 import { Check, ChevronDown, FileText, Folder, Globe2, Minus } from 'lucide-react'
 import type { Run, RuntimeScriptId } from '../domain'
+import type { BackendCapabilityStatus } from '../runtime/backendCapabilityStatus'
+import { getBackendCapabilityCopy } from '../runtime/backendCapabilityStatus'
+import { groupRuntimeEvents } from '../runtime/runtimeEventGroups'
 import { AgentStateMotion } from './AgentStateMotion'
 
 type Props = {
@@ -9,22 +12,36 @@ type Props = {
   onOpenArtifact: () => void
   onStopRun?: () => void
   selectedRuntimeScript?: RuntimeScriptId
+  capabilityStatus?: BackendCapabilityStatus
   onSelectRuntimeScript?: (scriptId: RuntimeScriptId) => void
 }
 
-function getEventClassName(status: Run['events'][number]['status']) {
-  if (status === 'running') return 'progress-row active'
-  if (status === 'failed' || status === 'stopped') return 'progress-row failed'
+function getEventClassName(event: Run['events'][number]) {
+  if (event.severity === 'error' || event.group === 'error' || event.status === 'failed') return 'progress-row failed'
+  if (event.status === 'stopped' || event.status === 'cancelled' || event.severity === 'warning') return 'progress-row warning'
+  if (event.status === 'running' || event.status === 'retrying') return 'progress-row active'
   return 'progress-row done'
 }
 
 function getEventMark(event: Run['events'][number], index: number) {
-  if (event.status === 'running') return index + 1
-  if (event.status === 'failed' || event.status === 'stopped') return <Minus size={10} />
+  if (event.severity === 'error' || event.group === 'error' || event.status === 'failed') return <Minus size={10} />
+  if (event.status === 'stopped' || event.status === 'cancelled' || event.severity === 'warning') return <Minus size={10} />
+  if (event.status === 'running' || event.status === 'retrying') return index + 1
   return <Check size={11} />
 }
 
-export function RunRail({ run, open, onOpenArtifact, onStopRun, selectedRuntimeScript = 'success', onSelectRuntimeScript }: Props) {
+function getEventDetail(event: Run['events'][number]) {
+  const usage = event.usage
+  if (!usage) return event.detail
+  const usageParts = [
+    usage.inputTokens !== undefined ? `${usage.inputTokens} in` : null,
+    usage.outputTokens !== undefined ? `${usage.outputTokens} out` : null,
+    usage.totalTokens !== undefined ? `${usage.totalTokens} total` : null,
+  ].filter(Boolean)
+  return usageParts.length > 0 ? `${event.detail} · ${usageParts.join(' / ')}` : event.detail
+}
+
+export function RunRail({ run, open, onOpenArtifact, onStopRun, selectedRuntimeScript = 'success', capabilityStatus, onSelectRuntimeScript }: Props) {
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set())
   const toggleSection = (section: string) => {
     setCollapsedSections((current) => {
@@ -34,6 +51,9 @@ export function RunRail({ run, open, onOpenArtifact, onStopRun, selectedRuntimeS
       return next
     })
   }
+
+  const eventGroups = groupRuntimeEvents(run?.events ?? [])
+  const capabilityCopy = capabilityStatus ? getBackendCapabilityCopy(capabilityStatus) : null
 
   return (
     <aside className={open ? 'floating-rail open' : 'floating-rail'}>
@@ -51,13 +71,19 @@ export function RunRail({ run, open, onOpenArtifact, onStopRun, selectedRuntimeS
               <button className={selectedRuntimeScript === 'failure' ? 'selected' : undefined} onClick={() => onSelectRuntimeScript('failure')}>Fail</button>
             </div>
           )}
+          {capabilityCopy && <div className={`capability-rail ${capabilityStatus}`}><strong>{capabilityCopy.title}</strong><span>{capabilityCopy.detail}</span></div>}
           {run?.status === 'running' && onStopRun && <button className="runtime-stop-button ghost" onClick={onStopRun}>Stop run</button>}
-          {run?.events.map((event, index) => (
-            <div key={event.id} className={getEventClassName(event.status)}>
-              <span className="progress-mark">{getEventMark(event, index)}</span>
-              <span>{event.detail}</span>
-              <small>{event.time}</small>
-            </div>
+          {eventGroups.map((group) => (
+            <section key={group.id} className={`runtime-event-group ${group.id}`}>
+              <h3>{group.title}</h3>
+              {group.events.length === 0 ? <p className="runtime-event-empty">No events yet</p> : group.events.map((event, index) => (
+                <div key={event.id} className={getEventClassName(event)}>
+                  <span className="progress-mark">{getEventMark(event, index)}</span>
+                  <span>{getEventDetail(event)}</span>
+                  <small>{event.time}</small>
+                </div>
+              ))}
+            </section>
           ))}
         </div>
       </section>

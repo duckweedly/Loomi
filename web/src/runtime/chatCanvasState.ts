@@ -16,10 +16,13 @@ export function deriveChatCanvasState(input: ChatCanvasStateInput): ChatCanvasSt
   if (input.backendCapability === 'unavailable' && input.backendUnavailableAttempted) return 'backend-unavailable'
   if (!input.selectedThreadId) return 'no-thread'
   if (input.run) {
-    if (input.run.status === 'pending') return 'waiting-run'
-    if (input.run.status === 'running') return input.run.events.length === 0 ? 'waiting-run' : 'running'
+    const draftStatus = input.run.assistantDraft?.status
+    if (draftStatus === 'recovering' || input.run.status === 'recovering') return 'recovering'
+    if (draftStatus === 'stopped' || input.run.status === 'stopped') return 'stopped'
+    if (draftStatus === 'failed' || input.run.status === 'failed') return 'failed'
+    if (input.run.status === 'pending' || draftStatus === 'pending') return 'waiting-run'
+    if (input.run.status === 'running') return input.run.events.length === 0 && !input.run.assistantDraft?.content ? 'waiting-run' : 'running'
     if (input.run.status === 'completed' && input.run.events.length > 0) return 'completed'
-    if (input.run.status === 'failed' || input.run.status === 'stopped') return 'failed'
   }
   if (input.messageCount === 0) return 'empty-thread'
   return 'history'

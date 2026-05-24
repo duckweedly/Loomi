@@ -1,11 +1,12 @@
 import type { Message, Run, RuntimeEvent, RuntimeScriptId } from '../domain'
-import type { ExecutionAdapter } from './executionAdapter'
+import { isRuntimeTerminal, type ExecutionAdapter } from './executionAdapter'
 import { createRuntimeEvent, getRuntimeScript, getRuntimeScriptSteps } from './runtimeScripts'
 
 type MockExecutionStore = {
   id: number
   messages: Message[]
   runs: Record<string, Run>
+  attemptOfMessageIds?: Record<string, string>
 }
 
 function nextId(store: MockExecutionStore, prefix: string) {
@@ -22,21 +23,58 @@ function cloneRun(run: Run): Run {
 }
 
 function appendRuntimeEvent(run: Run, event: RuntimeEvent): Run {
-  return {
+  if (isRuntimeTerminal(run.status)) return run
+  const status = event.status === 'running' ? run.status : event.status
+  const nextRun: Run = {
     ...run,
-    status: event.status,
+    status,
     events: [...run.events, event],
-    completedAt: event.status === 'completed' || event.status === 'failed' || event.status === 'stopped' ? event.time : run.completedAt,
+    completedAt: isRuntimeTerminal(status) ? event.time : run.completedAt,
   }
+  if (status === 'completed') {
+    return {
+      ...nextRun,
+      assistantDraft: {
+        content: event.content ?? nextRun.assistantDraft?.content ?? '',
+        status: 'completed',
+        messageId: nextRun.assistantDraft?.messageId,
+        lastEventId: event.id,
+      },
+    }
+  }
+  if (status === 'failed' || status === 'stopped') {
+    return {
+      ...nextRun,
+      assistantDraft: {
+        content: nextRun.assistantDraft?.content ?? event.content ?? '',
+        status,
+        lastEventId: event.id,
+      },
+    }
+  }
+  if (status === 'recovering') {
+    return {
+      ...nextRun,
+      assistantDraft: {
+        content: nextRun.assistantDraft?.content ?? event.content ?? '',
+        status: 'recovering',
+        lastEventId: event.id,
+      },
+    }
+  }
+  return nextRun
 }
 
 function appendAssistantDelta(run: Run, delta: string): Run {
+  if (isRuntimeTerminal(run.status)) return run
+
   return {
     ...run,
+    status: run.status === 'pending' ? 'running' : run.status,
     assistantDraft: {
       ...run.assistantDraft,
       content: `${run.assistantDraft?.content ?? ''}${delta}`,
-      status: 'drafting',
+      status: 'streaming',
     },
   }
 }
@@ -57,7 +95,7 @@ export function createMockExecutionAdapter(store: MockExecutionStore = { id: 0, 
       return message
     },
 
-    async createRun(threadId, _messageId, scriptId: RuntimeScriptId = 'success') {
+    async createRun(threadId, _messageId, scriptId: RuntimeScriptId = 'success', options) {
       const run: Run = {
         id: nextId(store, 'run'),
         threadId,
@@ -70,6 +108,9 @@ export function createMockExecutionAdapter(store: MockExecutionStore = { id: 0, 
         createdAt: nowLabel(),
       }
       store.runs[run.id] = run
+      if (options?.attemptOfMessageId) {
+        store.attemptOfMessageIds = { ...store.attemptOfMessageIds, [run.id]: options.attemptOfMessageId }
+      }
       return cloneRun(run)
     },
 
@@ -79,7 +120,7 @@ export function createMockExecutionAdapter(store: MockExecutionStore = { id: 0, 
       getRuntimeScriptSteps(run.scriptId ?? 'success').forEach((step, index) => {
         const event = createRuntimeEvent({ threadId, runId, sequence: index, step })
         onEvent(event)
-        if (store.runs[runId].status === 'failed' || store.runs[runId].status === 'stopped') return
+        if (isRuntimeTerminal(store.runs[runId].status)) return
         store.runs[runId] = appendRuntimeEvent(store.runs[runId], event)
         if (event.assistantDelta) store.runs[runId] = appendAssistantDelta(store.runs[runId], event.assistantDelta)
       })
@@ -96,12 +137,15 @@ export function createMockExecutionAdapter(store: MockExecutionStore = { id: 0, 
     async completeRun(threadId, runId, finalAssistantContent) {
       const run = store.runs[runId]
       if (!run || run.threadId !== threadId) throw new Error('Run not found')
+      if (isRuntimeTerminal(run.status)) throw new Error('Run is terminal')
       const message: Message = {
         id: nextId(store, 'msg'),
         threadId,
         role: 'assistant',
         content: finalAssistantContent,
         createdAt: nowLabel(),
+        runId,
+        attemptOfMessageId: store.attemptOfMessageIds?.[runId],
       }
       store.messages = [...store.messages, message]
       store.runs[runId] = {

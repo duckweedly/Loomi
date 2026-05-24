@@ -75,7 +75,9 @@ Success returns ordered events:
 }
 ```
 
-Supported categories are `lifecycle`, `progress`, `message`, `error`, and `final`.
+Supported categories are `lifecycle`, `progress`, `message`, `error`, and `final`. Frontend runtime mapping also accepts model event types directly: `model.delta` carries assistant draft text in `content`, `model.final` carries final assistant text without creating duplicate visible chat content, and `model.error` maps to a failed assistant draft state. `run.recovering` keeps recovery visible until the latest run state is reconciled, while `run.stopped` and `run.failed` preserve any partial draft text as terminal context.
+
+Frontend timeline grouping recognizes lifecycle events (`run.created`, `run.completed`, `run.stopped`, `run.cancelled`, retry/recovering states), model events (`model.started`, `model.delta`, `model.final`, `model.usage`, assistant draft/message events), worker/job events (`job.queued`, `job.claimed`, `worker.claimed`, `job.retrying`), and error events (`provider.error`, `stream.error`, `backend.unavailable`, `run.failed`). Usage metadata may include `input_tokens`, `output_tokens`, and `total_tokens`; provider metadata such as `provider` and `code` is displayed in timeline/debug details, not in message text. Event types containing `error`, `failed`, `unavailable`, or `timeout`, failed statuses, and error severities are grouped as Error even when another category is present.
 
 ## Stream events
 

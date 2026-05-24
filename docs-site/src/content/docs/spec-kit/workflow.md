@@ -36,6 +36,16 @@ Claude Code 项目内命令使用横线格式：
 
 `/speckit-implement` 按任务实现，并在必要时回到 spec 或 plan 修正前提。
 
+## 当前功能：006 Streaming Chat Runtime
+
+当前 Spec Kit 功能目录：
+
+```text
+specs/006-streaming-chat-runtime/
+```
+
+US1-US5 are implemented: streaming Chat Canvas draft bubbles, grouped Timeline/debug events, backend capability status, composer stop/retry/regenerate/continue controls, and synchronized thread/message loading/error/history states. Final validation is tracked in tasks T060-T063.
+
 ## 当前功能：M3.5 Frontend Agent Runtime Skeleton
 
 当前 Spec Kit 功能目录：

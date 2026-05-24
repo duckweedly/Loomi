@@ -5,6 +5,7 @@ import { motion } from 'motion/react'
 import { ChatCanvas } from './components/ChatCanvas'
 import { RunTimeline } from './components/RunTimeline'
 import { ThreadSidebar } from './components/ThreadSidebar'
+import { deriveBackendCapabilityStatus } from './runtime/backendCapabilityStatus'
 import { useWorkspaceState } from './state'
 import { filterThreadsByMode } from './threadFilters'
 import { useWorkspaceShellState } from './useWorkspaceShellState'
@@ -23,6 +24,7 @@ export default function App() {
     dataSourceMode,
     backendCapability,
     backendUnavailableAttempted,
+    capabilitySignals,
     selectedRuntimeScript,
     selectRuntimeScript,
     refresh,
@@ -32,10 +34,22 @@ export default function App() {
     archiveThread,
     sendMessage,
     stopRun,
+    retryRun,
+    regenerateRun,
   } = useWorkspaceState()
 
   const selectedMode = selectedThread?.mode ?? 'chat'
   const visibleThreads = filterThreadsByMode(threads, selectedMode)
+  const capabilityStatus = deriveBackendCapabilityStatus({
+    dataSourceMode,
+    runtimeSource: run?.context === 'real_model' ? 'real_model' : 'local_simulated',
+    backendUnavailable: backendCapability === 'unavailable' || backendUnavailableAttempted || capabilitySignals.backendUnavailable,
+    modelSetupMissing: capabilitySignals.modelSetupMissing,
+    providerUnavailable: capabilitySignals.providerUnavailable,
+    activeRun: Boolean(run && (run.status === 'pending' || run.status === 'running' || run.status === 'retrying' || run.status === 'recovering')),
+    streamDisconnected: Boolean(run && (run.status === 'pending' || run.status === 'running' || run.status === 'retrying' || run.status === 'recovering') && (capabilitySignals.streamDisconnected || streamState === 'recoverable_error')),
+    runRecovering: run?.status === 'recovering' || run?.assistantDraft?.status === 'recovering',
+  })
   const workspaceStyle = { '--sidebar-width': `${shell.sidebarWidth}px` } as CSSProperties
   const workspaceClass = [
     'workspace-grid',
@@ -88,6 +102,8 @@ export default function App() {
                   selectedThreadId={selectedThreadId}
                   selectedMode={selectedMode}
                   theme={shell.theme}
+                  loading={loading}
+                  error={error}
                   onRefresh={() => void refresh()}
                   onSelectThread={selectThread}
                   onCreateThread={() => void createThread()}
@@ -155,8 +171,11 @@ export default function App() {
                 streamState={streamState}
                 backendCapability={backendCapability}
                 backendUnavailableAttempted={backendUnavailableAttempted}
+                capabilitySignals={capabilitySignals}
                 onSendMessage={(content) => void sendMessage(content)}
                 onStopRun={() => void stopRun()}
+                onRetryRun={retryRun}
+                onRegenerateRun={regenerateRun}
               />
             </section>
             <RunTimeline
@@ -169,6 +188,7 @@ export default function App() {
               onOpenArtifact={shell.openArtifact}
               onStopRun={() => void stopRun()}
               selectedRuntimeScript={selectedRuntimeScript}
+              capabilityStatus={capabilityStatus}
               onSelectRuntimeScript={dataSourceMode === 'mock' ? selectRuntimeScript : undefined}
             />
           </main>

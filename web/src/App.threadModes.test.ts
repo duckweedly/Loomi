@@ -11,4 +11,16 @@ describe('App thread mode sidebar wiring', () => {
     expect(source).toContain('threads={visibleThreads}')
     expect(source).not.toContain('threads={threads}')
   })
+
+  test('passes selected thread loading error and latest run state to canvas sidebar and timeline', () => {
+    const source = readFileSync(resolve(import.meta.dir, 'App.tsx'), 'utf8')
+
+    expect(source).toContain('thread={selectedThread}')
+    expect(source).toContain('messages={messages}')
+    expect(source).toContain('run={run}')
+    expect(source).toContain('loading={loading}')
+    expect(source).toContain('error={error}')
+    expect(source).toContain('RunTimeline')
+    expect(source).toContain('ThreadSidebar')
+  })
 })

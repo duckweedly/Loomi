@@ -55,7 +55,21 @@ history
 - 执行中
 - 已完成
 - 执行失败
+- 已停止
+- 恢复中
 - 后端能力未接入
+
+US1 adds the assistant draft as a first-class transient bubble. The bubble reads from `run.assistantDraft`, appears while the run is pending or streaming, preserves partial text for failed/stopped/recovering terminal states, and hides a matching final assistant message when a completed draft is already represented by persisted history so final content is not duplicated.
+
+US2 groups selected-run events before rendering Timeline/debug details. The stable groups are Run lifecycle, Model stream, Worker/job, and Error. Error semantics win over explicit group metadata, token usage stays in the Model stream detail, and provider/stream/backend failures stay visually separate from normal lifecycle events.
+
+US3 adds a backend capability status derived from runtime facts, not marketing copy. The precedence is recovering run, stream disconnected, provider unavailable, model setup missing, backend unavailable, real model, local simulated, then mock. Chat Canvas and RunRail show the same short status and detail so mock/local simulated behavior is never described as real model output.
+
+US4 derives composer actions from selected-thread text, latest run state, and assistant history. Active runs block send/continue/retry/regenerate, stop is only offered for active stoppable runs, retry starts a pending attempt from failed context, and regenerate keeps the previous assistant message visible while creating a new pending attempt linked to the prior message.
+
+US5 keeps selected thread, messages, latest run, composer guards, ThreadSidebar, Chat Canvas, and Run Timeline synchronized. No-thread never shows stale messages, empty/loading/error are distinct, sidebar retry keeps selected context, and terminal/recovering run state stays visible until the next user action.
+
+006 Streaming Chat Runtime completes this frontend slice by making the transient assistant draft visible as a chat bubble, deriving grouped timeline/debug rows from the same selected run, surfacing backend capability status in both Chat Canvas and RunRail, and driving Composer actions from selected-thread/run state instead of separate UI flags.
 
 产品 UI 只保留短标签；详细解释放在文档和测试里。
 
@@ -83,14 +97,14 @@ assistant.thinking
 run.failed
 ```
 
-每次 run 生成独立 `runId` 和 event id，避免测试和截图出现随机顺序。成功剧本只追加一次 assistant message；失败或停止不会追加伪成功回复。
+每次 run 生成独立 `runId` 和 event id，避免测试和截图出现随机顺序。成功剧本只追加一次 assistant message；失败或停止不会追加伪成功回复。Mock API now returns the running run before script playback and emits deterministic events through the same subscription path, so the browser can show the pending draft bubble and grouped timeline transitions before terminal content.
 
 ## 三个前端表面的同源状态
 
 Chat Canvas、Run Timeline 和 Agent 状态徽章都消费同一个 selected run：
 
-- Chat Canvas 根据 run status 和 events 派生工作区状态，并显示 real API/mock、stream state 和 stop 控制。
-- RunRail/RunTimeline 渲染同一组 runtime events，并显示 failed/stopped terminal semantics。
+- Chat Canvas 根据 selected thread、messages、run、assistant draft 和 capability 派生工作区状态，并显示 pending/streaming/completed/failed/stopped/recovering draft bubble、real API/mock、stream state 和 stop/retry/regenerate/continue 控制。
+- RunRail/RunTimeline 渲染同一组 runtime events，按 Run lifecycle、Model stream、Worker/job、Error 分组，并显示 failed/stopped terminal semantics。
 - AgentStateMotion 根据 run status/event type 映射到 thinking/speaking/done/error。
 
 这避免三个区域分别维护“装饰状态”，导致一个显示成功、另一个显示失败。

@@ -2,6 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { apiClient, executionAdapter } from './apiClient'
 import { setMockRuntimeScript } from './mockApiClient'
 import type { BackendCapabilityState, Message, Run, RunEvent, RuntimeEvent, RuntimeScriptId, StaleEventGuard, StreamState, Thread, ThreadRuntimeState } from './domain'
+import { isRuntimeTerminal } from './runtime/executionAdapter'
+import { deriveCapabilitySignalFromEvent } from './runtime/backendCapabilityStatus'
+import { mapRealRuntimeCapabilitySignal } from './runtime/realExecutionAdapter'
 import { createNextThreadTitle } from './threadTitles'
 
 type RefreshResult = {
@@ -66,32 +69,110 @@ export function createRuntimeStateForThread(backendCapability: BackendCapability
 }
 
 export function shouldBlockRuntimeSubmit(run: Run | null) {
-  return run?.status === 'pending' || run?.status === 'running'
+  return run?.status === 'pending' || run?.status === 'running' || run?.status === 'retrying' || run?.status === 'recovering'
 }
 
 export function appendRuntimeEventToRun(run: Run, event: RuntimeEvent): Run {
+  if (isRuntimeTerminal(run.status)) return run
+
   return {
     ...run,
     status: event.status,
     events: [...run.events, event],
-    completedAt: event.status === 'completed' || event.status === 'failed' || event.status === 'stopped' ? event.time : run.completedAt,
+    completedAt: isRuntimeTerminal(event.status) ? event.time : run.completedAt,
   }
 }
 
-export function applyAssistantDeltaToRun(run: Run, delta: string): Run {
+export function applyAssistantDeltaToRun(run: Run, delta: string, eventId?: string): Run {
+  if (isRuntimeTerminal(run.status)) return run
+  if (eventId && run.assistantDraft?.lastEventId === eventId) return run
+
   const current = run.assistantDraft?.content ?? ''
   return {
     ...run,
     assistantDraft: {
       ...run.assistantDraft,
       content: `${current}${delta}`,
-      status: 'drafting',
+      status: 'streaming',
+      lastEventId: eventId ?? run.assistantDraft?.lastEventId,
     },
   }
 }
 
 export function shouldIgnoreTerminalRuntimeEvent(run: Run) {
-  return run.status === 'completed' || run.status === 'failed' || run.status === 'stopped'
+  return isRuntimeTerminal(run.status)
+}
+
+export function applyRunStreamEventToRun(run: Run, event: RunEvent): Run {
+  if (isRuntimeTerminal(run.status)) return run
+  if (run.events.some((existing) => existing.id === event.id)) return run
+
+  const lastSequence = run.events.at(-1)?.sequence ?? -1
+  const shouldApplyAssistantDelta = !event.assistantDelta || event.sequence === undefined || lastSequence <= event.sequence
+  let nextRun: Run = { ...run, events: mergeRunEvents(run.events, [event]) }
+  if (event.assistantDelta && shouldApplyAssistantDelta) nextRun = applyAssistantDeltaToRun(nextRun, event.assistantDelta, event.id)
+
+  if (event.status === 'running') return nextRun
+  if (event.status === 'completed') {
+    return {
+      ...nextRun,
+      status: 'completed',
+      completedAt: event.time,
+      assistantDraft: {
+        content: event.content ?? nextRun.assistantDraft?.content ?? '',
+        status: 'completed',
+        messageId: nextRun.assistantDraft?.messageId,
+        lastEventId: event.id,
+      },
+    }
+  }
+  if (event.status === 'failed' || event.status === 'stopped') {
+    return {
+      ...nextRun,
+      status: event.status,
+      completedAt: event.time,
+      assistantDraft: {
+        content: nextRun.assistantDraft?.content ?? event.content ?? '',
+        status: event.status,
+        lastEventId: event.id,
+      },
+    }
+  }
+  if (event.status === 'recovering') {
+    return {
+      ...nextRun,
+      status: 'recovering',
+      assistantDraft: {
+        content: nextRun.assistantDraft?.content ?? event.content ?? '',
+        status: 'recovering',
+        lastEventId: event.id,
+      },
+    }
+  }
+  return { ...nextRun, status: event.status }
+}
+
+export function createRetryAttemptRun(failedRun: Run): Run {
+  return {
+    ...failedRun,
+    id: `${failedRun.id}-retry`,
+    status: 'pending',
+    events: [],
+    completedAt: undefined,
+    assistantDraft: { content: '', status: 'pending' },
+  }
+}
+
+export function createRegenerateAttemptRun(run: Run, attemptOfMessageId: string): Run {
+  return {
+    ...run,
+    id: `${run.id}-regen`,
+    status: 'pending',
+    events: [],
+    completedAt: undefined,
+    attemptOfMessageId,
+    assistantDraft: { content: '', status: 'pending' },
+  }
 }
 
 export function useWorkspaceState() {
@@ -103,6 +184,7 @@ export function useWorkspaceState() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [backendUnavailableAttempted, setBackendUnavailableAttempted] = useState(false)
+  const [capabilitySignals, setCapabilitySignals] = useState({ backendUnavailable: false, modelSetupMissing: false, providerUnavailable: false, streamDisconnected: false })
   const [selectedRuntimeScript, setSelectedRuntimeScript] = useState<RuntimeScriptId>('success')
   const selectedThreadIdRef = useRef(selectedThreadId)
   const runRef = useRef<Run | null>(run)
@@ -128,11 +210,13 @@ export function useWorkspaceState() {
       setThreads(nextThreads)
       setMessages(nextMessages)
       setRun(nextRun)
+      setCapabilitySignals({ backendUnavailable: false, modelSetupMissing: false, providerUnavailable: false, streamDisconnected: false })
       setStreamState(nextRun?.status === 'running' ? 'connecting' : 'closed')
       if (!threadId && nextThreadId) setSelectedThreadId(nextThreadId)
       else if (shouldSelectWorkspaceRefreshThread({ requestedThreadId: threadId, resolvedThreadId: nextThreadId, currentSelectedThreadId: selectedThreadIdRef.current })) setSelectedThreadId(nextThreadId)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'API request failed')
+      setCapabilitySignals((current) => ({ ...current, ...mapRealRuntimeCapabilitySignal(err) }))
       setMessages([])
       setRun(null)
     } finally {
@@ -160,17 +244,20 @@ export function useWorkspaceState() {
       (event) => {
         setRun((currentRun) => {
           if (!currentRun || !shouldApplyRunStreamEvent({ eventThreadId: event.threadId ?? '', eventRunId: event.runId ?? '', selectedThreadId: selectedThreadIdRef.current, currentRunId: currentRun.id })) return currentRun
-          const status = event.status === 'running' ? currentRun.status : event.status
-          const nextRun = { ...currentRun, status, events: mergeRunEvents(currentRun.events, [event]) }
+          const nextRun = applyRunStreamEventToRun(currentRun, event)
           runRef.current = nextRun
           return nextRun
         })
+        setCapabilitySignals((current) => ({ ...current, ...deriveCapabilitySignalFromEvent(event), streamDisconnected: event.status === 'running' ? current.streamDisconnected : false }))
         setStreamState((current) => {
           const next = event.status === 'running' ? 'live' : 'closed'
           return current === next ? current : next
         })
       },
-      () => setStreamState((current) => (current === 'recoverable_error' ? current : 'recoverable_error')),
+      () => {
+        setCapabilitySignals((current) => ({ ...current, streamDisconnected: true }))
+        setStreamState((current) => (current === 'recoverable_error' ? current : 'recoverable_error'))
+      },
     )
     return unsubscribe
   }, [run?.id, run?.status])
@@ -185,16 +272,19 @@ export function useWorkspaceState() {
     const requestedThreadId = selectedThreadId
     setError(null)
     setBackendUnavailableAttempted(false)
+    setCapabilitySignals({ backendUnavailable: false, modelSetupMissing: false, providerUnavailable: false, streamDisconnected: false })
     try {
       const result = await apiClient.sendMessage(requestedThreadId, trimmed)
       const nextThreads = await apiClient.listThreads()
       if (!shouldApplySendMessageResult({ requestedThreadId, currentSelectedThreadId: selectedThreadIdRef.current })) return
       setMessages(result.messages)
       setRun(result.run)
+      setCapabilitySignals({ backendUnavailable: false, modelSetupMissing: false, providerUnavailable: false, streamDisconnected: false })
       setStreamState(result.run.status === 'running' ? 'connecting' : 'closed')
       setThreads(nextThreads)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'API request failed')
+      setCapabilitySignals((current) => ({ ...current, ...mapRealRuntimeCapabilitySignal(err) }))
     }
   }, [selectedThreadId])
 
@@ -236,9 +326,47 @@ export function useWorkspaceState() {
     if (!run || run.status !== 'running') return
     const stopped = await apiClient.stopRun(run.id)
     setRun(stopped)
+    setCapabilitySignals((current) => ({ ...current, streamDisconnected: false }))
     setStreamState('closed')
     setThreads(await apiClient.listThreads())
   }, [run])
+
+  const retryRun = useCallback(async () => {
+    if (!run || run.status !== 'failed') return
+    setError(null)
+    try {
+      if (apiClient.startRun) {
+        const nextRun = await apiClient.startRun(run.threadId)
+        setRun(nextRun)
+      } else {
+        setRun(createRetryAttemptRun(run))
+      }
+      setCapabilitySignals((current) => ({ ...current, streamDisconnected: false }))
+      setStreamState('connecting')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'API request failed')
+      setCapabilitySignals((current) => ({ ...current, ...mapRealRuntimeCapabilitySignal(err) }))
+    }
+  }, [run])
+
+  const regenerateRun = useCallback(async () => {
+    const lastAssistant = [...messages].reverse().find((message) => message.role === 'assistant')
+    if (!run || !lastAssistant || shouldBlockRuntimeSubmit(run)) return
+    setError(null)
+    try {
+      if (apiClient.startRun) {
+        const nextRun = await apiClient.startRun(run.threadId)
+        setRun({ ...nextRun, attemptOfMessageId: lastAssistant.id })
+      } else {
+        setRun(createRegenerateAttemptRun(run, lastAssistant.id))
+      }
+      setCapabilitySignals((current) => ({ ...current, streamDisconnected: false }))
+      setStreamState('connecting')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'API request failed')
+      setCapabilitySignals((current) => ({ ...current, ...mapRealRuntimeCapabilitySignal(err) }))
+    }
+  }, [messages, run])
 
   const selectRuntimeScript = useCallback((scriptId: RuntimeScriptId) => {
     setSelectedRuntimeScript(scriptId)
@@ -256,7 +384,8 @@ export function useWorkspaceState() {
     error,
     dataSourceMode: apiClient.mode,
     backendCapability: executionAdapter.runtimeCapability,
-    backendUnavailableAttempted,
+    backendUnavailableAttempted: backendUnavailableAttempted || capabilitySignals.backendUnavailable,
+    capabilitySignals,
     selectedRuntimeScript,
     selectRuntimeScript,
     refresh,
@@ -266,5 +395,7 @@ export function useWorkspaceState() {
     archiveThread,
     sendMessage,
     stopRun,
+    retryRun,
+    regenerateRun,
   }
 }
