@@ -30,7 +30,8 @@ const (
 	ThreadLifecycleActive   ThreadLifecycleStatus = "active"
 	ThreadLifecycleArchived ThreadLifecycleStatus = "archived"
 
-	MessageRoleUser MessageRole = "user"
+	MessageRoleUser      MessageRole = "user"
+	MessageRoleAssistant MessageRole = "assistant"
 
 	RunStatusPending   RunStatus = "pending"
 	RunStatusRunning   RunStatus = "running"
@@ -39,6 +40,7 @@ const (
 	RunStatusStopped   RunStatus = "stopped"
 
 	RunSourceLocalSimulated RunSource = "local_simulated"
+	RunSourceModelGateway   RunSource = "model_gateway"
 
 	RunEventCategoryLifecycle RunEventCategory = "lifecycle"
 	RunEventCategoryProgress  RunEventCategory = "progress"
@@ -46,12 +48,14 @@ const (
 	RunEventCategoryError     RunEventCategory = "error"
 	RunEventCategoryFinal     RunEventCategory = "final"
 
-	CodeInvalidRequest   Code = "invalid_request"
-	CodeThreadNotFound   Code = "thread_not_found"
-	CodeRunNotFound      Code = "run_not_found"
-	CodeActiveRunExists  Code = "active_run_exists"
-	CodeMethodNotAllowed Code = "method_not_allowed"
-	CodeInternalError    Code = "internal_error"
+	CodeInvalidRequest        Code = "invalid_request"
+	CodeThreadNotFound        Code = "thread_not_found"
+	CodeRunNotFound           Code = "run_not_found"
+	CodeActiveRunExists       Code = "active_run_exists"
+	CodeProviderUnavailable   Code = "provider_unavailable"
+	CodeProviderMisconfigured Code = "provider_misconfigured"
+	CodeMethodNotAllowed      Code = "method_not_allowed"
+	CodeInternalError         Code = "internal_error"
 )
 
 const (
@@ -152,14 +156,25 @@ type CreateMessageInput struct {
 
 type StartRunInput struct {
 	ScriptName string
+	Source     RunSource
+	MessageID  string
+	ProviderID string
+	Model      string
+}
+
+type AppendAssistantMessageInput struct {
+	Content  string
+	Metadata map[string]any
 }
 
 type AppendRunEventInput struct {
-	Category RunEventCategory
-	Type     string
-	Summary  string
-	Content  *string
-	Metadata map[string]any
+	Category     RunEventCategory
+	Type         string
+	Summary      string
+	Content      *string
+	Metadata     map[string]any
+	ErrorCode    string
+	ErrorMessage string
 }
 
 type StopRunResult string
@@ -201,12 +216,42 @@ func prefixedID(prefix string) string {
 	return fmt.Sprintf("%s_%d_%s", prefix, time.Now().UnixNano(), hex.EncodeToString(buf))
 }
 
+func ValidateMessageRole(role MessageRole) error {
+	switch role {
+	case MessageRoleUser, MessageRoleAssistant:
+		return nil
+	default:
+		return NewError(CodeInvalidRequest, "Message role is invalid.")
+	}
+}
+
 func ValidateRunStatus(status RunStatus) error {
 	switch status {
 	case RunStatusPending, RunStatusRunning, RunStatusCompleted, RunStatusFailed, RunStatusStopped:
 		return nil
 	default:
 		return NewError(CodeInvalidRequest, "Run status is invalid.")
+	}
+}
+
+func NormalizeRunSource(source RunSource) (RunSource, error) {
+	if source == "" {
+		return RunSourceLocalSimulated, nil
+	}
+	switch source {
+	case RunSourceLocalSimulated, RunSourceModelGateway:
+		return source, nil
+	default:
+		return "", NewError(CodeInvalidRequest, "Run source is invalid.")
+	}
+}
+
+func TitleForRunSource(source RunSource) string {
+	switch source {
+	case RunSourceModelGateway:
+		return "Model gateway run"
+	default:
+		return "Local simulated run"
 	}
 }
 
@@ -304,6 +349,8 @@ func NormalizeRunEventInput(input AppendRunEventInput) (AppendRunEventInput, err
 	if input.Metadata == nil {
 		input.Metadata = map[string]any{}
 	}
+	input.ErrorCode = strings.TrimSpace(input.ErrorCode)
+	input.ErrorMessage = RedactEventText(strings.TrimSpace(input.ErrorMessage))
 	return input, nil
 }
 

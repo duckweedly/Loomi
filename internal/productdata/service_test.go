@@ -142,6 +142,55 @@ func TestMessageCreationIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestAppendAssistantMessagePersistsAssistantRole(t *testing.T) {
+	svc := NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, CreateThreadInput{Title: "Assistant", Mode: ThreadModeChat})
+	if err != nil {
+		t.Fatalf("CreateThread() error = %v", err)
+	}
+	message, err := svc.AppendAssistantMessage(context.Background(), ident, thread.ID, AppendAssistantMessageInput{Content: "  hello from model  ", Metadata: map[string]any{"api_key": "secret", "run_id": "run_1"}})
+	if err != nil {
+		t.Fatalf("AppendAssistantMessage() error = %v", err)
+	}
+	if message.Role != MessageRoleAssistant || message.Content != "hello from model" {
+		t.Fatalf("message = %+v", message)
+	}
+	if message.Metadata["api_key"] != "[redacted]" {
+		t.Fatalf("metadata = %+v", message.Metadata)
+	}
+	messages, err := svc.ListMessages(context.Background(), ident, thread.ID)
+	if err != nil {
+		t.Fatalf("ListMessages() error = %v", err)
+	}
+	if len(messages) != 1 || messages[0].Role != MessageRoleAssistant {
+		t.Fatalf("messages = %+v", messages)
+	}
+}
+
+func TestAppendAssistantMessageRejectsDuplicateRunMessage(t *testing.T) {
+	svc := NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, CreateThreadInput{Title: "Assistant", Mode: ThreadModeChat})
+	if err != nil {
+		t.Fatalf("CreateThread() error = %v", err)
+	}
+	input := AppendAssistantMessageInput{Content: "hello from model", Metadata: map[string]any{"run_id": "run_1"}}
+	if _, err := svc.AppendAssistantMessage(context.Background(), ident, thread.ID, input); err != nil {
+		t.Fatalf("AppendAssistantMessage() error = %v", err)
+	}
+	if _, err := svc.AppendAssistantMessage(context.Background(), ident, thread.ID, input); err == nil || ErrorCode(err) != CodeInvalidRequest {
+		t.Fatalf("duplicate err = %v", err)
+	}
+	messages, err := svc.ListMessages(context.Background(), ident, thread.ID)
+	if err != nil {
+		t.Fatalf("ListMessages() error = %v", err)
+	}
+	if len(messages) != 1 {
+		t.Fatalf("messages = %+v", messages)
+	}
+}
+
 func TestMessageValidationAndThreadNotFound(t *testing.T) {
 	svc := NewMemoryService()
 	ident := identity.LocalDevIdentity()
@@ -202,6 +251,29 @@ func TestStartRunCreatesInitialLifecycleEvent(t *testing.T) {
 		t.Fatalf("events = %+v", events)
 	}
 	if events[0].Metadata["script_name"] != "[redacted]" {
+		t.Fatalf("metadata = %+v", events[0].Metadata)
+	}
+}
+
+func TestStartRunSupportsModelGatewaySource(t *testing.T) {
+	svc := NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, CreateThreadInput{Title: "Run", Mode: ThreadModeChat})
+	if err != nil {
+		t.Fatalf("CreateThread() error = %v", err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, StartRunInput{Source: RunSourceModelGateway, MessageID: "msg_1", ProviderID: "custom", Model: "gpt-5.5"})
+	if err != nil {
+		t.Fatalf("StartRun() error = %v", err)
+	}
+	if run.Source != RunSourceModelGateway || run.Title != "Model gateway run" {
+		t.Fatalf("run = %+v", run)
+	}
+	events, err := svc.ListRunEvents(context.Background(), ident, run.ID, 0)
+	if err != nil {
+		t.Fatalf("ListRunEvents() error = %v", err)
+	}
+	if events[0].Metadata["provider_id"] != "custom" || events[0].Metadata["model"] != "gpt-5.5" {
 		t.Fatalf("metadata = %+v", events[0].Metadata)
 	}
 }

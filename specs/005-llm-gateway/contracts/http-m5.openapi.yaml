@@ -1,0 +1,214 @@
+openapi: 3.1.0
+info:
+  title: Loomi M5 LLM Gateway API
+  version: 0.1.0
+  description: Local-development API contract for model-backed runs over the existing thread/message and run/event foundation.
+servers:
+  - url: http://127.0.0.1:8080
+    description: Local Loomi API service
+paths:
+  /v1/model-providers:
+    get:
+      summary: List locally configured model provider capability states
+      operationId: listModelProviders
+      responses:
+        '200':
+          description: Provider list and current selection state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModelProviderListResponse'
+  /v1/model-providers/check:
+    post:
+      summary: Check whether a locally configured provider can be used for a model-backed run
+      operationId: checkModelProvider
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CheckModelProviderRequest'
+      responses:
+        '200':
+          description: Provider capability check result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModelProviderCheckResponse'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+  /v1/threads/{thread_id}/runs:
+    post:
+      summary: Start a run for an owned active thread
+      operationId: startRun
+      parameters:
+        - $ref: '#/components/parameters/ThreadId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StartRunRequest'
+      responses:
+        '201':
+          description: Run created and started or pending
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunResponse'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '404':
+          $ref: '#/components/responses/ThreadNotFound'
+        '409':
+          $ref: '#/components/responses/ActiveRunConflict'
+components:
+  parameters:
+    ThreadId:
+      name: thread_id
+      in: path
+      required: true
+      schema:
+        type: string
+        minLength: 1
+  responses:
+    InvalidRequest:
+      description: Invalid client request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    ThreadNotFound:
+      description: Thread is absent, archived, or not owned by the fixed local identity
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    ActiveRunConflict:
+      description: Thread already has an active run
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+  schemas:
+    StartRunRequest:
+      type: object
+      required: [message_id, source]
+      properties:
+        message_id:
+          type: string
+          minLength: 1
+          description: Existing user message that starts the run.
+        source:
+          type: string
+          enum: [local_simulated, model_gateway]
+        provider_id:
+          type: string
+          minLength: 1
+          description: Required when source is model_gateway.
+        model:
+          type: string
+          minLength: 1
+          description: Optional override constrained by local provider configuration.
+        script_name:
+          type: string
+          description: Optional deterministic local script label for local_simulated source.
+      additionalProperties: false
+    RunResponse:
+      type: object
+      required: [run, request_id]
+      properties:
+        run:
+          $ref: '#/components/schemas/Run'
+        request_id:
+          type: string
+    Run:
+      type: object
+      required: [id, thread_id, status, source, title, created_at, updated_at]
+      properties:
+        id:
+          type: string
+        thread_id:
+          type: string
+        status:
+          type: string
+          enum: [pending, running, completed, failed, stopped]
+        source:
+          type: string
+          enum: [local_simulated, model_gateway]
+        title:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: [string, 'null']
+          format: date-time
+        error_code:
+          type: [string, 'null']
+          enum: [provider_error, provider_timeout, provider_rate_limited, provider_unavailable, provider_misconfigured, model_refusal, empty_response, internal_error, null]
+        error_message:
+          type: [string, 'null']
+    ModelProviderListResponse:
+      type: object
+      required: [providers, request_id]
+      properties:
+        providers:
+          type: array
+          items:
+            $ref: '#/components/schemas/ModelProviderCapability'
+        request_id:
+          type: string
+    ModelProviderCapability:
+      type: object
+      required: [id, family, model, status]
+      properties:
+        id:
+          type: string
+        family:
+          type: string
+          enum: [anthropic, openai, gemini, openai_compatible]
+        model:
+          type: string
+        base_url:
+          type: [string, 'null']
+          description: Redacted display value; must not include credentials.
+        status:
+          type: string
+          enum: [available, unavailable, misconfigured]
+        message:
+          type: [string, 'null']
+    CheckModelProviderRequest:
+      type: object
+      required: [provider_id]
+      properties:
+        provider_id:
+          type: string
+          minLength: 1
+      additionalProperties: false
+    ModelProviderCheckResponse:
+      type: object
+      required: [provider, request_id]
+      properties:
+        provider:
+          $ref: '#/components/schemas/ModelProviderCapability'
+        request_id:
+          type: string
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message, request_id]
+          properties:
+            code:
+              type: string
+              enum: [invalid_request, thread_not_found, active_run_exists, provider_unavailable, provider_misconfigured, method_not_allowed, internal_error]
+            message:
+              type: string
+            request_id:
+              type: string

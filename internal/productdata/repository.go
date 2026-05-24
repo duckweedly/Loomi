@@ -173,6 +173,39 @@ func (r *PostgresRepository) CreateMessage(ctx context.Context, ident identity.L
 	return message, true, tx.Commit(ctx)
 }
 
+func (r *PostgresRepository) AppendAssistantMessage(ctx context.Context, ident identity.LocalIdentity, threadID string, input AppendAssistantMessageInput) (Message, error) {
+	content, err := NormalizeMessageContent(input.Content)
+	if err != nil {
+		return Message{}, err
+	}
+	user, err := r.ensureUser(ctx, ident)
+	if err != nil {
+		return Message{}, err
+	}
+	metadata := RedactEventMetadata(input.Metadata)
+	if runID, ok := metadata["run_id"].(string); ok && runID != "" {
+		var existing string
+		err := r.Pool.QueryRow(ctx, `select id from messages where thread_id=$1 and user_id=$2 and role='assistant' and metadata->>'run_id'=$3 limit 1`, threadID, user.ID, runID).Scan(&existing)
+		if err == nil {
+			return Message{}, NewError(CodeInvalidRequest, "Assistant message already exists for run.")
+		}
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return Message{}, err
+		}
+	}
+	message, err := scanMessage(r.Pool.QueryRow(ctx, `insert into messages (id, thread_id, user_id, role, content, metadata, client_message_id) values ($1, $2, $3, 'assistant', $4, $5, null) returning id, thread_id, user_id, role, content, metadata, client_message_id, created_at`, NewMessageID(), threadID, user.ID, content, mustJSON(metadata)))
+	if err != nil {
+		if strings.Contains(err.Error(), "foreign key") {
+			return Message{}, NewError(CodeThreadNotFound, "Thread not found.")
+		}
+		return Message{}, err
+	}
+	if _, err := r.Pool.Exec(ctx, `update threads set updated_at=now() where id=$1 and user_id=$2`, threadID, user.ID); err != nil {
+		return Message{}, err
+	}
+	return message, nil
+}
+
 func (r *PostgresRepository) UpsertSeedMessage(ctx context.Context, ident identity.LocalIdentity, input SeedMessageInput) (Message, error) {
 	content, err := NormalizeMessageContent(input.Content)
 	if err != nil {
@@ -253,15 +286,27 @@ func (r *PostgresRepository) StartRun(ctx context.Context, ident identity.LocalI
 		}
 		return Run{}, err
 	}
+	source, err := NormalizeRunSource(input.Source)
+	if err != nil {
+		return Run{}, err
+	}
 	runID := NewRunID()
-	run, err := scanRun(tx.QueryRow(ctx, `insert into runs (id, thread_id, user_id, status, source, title) values ($1, $2, $3, 'running', 'local_simulated', $4) returning id, thread_id, user_id, status, source, title, created_at, updated_at, completed_at, error_code, error_message`, runID, threadID, user.ID, "Local simulated run"))
+	run, err := scanRun(tx.QueryRow(ctx, `insert into runs (id, thread_id, user_id, status, source, title) values ($1, $2, $3, 'running', $4, $5) returning id, thread_id, user_id, status, source, title, created_at, updated_at, completed_at, error_code, error_message`, runID, threadID, user.ID, source, TitleForRunSource(source)))
 	if err != nil {
 		if strings.Contains(err.Error(), "runs_one_active_per_thread_idx") {
 			return Run{}, NewError(CodeActiveRunExists, "Thread already has an active run.")
 		}
 		return Run{}, err
 	}
-	_, err = scanRunEvent(tx.QueryRow(ctx, `insert into run_events (id, run_id, thread_id, user_id, sequence, category, type, summary, metadata) values ($1, $2, $3, $4, 1, 'lifecycle', 'run_created', 'Run created', $5) returning id, run_id, thread_id, user_id, sequence, category, type, summary, content, metadata, created_at`, NewRunEventID(), run.ID, threadID, user.ID, mustJSON(RedactEventMetadata(map[string]any{"script_name": NormalizeScriptName(input.ScriptName)}))))
+	metadata := map[string]any{"source": string(source)}
+	if source == RunSourceLocalSimulated {
+		metadata["script_name"] = NormalizeScriptName(input.ScriptName)
+	} else {
+		metadata["message_id"] = input.MessageID
+		metadata["provider_id"] = input.ProviderID
+		metadata["model"] = input.Model
+	}
+	_, err = scanRunEvent(tx.QueryRow(ctx, `insert into run_events (id, run_id, thread_id, user_id, sequence, category, type, summary, metadata) values ($1, $2, $3, $4, 1, 'lifecycle', 'run_created', 'Run created', $5) returning id, run_id, thread_id, user_id, sequence, category, type, summary, content, metadata, created_at`, NewRunEventID(), run.ID, threadID, user.ID, mustJSON(RedactEventMetadata(metadata))))
 	if err != nil {
 		return Run{}, err
 	}
@@ -357,11 +402,19 @@ func (r *PostgresRepository) AppendRunEvent(ctx context.Context, ident identity.
 	}
 	status := run.Status
 	completedAtSQL := `completed_at`
+	errorCode := run.ErrorCode
+	errorMessage := run.ErrorMessage
 	if input.Category == RunEventCategoryFinal {
 		status = statusFromFinalType(input.Type)
 		completedAtSQL = `now()`
+		if input.ErrorCode != "" {
+			errorCode = &input.ErrorCode
+		}
+		if input.ErrorMessage != "" {
+			errorMessage = &input.ErrorMessage
+		}
 	}
-	if _, err := tx.Exec(ctx, `update runs set status=$1, updated_at=now(), completed_at=`+completedAtSQL+` where id=$2 and user_id=$3`, status, run.ID, user.ID); err != nil {
+	if _, err := tx.Exec(ctx, `update runs set status=$1, updated_at=now(), completed_at=`+completedAtSQL+`, error_code=$4, error_message=$5 where id=$2 and user_id=$3`, status, run.ID, user.ID, errorCode, errorMessage); err != nil {
 		return RunEvent{}, err
 	}
 	return event, tx.Commit(ctx)

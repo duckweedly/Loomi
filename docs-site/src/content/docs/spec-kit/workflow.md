@@ -36,9 +36,29 @@ Claude Code 项目内命令使用横线格式：
 
 `/speckit-implement` 按任务实现，并在必要时回到 spec 或 plan 修正前提。
 
-## 当前功能：M3.5 Frontend Agent Runtime Skeleton
+## 当前功能：M5 LLM Gateway
 
 当前 Spec Kit 功能目录：
+
+```text
+specs/005-llm-gateway/
+```
+
+关键产物：
+
+- `spec.md`：定义模型网关用户故事，明确成功响应、失败可见性和工具边界。
+- `plan.md`：确定复用 M3 thread/message 与 M4 run/event/SSE 基座，使用后端本地 provider 配置和 Go stdlib HTTP。
+- `research.md`：记录 server-side gateway、provider stream normalization、redacted errors、current-thread context 和非执行 tool boundary 决策。
+- `data-model.md`：扩展 Message/Run/Run Event/Provider Capability/Gateway Request Context 等实体。
+- `contracts/http-m5.openapi.yaml`：定义 provider capability、model_gateway run creation 和 run event/SSE 契约。
+- `contracts/provider-event-mapping.md`：定义 Anthropic、OpenAI、Gemini 和 OpenAI-compatible provider 事件到 Loomi run events 的映射。
+- `contracts/frontend-runtime.md`：定义前端真实 API 模式下的 assistant draft、provider failure 和 tool-boundary 行为。
+- `quickstart.md`：记录 provider 配置、API/SSE、failure、tool-boundary、frontend 和验证命令。
+- `tasks.md`：按 foundation、US1、US2、US3 和 polish 拆分并跟踪实现任务。
+
+## 近期已完成：M3.5 Frontend Agent Runtime Skeleton
+
+Spec Kit 功能目录：
 
 ```text
 specs/004-frontend-agent-runtime/

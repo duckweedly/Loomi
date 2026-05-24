@@ -17,6 +17,7 @@ type Service interface {
 	UpdateThread(context.Context, identity.LocalIdentity, string, UpdateThreadInput) (Thread, error)
 	ArchiveThread(context.Context, identity.LocalIdentity, string) (Thread, error)
 	CreateMessage(context.Context, identity.LocalIdentity, string, CreateMessageInput) (Message, bool, error)
+	AppendAssistantMessage(context.Context, identity.LocalIdentity, string, AppendAssistantMessageInput) (Message, error)
 	ListMessages(context.Context, identity.LocalIdentity, string) ([]Message, error)
 	StartRun(context.Context, identity.LocalIdentity, string, StartRunInput) (Run, error)
 	GetRun(context.Context, identity.LocalIdentity, string) (Run, error)
@@ -178,6 +179,29 @@ func (s *MemoryService) CreateMessage(_ context.Context, ident identity.LocalIde
 	return message, created, err
 }
 
+func (s *MemoryService) AppendAssistantMessage(_ context.Context, ident identity.LocalIdentity, threadID string, input AppendAssistantMessageInput) (Message, error) {
+	content, err := NormalizeMessageContent(input.Content)
+	if err != nil {
+		return Message{}, err
+	}
+	metadata := RedactEventMetadata(input.Metadata)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user := s.ensureUserLocked(ident)
+	if runID, ok := metadata["run_id"].(string); ok && runID != "" {
+		for _, message := range s.messages[threadID] {
+			if message.Role == MessageRoleAssistant && message.Metadata["run_id"] == runID {
+				return Message{}, NewError(CodeInvalidRequest, "Assistant message already exists for run.")
+			}
+		}
+	}
+	message, err := s.appendMessageLocked(NewMessageID(), threadID, user.ID, MessageRoleAssistant, content, metadata, nil)
+	if err != nil {
+		return Message{}, err
+	}
+	return message, nil
+}
+
 func (s *MemoryService) UpsertSeedMessage(_ context.Context, ident identity.LocalIdentity, input SeedMessageInput) (Message, error) {
 	content, err := NormalizeMessageContent(input.Content)
 	if err != nil {
@@ -220,10 +244,22 @@ func (s *MemoryService) StartRun(_ context.Context, ident identity.LocalIdentity
 			return Run{}, NewError(CodeActiveRunExists, "Thread already has an active run.")
 		}
 	}
+	source, err := NormalizeRunSource(input.Source)
+	if err != nil {
+		return Run{}, err
+	}
 	now := s.now()
-	run := Run{ID: NewRunID(), ThreadID: threadID, UserID: user.ID, Status: RunStatusRunning, Source: RunSourceLocalSimulated, Title: "Local simulated run", CreatedAt: now, UpdatedAt: now}
+	run := Run{ID: NewRunID(), ThreadID: threadID, UserID: user.ID, Status: RunStatusRunning, Source: source, Title: TitleForRunSource(source), CreatedAt: now, UpdatedAt: now}
 	s.runs[run.ID] = run
-	s.runEvents[run.ID] = append(s.runEvents[run.ID], RunEvent{ID: NewRunEventID(), RunID: run.ID, ThreadID: threadID, UserID: user.ID, Sequence: 1, Category: RunEventCategoryLifecycle, Type: "run_created", Summary: "Run created", Metadata: RedactEventMetadata(map[string]any{"script_name": NormalizeScriptName(input.ScriptName)}), CreatedAt: now})
+	metadata := map[string]any{"source": string(source)}
+	if source == RunSourceLocalSimulated {
+		metadata["script_name"] = NormalizeScriptName(input.ScriptName)
+	} else {
+		metadata["message_id"] = input.MessageID
+		metadata["provider_id"] = input.ProviderID
+		metadata["model"] = input.Model
+	}
+	s.runEvents[run.ID] = append(s.runEvents[run.ID], RunEvent{ID: NewRunEventID(), RunID: run.ID, ThreadID: threadID, UserID: user.ID, Sequence: 1, Category: RunEventCategoryLifecycle, Type: "run_created", Summary: "Run created", Metadata: RedactEventMetadata(metadata), CreatedAt: now})
 	thread.UpdatedAt = now
 	s.threads[threadID] = thread
 	return run, nil
@@ -300,6 +336,12 @@ func (s *MemoryService) AppendRunEvent(_ context.Context, ident identity.LocalId
 	if input.Category == RunEventCategoryFinal {
 		run.Status = statusFromFinalType(input.Type)
 		run.CompletedAt = &now
+		if input.ErrorCode != "" {
+			run.ErrorCode = &input.ErrorCode
+		}
+		if input.ErrorMessage != "" {
+			run.ErrorMessage = &input.ErrorMessage
+		}
 	}
 	s.runs[run.ID] = run
 	return event, nil
@@ -365,21 +407,30 @@ func statusFromFinalType(eventType string) RunStatus {
 }
 
 func (s *MemoryService) upsertMessageLocked(id string, threadID string, userID string, content string, clientMessageID *string) (Message, bool, error) {
-	thread, ok := s.threads[threadID]
-	if !ok || thread.UserID != userID {
-		return Message{}, false, NewError(CodeThreadNotFound, "Thread not found.")
-	}
-	if clientMessageID != nil {
-		for _, message := range s.messages[threadID] {
-			if message.UserID == userID && message.ClientMessageID != nil && *message.ClientMessageID == *clientMessageID {
-				return message, false, nil
-			}
+	for _, message := range s.messages[threadID] {
+		if message.UserID == userID && message.ClientMessageID != nil && clientMessageID != nil && *message.ClientMessageID == *clientMessageID {
+			return message, false, nil
 		}
 	}
+	message, err := s.appendMessageLocked(id, threadID, userID, MessageRoleUser, content, map[string]any{}, clientMessageID)
+	if err != nil {
+		return Message{}, false, err
+	}
+	return message, true, nil
+}
+
+func (s *MemoryService) appendMessageLocked(id string, threadID string, userID string, role MessageRole, content string, metadata map[string]any, clientMessageID *string) (Message, error) {
+	thread, ok := s.threads[threadID]
+	if !ok || thread.UserID != userID {
+		return Message{}, NewError(CodeThreadNotFound, "Thread not found.")
+	}
+	if err := ValidateMessageRole(role); err != nil {
+		return Message{}, err
+	}
 	now := s.now()
-	message := Message{ID: id, ThreadID: threadID, UserID: userID, Role: MessageRoleUser, Content: content, Metadata: map[string]any{}, ClientMessageID: clientMessageID, CreatedAt: now}
+	message := Message{ID: id, ThreadID: threadID, UserID: userID, Role: role, Content: content, Metadata: RedactEventMetadata(metadata), ClientMessageID: clientMessageID, CreatedAt: now}
 	s.messages[threadID] = append(s.messages[threadID], message)
 	thread.UpdatedAt = now
 	s.threads[threadID] = thread
-	return message, true, nil
+	return message, nil
 }

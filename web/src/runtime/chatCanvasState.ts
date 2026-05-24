@@ -1,9 +1,9 @@
-import type { ChatCanvasState, Run } from '../domain'
+import type { BackendCapabilityState, ChatCanvasState, Run } from '../domain'
 
 export type ChatCanvasStateInput = {
   loading: boolean
   error?: string | null
-  backendCapability?: 'available' | 'unavailable'
+  backendCapability?: BackendCapabilityState
   backendUnavailableAttempted?: boolean
   selectedThreadId?: string | null
   messageCount: number

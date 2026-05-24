@@ -1,5 +1,5 @@
 import type { ApiClient } from './apiClient'
-import type { Message, Run, RunEvent, RunStatus, Thread } from './domain'
+import type { Message, ProviderCapability, ProviderFamily, Run, RunEvent, RunSource, RunStatus, Thread } from './domain'
 
 const apiBaseUrl = (import.meta.env.VITE_LOOMI_API_BASE_URL ?? '').replace(/\/$/, '')
 
@@ -20,7 +20,7 @@ type ApiThread = {
 type ApiMessage = {
   id: string
   thread_id: string
-  role: 'user'
+  role: 'user' | 'assistant'
   content: string
   created_at: string
   client_message_id?: string | null
@@ -30,7 +30,7 @@ export type ApiRun = {
   id: string
   thread_id: string
   status: RunStatus
-  source: 'local_simulated'
+  source: RunSource
   title: string
   created_at: string
   updated_at: string
@@ -39,7 +39,16 @@ export type ApiRun = {
   error_message?: string | null
 }
 
-export type ApiRunEvent = {
+export type ApiProviderCapability = {
+  id: string
+  family: ProviderFamily
+  base_url?: string | null
+  model: string
+  status: ProviderCapability['status']
+  message?: string | null
+}
+
+type ApiRunEvent = {
   id: string
   run_id: string
   thread_id: string
@@ -102,25 +111,39 @@ export function mapApiRun(run: ApiRun, events: RunEvent[] = []): Run {
     id: run.id,
     threadId: run.thread_id,
     status: run.status,
-    model: 'Local simulated',
+    model: run.source === 'model_gateway' ? 'Model gateway' : 'Local simulated',
     context: run.source,
+    source: run.source,
     events,
   }
 }
 
+export function mapApiProviderCapability(provider: ApiProviderCapability): ProviderCapability {
+  return {
+    id: provider.id,
+    family: provider.family,
+    baseUrl: provider.base_url ?? null,
+    model: provider.model,
+    status: provider.status,
+    message: provider.message ?? null,
+  }
+}
+
 export function mapApiRunEvent(event: ApiRunEvent): RunEvent {
+  const type = `${event.category}.${event.type}`
   return {
     id: event.id,
     runId: event.run_id,
     threadId: event.thread_id,
     sequence: event.sequence,
     category: event.category,
-    type: `${event.category}.${event.type}`,
+    type,
     label: event.category,
     detail: event.summary,
     content: event.content ?? null,
     time: event.created_at,
     status: statusFromApiEvent(event),
+    assistantDelta: type === 'message.model_output_delta' ? event.content ?? '' : undefined,
   }
 }
 
@@ -180,10 +203,25 @@ export const realApiClient: ApiClient = {
     return body.events.map(mapApiRunEvent)
   },
 
-  async startRun(threadId: string) {
+  async listModelProviders() {
+    const body = await requestJSON<{ providers: ApiProviderCapability[] }>('/v1/model-providers')
+    return body.providers.map(mapApiProviderCapability)
+  },
+
+  async checkModelProvider(providerId: string) {
+    const body = await requestJSON<{ provider: ApiProviderCapability }>('/v1/model-providers/check', {
+      method: 'POST',
+      body: JSON.stringify({ provider_id: providerId }),
+    })
+    return mapApiProviderCapability(body.provider)
+  },
+
+  async startRun(threadId: string, input: { messageId?: string; source?: RunSource; providerId?: string; model?: string } = {}) {
     const body = await requestJSON<{ run: ApiRun }>(`/v1/threads/${threadId}/runs`, {
       method: 'POST',
-      body: JSON.stringify({ script_name: 'm4_smoke' }),
+      body: JSON.stringify(input.source === 'model_gateway'
+        ? { message_id: input.messageId, source: 'model_gateway', provider_id: input.providerId, model: input.model }
+        : { script_name: 'm4_smoke' }),
     })
     return loadRunWithEvents(body.run)
   },
@@ -229,13 +267,16 @@ export const realApiClient: ApiClient = {
   },
 
   async sendMessage(threadId: string, content: string) {
-    await requestJSON<{ message: ApiMessage }>(`/v1/threads/${threadId}/messages`, {
+    const created = await requestJSON<{ message: ApiMessage }>(`/v1/threads/${threadId}/messages`, {
       method: 'POST',
       body: JSON.stringify({ content, client_message_id: createClientMessageID() }),
     })
     let run: Run | undefined
     try {
-      run = await this.startRun?.(threadId)
+      const providers = await this.listModelProviders?.()
+      const provider = providers?.find((candidate) => candidate.status === 'available')
+      if (!provider) throw new ApiRequestError('Model provider is unavailable.', 'provider_unavailable', 503)
+      run = await this.startRun?.(threadId, { messageId: created.message.id, source: 'model_gateway', providerId: provider.id, model: provider.model })
     } catch (err) {
       if (!(err instanceof ApiRequestError) || err.code !== 'active_run_exists') throw err
       run = await this.getThreadRun(threadId)

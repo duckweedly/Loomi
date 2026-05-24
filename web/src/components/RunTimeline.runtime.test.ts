@@ -17,6 +17,14 @@ describe('RunTimeline runtime linkage', () => {
     expect(source).toContain('onStopRun')
   })
 
+  test('RunRail labels model gateway provider and tool-boundary rows', () => {
+    const source = readFileSync(resolve(import.meta.dir, 'RunRail.tsx'), 'utf8')
+
+    expect(source).toContain('formatRuntimeEventDetail')
+    expect(source).toContain('Provider failure')
+    expect(source).toContain('Tool request blocked')
+  })
+
   test('RunRail exposes a compact mock script selector for failure smoke', () => {
     const source = readFileSync(resolve(import.meta.dir, 'RunRail.tsx'), 'utf8')
 

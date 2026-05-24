@@ -1,4 +1,4 @@
-import type { ChatCanvasState, Message, Run, StreamState, Thread } from '../domain'
+import type { AssistantDraft as AssistantDraftState, BackendCapabilityState, ChatCanvasState, Message, Run, StreamState, Thread } from '../domain'
 import { deriveChatCanvasState } from '../runtime/chatCanvasState'
 import { Composer } from './Composer'
 import { ToolCallCard } from './ToolCallCard'
@@ -12,7 +12,7 @@ type Props = {
   error?: string | null
   dataSourceMode: 'mock' | 'real_api'
   streamState: StreamState
-  backendCapability?: 'available' | 'unavailable'
+  backendCapability?: BackendCapabilityState
   backendUnavailableAttempted?: boolean
   onSendMessage: (content: string) => void
   onStopRun: () => void
@@ -43,6 +43,30 @@ function MessageHistory({ messages }: { messages: Message[] }) {
   ))
 }
 
+function draftFallback(status: AssistantDraftState['status']) {
+  if (status === 'failed') return '未生成成功回复'
+  if (status === 'stopped') return '已停止生成'
+  return '模型正在生成回复'
+}
+
+function AssistantDraft({ run }: { run: Run | null }) {
+  if (!run?.assistantDraft || run.assistantDraft.status === 'empty') return null
+  return (
+    <article className={`message-row assistant ${run.assistantDraft.status}`}>
+      <div className="message-avatar">L</div>
+      <div className="message-bubble">
+        <div className="message-meta">Loomi · 模型网关</div>
+        <p className="message-markdown">{run.assistantDraft.content || draftFallback(run.assistantDraft.status)}</p>
+      </div>
+    </article>
+  )
+}
+
+function ToolBoundaryNotice({ run }: { run: Run | null }) {
+  if (!run?.events.some((event) => event.type === 'progress.tool_call_blocked')) return null
+  return <div className="api-error">工具调用未执行：M5 只记录边界事件，不执行外部动作。</div>
+}
+
 function StatePanel({ state, error }: { state: Exclude<ChatCanvasState, 'history'>; error?: string | null }) {
   const copy = stateCopy[state]
   return (
@@ -70,7 +94,7 @@ export function ChatCanvas({ sidebarCollapsed, thread, messages, run, loading, e
     <section className="chat-shell glass-panel" data-chat-state={state}>
       <div className="context-bar">
         <span>Context</span>
-        <strong>{run?.context === 'local_simulated' ? 'Local simulated' : run?.context ?? '-'}</strong>
+        <strong>{run?.context === 'local_simulated' ? 'Local simulated' : run?.context === 'model_gateway' ? '模型网关' : run?.context ?? '-'}</strong>
         <span className="context-line" />
         {sidebarCollapsed && <strong>{thread?.title ?? 'Untitled'}</strong>}
         <span>{thread?.mode ?? 'work'}</span>
@@ -80,13 +104,18 @@ export function ChatCanvas({ sidebarCollapsed, thread, messages, run, loading, e
       </div>
 
       {error && <div className="api-error">{error}</div>}
+      <ToolBoundaryNotice run={run} />
 
       <div className="message-list">
         {state === 'history' ? (
-          <MessageHistory messages={messages} />
+          <>
+            <MessageHistory messages={messages} />
+            <AssistantDraft run={run} />
+          </>
         ) : (
           <>
             {(state === 'waiting-run' || state === 'running' || state === 'completed' || state === 'failed') && <MessageHistory messages={messages} />}
+            <AssistantDraft run={run} />
             <StatePanel state={state} error={state === 'error' ? error : null} />
           </>
         )}

@@ -46,7 +46,9 @@ func main() {
 
 	product := productServiceForPool(pool)
 	broadcaster := productruntime.NewBroadcaster()
-	server := httpapi.NewServerWithRuntime(cfg, db.PostgresChecker{Pool: pool}, product, broadcaster, productruntime.NewLocalRunner(product, broadcaster))
+	providers := productruntime.NewHTTPProviders(productruntime.ProviderConfigsFromConfig(cfg), http.DefaultClient)
+	gateway := productruntime.NewGateway(product, broadcaster, providers)
+	server := httpapi.NewServerWithRuntimes(cfg, db.PostgresChecker{Pool: pool}, product, broadcaster, productruntime.NewLocalRunner(product, broadcaster), gateway)
 	logger.Info("loomi api starting", "operation_id", opID, "addr", cfg.HTTPAddr, "env", cfg.AppEnv)
 
 	if err := http.ListenAndServe(cfg.HTTPAddr, server); err != nil {

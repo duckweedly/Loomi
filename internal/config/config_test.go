@@ -66,6 +66,25 @@ func TestLoadRejectsInvalidFields(t *testing.T) {
 	}
 }
 
+func TestLoadModelProviderConfiguration(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://loomi:secret@127.0.0.1:55432/loomi?sslmode=disable")
+	t.Setenv("LOOMI_CUSTOM_MODEL_API_KEY", "test-key")
+	t.Setenv("LOOMI_CUSTOM_MODEL_BASE_URL", "https://example.test/v1")
+	t.Setenv("LOOMI_CUSTOM_MODEL_NAME", "test-model")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(cfg.ModelProviders) != 1 {
+		t.Fatalf("len(ModelProviders) = %d, want 1", len(cfg.ModelProviders))
+	}
+	provider := cfg.ModelProviders[0]
+	if provider.ID != "custom" || provider.Family != "openai_compatible" || provider.Model != "test-model" || !provider.Enabled {
+		t.Fatalf("ModelProviders[0] = %+v", provider)
+	}
+}
+
 func TestRedactedDatabaseURL(t *testing.T) {
 	cfg := Config{DatabaseURL: "postgres://loomi:secret@127.0.0.1:55432/loomi?sslmode=disable"}
 	got := cfg.RedactedDatabaseURL()
