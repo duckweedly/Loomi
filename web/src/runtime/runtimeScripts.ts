@@ -8,6 +8,10 @@ export const runtimeScripts: Record<RuntimeScriptId, RuntimeScript> = {
     finalAssistantMessage: '已完成一次模拟执行。',
     steps: [
       { type: 'run.created', label: 'Run', detail: '已创建', status: 'running' },
+      { type: 'run.queued', label: 'Queue', detail: '已排队', status: 'queued', group: 'run-lifecycle', severity: 'info' },
+      { type: 'job.claimed', label: 'Worker', detail: 'Worker 已领取', status: 'running', group: 'worker-job', severity: 'info' },
+      { type: 'pipeline.step.started', label: 'Pipeline', detail: '开始执行 runtime', status: 'running', group: 'worker-job', severity: 'progress' },
+      { type: 'pipeline.step.completed', label: 'Pipeline', detail: '完成执行 runtime', status: 'running', group: 'worker-job', severity: 'info' },
       { type: 'context.loading', label: 'Context', detail: '加载上下文', status: 'running' },
       { type: 'assistant.thinking', label: 'Thinking', detail: '思考中', status: 'running' },
       { type: 'assistant.drafting', label: 'Drafting', detail: '草拟回复', status: 'running', assistantDelta: '正在整理答案。' },

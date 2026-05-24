@@ -23,6 +23,7 @@ describe('deriveChatCanvasState', () => {
     expect(deriveChatCanvasState({ loading: false, selectedThreadId: 'thread-a', messageCount: 0 })).toBe('empty-thread')
     expect(deriveChatCanvasState({ loading: false, selectedThreadId: 'thread-a', messageCount: 1 })).toBe('history')
     expect(deriveChatCanvasState({ loading: false, selectedThreadId: 'thread-a', messageCount: 1, run: { ...baseRun, status: 'pending', events: [] } })).toBe('waiting-run')
+    expect(deriveChatCanvasState({ loading: false, selectedThreadId: 'thread-a', messageCount: 1, run: { ...baseRun, status: 'queued', events: [] } })).toBe('waiting-run')
     expect(deriveChatCanvasState({ loading: false, selectedThreadId: 'thread-a', messageCount: 1, run: baseRun })).toBe('running')
     expect(deriveChatCanvasState({ loading: false, selectedThreadId: 'thread-a', messageCount: 2, run: { ...baseRun, status: 'completed' } })).toBe('completed')
     expect(deriveChatCanvasState({ loading: false, selectedThreadId: 'thread-a', messageCount: 1, run: { ...baseRun, status: 'failed' } })).toBe('failed')
@@ -36,6 +37,7 @@ describe('deriveChatCanvasState', () => {
     expect(deriveChatCanvasState({ loading: false, selectedThreadId: 'thread-a', messageCount: 1, run: { ...baseRun, status: 'failed', assistantDraft: { content: 'Partial', status: 'failed' } } })).toBe('failed')
     expect(deriveChatCanvasState({ loading: false, selectedThreadId: 'thread-a', messageCount: 1, run: { ...baseRun, status: 'stopped', assistantDraft: { content: 'Partial', status: 'stopped' } } })).toBe('stopped')
     expect(deriveChatCanvasState({ loading: false, selectedThreadId: 'thread-a', messageCount: 1, run: { ...baseRun, status: 'recovering', assistantDraft: { content: 'Restored', status: 'recovering' } } })).toBe('recovering')
+    expect(deriveChatCanvasState({ loading: false, selectedThreadId: 'thread-a', messageCount: 1, run: { ...baseRun, status: 'stopping', assistantDraft: { content: '', status: 'stopping' } } })).toBe('stopping')
   })
 
   test('keeps idle completed runs as history instead of a completed runtime state', () => {

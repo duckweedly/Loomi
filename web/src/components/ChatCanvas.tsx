@@ -38,6 +38,7 @@ const stateCopy: Record<Exclude<ChatCanvasState, 'history'>, { title: string; de
   failed: { title: '执行失败', detail: '未生成成功回复' },
   stopped: { title: '已停止', detail: '保留已生成内容' },
   recovering: { title: '恢复中', detail: '正在恢复运行状态' },
+  stopping: { title: '停止中', detail: '等待后台 worker 确认' },
   'backend-unavailable': { title: '后端能力未接入', detail: '等待 M4/M5 run/event' },
 }
 
@@ -120,7 +121,7 @@ export function ChatCanvas({ sidebarCollapsed, thread, messages, run, loading, e
     messageCount: messages.length,
     run,
   })
-  const composerDisabled = state === 'loading' || state === 'error' || state === 'no-thread' || state === 'backend-unavailable' || state === 'waiting-run' || state === 'running' || state === 'recovering'
+  const composerDisabled = state === 'loading' || state === 'error' || state === 'no-thread' || state === 'backend-unavailable' || state === 'waiting-run' || state === 'running' || state === 'recovering' || state === 'stopping'
   const composerPlaceholder = state === 'history' ? 'Message Loomi' : stateCopy[state].title
   const capabilityStatus = deriveBackendCapabilityStatus({
     dataSourceMode,
@@ -128,8 +129,8 @@ export function ChatCanvas({ sidebarCollapsed, thread, messages, run, loading, e
     backendUnavailable: backendCapability === 'unavailable' || backendUnavailableAttempted || capabilitySignals?.backendUnavailable,
     modelSetupMissing: capabilitySignals?.modelSetupMissing,
     providerUnavailable: capabilitySignals?.providerUnavailable,
-    activeRun: Boolean(run && (run.status === 'pending' || run.status === 'running' || run.status === 'retrying' || run.status === 'recovering')),
-    streamDisconnected: Boolean(run && (run.status === 'pending' || run.status === 'running' || run.status === 'retrying' || run.status === 'recovering') && (capabilitySignals?.streamDisconnected || streamState === 'recoverable_error')),
+    activeRun: Boolean(run && (run.status === 'pending' || run.status === 'queued' || run.status === 'running' || run.status === 'retrying' || run.status === 'recovering' || run.status === 'stopping')),
+    streamDisconnected: Boolean(run && (run.status === 'pending' || run.status === 'queued' || run.status === 'running' || run.status === 'retrying' || run.status === 'recovering' || run.status === 'stopping') && (capabilitySignals?.streamDisconnected || streamState === 'recoverable_error')),
     runRecovering: run?.status === 'recovering' || run?.assistantDraft?.status === 'recovering',
   })
   const capabilityCopy = getBackendCapabilityCopy(capabilityStatus)
@@ -142,7 +143,7 @@ export function ChatCanvas({ sidebarCollapsed, thread, messages, run, loading, e
     )
   ))
   const shouldShowAssistantDraft = Boolean(run && !hasPersistedCompletedDraftMessage)
-  const shouldShowHistory = state === 'history' || state === 'waiting-run' || state === 'running' || state === 'completed' || state === 'failed' || state === 'stopped' || state === 'recovering'
+  const shouldShowHistory = state === 'history' || state === 'waiting-run' || state === 'running' || state === 'completed' || state === 'failed' || state === 'stopped' || state === 'recovering' || state === 'stopping'
 
   return (
     <section className="chat-shell glass-panel" data-chat-state={state}>
@@ -155,7 +156,7 @@ export function ChatCanvas({ sidebarCollapsed, thread, messages, run, loading, e
         <span className={`capability-chip ${capabilityStatus}`}>{capabilityCopy.title}</span>
         <span className="capability-detail">{capabilityCopy.detail}</span>
         <span>{streamState}</span>
-        {run?.status === 'running' && <button className="titlebar-button" onClick={onStopRun}>Stop</button>}
+        {(run?.status === 'queued' || run?.status === 'running' || run?.status === 'retrying' || run?.status === 'recovering') && <button className="titlebar-button" onClick={onStopRun}>Stop</button>}
       </div>
 
       {error && <div className="api-error">{error}</div>}

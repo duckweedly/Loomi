@@ -40,7 +40,7 @@ describe('mockApiClient thread runs', () => {
     const eventTypes: string[] = []
 
     mockApiClient.subscribeRunEvents?.(run!.id, 0, (event) => eventTypes.push(event.type), () => {})
-    await new Promise((resolve) => setTimeout(resolve, 140))
+    await new Promise((resolve) => setTimeout(resolve, 220))
     const storedRun = await mockApiClient.getThreadRun(thread!.id)
 
     expect(run?.status).toBe('running')

@@ -15,6 +15,11 @@ type Config struct {
 	DatabaseURL             string
 	LogLevel                string
 	ReadinessTimeoutSeconds int
+	WorkerQueueEnabled      bool
+	WorkerQueuePaused       bool
+	WorkerLeaseSeconds      int
+	WorkerMaxAttempts       int
+	WorkerPollMillis        int
 	ModelProviders          []ModelProvider
 }
 
@@ -34,6 +39,11 @@ func Load() (Config, error) {
 		DatabaseURL:             os.Getenv("DATABASE_URL"),
 		LogLevel:                getenv("LOG_LEVEL", "info"),
 		ReadinessTimeoutSeconds: 5,
+		WorkerQueueEnabled:      getenv("LOOMI_WORKER_QUEUE_ENABLED", "true") != "false",
+		WorkerQueuePaused:       getenv("LOOMI_WORKER_QUEUE_PAUSED", "false") == "true",
+		WorkerLeaseSeconds:      30,
+		WorkerMaxAttempts:       3,
+		WorkerPollMillis:        250,
 		ModelProviders:          loadModelProviders(),
 	}
 
@@ -43,6 +53,27 @@ func Load() (Config, error) {
 			return Config{}, errors.New("READINESS_TIMEOUT_SECONDS must be an integer from 1 to 10")
 		}
 		cfg.ReadinessTimeoutSeconds = value
+	}
+	if raw := os.Getenv("LOOMI_WORKER_LEASE_SECONDS"); raw != "" {
+		value, err := strconv.Atoi(raw)
+		if err != nil || value <= 0 || value > 300 {
+			return Config{}, errors.New("LOOMI_WORKER_LEASE_SECONDS must be an integer from 1 to 300")
+		}
+		cfg.WorkerLeaseSeconds = value
+	}
+	if raw := os.Getenv("LOOMI_WORKER_MAX_ATTEMPTS"); raw != "" {
+		value, err := strconv.Atoi(raw)
+		if err != nil || value <= 0 || value > 10 {
+			return Config{}, errors.New("LOOMI_WORKER_MAX_ATTEMPTS must be an integer from 1 to 10")
+		}
+		cfg.WorkerMaxAttempts = value
+	}
+	if raw := os.Getenv("LOOMI_WORKER_POLL_MILLIS"); raw != "" {
+		value, err := strconv.Atoi(raw)
+		if err != nil || value <= 0 || value > 10000 {
+			return Config{}, errors.New("LOOMI_WORKER_POLL_MILLIS must be an integer from 1 to 10000")
+		}
+		cfg.WorkerPollMillis = value
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -71,6 +102,15 @@ func (c Config) Validate() error {
 	case "debug", "info", "warn", "error":
 	default:
 		return errors.New("LOG_LEVEL must be debug, info, warn, or error")
+	}
+	if c.WorkerLeaseSeconds <= 0 || c.WorkerLeaseSeconds > 300 {
+		return errors.New("LOOMI_WORKER_LEASE_SECONDS must be an integer from 1 to 300")
+	}
+	if c.WorkerMaxAttempts <= 0 || c.WorkerMaxAttempts > 10 {
+		return errors.New("LOOMI_WORKER_MAX_ATTEMPTS must be an integer from 1 to 10")
+	}
+	if c.WorkerPollMillis <= 0 || c.WorkerPollMillis > 10000 {
+		return errors.New("LOOMI_WORKER_POLL_MILLIS must be an integer from 1 to 10000")
 	}
 	for _, provider := range c.ModelProviders {
 		if provider.ID == "" {

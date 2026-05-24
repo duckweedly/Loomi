@@ -3,6 +3,7 @@ package productdata
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/sheridiany/loomi/internal/identity"
 )
@@ -215,7 +216,10 @@ func TestRunValidation(t *testing.T) {
 	if err := ValidateRunEventCategory(RunEventCategoryFinal); err != nil {
 		t.Fatalf("ValidateRunEventCategory(final) error = %v", err)
 	}
-	if err := ValidateRunStatus(RunStatus("queued")); err == nil || ErrorCode(err) != CodeInvalidRequest {
+	if err := ValidateRunStatus(RunStatusQueued); err != nil {
+		t.Fatalf("ValidateRunStatus(queued) error = %v", err)
+	}
+	if err := ValidateRunStatus(RunStatus("unknown")); err == nil || ErrorCode(err) != CodeInvalidRequest {
 		t.Fatalf("invalid status err = %v", err)
 	}
 	if err := ValidateRunEventCategory(RunEventCategory("tool")); err == nil || ErrorCode(err) != CodeInvalidRequest {
@@ -240,14 +244,14 @@ func TestStartRunCreatesInitialLifecycleEvent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	if run.ThreadID != thread.ID || run.Status != RunStatusRunning || run.Source != RunSourceLocalSimulated {
+	if run.ThreadID != thread.ID || run.Status != RunStatusQueued || run.Source != RunSourceLocalSimulated {
 		t.Fatalf("run = %+v", run)
 	}
 	events, err := svc.ListRunEvents(context.Background(), ident, run.ID, 0)
 	if err != nil {
 		t.Fatalf("ListRunEvents() error = %v", err)
 	}
-	if len(events) != 1 || events[0].Sequence != 1 || events[0].Type != "run_created" {
+	if len(events) != 2 || events[0].Sequence != 1 || events[0].Type != "run_created" || events[1].Type != EventRunQueued {
 		t.Fatalf("events = %+v", events)
 	}
 	if events[0].Metadata["script_name"] != "[redacted]" {
@@ -294,6 +298,192 @@ func TestStartRunRejectsSecondActiveRunForThread(t *testing.T) {
 	}
 }
 
+func TestStartRunAndJobCreationAreAtomicFromServiceBoundary(t *testing.T) {
+	svc := NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, CreateThreadInput{Title: "Jobs", Mode: ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, StartRunInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	diagnostics, err := svc.WorkerQueueDiagnostics(context.Background(), ident)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diagnostics.QueuedCount != 1 {
+		t.Fatalf("diagnostics = %+v", diagnostics)
+	}
+	job, claimedRun, ok, err := svc.ClaimBackgroundJob(context.Background(), ident, ClaimBackgroundJobInput{WorkerID: "worker_test", LeaseSeconds: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || job.RunID != run.ID || claimedRun.Status != RunStatusRunning {
+		t.Fatalf("job=%+v run=%+v ok=%v", job, claimedRun, ok)
+	}
+}
+
+func TestFailBackgroundJobRedactsFailureAndTerminalEvents(t *testing.T) {
+	svc := NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, CreateThreadInput{Title: "Fail", Mode: ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, StartRunInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, _, ok, err := svc.ClaimBackgroundJob(context.Background(), ident, ClaimBackgroundJobInput{WorkerID: "worker_test", LeaseSeconds: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("claim ok = false")
+	}
+	failed, changed, err := svc.FailBackgroundJob(context.Background(), ident, FailBackgroundJobInput{JobID: job.ID, WorkerID: "worker_test", OwnershipVersion: job.OwnershipVersion, ErrorCode: "provider_failed", ErrorMessage: "token secret leaked"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !changed || failed.Status != BackgroundJobStatusFailed || failed.LastError == nil || *failed.LastError != "[redacted]" {
+		t.Fatalf("failed = %+v", failed)
+	}
+	got, err := svc.GetRun(context.Background(), ident, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != RunStatusFailed || got.ErrorMessage == nil || *got.ErrorMessage != "[redacted]" {
+		t.Fatalf("run = %+v", got)
+	}
+	events, err := svc.ListRunEvents(context.Background(), ident, run.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if events[len(events)-2].Type != EventJobAttemptFailed || events[len(events)-1].Type != EventRunFailed || events[len(events)-1].Summary != "[redacted]" {
+		t.Fatalf("events = %+v", events)
+	}
+}
+
+func TestRecoverBackgroundJobsReschedulesExpiredLeaseAndRejectsStaleOwner(t *testing.T) {
+	svc := NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	base := time.Date(2026, 5, 24, 10, 0, 0, 0, time.UTC)
+	svc.now = func() time.Time { return base }
+	thread, err := svc.CreateThread(context.Background(), ident, CreateThreadInput{Title: "Recover", Mode: ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.StartRun(context.Background(), ident, thread.ID, StartRunInput{}); err != nil {
+		t.Fatal(err)
+	}
+	job, _, ok, err := svc.ClaimBackgroundJob(context.Background(), ident, ClaimBackgroundJobInput{WorkerID: "worker_stale", LeaseSeconds: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || job.OwnershipVersion != 1 {
+		t.Fatalf("job = %+v ok=%v", job, ok)
+	}
+	base = base.Add(2 * time.Second)
+	recoveries, err := svc.RecoverBackgroundJobs(context.Background(), ident, RecoverBackgroundJobsInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recoveries) != 1 || recoveries[0].Exhausted || recoveries[0].Job.Status != BackgroundJobStatusQueued || recoveries[0].Run.Status != RunStatusRecovering {
+		t.Fatalf("recoveries = %+v", recoveries)
+	}
+	if recoveries[0].Events[0].Type != EventJobRecovering || recoveries[0].Events[1].Type != EventJobRetryScheduled {
+		t.Fatalf("events = %+v", recoveries[0].Events)
+	}
+	if _, changed, err := svc.CompleteBackgroundJob(context.Background(), ident, CompleteBackgroundJobInput{JobID: job.ID, WorkerID: "worker_stale", OwnershipVersion: job.OwnershipVersion}); err != nil || changed {
+		t.Fatalf("stale completion changed=%v err=%v", changed, err)
+	}
+	claimed, _, ok, err := svc.ClaimBackgroundJob(context.Background(), ident, ClaimBackgroundJobInput{WorkerID: "worker_fresh", LeaseSeconds: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || claimed.OwnershipVersion <= job.OwnershipVersion || claimed.AttemptCount != 2 {
+		t.Fatalf("fresh claim = %+v ok=%v", claimed, ok)
+	}
+}
+
+func TestRecoverBackgroundJobsExhaustsRetriesWithRedactedFailure(t *testing.T) {
+	svc := NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	base := time.Date(2026, 5, 24, 10, 0, 0, 0, time.UTC)
+	svc.now = func() time.Time { return base }
+	thread, err := svc.CreateThread(context.Background(), ident, CreateThreadInput{Title: "Recover", Mode: ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, StartRunInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for attempt := 1; attempt <= 3; attempt++ {
+		if _, _, ok, err := svc.ClaimBackgroundJob(context.Background(), ident, ClaimBackgroundJobInput{WorkerID: "worker_retry", LeaseSeconds: 1}); err != nil || !ok {
+			t.Fatalf("claim attempt %d ok=%v err=%v", attempt, ok, err)
+		}
+		base = base.Add(2 * time.Second)
+		recoveries, err := svc.RecoverBackgroundJobs(context.Background(), ident, RecoverBackgroundJobsInput{ErrorMessage: "token secret leaked"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(recoveries) != 1 {
+			t.Fatalf("attempt %d recoveries = %+v", attempt, recoveries)
+		}
+		if attempt < 3 && recoveries[0].Exhausted {
+			t.Fatalf("attempt %d exhausted early: %+v", attempt, recoveries[0])
+		}
+		if attempt == 3 {
+			if !recoveries[0].Exhausted || recoveries[0].Job.Status != BackgroundJobStatusDead || recoveries[0].Run.Status != RunStatusFailed {
+				t.Fatalf("final recovery = %+v", recoveries[0])
+			}
+			if recoveries[0].Run.ErrorMessage == nil || *recoveries[0].Run.ErrorMessage != "[redacted]" || recoveries[0].Events[0].Summary != "[redacted]" {
+				t.Fatalf("final recovery did not redact = %+v", recoveries[0])
+			}
+		}
+	}
+	got, err := svc.GetRun(context.Background(), ident, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != RunStatusFailed || got.CompletedAt == nil {
+		t.Fatalf("run = %+v", got)
+	}
+}
+
+func TestStopRunCancelsQueuedJobAndPreventsClaim(t *testing.T) {
+	svc := NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, CreateThreadInput{Title: "Run", Mode: ThreadModeChat})
+	if err != nil {
+		t.Fatalf("CreateThread() error = %v", err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, StartRunInput{})
+	if err != nil {
+		t.Fatalf("StartRun() error = %v", err)
+	}
+	stopped, err := svc.StopRun(context.Background(), ident, run.ID)
+	if err != nil {
+		t.Fatalf("StopRun() error = %v", err)
+	}
+	if stopped.Run.StopRequestedAt == nil || stopped.Run.Status != RunStatusStopped {
+		t.Fatalf("stopped = %+v", stopped)
+	}
+	if _, _, ok, err := svc.ClaimBackgroundJob(context.Background(), ident, ClaimBackgroundJobInput{WorkerID: "worker_test", LeaseSeconds: 1}); err != nil || ok {
+		t.Fatalf("claim after stop ok=%v err=%v", ok, err)
+	}
+	diagnostics, err := svc.WorkerQueueDiagnostics(context.Background(), ident)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diagnostics.QueuedCount != 0 || diagnostics.LeasedCount != 0 {
+		t.Fatalf("diagnostics = %+v", diagnostics)
+	}
+}
+
 func TestStopRunRecordsStoppedTerminalEvents(t *testing.T) {
 	svc := NewMemoryService()
 	ident := identity.LocalDevIdentity()
@@ -316,7 +506,7 @@ func TestStopRunRecordsStoppedTerminalEvents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListRunEvents() error = %v", err)
 	}
-	if len(events) != 3 || events[1].Type != "run_stopped" || events[2].Category != RunEventCategoryFinal {
+	if len(events) != 4 || events[2].Type != EventStopRequested || events[3].Category != RunEventCategoryFinal {
 		t.Fatalf("events = %+v", events)
 	}
 }
@@ -346,7 +536,7 @@ func TestStopRunReturnsAlreadyTerminalWithoutChangingOutcome(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListRunEvents() error = %v", err)
 	}
-	if len(events) != 2 {
+	if len(events) != 3 {
 		t.Fatalf("events = %+v", events)
 	}
 }
@@ -413,14 +603,14 @@ func TestAppendRunEventOrdersPersistedEvents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AppendRunEvent(final) error = %v", err)
 	}
-	if final.Sequence != 3 {
+	if final.Sequence != 4 {
 		t.Fatalf("final sequence = %d", final.Sequence)
 	}
 	events, err := svc.ListRunEvents(context.Background(), ident, run.ID, 1)
 	if err != nil {
 		t.Fatalf("ListRunEvents(after=1) error = %v", err)
 	}
-	if len(events) != 2 || events[0].Sequence != 2 || events[1].Sequence != 3 {
+	if len(events) != 3 || events[0].Sequence != 2 || events[1].Sequence != 3 || events[2].Sequence != 4 {
 		t.Fatalf("events = %+v", events)
 	}
 	got, err := svc.GetRun(context.Background(), ident, run.ID)

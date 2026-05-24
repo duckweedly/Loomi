@@ -24,6 +24,7 @@ describe('runtime event groups', () => {
     expect(mapRuntimeEventGroup(event({ type: 'run.created' }))).toBe('run-lifecycle')
     expect(mapRuntimeEventGroup(event({ type: 'model.delta' }))).toBe('model-stream')
     expect(mapRuntimeEventGroup(event({ type: 'worker.claimed' }))).toBe('worker-job')
+    expect(mapRuntimeEventGroup(event({ type: 'pipeline.step.started' }))).toBe('worker-job')
     expect(mapRuntimeEventGroup(event({ type: 'provider.error', status: 'failed' }))).toBe('error')
     expect(mapRuntimeEventGroup(event({ type: 'backend.unavailable' }))).toBe('error')
     expect(mapRuntimeEventGroup(event({ type: 'provider.timeout' }))).toBe('error')

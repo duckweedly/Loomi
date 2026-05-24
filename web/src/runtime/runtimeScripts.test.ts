@@ -2,9 +2,13 @@ import { describe, expect, test } from 'bun:test'
 import { createRuntimeEvent, getRuntimeScript, getRuntimeScriptSteps, runtimeScripts } from './runtimeScripts'
 
 describe('runtimeScripts', () => {
-  test('defines success script with six ordered runtime milestones and final assistant content', () => {
+  test('defines success script with M6 worker milestones and final assistant content', () => {
     expect(getRuntimeScriptSteps('success').map((step) => step.type)).toEqual([
       'run.created',
+      'run.queued',
+      'job.claimed',
+      'pipeline.step.started',
+      'pipeline.step.completed',
       'context.loading',
       'assistant.thinking',
       'assistant.drafting',
@@ -67,8 +71,8 @@ describe('runtimeScripts', () => {
   })
 
   test('creates per-run events with thread and run identifiers', () => {
-    expect(createRuntimeEvent({ threadId: 'thread-a', runId: 'run-a', sequence: 2, step: getRuntimeScriptSteps('success')[2] })).toMatchObject({
-      id: 'run-a-evt-2',
+    expect(createRuntimeEvent({ threadId: 'thread-a', runId: 'run-a', sequence: 6, step: getRuntimeScriptSteps('success')[6] })).toMatchObject({
+      id: 'run-a-evt-6',
       threadId: 'thread-a',
       runId: 'run-a',
       type: 'assistant.thinking',

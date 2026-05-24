@@ -23,7 +23,7 @@ func TestStartRunHandlerCreatesLocalSimulatedRun(t *testing.T) {
 
 	res := requestJSON(t, srv, http.MethodPost, "/v1/threads/"+thread.ID+"/runs", `{"script_name":"m4_smoke"}`)
 
-	if res.Code != http.StatusCreated {
+	if res.Code != http.StatusAccepted {
 		t.Fatalf("status = %d body=%s", res.Code, res.Body.String())
 	}
 	var body struct {
@@ -32,7 +32,7 @@ func TestStartRunHandlerCreatesLocalSimulatedRun(t *testing.T) {
 	if err := json.Unmarshal(res.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
-	if body.Run.ThreadID != thread.ID || body.Run.Source != productdata.RunSourceLocalSimulated || body.Run.Status != productdata.RunStatusRunning {
+	if body.Run.ThreadID != thread.ID || body.Run.Source != productdata.RunSourceLocalSimulated || body.Run.Status != productdata.RunStatusQueued {
 		t.Fatalf("run = %+v", body.Run)
 	}
 }
@@ -91,7 +91,7 @@ func TestStartRunHandlerCreatesModelGatewayRun(t *testing.T) {
 
 	res := requestJSON(t, srv, http.MethodPost, "/v1/threads/"+thread.ID+"/runs", `{"message_id":"msg_1","source":"model_gateway","provider_id":"custom","model":"gpt-5.5"}`)
 
-	if res.Code != http.StatusCreated {
+	if res.Code != http.StatusAccepted {
 		t.Fatalf("status = %d body=%s", res.Code, res.Body.String())
 	}
 	var body struct {
@@ -105,18 +105,17 @@ func TestStartRunHandlerCreatesModelGatewayRun(t *testing.T) {
 	}
 }
 
-func TestStartRunHandlerTriggersModelGateway(t *testing.T) {
+func TestStartRunHandlerQueuesModelGatewayRun(t *testing.T) {
 	svc := productdata.NewMemoryService()
 	thread := createRuntimeTestThread(t, svc)
 	message, _, err := svc.CreateMessage(context.Background(), identity.LocalDevIdentity(), thread.ID, productdata.CreateMessageInput{Content: "hello"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	provider := productruntime.StaticProvider{ProviderConfig: productruntime.ProviderConfig{ID: "custom", Family: productruntime.ProviderFamilyOpenAICompatible, BaseURL: "https://example.test", APIKey: "key", Model: "gpt-5.5", Enabled: true}, Events: []productruntime.ProviderEvent{{Type: productruntime.ProviderEventTextDelta, Text: "hi"}, {Type: productruntime.ProviderEventCompleted}}}
-	srv := NewServerWithRuntimes(config.Config{AppEnv: "local"}, fakeChecker{}, svc, productruntime.NewBroadcaster(), nil, productruntime.NewGateway(svc, productruntime.NewBroadcaster(), []productruntime.Provider{provider}))
+	srv := NewServerWithProduct(config.Config{AppEnv: "local"}, fakeChecker{}, svc)
 
 	res := requestJSON(t, srv, http.MethodPost, "/v1/threads/"+thread.ID+"/runs", `{"message_id":"`+message.ID+`","source":"model_gateway","provider_id":"custom"}`)
-	if res.Code != http.StatusCreated {
+	if res.Code != http.StatusAccepted {
 		t.Fatalf("status = %d body=%s", res.Code, res.Body.String())
 	}
 	var body struct {
@@ -125,8 +124,14 @@ func TestStartRunHandlerTriggersModelGateway(t *testing.T) {
 	if err := json.Unmarshal(res.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
-	events := waitForRuntimeTestEvents(t, svc, body.Run.ID, "run_completed")
-	if events[len(events)-2].Type != "model_output_completed" {
+	if body.Run.Status != productdata.RunStatusQueued {
+		t.Fatalf("run = %+v", body.Run)
+	}
+	events, err := svc.ListRunEvents(context.Background(), identity.LocalDevIdentity(), body.Run.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 || events[1].Type != productdata.EventRunQueued {
 		t.Fatalf("events = %+v", events)
 	}
 }
@@ -149,7 +154,7 @@ func TestRunEventHistoryHandlerReturnsOrderedEvents(t *testing.T) {
 	if err := json.Unmarshal(res.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
-	if len(body.Events) != 2 || body.Events[0].Sequence != 2 || body.Events[1].Sequence != 3 {
+	if len(body.Events) != 3 || body.Events[0].Sequence != 2 || body.Events[1].Sequence != 3 || body.Events[2].Sequence != 4 {
 		t.Fatalf("events = %+v", body.Events)
 	}
 }
@@ -220,6 +225,27 @@ func TestRunEventStreamFlushesHistoryAndCloseMarker(t *testing.T) {
 	}
 }
 
+func TestStopRunHandlerStopsQueuedBackgroundRun(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	thread := createRuntimeTestThread(t, svc)
+	run, err := svc.StartRun(context.Background(), identity.LocalDevIdentity(), thread.ID, productdata.StartRunInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := NewServerWithProduct(config.Config{AppEnv: "local"}, fakeChecker{}, svc)
+
+	res := requestJSON(t, srv, http.MethodPost, "/v1/runs/"+run.ID+"/stop", "")
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), `"result":"stopped"`) || !strings.Contains(res.Body.String(), `"status":"stopped"`) {
+		t.Fatalf("body = %s", res.Body.String())
+	}
+	if _, _, ok, err := svc.ClaimBackgroundJob(context.Background(), identity.LocalDevIdentity(), productdata.ClaimBackgroundJobInput{WorkerID: "worker_test", LeaseSeconds: 1}); err != nil || ok {
+		t.Fatalf("claim after stop ok=%v err=%v", ok, err)
+	}
+}
+
 func TestStopRunHandlerPublishesStopEvents(t *testing.T) {
 	svc := productdata.NewMemoryService()
 	run := createRuntimeTestRun(t, svc)
@@ -233,7 +259,7 @@ func TestStopRunHandlerPublishesStopEvents(t *testing.T) {
 	}
 	first := <-events
 	second := <-events
-	if first.Type != "run_stopped" || second.Category != productdata.RunEventCategoryFinal {
+	if first.Type != productdata.EventStopRequested || second.Category != productdata.RunEventCategoryFinal {
 		t.Fatalf("published events = %+v %+v", first, second)
 	}
 }

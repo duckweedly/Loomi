@@ -21,10 +21,10 @@ type GatewayRunner interface {
 }
 
 type Server struct {
-	cfg         config.Config
-	checker     db.Checker
-	product     productdata.Service
-	broadcaster *productruntime.Broadcaster
+	cfg           config.Config
+	checker       db.Checker
+	product       productdata.Service
+	broadcaster   *productruntime.Broadcaster
 	runner        RuntimeRunner
 	gatewayRunner GatewayRunner
 	providers     []productruntime.ProviderConfig
@@ -49,6 +49,7 @@ func NewServerWithRuntimes(cfg config.Config, checker db.Checker, product produc
 	s.mux.HandleFunc("GET /healthz", s.handleHealthz)
 	s.mux.HandleFunc("GET /readyz", s.handleReadyz)
 	s.mux.HandleFunc("GET /v1/me", s.handleCurrentIdentity)
+	s.mux.HandleFunc("GET /v1/diagnostics/worker-queue", s.handleWorkerQueueDiagnostics)
 	s.mux.HandleFunc("/v1/model-providers", s.handleModelProviders)
 	s.mux.HandleFunc("POST /v1/model-providers/check", s.handleModelProviderCheck)
 	s.mux.HandleFunc("/v1/threads", s.handleThreads)

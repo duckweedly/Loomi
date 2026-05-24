@@ -21,6 +21,16 @@ type RunSource string
 
 type RunEventCategory string
 
+type BackgroundJobKind string
+
+type BackgroundJobStatus string
+
+type WorkerQueueStatus string
+
+type WorkerStatus string
+
+type PipelineStepName string
+
 type Code string
 
 const (
@@ -33,11 +43,13 @@ const (
 	MessageRoleUser      MessageRole = "user"
 	MessageRoleAssistant MessageRole = "assistant"
 
-	RunStatusPending   RunStatus = "pending"
-	RunStatusRunning   RunStatus = "running"
-	RunStatusCompleted RunStatus = "completed"
-	RunStatusFailed    RunStatus = "failed"
-	RunStatusStopped   RunStatus = "stopped"
+	RunStatusPending    RunStatus = "pending"
+	RunStatusQueued     RunStatus = "queued"
+	RunStatusRunning    RunStatus = "running"
+	RunStatusRecovering RunStatus = "recovering"
+	RunStatusCompleted  RunStatus = "completed"
+	RunStatusFailed     RunStatus = "failed"
+	RunStatusStopped    RunStatus = "stopped"
 
 	RunSourceLocalSimulated RunSource = "local_simulated"
 	RunSourceModelGateway   RunSource = "model_gateway"
@@ -47,6 +59,49 @@ const (
 	RunEventCategoryMessage   RunEventCategory = "message"
 	RunEventCategoryError     RunEventCategory = "error"
 	RunEventCategoryFinal     RunEventCategory = "final"
+
+	BackgroundJobKindRunExecution BackgroundJobKind = "run_execution"
+
+	BackgroundJobStatusQueued    BackgroundJobStatus = "queued"
+	BackgroundJobStatusLeased    BackgroundJobStatus = "leased"
+	BackgroundJobStatusRetrying  BackgroundJobStatus = "retrying"
+	BackgroundJobStatusCompleted BackgroundJobStatus = "completed"
+	BackgroundJobStatusFailed    BackgroundJobStatus = "failed"
+	BackgroundJobStatusCancelled BackgroundJobStatus = "cancelled"
+	BackgroundJobStatusDead      BackgroundJobStatus = "dead"
+
+	WorkerQueueStatusReady     WorkerQueueStatus = "ready"
+	WorkerQueueStatusPaused    WorkerQueueStatus = "paused"
+	WorkerQueueStatusUnhealthy WorkerQueueStatus = "unhealthy"
+	WorkerQueueStatusDegraded  WorkerQueueStatus = "degraded"
+
+	WorkerStatusReady     WorkerStatus = "ready"
+	WorkerStatusPaused    WorkerStatus = "paused"
+	WorkerStatusUnhealthy WorkerStatus = "unhealthy"
+	WorkerStatusDegraded  WorkerStatus = "degraded"
+	WorkerStatusStopped   WorkerStatus = "stopped"
+
+	PipelineStepEnqueue        PipelineStepName = "enqueue"
+	PipelineStepClaim          PipelineStepName = "claim"
+	PipelineStepPrepareContext PipelineStepName = "prepare_context"
+	PipelineStepInvokeRuntime  PipelineStepName = "invoke_runtime"
+	PipelineStepFinalize       PipelineStepName = "finalize"
+	PipelineStepRecover        PipelineStepName = "recover"
+	PipelineStepFail           PipelineStepName = "fail"
+
+	EventRunQueued             = "run_queued"
+	EventJobClaimed            = "job_claimed"
+	EventLeaseRenewed          = "lease_renewed"
+	EventPipelineStepStarted   = "pipeline_step_started"
+	EventPipelineStepCompleted = "pipeline_step_completed"
+	EventJobRecovering         = "job_recovering"
+	EventJobRetryScheduled     = "job_retry_scheduled"
+	EventStopRequested         = "stop_requested"
+	EventJobAttemptFailed      = "job_attempt_failed"
+	EventJobRetryExhausted     = "job_retry_exhausted"
+	EventRunCompleted          = "run_completed"
+	EventRunFailed             = "run_failed"
+	EventRunStopped            = "run_stopped"
 
 	CodeInvalidRequest        Code = "invalid_request"
 	CodeThreadNotFound        Code = "thread_not_found"
@@ -112,17 +167,50 @@ type Message struct {
 }
 
 type Run struct {
-	ID           string     `json:"id"`
-	ThreadID     string     `json:"thread_id"`
-	UserID       string     `json:"-"`
-	Status       RunStatus  `json:"status"`
-	Source       RunSource  `json:"source"`
-	Title        string     `json:"title"`
-	CreatedAt    time.Time  `json:"created_at"`
-	UpdatedAt    time.Time  `json:"updated_at"`
-	CompletedAt  *time.Time `json:"completed_at,omitempty"`
-	ErrorCode    *string    `json:"error_code,omitempty"`
-	ErrorMessage *string    `json:"error_message,omitempty"`
+	ID              string     `json:"id"`
+	ThreadID        string     `json:"thread_id"`
+	UserID          string     `json:"-"`
+	Status          RunStatus  `json:"status"`
+	Source          RunSource  `json:"source"`
+	Title           string     `json:"title"`
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
+	CompletedAt     *time.Time `json:"completed_at,omitempty"`
+	StopRequestedAt *time.Time `json:"stop_requested_at,omitempty"`
+	ErrorCode       *string    `json:"error_code,omitempty"`
+	ErrorMessage    *string    `json:"error_message,omitempty"`
+}
+
+type BackgroundJob struct {
+	ID               string              `json:"id"`
+	RunID            string              `json:"run_id"`
+	ThreadID         string              `json:"thread_id"`
+	UserID           string              `json:"-"`
+	Kind             BackgroundJobKind   `json:"kind"`
+	Status           BackgroundJobStatus `json:"status"`
+	Priority         int                 `json:"priority"`
+	AttemptCount     int                 `json:"attempt_count"`
+	MaxAttempts      int                 `json:"max_attempts"`
+	ScheduledAt      time.Time           `json:"scheduled_at"`
+	LeasedBy         *string             `json:"leased_by,omitempty"`
+	LeaseExpiresAt   *time.Time          `json:"lease_expires_at,omitempty"`
+	OwnershipVersion int                 `json:"ownership_version"`
+	Metadata         map[string]any      `json:"metadata,omitempty"`
+	LastErrorCode    *string             `json:"last_error_code,omitempty"`
+	LastError        *string             `json:"last_error_message,omitempty"`
+	CreatedAt        time.Time           `json:"created_at"`
+	UpdatedAt        time.Time           `json:"updated_at"`
+}
+
+type WorkerQueueDiagnostics struct {
+	QueueStatus   WorkerQueueStatus `json:"queue_status"`
+	WorkerStatus  WorkerStatus      `json:"worker_status"`
+	QueuedCount   int               `json:"queued_count"`
+	LeasedCount   int               `json:"leased_count"`
+	StaleCount    int               `json:"stale_count"`
+	RetryingCount int               `json:"retrying_count"`
+	DeadCount     int               `json:"dead_count"`
+	UpdatedAt     time.Time         `json:"updated_at"`
 }
 
 type RunEvent struct {
@@ -190,6 +278,45 @@ type StopRunOutput struct {
 	Events []RunEvent
 }
 
+type ClaimBackgroundJobInput struct {
+	WorkerID     string
+	LeaseSeconds int
+}
+
+type CompleteBackgroundJobInput struct {
+	JobID            string
+	WorkerID         string
+	OwnershipVersion int
+}
+
+type FailBackgroundJobInput struct {
+	JobID            string
+	WorkerID         string
+	OwnershipVersion int
+	ErrorCode        string
+	ErrorMessage     string
+}
+
+type RenewBackgroundJobLeaseInput struct {
+	JobID            string
+	WorkerID         string
+	OwnershipVersion int
+	LeaseSeconds     int
+}
+
+type RecoverBackgroundJobsInput struct {
+	Limit        int
+	ErrorCode    string
+	ErrorMessage string
+}
+
+type BackgroundJobRecovery struct {
+	Job       BackgroundJob
+	Run       Run
+	Events    []RunEvent
+	Exhausted bool
+}
+
 type SeedThreadInput struct {
 	ID    string
 	Title string
@@ -203,10 +330,11 @@ type SeedMessageInput struct {
 	ClientMessageID string
 }
 
-func NewThreadID() string   { return prefixedID("thr") }
-func NewMessageID() string  { return prefixedID("msg") }
-func NewRunID() string      { return prefixedID("run") }
-func NewRunEventID() string { return prefixedID("evt") }
+func NewThreadID() string        { return prefixedID("thr") }
+func NewMessageID() string       { return prefixedID("msg") }
+func NewRunID() string           { return prefixedID("run") }
+func NewRunEventID() string      { return prefixedID("evt") }
+func NewBackgroundJobID() string { return prefixedID("job") }
 
 func prefixedID(prefix string) string {
 	buf := make([]byte, 6)
@@ -227,7 +355,7 @@ func ValidateMessageRole(role MessageRole) error {
 
 func ValidateRunStatus(status RunStatus) error {
 	switch status {
-	case RunStatusPending, RunStatusRunning, RunStatusCompleted, RunStatusFailed, RunStatusStopped:
+	case RunStatusPending, RunStatusQueued, RunStatusRunning, RunStatusRecovering, RunStatusCompleted, RunStatusFailed, RunStatusStopped:
 		return nil
 	default:
 		return NewError(CodeInvalidRequest, "Run status is invalid.")
@@ -275,7 +403,16 @@ func IsRunTerminal(status RunStatus) bool {
 
 func IsRunActive(status RunStatus) bool {
 	switch status {
-	case RunStatusPending, RunStatusRunning:
+	case RunStatusPending, RunStatusQueued, RunStatusRunning, RunStatusRecovering:
+		return true
+	default:
+		return false
+	}
+}
+
+func IsBackgroundJobTerminal(status BackgroundJobStatus) bool {
+	switch status {
+	case BackgroundJobStatusCompleted, BackgroundJobStatusFailed, BackgroundJobStatusCancelled, BackgroundJobStatusDead:
 		return true
 	default:
 		return false

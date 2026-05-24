@@ -18,10 +18,10 @@ export function deriveAgentMotionState(run: Run | null): AgentMotionState {
   if (run.status === 'completed' && run.events.length === 0) return 'idle'
   if (run.status === 'completed') return 'done'
   if (run.status === 'failed' || run.status === 'stopped') return 'error'
-  if (run.status === 'recovering') return 'thinking'
+  if (run.status === 'queued' || run.status === 'recovering' || run.status === 'stopping') return 'thinking'
   if (run.assistantDraft?.status === 'streaming') return 'speaking'
   if (run.assistantDraft?.status === 'failed' || run.assistantDraft?.status === 'stopped') return 'error'
-  if (run.assistantDraft?.status === 'recovering') return 'thinking'
+  if (run.assistantDraft?.status === 'queued' || run.assistantDraft?.status === 'recovering' || run.assistantDraft?.status === 'stopping') return 'thinking'
 
   let currentEvent = run.events.at(-1)
   for (let index = run.events.length - 1; index >= 0; index -= 1) {

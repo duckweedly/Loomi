@@ -17,7 +17,7 @@ export function deriveComposerActions(input: ComposerActionsInput) {
   return {
     canSend: input.threadSelected && hasText && !activeRun,
     canContinue: input.threadSelected && hasText && !activeRun,
-    canStop: input.run?.status === 'running' || input.run?.status === 'retrying' || input.run?.status === 'recovering',
+    canStop: input.run?.status === 'queued' || input.run?.status === 'running' || input.run?.status === 'retrying' || input.run?.status === 'recovering',
     canRetry: input.threadSelected && failedRun && !activeRun,
     canRegenerate: input.threadSelected && completedAssistant && !activeRun,
   }

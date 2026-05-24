@@ -19,14 +19,14 @@ type Props = {
 function getEventClassName(event: Run['events'][number]) {
   if (event.severity === 'error' || event.group === 'error' || event.status === 'failed') return 'progress-row failed'
   if (event.status === 'stopped' || event.status === 'cancelled' || event.severity === 'warning') return 'progress-row warning'
-  if (event.status === 'running' || event.status === 'retrying') return 'progress-row active'
+  if (event.status === 'queued' || event.status === 'running' || event.status === 'retrying' || event.status === 'recovering' || event.status === 'stopping') return 'progress-row active'
   return 'progress-row done'
 }
 
 function getEventMark(event: Run['events'][number], index: number) {
   if (event.severity === 'error' || event.group === 'error' || event.status === 'failed') return <Minus size={10} />
   if (event.status === 'stopped' || event.status === 'cancelled' || event.severity === 'warning') return <Minus size={10} />
-  if (event.status === 'running' || event.status === 'retrying') return index + 1
+  if (event.status === 'queued' || event.status === 'running' || event.status === 'retrying' || event.status === 'recovering' || event.status === 'stopping') return index + 1
   return <Check size={11} />
 }
 
@@ -76,7 +76,7 @@ export function RunRail({ run, open, onOpenArtifact, onStopRun, selectedRuntimeS
             </div>
           )}
           {capabilityCopy && <div className={`capability-rail ${capabilityStatus}`}><strong>{capabilityCopy.title}</strong><span>{capabilityCopy.detail}</span></div>}
-          {run?.status === 'running' && onStopRun && <button className="runtime-stop-button ghost" onClick={onStopRun}>Stop run</button>}
+          {(run?.status === 'queued' || run?.status === 'running' || run?.status === 'retrying' || run?.status === 'recovering') && onStopRun && <button className="runtime-stop-button ghost" onClick={onStopRun}>Stop run</button>}
           {eventGroups.map((group) => (
             <section key={group.id} className={`runtime-event-group ${group.id}`}>
               <h3>{group.title}</h3>

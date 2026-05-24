@@ -55,8 +55,8 @@ func (c PostgresChecker) SchemaReady(ctx context.Context) error {
 }
 
 func schemaVersionReady(version int, dirty bool) error {
-	if version < 3 || dirty {
-		return errors.New("m4 schema unavailable")
+	if version < 5 || dirty {
+		return errors.New("m6 schema unavailable")
 	}
 	return nil
 }

@@ -37,3 +37,30 @@ func TestMergeHistoryThenLiveSkipsDeliveredSequences(t *testing.T) {
 		t.Fatalf("merged = %+v", merged)
 	}
 }
+
+func TestMergeHistoryThenLiveKeepsM6WorkerEventOrder(t *testing.T) {
+	history := []productdata.RunEvent{
+		{ID: "evt_queued", RunID: "run_1", Sequence: 2, Type: productdata.EventRunQueued},
+		{ID: "evt_claimed", RunID: "run_1", Sequence: 3, Type: productdata.EventJobClaimed},
+		{ID: "evt_step_started", RunID: "run_1", Sequence: 4, Type: productdata.EventPipelineStepStarted},
+	}
+	live := make(chan productdata.RunEvent, 2)
+	live <- productdata.RunEvent{ID: "evt_step_completed", RunID: "run_1", Sequence: 5, Type: productdata.EventPipelineStepCompleted}
+	live <- productdata.RunEvent{ID: "evt_step_started", RunID: "run_1", Sequence: 4, Type: productdata.EventPipelineStepStarted}
+	close(live)
+
+	merged := CollectHistoryThenLive(context.Background(), history, live, 1)
+	got := make([]string, 0, len(merged))
+	for _, event := range merged {
+		got = append(got, event.Type)
+	}
+	want := []string{productdata.EventRunQueued, productdata.EventJobClaimed, productdata.EventPipelineStepStarted, productdata.EventPipelineStepCompleted}
+	if len(got) != len(want) {
+		t.Fatalf("merged = %+v", merged)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("got = %+v want = %+v", got, want)
+		}
+	}
+}

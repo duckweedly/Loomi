@@ -22,6 +22,9 @@ func TestLoadAppliesLocalDefaults(t *testing.T) {
 	if cfg.ReadinessTimeoutSeconds != 5 {
 		t.Fatalf("ReadinessTimeoutSeconds = %d", cfg.ReadinessTimeoutSeconds)
 	}
+	if !cfg.WorkerQueueEnabled || cfg.WorkerQueuePaused || cfg.WorkerLeaseSeconds != 30 || cfg.WorkerMaxAttempts != 3 || cfg.WorkerPollMillis != 250 {
+		t.Fatalf("worker defaults = %+v", cfg)
+	}
 }
 
 func TestLoadRejectsMissingDatabaseURL(t *testing.T) {
@@ -53,6 +56,10 @@ func TestLoadRejectsInvalidFields(t *testing.T) {
 		{name: "log level", key: "LOG_LEVEL", val: "trace"},
 		{name: "timeout text", key: "READINESS_TIMEOUT_SECONDS", val: "slow"},
 		{name: "timeout too high", key: "READINESS_TIMEOUT_SECONDS", val: "30"},
+		{name: "lease text", key: "LOOMI_WORKER_LEASE_SECONDS", val: "slow"},
+		{name: "lease too high", key: "LOOMI_WORKER_LEASE_SECONDS", val: "301"},
+		{name: "attempts zero", key: "LOOMI_WORKER_MAX_ATTEMPTS", val: "0"},
+		{name: "poll too high", key: "LOOMI_WORKER_POLL_MILLIS", val: "10001"},
 	}
 
 	for _, tt := range tests {
@@ -63,6 +70,23 @@ func TestLoadRejectsInvalidFields(t *testing.T) {
 				t.Fatal("Load() error = nil, want error")
 			}
 		})
+	}
+}
+
+func TestLoadWorkerQueueConfiguration(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://loomi:secret@127.0.0.1:55432/loomi?sslmode=disable")
+	t.Setenv("LOOMI_WORKER_QUEUE_ENABLED", "false")
+	t.Setenv("LOOMI_WORKER_QUEUE_PAUSED", "true")
+	t.Setenv("LOOMI_WORKER_LEASE_SECONDS", "45")
+	t.Setenv("LOOMI_WORKER_MAX_ATTEMPTS", "5")
+	t.Setenv("LOOMI_WORKER_POLL_MILLIS", "500")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.WorkerQueueEnabled || !cfg.WorkerQueuePaused || cfg.WorkerLeaseSeconds != 45 || cfg.WorkerMaxAttempts != 5 || cfg.WorkerPollMillis != 500 {
+		t.Fatalf("worker config = %+v", cfg)
 	}
 }
 

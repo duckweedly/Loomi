@@ -169,6 +169,85 @@ func (p *capturingProvider) Stream(_ context.Context, request ProviderRequest) (
 	return ch, nil
 }
 
+func TestQueuedRunRouterHydratesGatewayInputFromJobMetadata(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, productdata.CreateThreadInput{Title: "Gateway", Mode: productdata.ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _, err := svc.CreateMessage(context.Background(), ident, thread.ID, productdata.CreateMessageInput{Content: "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, productdata.StartRunInput{Source: productdata.RunSourceModelGateway, MessageID: message.ID, ProviderID: "custom", Model: "override"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, claimedRun, ok, err := svc.ClaimBackgroundJob(context.Background(), ident, productdata.ClaimBackgroundJobInput{WorkerID: "worker_gateway", LeaseSeconds: 30})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("claim ok = false")
+	}
+	provider := &capturingProvider{config: ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: "https://example.test/v1", APIKey: "key", Model: "base", Enabled: true}}
+
+	if err := (QueuedRunRouter{Gateway: NewGateway(svc, nil, []Provider{provider})}).Run(context.Background(), claimedRun, job); err != nil {
+		t.Fatal(err)
+	}
+
+	if provider.request.ThreadID != thread.ID || provider.request.MessageID != message.ID || provider.request.Model != "override" {
+		t.Fatalf("request = %+v", provider.request)
+	}
+	got, err := svc.GetRun(context.Background(), ident, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != productdata.RunStatusCompleted {
+		t.Fatalf("run = %+v", got)
+	}
+}
+
+func TestQueuedRunRouterReturnsErrorWhenGatewayRunFails(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, productdata.CreateThreadInput{Title: "Gateway", Mode: productdata.ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _, err := svc.CreateMessage(context.Background(), ident, thread.ID, productdata.CreateMessageInput{Content: "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, productdata.StartRunInput{Source: productdata.RunSourceModelGateway, MessageID: message.ID, ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, claimedRun, ok, err := svc.ClaimBackgroundJob(context.Background(), ident, productdata.ClaimBackgroundJobInput{WorkerID: "worker_gateway", LeaseSeconds: 30})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("claim ok = false")
+	}
+	provider := StaticProvider{ProviderConfig: ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: "https://example.test/v1", APIKey: "key", Model: "model", Enabled: true}, Events: []ProviderEvent{{Type: ProviderEventRateLimited}}}
+
+	if err := (QueuedRunRouter{Gateway: NewGateway(svc, nil, []Provider{provider})}).Run(context.Background(), claimedRun, job); err == nil {
+		t.Fatal("Run() error = nil")
+	}
+	if _, changed, err := svc.CompleteBackgroundJob(context.Background(), ident, productdata.CompleteBackgroundJobInput{JobID: job.ID, WorkerID: "worker_gateway", OwnershipVersion: job.OwnershipVersion}); err != nil || !changed {
+		t.Fatalf("CompleteBackgroundJob() changed=%v err=%v", changed, err)
+	}
+	got, err := svc.GetRun(context.Background(), ident, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != productdata.RunStatusFailed {
+		t.Fatalf("run = %+v", got)
+	}
+}
+
 func TestGatewayRunAsyncOutlivesRequestContext(t *testing.T) {
 	svc := productdata.NewMemoryService()
 	ident := identity.LocalDevIdentity()

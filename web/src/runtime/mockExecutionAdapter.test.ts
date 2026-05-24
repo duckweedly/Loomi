@@ -21,7 +21,7 @@ describe('createMockExecutionAdapter', () => {
     await adapter.subscribeRunEvents('thread-a', firstRun.id, (event) => events.push(event.type))
 
     expect(firstRun.id).not.toBe(secondRun.id)
-    expect(events).toEqual(['run.created', 'context.loading', 'assistant.thinking', 'assistant.drafting', 'assistant.message.completed', 'run.completed'])
+    expect(events).toEqual(['run.created', 'run.queued', 'job.claimed', 'pipeline.step.started', 'pipeline.step.completed', 'context.loading', 'assistant.thinking', 'assistant.drafting', 'assistant.message.completed', 'run.completed'])
   })
 
   test('accumulates assistant draft and completes exactly one assistant message', async () => {

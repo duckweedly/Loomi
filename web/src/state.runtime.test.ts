@@ -24,9 +24,11 @@ const message: Message = {
 describe('runtime state orchestration helpers', () => {
   test('blocks a second submit while a selected run is pending, running, retrying, or recovering', () => {
     expect(shouldBlockRuntimeSubmit({ ...run, status: 'pending' })).toBe(true)
+    expect(shouldBlockRuntimeSubmit({ ...run, status: 'queued' })).toBe(true)
     expect(shouldBlockRuntimeSubmit({ ...run, status: 'running' })).toBe(true)
     expect(shouldBlockRuntimeSubmit({ ...run, status: 'retrying' })).toBe(true)
     expect(shouldBlockRuntimeSubmit({ ...run, status: 'recovering' })).toBe(true)
+    expect(shouldBlockRuntimeSubmit({ ...run, status: 'stopping' })).toBe(true)
     expect(shouldBlockRuntimeSubmit({ ...run, status: 'completed' })).toBe(false)
     expect(shouldBlockRuntimeSubmit({ ...run, status: 'cancelled' })).toBe(false)
     expect(shouldBlockRuntimeSubmit(null)).toBe(false)
@@ -131,6 +133,49 @@ describe('runtime state orchestration helpers', () => {
     }
 
     expect(applyRunStreamEventToRun(stoppedRun, staleEvent)).toBe(stoppedRun)
+  })
+
+  test('replays stopping and stopped worker events', () => {
+    const runningRun: Run = { ...run, status: 'running', events: [] }
+    const events: Run['events'] = [
+      { id: 'evt-stopping', runId: run.id, threadId: run.threadId, sequence: 1, type: 'run.stopping', label: 'Run', detail: 'stopping', time: 'Now', status: 'stopping' },
+      { id: 'evt-stopped', runId: run.id, threadId: run.threadId, sequence: 2, type: 'run.stopped', label: 'Run', detail: 'stopped', time: 'Later', status: 'stopped' },
+    ]
+
+    const next = events.reduce(applyRunStreamEventToRun, runningRun)
+
+    expect(next.status).toBe('stopped')
+    expect(next.assistantDraft).toMatchObject({ status: 'stopped' })
+    expect(next.events.map((event) => event.type)).toEqual(['run.stopping', 'run.stopped'])
+  })
+
+  test('replays recovery history before retry exhaustion failure', () => {
+    const recoveringRun: Run = { ...run, status: 'recovering', events: [] }
+    const events: Run['events'] = [
+      { id: 'evt-recovering', runId: run.id, threadId: run.threadId, sequence: 1, type: 'job.recovering', label: 'Worker', detail: 'recovering', time: 'Now', status: 'recovering' },
+      { id: 'evt-retry', runId: run.id, threadId: run.threadId, sequence: 2, type: 'job.retry_scheduled', label: 'Worker', detail: 'retry scheduled', time: 'Now', status: 'recovering' },
+      { id: 'evt-exhausted', runId: run.id, threadId: run.threadId, sequence: 3, type: 'job.retry_exhausted', label: 'Worker', detail: 'exhausted', time: 'Later', status: 'failed' },
+    ]
+
+    const next = events.reduce(applyRunStreamEventToRun, recoveringRun)
+
+    expect(next.status).toBe('failed')
+    expect(next.assistantDraft).toMatchObject({ status: 'failed' })
+    expect(next.events.map((event) => event.type)).toEqual(['job.recovering', 'job.retry_scheduled', 'job.retry_exhausted'])
+  })
+
+  test('replays queued worker history before terminal completion', () => {
+    const queuedRun: Run = { ...run, status: 'queued', events: [] }
+    const events: Run['events'] = [
+      { id: 'evt-queued', runId: run.id, threadId: run.threadId, sequence: 1, type: 'run.queued', label: 'Run', detail: 'queued', time: 'Now', status: 'queued' },
+      { id: 'evt-claimed', runId: run.id, threadId: run.threadId, sequence: 2, type: 'job.claimed', label: 'Worker', detail: 'claimed', time: 'Now', status: 'running' },
+      { id: 'evt-completed', runId: run.id, threadId: run.threadId, sequence: 3, type: 'run.completed', label: 'Run', detail: 'completed', time: 'Later', status: 'completed' },
+    ]
+
+    const next = events.reduce(applyRunStreamEventToRun, queuedRun)
+
+    expect(next.status).toBe('completed')
+    expect(next.events.map((event) => event.type)).toEqual(['run.queued', 'job.claimed', 'run.completed'])
   })
 
   test('merges live stream events into non-terminal runs', () => {

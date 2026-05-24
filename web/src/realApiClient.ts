@@ -1,5 +1,5 @@
 import type { ApiClient } from './apiClient'
-import type { Message, ProviderCapability, ProviderFamily, Run, RunEvent, RunSource, RunStatus, Thread } from './domain'
+import type { Message, ProviderCapability, ProviderFamily, Run, RunEvent, RunSource, RunStatus, Thread, WorkerQueueDiagnostics, WorkerQueueStatus, WorkerStatus } from './domain'
 import { isRuntimeTerminal } from './runtime/executionAdapter'
 
 const apiBaseUrl = (import.meta.env.VITE_LOOMI_API_BASE_URL ?? '').replace(/\/$/, '')
@@ -49,6 +49,17 @@ export type ApiProviderCapability = {
   model: string
   status: ProviderCapability['status']
   message?: string | null
+}
+
+export type ApiWorkerQueueDiagnostics = {
+  queue_status: WorkerQueueStatus
+  worker_status: WorkerStatus
+  queued_count: number
+  leased_count: number
+  stale_count: number
+  retrying_count: number
+  dead_count: number
+  updated_at: string
 }
 
 type ApiRunEvent = {
@@ -128,8 +139,8 @@ function restoreAssistantDraftFromEvents(run: Run, events: RunEvent[]): Run {
     if (event.status === 'failed' || event.status === 'stopped') {
       return { ...current, status: event.status, events, completedAt: event.time, assistantDraft: { content, status: event.status, lastEventId: event.id } }
     }
-    if (event.status === 'recovering') {
-      return { ...current, status: 'recovering', events, assistantDraft: { content, status: 'recovering', lastEventId: event.id } }
+    if (event.status === 'recovering' || event.status === 'queued' || event.status === 'stopping') {
+      return { ...current, status: event.status, events, assistantDraft: { content, status: event.status, lastEventId: event.id } }
     }
     if (event.type === 'assistant.message.completed' && event.content) {
       return { ...current, status: event.status, events, assistantDraft: { content: event.content, status: 'completed', lastEventId: event.id } }
@@ -139,8 +150,8 @@ function restoreAssistantDraftFromEvents(run: Run, events: RunEvent[]): Run {
 }
 
 export function mapApiRun(run: ApiRun, events: RunEvent[] = []): Run {
-  const assistantDraft = run.status === 'pending' || run.status === 'running' || run.status === 'recovering'
-    ? { content: '', status: run.status === 'recovering' ? 'recovering' as const : 'pending' as const }
+  const assistantDraft = run.status === 'pending' || run.status === 'queued' || run.status === 'running' || run.status === 'recovering' || run.status === 'stopping'
+    ? { content: '', status: run.status === 'recovering' ? 'recovering' as const : run.status === 'stopping' ? 'stopping' as const : run.status === 'queued' ? 'queued' as const : 'pending' as const }
     : undefined
   const mappedRun: Run = {
     id: run.id,
@@ -174,12 +185,38 @@ function tokenUsage(metadata: Record<string, unknown>) {
 
 function canonicalRunEventType(event: ApiRunEvent) {
   if (event.type.includes('.')) return event.type
+  const m6Types: Record<string, string> = {
+    run_queued: 'run.queued',
+    job_claimed: 'job.claimed',
+    lease_renewed: 'worker.lease_renewed',
+    pipeline_step_started: 'pipeline.step.started',
+    pipeline_step_completed: 'pipeline.step.completed',
+    job_recovering: 'job.recovering',
+    job_retry_scheduled: 'job.retry_scheduled',
+    stop_requested: 'run.stopping',
+    job_attempt_failed: 'job.attempt_failed',
+    job_retry_exhausted: 'job.retry_exhausted',
+    run_completed: 'run.completed',
+    run_failed: 'run.failed',
+    run_stopped: 'run.stopped',
+  }
+  if (m6Types[event.type]) return m6Types[event.type]
   if (event.category === 'progress' && event.type === 'drafting') return 'assistant.drafting'
   if (event.category === 'message' && event.type === 'assistant_message') return 'assistant.message.completed'
-  if (event.category === 'final' && event.type === 'run_completed') return 'run.completed'
-  if (event.category === 'final' && event.type === 'run_stopped') return 'run.stopped'
-  if (event.category === 'final' && event.type === 'run_failed') return 'run.failed'
   return `${event.category}.${event.type}`
+}
+
+export function mapApiWorkerQueueDiagnostics(diagnostics: ApiWorkerQueueDiagnostics): WorkerQueueDiagnostics {
+  return {
+    queueStatus: diagnostics.queue_status,
+    workerStatus: diagnostics.worker_status,
+    queuedCount: diagnostics.queued_count,
+    leasedCount: diagnostics.leased_count,
+    staleCount: diagnostics.stale_count,
+    retryingCount: diagnostics.retrying_count,
+    deadCount: diagnostics.dead_count,
+    updatedAt: diagnostics.updated_at,
+  }
 }
 
 export function mapApiProviderCapability(provider: ApiProviderCapability): ProviderCapability {
@@ -214,7 +251,7 @@ export function mapApiRunEvent(event: ApiRunEvent): RunEvent {
       ? 'error'
       : isModelStream
         ? 'model-stream'
-        : type.startsWith('worker.') || type.startsWith('job.')
+        : type.startsWith('worker.') || type.startsWith('job.') || type.startsWith('pipeline.')
           ? 'worker-job'
           : 'run-lifecycle',
     severity: isError ? 'error' : type === 'model.delta' || type === 'assistant.drafting' || type === 'message.model_output_delta' ? 'progress' : 'info',
@@ -224,10 +261,14 @@ export function mapApiRunEvent(event: ApiRunEvent): RunEvent {
 }
 
 function statusFromApiEvent(event: ApiRunEvent): RunStatus {
-  if (event.type === 'run.recovering' || event.type === 'run_recovering') return 'recovering'
-  if (event.type === 'run.stopped' || event.type === 'run_stopped' || event.type === 'run_stopped') return 'stopped'
-  if (event.type === 'run.failed' || event.type === 'run_failed') return 'failed'
-  if (event.type === 'run.cancelled' || event.type === 'run_cancelled') return 'cancelled'
+  const type = canonicalRunEventType(event)
+  if (type === 'run.queued') return 'queued'
+  if (type === 'job.recovering' || type === 'run.recovering') return 'recovering'
+  if (type === 'run.stopping') return 'stopping'
+  if (type === 'run.stopped') return 'stopped'
+  if (type === 'run.failed' || type === 'job.retry_exhausted') return 'failed'
+  if (type === 'run.cancelled') return 'cancelled'
+  if (type === 'run.completed') return 'completed'
   if (event.category !== 'final') return event.category === 'error' ? 'failed' : 'running'
   return 'completed'
 }
@@ -292,6 +333,11 @@ export const realApiClient: ApiClient = {
       body: JSON.stringify({ provider_id: providerId }),
     })
     return mapApiProviderCapability(body.provider)
+  },
+
+  async getWorkerQueueDiagnostics() {
+    const body = await requestJSON<{ diagnostics: ApiWorkerQueueDiagnostics }>('/v1/diagnostics/worker-queue')
+    return mapApiWorkerQueueDiagnostics(body.diagnostics)
   },
 
   async startRun(threadId: string, input: { messageId?: string; source?: RunSource; providerId?: string; model?: string } = {}) {

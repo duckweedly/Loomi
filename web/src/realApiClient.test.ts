@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { createClientMessageID, mapApiProviderCapability, mapApiRun, mapApiRunEvent } from './realApiClient'
+import { createClientMessageID, mapApiProviderCapability, mapApiRun, mapApiRunEvent, mapApiWorkerQueueDiagnostics } from './realApiClient'
 
 describe('createClientMessageID', () => {
   test('does not rely on Date.now alone', () => {
@@ -15,6 +15,32 @@ describe('createClientMessageID', () => {
     } finally {
       Date.now = originalNow
     }
+  })
+})
+
+describe('M6 worker queue diagnostics mapping', () => {
+  test('maps worker queue diagnostics without credential fields', () => {
+    const diagnostics = mapApiWorkerQueueDiagnostics({
+      queue_status: 'degraded',
+      worker_status: 'degraded',
+      queued_count: 1,
+      leased_count: 2,
+      stale_count: 1,
+      retrying_count: 1,
+      dead_count: 1,
+      updated_at: '2026-05-24T10:00:00Z',
+    })
+
+    expect(diagnostics).toEqual({
+      queueStatus: 'degraded',
+      workerStatus: 'degraded',
+      queuedCount: 1,
+      leasedCount: 2,
+      staleCount: 1,
+      retryingCount: 1,
+      deadCount: 1,
+      updatedAt: '2026-05-24T10:00:00Z',
+    })
   })
 })
 
@@ -247,5 +273,18 @@ describe('M4 run mapping', () => {
     expect(backend.type).toBe('backend.unavailable')
     expect(backend.group).toBe('error')
     expect(backend.severity).toBe('error')
+  })
+
+  test('maps M6 queue worker and pipeline events into frontend statuses', () => {
+    const queued = mapApiRunEvent({ id: 'evt-queued', run_id: 'run-1', thread_id: 'thread-1', sequence: 1, category: 'lifecycle', type: 'run_queued', summary: 'Run queued', content: null, metadata: {}, created_at: '2026-05-24T00:00:00Z' })
+    const claimed = mapApiRunEvent({ id: 'evt-claimed', run_id: 'run-1', thread_id: 'thread-1', sequence: 2, category: 'progress', type: 'job_claimed', summary: 'Job claimed', content: null, metadata: {}, created_at: '2026-05-24T00:00:01Z' })
+    const pipeline = mapApiRunEvent({ id: 'evt-pipeline', run_id: 'run-1', thread_id: 'thread-1', sequence: 3, category: 'progress', type: 'pipeline_step_started', summary: 'Pipeline step started', content: null, metadata: { step: 'invoke_runtime' }, created_at: '2026-05-24T00:00:02Z' })
+    const stopped = mapApiRunEvent({ id: 'evt-stop', run_id: 'run-1', thread_id: 'thread-1', sequence: 4, category: 'progress', type: 'stop_requested', summary: 'Stop requested', content: null, metadata: {}, created_at: '2026-05-24T00:00:03Z' })
+
+    expect(queued).toMatchObject({ type: 'run.queued', status: 'queued', group: 'run-lifecycle' })
+    expect(claimed).toMatchObject({ type: 'job.claimed', status: 'running', group: 'worker-job' })
+    expect(pipeline).toMatchObject({ type: 'pipeline.step.started', status: 'running', group: 'worker-job' })
+    expect(pipeline.detail).toContain('invoke_runtime')
+    expect(stopped).toMatchObject({ type: 'run.stopping', status: 'stopping' })
   })
 })

@@ -36,9 +36,29 @@ Claude Code 项目内命令使用横线格式：
 
 `/speckit-implement` 按任务实现，并在必要时回到 spec 或 plan 修正前提。
 
-## 当前功能：M5 LLM Gateway
+## 当前功能：M6 Worker Job Pipeline
 
 当前 Spec Kit 功能目录：
+
+```text
+specs/008-worker-job-pipeline/
+```
+
+关键产物：
+
+- `spec.md`：定义 background worker、durable job queue、recovery、cancellation 和 diagnostics user stories。
+- `plan.md`：确定复用 M4/M5 run/event/SSE/message 基座，新增 database-backed job queue 和 local in-process worker。
+- `research.md`：记录 durable queue、worker lease、terminal idempotency、safe cancellation、minimal pipeline 和 diagnostics 决策。
+- `data-model.md`：定义 Background Job、Worker Lease、Pipeline Step、Queue Diagnostics 和扩展 Run 状态。
+- `contracts/http-m6.openapi.yaml`：定义 queued run creation、stop、event history/SSE 和 diagnostics 契约。
+- `contracts/worker-queue.md`：定义 claim、lease、retry、cancellation、completion 和 diagnostics 语义。
+- `contracts/pipeline-events.md`：定义 `run_queued`、`job_claimed`、pipeline、recovery、retry、stop 和 terminal events。
+- `quickstart.md`：记录 queued ack、reconnect、recovery、cancellation、diagnostics、frontend 和 rollback validation。
+- `tasks.md`：按 setup、foundation、US1-US4 和 polish 拆分并跟踪实现任务；当前已完成 US1 MVP。
+
+## 近期已完成：M5 LLM Gateway
+
+Spec Kit 功能目录：
 
 ```text
 specs/005-llm-gateway/

@@ -1,4 +1,4 @@
-export type RunStatus = 'pending' | 'running' | 'completed' | 'failed' | 'stopped' | 'cancelled' | 'retrying' | 'recovering'
+export type RunStatus = 'pending' | 'queued' | 'running' | 'recovering' | 'stopping' | 'completed' | 'failed' | 'stopped' | 'cancelled' | 'retrying'
 
 export type RuntimeStatus = RunStatus
 
@@ -42,6 +42,7 @@ export type ChatCanvasState =
   | 'backend-unavailable'
   | 'stopped'
   | 'recovering'
+  | 'stopping'
 
 export type Thread = {
   id: string
@@ -75,10 +76,20 @@ export type Message = {
 
 export type RuntimeEventType =
   | 'run.created'
+  | 'run.queued'
+  | 'run.stopping'
   | 'context.loading'
   | 'assistant.thinking'
   | 'assistant.drafting'
   | 'assistant.message.completed'
+  | 'job.claimed'
+  | 'job.recovering'
+  | 'job.retry_scheduled'
+  | 'job.attempt_failed'
+  | 'job.retry_exhausted'
+  | 'worker.lease_renewed'
+  | 'pipeline.step.started'
+  | 'pipeline.step.completed'
   | 'run.completed'
   | 'run.failed'
   | 'run.stopped'
@@ -109,7 +120,7 @@ export type RunEvent = Omit<RuntimeEvent, 'runId' | 'threadId'> & {
 
 export type AssistantDraft = {
   content: string
-  status: 'empty' | 'drafting' | 'pending' | 'streaming' | 'completed' | 'failed' | 'stopped' | 'recovering'
+  status: 'empty' | 'drafting' | 'pending' | 'queued' | 'streaming' | 'completed' | 'failed' | 'stopped' | 'recovering' | 'stopping'
   messageId?: string
   lastEventId?: string
 }
@@ -150,6 +161,21 @@ export type RuntimeScript = {
   steps: RuntimeScriptStep[]
   finalAssistantMessage?: string
   terminalStatus: Extract<RuntimeStatus, 'completed' | 'failed' | 'stopped'>
+}
+
+export type WorkerQueueStatus = 'ready' | 'paused' | 'unhealthy' | 'degraded'
+
+export type WorkerStatus = 'ready' | 'paused' | 'unhealthy' | 'degraded' | 'stopped'
+
+export type WorkerQueueDiagnostics = {
+  queueStatus: WorkerQueueStatus
+  workerStatus: WorkerStatus
+  queuedCount: number
+  leasedCount: number
+  staleCount: number
+  retryingCount: number
+  deadCount: number
+  updatedAt: string
 }
 
 export type ThreadRuntimeState = {

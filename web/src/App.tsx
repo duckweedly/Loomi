@@ -46,8 +46,8 @@ export default function App() {
     backendUnavailable: backendCapability === 'unavailable' || backendUnavailableAttempted || capabilitySignals.backendUnavailable,
     modelSetupMissing: capabilitySignals.modelSetupMissing,
     providerUnavailable: capabilitySignals.providerUnavailable,
-    activeRun: Boolean(run && (run.status === 'pending' || run.status === 'running' || run.status === 'retrying' || run.status === 'recovering')),
-    streamDisconnected: Boolean(run && (run.status === 'pending' || run.status === 'running' || run.status === 'retrying' || run.status === 'recovering') && (capabilitySignals.streamDisconnected || streamState === 'recoverable_error')),
+    activeRun: Boolean(run && (run.status === 'pending' || run.status === 'queued' || run.status === 'running' || run.status === 'retrying' || run.status === 'recovering' || run.status === 'stopping')),
+    streamDisconnected: Boolean(run && (run.status === 'pending' || run.status === 'queued' || run.status === 'running' || run.status === 'retrying' || run.status === 'recovering' || run.status === 'stopping') && (capabilitySignals.streamDisconnected || streamState === 'recoverable_error')),
     runRecovering: run?.status === 'recovering' || run?.assistantDraft?.status === 'recovering',
   })
   const workspaceStyle = { '--sidebar-width': `${shell.sidebarWidth}px` } as CSSProperties

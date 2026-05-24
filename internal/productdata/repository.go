@@ -291,14 +291,15 @@ func (r *PostgresRepository) StartRun(ctx context.Context, ident identity.LocalI
 		return Run{}, err
 	}
 	runID := NewRunID()
-	run, err := scanRun(tx.QueryRow(ctx, `insert into runs (id, thread_id, user_id, status, source, title) values ($1, $2, $3, 'running', $4, $5) returning id, thread_id, user_id, status, source, title, created_at, updated_at, completed_at, error_code, error_message`, runID, threadID, user.ID, source, TitleForRunSource(source)))
+	run, err := scanRun(tx.QueryRow(ctx, `insert into runs (id, thread_id, user_id, status, source, title) values ($1, $2, $3, 'queued', $4, $5) returning id, thread_id, user_id, status, source, title, created_at, updated_at, completed_at, stop_requested_at, error_code, error_message`, runID, threadID, user.ID, source, TitleForRunSource(source)))
 	if err != nil {
 		if strings.Contains(err.Error(), "runs_one_active_per_thread_idx") {
 			return Run{}, NewError(CodeActiveRunExists, "Thread already has an active run.")
 		}
 		return Run{}, err
 	}
-	metadata := map[string]any{"source": string(source)}
+	jobID := NewBackgroundJobID()
+	metadata := map[string]any{"source": string(source), "job_id": jobID}
 	if source == RunSourceLocalSimulated {
 		metadata["script_name"] = NormalizeScriptName(input.ScriptName)
 	} else {
@@ -308,6 +309,12 @@ func (r *PostgresRepository) StartRun(ctx context.Context, ident identity.LocalI
 	}
 	_, err = scanRunEvent(tx.QueryRow(ctx, `insert into run_events (id, run_id, thread_id, user_id, sequence, category, type, summary, metadata) values ($1, $2, $3, $4, 1, 'lifecycle', 'run_created', 'Run created', $5) returning id, run_id, thread_id, user_id, sequence, category, type, summary, content, metadata, created_at`, NewRunEventID(), run.ID, threadID, user.ID, mustJSON(RedactEventMetadata(metadata))))
 	if err != nil {
+		return Run{}, err
+	}
+	if _, err := scanRunEvent(tx.QueryRow(ctx, `insert into run_events (id, run_id, thread_id, user_id, sequence, category, type, summary, metadata) values ($1, $2, $3, $4, 2, 'lifecycle', 'run_queued', 'Run queued', $5) returning id, run_id, thread_id, user_id, sequence, category, type, summary, content, metadata, created_at`, NewRunEventID(), run.ID, threadID, user.ID, mustJSON(RedactEventMetadata(map[string]any{"job_id": jobID})))); err != nil {
+		return Run{}, err
+	}
+	if _, err := tx.Exec(ctx, `insert into background_jobs (id, run_id, thread_id, user_id, kind, status, max_attempts, metadata) values ($1, $2, $3, $4, 'run_execution', 'queued', 3, $5)`, jobID, run.ID, threadID, user.ID, mustJSON(RedactEventMetadata(metadata))); err != nil {
 		return Run{}, err
 	}
 	if _, err := tx.Exec(ctx, `update threads set updated_at=now() where id=$1 and user_id=$2`, threadID, user.ID); err != nil {
@@ -321,7 +328,7 @@ func (r *PostgresRepository) GetRun(ctx context.Context, ident identity.LocalIde
 	if err != nil {
 		return Run{}, err
 	}
-	run, err := scanRun(r.Pool.QueryRow(ctx, `select id, thread_id, user_id, status, source, title, created_at, updated_at, completed_at, error_code, error_message from runs where id=$1 and user_id=$2`, runID, user.ID))
+	run, err := scanRun(r.Pool.QueryRow(ctx, `select id, thread_id, user_id, status, source, title, created_at, updated_at, completed_at, stop_requested_at, error_code, error_message from runs where id=$1 and user_id=$2`, runID, user.ID))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Run{}, NewError(CodeRunNotFound, "Run not found.")
 	}
@@ -333,7 +340,7 @@ func (r *PostgresRepository) GetCurrentRun(ctx context.Context, ident identity.L
 	if err != nil {
 		return Run{}, err
 	}
-	run, err := scanRun(r.Pool.QueryRow(ctx, `select id, thread_id, user_id, status, source, title, created_at, updated_at, completed_at, error_code, error_message from runs where thread_id=$1 and user_id=$2 order by case when status in ('pending','running') then 0 else 1 end, updated_at desc, id desc limit 1`, threadID, user.ID))
+	run, err := scanRun(r.Pool.QueryRow(ctx, `select id, thread_id, user_id, status, source, title, created_at, updated_at, completed_at, stop_requested_at, error_code, error_message from runs where thread_id=$1 and user_id=$2 order by case when status in ('pending','running') then 0 else 1 end, updated_at desc, id desc limit 1`, threadID, user.ID))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Run{}, NewError(CodeRunNotFound, "Run not found.")
 	}
@@ -382,7 +389,7 @@ func (r *PostgresRepository) AppendRunEvent(ctx context.Context, ident identity.
 		return RunEvent{}, err
 	}
 	defer tx.Rollback(ctx)
-	run, err := scanRun(tx.QueryRow(ctx, `select id, thread_id, user_id, status, source, title, created_at, updated_at, completed_at, error_code, error_message from runs where id=$1 and user_id=$2 for update`, runID, user.ID))
+	run, err := scanRun(tx.QueryRow(ctx, `select id, thread_id, user_id, status, source, title, created_at, updated_at, completed_at, stop_requested_at, error_code, error_message from runs where id=$1 and user_id=$2 for update`, runID, user.ID))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return RunEvent{}, NewError(CodeRunNotFound, "Run not found.")
 	}
@@ -420,6 +427,231 @@ func (r *PostgresRepository) AppendRunEvent(ctx context.Context, ident identity.
 	return event, tx.Commit(ctx)
 }
 
+func (r *PostgresRepository) ClaimBackgroundJob(ctx context.Context, ident identity.LocalIdentity, input ClaimBackgroundJobInput) (BackgroundJob, Run, bool, error) {
+	user, err := r.ensureUser(ctx, ident)
+	if err != nil {
+		return BackgroundJob{}, Run{}, false, err
+	}
+	workerID := strings.TrimSpace(input.WorkerID)
+	if workerID == "" {
+		return BackgroundJob{}, Run{}, false, NewError(CodeInvalidRequest, "Worker id is required.")
+	}
+	leaseSeconds := input.LeaseSeconds
+	if leaseSeconds <= 0 {
+		leaseSeconds = 30
+	}
+	tx, err := r.Pool.Begin(ctx)
+	if err != nil {
+		return BackgroundJob{}, Run{}, false, err
+	}
+	defer tx.Rollback(ctx)
+	job, err := scanBackgroundJob(tx.QueryRow(ctx, `select id, run_id, thread_id, user_id, kind, status, priority, attempt_count, max_attempts, scheduled_at, leased_by, lease_expires_at, ownership_version, metadata, last_error_code, last_error_message, created_at, updated_at from background_jobs where user_id=$1 and status='queued' and scheduled_at<=now() order by priority asc, created_at asc, id asc for update skip locked limit 1`, user.ID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return BackgroundJob{}, Run{}, false, nil
+	}
+	if err != nil {
+		return BackgroundJob{}, Run{}, false, err
+	}
+	run, err := scanRun(tx.QueryRow(ctx, `select id, thread_id, user_id, status, source, title, created_at, updated_at, completed_at, stop_requested_at, error_code, error_message from runs where id=$1 and user_id=$2 for update`, job.RunID, user.ID))
+	if err != nil {
+		return BackgroundJob{}, Run{}, false, err
+	}
+	if IsRunTerminal(run.Status) || run.StopRequestedAt != nil {
+		cancelled, err := scanBackgroundJob(tx.QueryRow(ctx, `update background_jobs set status='cancelled', updated_at=now() where id=$1 returning id, run_id, thread_id, user_id, kind, status, priority, attempt_count, max_attempts, scheduled_at, leased_by, lease_expires_at, ownership_version, metadata, last_error_code, last_error_message, created_at, updated_at`, job.ID))
+		if err != nil {
+			return BackgroundJob{}, Run{}, false, err
+		}
+		return cancelled, run, false, tx.Commit(ctx)
+	}
+	leased, err := scanBackgroundJob(tx.QueryRow(ctx, `update background_jobs set status='leased', leased_by=$1, lease_expires_at=now() + ($2 || ' seconds')::interval, attempt_count=attempt_count+1, ownership_version=ownership_version+1, updated_at=now() where id=$3 returning id, run_id, thread_id, user_id, kind, status, priority, attempt_count, max_attempts, scheduled_at, leased_by, lease_expires_at, ownership_version, metadata, last_error_code, last_error_message, created_at, updated_at`, workerID, leaseSeconds, job.ID))
+	if err != nil {
+		return BackgroundJob{}, Run{}, false, err
+	}
+	run, err = scanRun(tx.QueryRow(ctx, `update runs set status='running', updated_at=now() where id=$1 and user_id=$2 returning id, thread_id, user_id, status, source, title, created_at, updated_at, completed_at, stop_requested_at, error_code, error_message`, run.ID, user.ID))
+	if err != nil {
+		return BackgroundJob{}, Run{}, false, err
+	}
+	if _, err := insertRunEvent(ctx, tx, run, RunEventCategoryProgress, EventJobClaimed, "Job claimed", nil, map[string]any{"job_id": leased.ID, "worker_id": workerID, "attempt": leased.AttemptCount}); err != nil {
+		return BackgroundJob{}, Run{}, false, err
+	}
+	return leased, run, true, tx.Commit(ctx)
+}
+
+func (r *PostgresRepository) RenewBackgroundJobLease(ctx context.Context, ident identity.LocalIdentity, input RenewBackgroundJobLeaseInput) (BackgroundJob, bool, error) {
+	user, err := r.ensureUser(ctx, ident)
+	if err != nil {
+		return BackgroundJob{}, false, err
+	}
+	leaseSeconds := input.LeaseSeconds
+	if leaseSeconds <= 0 {
+		leaseSeconds = 30
+	}
+	job, err := scanBackgroundJob(r.Pool.QueryRow(ctx, `update background_jobs set lease_expires_at=now() + ($1 || ' seconds')::interval, updated_at=now() where id=$2 and user_id=$3 and leased_by=$4 and ownership_version=$5 and status='leased' returning id, run_id, thread_id, user_id, kind, status, priority, attempt_count, max_attempts, scheduled_at, leased_by, lease_expires_at, ownership_version, metadata, last_error_code, last_error_message, created_at, updated_at`, leaseSeconds, input.JobID, user.ID, strings.TrimSpace(input.WorkerID), input.OwnershipVersion))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return BackgroundJob{}, false, nil
+	}
+	if err != nil {
+		return BackgroundJob{}, false, err
+	}
+	run, err := r.GetRun(ctx, ident, job.RunID)
+	if err == nil && !IsRunTerminal(run.Status) {
+		_, _ = r.AppendRunEvent(ctx, ident, job.RunID, AppendRunEventInput{Category: RunEventCategoryProgress, Type: EventLeaseRenewed, Summary: "Lease renewed", Metadata: map[string]any{"job_id": job.ID, "worker_id": strings.TrimSpace(input.WorkerID), "ownership_version": input.OwnershipVersion}})
+	}
+	return job, true, nil
+}
+
+func (r *PostgresRepository) RecoverBackgroundJobs(ctx context.Context, ident identity.LocalIdentity, input RecoverBackgroundJobsInput) ([]BackgroundJobRecovery, error) {
+	user, err := r.ensureUser(ctx, ident)
+	if err != nil {
+		return nil, err
+	}
+	limit := input.Limit
+	if limit <= 0 {
+		limit = 10
+	}
+	code := strings.TrimSpace(input.ErrorCode)
+	if code == "" {
+		code = "worker_lease_expired"
+	}
+	message := RedactEventText(strings.TrimSpace(input.ErrorMessage))
+	if message == "" {
+		message = "Worker lease expired."
+	}
+	tx, err := r.Pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+	rows, err := tx.Query(ctx, `select id, run_id, thread_id, user_id, kind, status, priority, attempt_count, max_attempts, scheduled_at, leased_by, lease_expires_at, ownership_version, metadata, last_error_code, last_error_message, created_at, updated_at from background_jobs where user_id=$1 and status='leased' and lease_expires_at < now() order by lease_expires_at asc, id asc for update skip locked limit $2`, user.ID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	jobs := []BackgroundJob{}
+	for rows.Next() {
+		job, err := scanBackgroundJob(rows)
+		if err != nil {
+			return nil, err
+		}
+		jobs = append(jobs, job)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	recoveries := []BackgroundJobRecovery{}
+	for _, job := range jobs {
+		run, err := scanRun(tx.QueryRow(ctx, `select id, thread_id, user_id, status, source, title, created_at, updated_at, completed_at, stop_requested_at, error_code, error_message from runs where id=$1 and user_id=$2 for update`, job.RunID, user.ID))
+		if err != nil || IsRunTerminal(run.Status) {
+			continue
+		}
+		previousWorkerID := ""
+		if job.LeasedBy != nil {
+			previousWorkerID = *job.LeasedBy
+		}
+		if job.AttemptCount >= job.MaxAttempts {
+			dead, err := scanBackgroundJob(tx.QueryRow(ctx, `update background_jobs set status='dead', leased_by=null, lease_expires_at=null, last_error_code=$1, last_error_message=$2, updated_at=now() where id=$3 returning id, run_id, thread_id, user_id, kind, status, priority, attempt_count, max_attempts, scheduled_at, leased_by, lease_expires_at, ownership_version, metadata, last_error_code, last_error_message, created_at, updated_at`, code, message, job.ID))
+			if err != nil {
+				return nil, err
+			}
+			failed, err := scanRun(tx.QueryRow(ctx, `update runs set status='failed', completed_at=now(), updated_at=now(), error_code=$1, error_message=$2 where id=$3 and user_id=$4 returning id, thread_id, user_id, status, source, title, created_at, updated_at, completed_at, stop_requested_at, error_code, error_message`, code, message, run.ID, user.ID))
+			if err != nil {
+				return nil, err
+			}
+			exhausted, err := insertRunEvent(ctx, tx, failed, RunEventCategoryError, EventJobRetryExhausted, message, nil, map[string]any{"job_id": dead.ID, "attempt_count": dead.AttemptCount, "error_code": code})
+			if err != nil {
+				return nil, err
+			}
+			final, err := insertRunEvent(ctx, tx, failed, RunEventCategoryFinal, EventRunFailed, message, nil, map[string]any{"job_id": dead.ID, "error_code": code})
+			if err != nil {
+				return nil, err
+			}
+			recoveries = append(recoveries, BackgroundJobRecovery{Job: dead, Run: failed, Events: []RunEvent{exhausted, final}, Exhausted: true})
+			continue
+		}
+		queued, err := scanBackgroundJob(tx.QueryRow(ctx, `update background_jobs set status='queued', leased_by=null, lease_expires_at=null, last_error_code=$1, last_error_message=$2, updated_at=now() where id=$3 returning id, run_id, thread_id, user_id, kind, status, priority, attempt_count, max_attempts, scheduled_at, leased_by, lease_expires_at, ownership_version, metadata, last_error_code, last_error_message, created_at, updated_at`, code, message, job.ID))
+		if err != nil {
+			return nil, err
+		}
+		recoveringRun, err := scanRun(tx.QueryRow(ctx, `update runs set status='recovering', updated_at=now() where id=$1 and user_id=$2 returning id, thread_id, user_id, status, source, title, created_at, updated_at, completed_at, stop_requested_at, error_code, error_message`, run.ID, user.ID))
+		if err != nil {
+			return nil, err
+		}
+		recovering, err := insertRunEvent(ctx, tx, recoveringRun, RunEventCategoryProgress, EventJobRecovering, "Job recovering", nil, map[string]any{"job_id": queued.ID, "previous_worker_id": previousWorkerID, "attempt": queued.AttemptCount})
+		if err != nil {
+			return nil, err
+		}
+		retry, err := insertRunEvent(ctx, tx, recoveringRun, RunEventCategoryProgress, EventJobRetryScheduled, "Job retry scheduled", nil, map[string]any{"job_id": queued.ID, "next_attempt": queued.AttemptCount + 1})
+		if err != nil {
+			return nil, err
+		}
+		recoveries = append(recoveries, BackgroundJobRecovery{Job: queued, Run: recoveringRun, Events: []RunEvent{recovering, retry}})
+	}
+	return recoveries, tx.Commit(ctx)
+}
+
+func (r *PostgresRepository) CompleteBackgroundJob(ctx context.Context, ident identity.LocalIdentity, input CompleteBackgroundJobInput) (BackgroundJob, bool, error) {
+	user, err := r.ensureUser(ctx, ident)
+	if err != nil {
+		return BackgroundJob{}, false, err
+	}
+	job, err := scanBackgroundJob(r.Pool.QueryRow(ctx, `update background_jobs set status='completed', updated_at=now() where id=$1 and user_id=$2 and leased_by=$3 and ownership_version=$4 and status='leased' returning id, run_id, thread_id, user_id, kind, status, priority, attempt_count, max_attempts, scheduled_at, leased_by, lease_expires_at, ownership_version, metadata, last_error_code, last_error_message, created_at, updated_at`, input.JobID, user.ID, strings.TrimSpace(input.WorkerID), input.OwnershipVersion))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return BackgroundJob{}, false, nil
+	}
+	return job, true, err
+}
+
+func (r *PostgresRepository) FailBackgroundJob(ctx context.Context, ident identity.LocalIdentity, input FailBackgroundJobInput) (BackgroundJob, bool, error) {
+	user, err := r.ensureUser(ctx, ident)
+	if err != nil {
+		return BackgroundJob{}, false, err
+	}
+	code := strings.TrimSpace(input.ErrorCode)
+	message := RedactEventText(strings.TrimSpace(input.ErrorMessage))
+	job, err := scanBackgroundJob(r.Pool.QueryRow(ctx, `update background_jobs set status='failed', last_error_code=$1, last_error_message=$2, updated_at=now() where id=$3 and user_id=$4 and leased_by=$5 and ownership_version=$6 and status='leased' returning id, run_id, thread_id, user_id, kind, status, priority, attempt_count, max_attempts, scheduled_at, leased_by, lease_expires_at, ownership_version, metadata, last_error_code, last_error_message, created_at, updated_at`, code, message, input.JobID, user.ID, strings.TrimSpace(input.WorkerID), input.OwnershipVersion))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return BackgroundJob{}, false, nil
+	}
+	if err != nil {
+		return BackgroundJob{}, false, err
+	}
+	_, _ = r.AppendRunEvent(ctx, ident, job.RunID, AppendRunEventInput{Category: RunEventCategoryError, Type: EventJobAttemptFailed, Summary: message, Metadata: map[string]any{"job_id": job.ID, "attempt": job.AttemptCount, "error_code": code}, ErrorCode: code, ErrorMessage: message})
+	_, _ = r.AppendRunEvent(ctx, ident, job.RunID, AppendRunEventInput{Category: RunEventCategoryFinal, Type: EventRunFailed, Summary: message, Metadata: map[string]any{"job_id": job.ID, "error_code": code}, ErrorCode: code, ErrorMessage: message})
+	return job, true, nil
+}
+
+func (r *PostgresRepository) WorkerQueueDiagnostics(ctx context.Context, ident identity.LocalIdentity) (WorkerQueueDiagnostics, error) {
+	user, err := r.ensureUser(ctx, ident)
+	if err != nil {
+		return WorkerQueueDiagnostics{}, err
+	}
+	diagnostics := WorkerQueueDiagnostics{QueueStatus: WorkerQueueStatusReady, WorkerStatus: WorkerStatusReady}
+	row := r.Pool.QueryRow(ctx, `select
+		count(*) filter (where status='queued'),
+		count(*) filter (where status='leased'),
+		count(*) filter (where status='leased' and lease_expires_at < now()),
+		count(*) filter (where status='retrying'),
+		count(*) filter (where status='dead'),
+		now()
+		from background_jobs where user_id=$1`, user.ID)
+	if err := row.Scan(&diagnostics.QueuedCount, &diagnostics.LeasedCount, &diagnostics.StaleCount, &diagnostics.RetryingCount, &diagnostics.DeadCount, &diagnostics.UpdatedAt); err != nil {
+		return WorkerQueueDiagnostics{}, err
+	}
+	if diagnostics.StaleCount > 0 || diagnostics.RetryingCount > 0 || diagnostics.DeadCount > 0 {
+		diagnostics.QueueStatus = WorkerQueueStatusDegraded
+		diagnostics.WorkerStatus = WorkerStatusDegraded
+	}
+	return diagnostics, nil
+}
+
+func insertRunEvent(ctx context.Context, tx pgx.Tx, run Run, category RunEventCategory, eventType string, summary string, content *string, metadata map[string]any) (RunEvent, error) {
+	var nextSequence int
+	if err := tx.QueryRow(ctx, `select coalesce(max(sequence), 0) + 1 from run_events where run_id=$1`, run.ID).Scan(&nextSequence); err != nil {
+		return RunEvent{}, err
+	}
+	return scanRunEvent(tx.QueryRow(ctx, `insert into run_events (id, run_id, thread_id, user_id, sequence, category, type, summary, content, metadata) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) returning id, run_id, thread_id, user_id, sequence, category, type, summary, content, metadata, created_at`, NewRunEventID(), run.ID, run.ThreadID, run.UserID, nextSequence, category, eventType, RedactEventText(summary), content, mustJSON(RedactEventMetadata(metadata))))
+}
+
 func (r *PostgresRepository) StopRun(ctx context.Context, ident identity.LocalIdentity, runID string) (StopRunOutput, error) {
 	user, err := r.ensureUser(ctx, ident)
 	if err != nil {
@@ -430,7 +662,7 @@ func (r *PostgresRepository) StopRun(ctx context.Context, ident identity.LocalId
 		return StopRunOutput{}, err
 	}
 	defer tx.Rollback(ctx)
-	run, err := scanRun(tx.QueryRow(ctx, `select id, thread_id, user_id, status, source, title, created_at, updated_at, completed_at, error_code, error_message from runs where id=$1 and user_id=$2 for update`, runID, user.ID))
+	run, err := scanRun(tx.QueryRow(ctx, `select id, thread_id, user_id, status, source, title, created_at, updated_at, completed_at, stop_requested_at, error_code, error_message from runs where id=$1 and user_id=$2 for update`, runID, user.ID))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return StopRunOutput{}, NewError(CodeRunNotFound, "Run not found.")
 	}
@@ -440,19 +672,18 @@ func (r *PostgresRepository) StopRun(ctx context.Context, ident identity.LocalId
 	if IsRunTerminal(run.Status) {
 		return StopRunOutput{Run: run, Result: StopRunResultAlreadyTerminal}, nil
 	}
-	var nextSequence int
-	if err := tx.QueryRow(ctx, `select coalesce(max(sequence), 0) + 1 from run_events where run_id=$1`, run.ID).Scan(&nextSequence); err != nil {
+	if _, err := tx.Exec(ctx, `update background_jobs set status='cancelled', updated_at=now() where run_id=$1 and user_id=$2 and status in ('queued', 'leased', 'retrying')`, run.ID, user.ID); err != nil {
 		return StopRunOutput{}, err
 	}
-	lifecycle, err := scanRunEvent(tx.QueryRow(ctx, `insert into run_events (id, run_id, thread_id, user_id, sequence, category, type, summary, metadata) values ($1, $2, $3, $4, $5, 'lifecycle', 'run_stopped', 'Run stopped', '{}'::jsonb) returning id, run_id, thread_id, user_id, sequence, category, type, summary, content, metadata, created_at`, NewRunEventID(), run.ID, run.ThreadID, user.ID, nextSequence))
+	stopped, err := scanRun(tx.QueryRow(ctx, `update runs set status='stopped', stop_requested_at=coalesce(stop_requested_at, now()), updated_at=now(), completed_at=now() where id=$1 and user_id=$2 returning id, thread_id, user_id, status, source, title, created_at, updated_at, completed_at, stop_requested_at, error_code, error_message`, run.ID, user.ID))
 	if err != nil {
 		return StopRunOutput{}, err
 	}
-	final, err := scanRunEvent(tx.QueryRow(ctx, `insert into run_events (id, run_id, thread_id, user_id, sequence, category, type, summary, metadata) values ($1, $2, $3, $4, $5, 'final', 'run_stopped', 'Run stopped', '{}'::jsonb) returning id, run_id, thread_id, user_id, sequence, category, type, summary, content, metadata, created_at`, NewRunEventID(), run.ID, run.ThreadID, user.ID, nextSequence+1))
+	lifecycle, err := insertRunEvent(ctx, tx, stopped, RunEventCategoryProgress, EventStopRequested, "Stop requested", nil, map[string]any{})
 	if err != nil {
 		return StopRunOutput{}, err
 	}
-	stopped, err := scanRun(tx.QueryRow(ctx, `update runs set status='stopped', updated_at=now(), completed_at=now() where id=$1 and user_id=$2 returning id, thread_id, user_id, status, source, title, created_at, updated_at, completed_at, error_code, error_message`, run.ID, user.ID))
+	final, err := insertRunEvent(ctx, tx, stopped, RunEventCategoryFinal, EventRunStopped, "Run stopped", nil, map[string]any{})
 	if err != nil {
 		return StopRunOutput{}, err
 	}
@@ -482,10 +713,25 @@ func scanThread(row scanner) (Thread, error) {
 
 func scanRun(row scanner) (Run, error) {
 	var run Run
-	if err := row.Scan(&run.ID, &run.ThreadID, &run.UserID, &run.Status, &run.Source, &run.Title, &run.CreatedAt, &run.UpdatedAt, &run.CompletedAt, &run.ErrorCode, &run.ErrorMessage); err != nil {
+	if err := row.Scan(&run.ID, &run.ThreadID, &run.UserID, &run.Status, &run.Source, &run.Title, &run.CreatedAt, &run.UpdatedAt, &run.CompletedAt, &run.StopRequestedAt, &run.ErrorCode, &run.ErrorMessage); err != nil {
 		return Run{}, err
 	}
 	return run, nil
+}
+
+func scanBackgroundJob(row scanner) (BackgroundJob, error) {
+	var job BackgroundJob
+	var rawMetadata []byte
+	if err := row.Scan(&job.ID, &job.RunID, &job.ThreadID, &job.UserID, &job.Kind, &job.Status, &job.Priority, &job.AttemptCount, &job.MaxAttempts, &job.ScheduledAt, &job.LeasedBy, &job.LeaseExpiresAt, &job.OwnershipVersion, &rawMetadata, &job.LastErrorCode, &job.LastError, &job.CreatedAt, &job.UpdatedAt); err != nil {
+		return BackgroundJob{}, err
+	}
+	if len(rawMetadata) > 0 {
+		_ = json.Unmarshal(rawMetadata, &job.Metadata)
+	}
+	if job.Metadata == nil {
+		job.Metadata = map[string]any{}
+	}
+	return job, nil
 }
 
 func scanRunEvent(row scanner) (RunEvent, error) {
