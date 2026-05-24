@@ -76,32 +76,79 @@ func TestMessageHandlers(t *testing.T) {
 
 func TestAPIPreflightAllowsBrowserWrites(t *testing.T) {
 	srv := NewServerWithProduct(config.Config{AppEnv: "local"}, fakeChecker{}, productdata.NewMemoryService())
-	req := httptest.NewRequest(http.MethodOptions, "/v1/threads", nil)
-	req.Header.Set("Origin", "http://127.0.0.1:5173")
-	req.Header.Set("Access-Control-Request-Method", http.MethodPost)
-	req.Header.Set("Access-Control-Request-Headers", "content-type")
-	res := httptest.NewRecorder()
+	for _, origin := range []string{"http://127.0.0.1:5173", "http://localhost:5173"} {
+		t.Run(origin, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodOptions, "/v1/threads", nil)
+			req.Header.Set("Origin", origin)
+			req.Header.Set("Access-Control-Request-Method", http.MethodPost)
+			req.Header.Set("Access-Control-Request-Headers", "content-type")
+			res := httptest.NewRecorder()
 
-	srv.ServeHTTP(res, req)
+			srv.ServeHTTP(res, req)
 
-	if res.Code != http.StatusNoContent {
-		t.Fatalf("status = %d body=%s", res.Code, res.Body.String())
-	}
-	if res.Header().Get("Access-Control-Allow-Origin") != "http://127.0.0.1:5173" {
-		t.Fatalf("allow origin = %q", res.Header().Get("Access-Control-Allow-Origin"))
-	}
-	if !strings.Contains(res.Header().Get("Access-Control-Allow-Methods"), http.MethodPatch) {
-		t.Fatalf("allow methods = %q", res.Header().Get("Access-Control-Allow-Methods"))
-	}
-	if !strings.Contains(strings.ToLower(res.Header().Get("Access-Control-Allow-Headers")), "content-type") {
-		t.Fatalf("allow headers = %q", res.Header().Get("Access-Control-Allow-Headers"))
+			if res.Code != http.StatusNoContent {
+				t.Fatalf("status = %d body=%s", res.Code, res.Body.String())
+			}
+			if res.Header().Get("Access-Control-Allow-Origin") != origin {
+				t.Fatalf("allow origin = %q", res.Header().Get("Access-Control-Allow-Origin"))
+			}
+			if res.Header().Get("Access-Control-Allow-Methods") != "GET, POST, PATCH, OPTIONS" {
+				t.Fatalf("allow methods = %q", res.Header().Get("Access-Control-Allow-Methods"))
+			}
+			if res.Header().Get("Access-Control-Allow-Headers") != "Content-Type" {
+				t.Fatalf("allow headers = %q", res.Header().Get("Access-Control-Allow-Headers"))
+			}
+			if res.Header().Get("Access-Control-Allow-Credentials") != "" {
+				t.Fatalf("allow credentials = %q", res.Header().Get("Access-Control-Allow-Credentials"))
+			}
+		})
 	}
 }
 
 func TestAPIPreflightRejectsNonLocalOrigin(t *testing.T) {
 	srv := NewServerWithProduct(config.Config{AppEnv: "local"}, fakeChecker{}, productdata.NewMemoryService())
+	for _, origin := range []string{"https://example.com", "http://127.0.0.1:5174", "http://localhost:3000"} {
+		t.Run(origin, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodOptions, "/v1/threads", nil)
+			req.Header.Set("Origin", origin)
+			req.Header.Set("Access-Control-Request-Method", http.MethodPost)
+			res := httptest.NewRecorder()
+
+			srv.ServeHTTP(res, req)
+
+			if res.Code != http.StatusNoContent {
+				t.Fatalf("status = %d body=%s", res.Code, res.Body.String())
+			}
+			if res.Header().Get("Access-Control-Allow-Origin") != "" {
+				t.Fatalf("allow origin = %q", res.Header().Get("Access-Control-Allow-Origin"))
+			}
+		})
+	}
+}
+
+func TestAPICORSHeadersOnNormalRequest(t *testing.T) {
+	srv := NewServerWithProduct(config.Config{AppEnv: "local"}, fakeChecker{}, productdata.NewMemoryService())
+	req := httptest.NewRequest(http.MethodGet, "/v1/threads", nil)
+	req.Header.Set("Origin", "http://localhost:5173")
+	res := httptest.NewRecorder()
+
+	srv.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", res.Code, res.Body.String())
+	}
+	if res.Header().Get("Access-Control-Allow-Origin") != "http://localhost:5173" {
+		t.Fatalf("allow origin = %q", res.Header().Get("Access-Control-Allow-Origin"))
+	}
+	if res.Header().Get("Access-Control-Allow-Credentials") != "" {
+		t.Fatalf("allow credentials = %q", res.Header().Get("Access-Control-Allow-Credentials"))
+	}
+}
+
+func TestAPICORSDisabledOutsideLocalDev(t *testing.T) {
+	srv := NewServerWithProduct(config.Config{AppEnv: "test"}, fakeChecker{}, productdata.NewMemoryService())
 	req := httptest.NewRequest(http.MethodOptions, "/v1/threads", nil)
-	req.Header.Set("Origin", "https://example.com")
+	req.Header.Set("Origin", "http://127.0.0.1:5173")
 	req.Header.Set("Access-Control-Request-Method", http.MethodPost)
 	res := httptest.NewRecorder()
 

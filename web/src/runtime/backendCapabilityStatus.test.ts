@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
-import type { RunEvent } from '../domain'
-import { deriveBackendCapabilityStatus, deriveCapabilitySignalFromEvent, getBackendCapabilityCopy } from './backendCapabilityStatus'
+import type { ProviderCapability, RunEvent } from '../domain'
+import { deriveBackendCapabilityStatus, deriveCapabilitySignalFromEvent, getBackendCapabilityCopy, shouldShowProviderUnavailableWarning } from './backendCapabilityStatus'
 
 describe('backend capability status', () => {
   test('applies capability precedence from recovering through mock', () => {
@@ -38,5 +38,27 @@ describe('backend capability status', () => {
     expect(deriveCapabilitySignalFromEvent({ ...base, type: 'model.setup_missing', detail: 'setup missing' })).toEqual({ modelSetupMissing: true })
     expect(deriveCapabilitySignalFromEvent({ ...base, type: 'backend.unavailable', detail: 'backend unavailable' })).toEqual({ backendUnavailable: true })
     expect(deriveCapabilitySignalFromEvent({ ...base, type: 'run.recovering', status: 'recovering' })).toEqual({ runRecovering: true })
+  })
+})
+
+describe('localized backend capability copy', () => {
+  test('returns Chinese capability titles and details when requested', () => {
+    expect(getBackendCapabilityCopy('mock', 'zh').detail).toContain('本地行为')
+    expect(getBackendCapabilityCopy('model-gateway', 'zh').title).toBe('模型网关')
+    expect(getBackendCapabilityCopy('backend-unavailable', 'zh').detail).toContain('后端')
+    expect(getBackendCapabilityCopy('stream-disconnected', 'zh').title).toBe('流已断开')
+  })
+})
+
+const availableProvider: ProviderCapability = { id: 'custom', family: 'openai_compatible', model: 'gpt-5.5', status: 'available' }
+const unavailableProvider: ProviderCapability = { ...availableProvider, status: 'unavailable' }
+const misconfiguredProvider: ProviderCapability = { ...availableProvider, status: 'misconfigured' }
+
+describe('provider availability warning', () => {
+  test('warns only for real API provider lists without an available provider', () => {
+    expect(shouldShowProviderUnavailableWarning('real_api', [])).toBe(true)
+    expect(shouldShowProviderUnavailableWarning('real_api', [unavailableProvider, misconfiguredProvider])).toBe(true)
+    expect(shouldShowProviderUnavailableWarning('real_api', [unavailableProvider, availableProvider])).toBe(false)
+    expect(shouldShowProviderUnavailableWarning('mock', [])).toBe(false)
   })
 })

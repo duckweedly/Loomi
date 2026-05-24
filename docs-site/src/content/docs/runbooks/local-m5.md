@@ -51,6 +51,14 @@ curl -s -X POST http://127.0.0.1:8080/v1/model-providers/check \
   -d '{"provider_id":"custom"}'
 ```
 
+For browser smoke from the Vite dev server, start the API with `APP_ENV=local` and the web app with:
+
+```bash
+VITE_LOOMI_API_BASE_URL=http://127.0.0.1:8080 bun run --cwd web dev
+```
+
+The API allows CORS only for `http://127.0.0.1:5173` and `http://localhost:5173` in local/development mode. Preflight supports `GET`, `POST`, `PATCH`, `OPTIONS`, and `Content-Type` without wildcard credentials.
+
 Expected:
 
 - available providers return redacted id/family/model/base URL

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Check, ChevronDown, FileText, Folder, Globe2, Minus } from 'lucide-react'
 import type { Run, RuntimeScriptId } from '../domain'
+import type { Locale } from '../i18n'
 import type { BackendCapabilityStatus } from '../runtime/backendCapabilityStatus'
 import { getBackendCapabilityCopy } from '../runtime/backendCapabilityStatus'
 import { groupRuntimeEvents } from '../runtime/runtimeEventGroups'
@@ -13,6 +14,7 @@ type Props = {
   onStopRun?: () => void
   selectedRuntimeScript?: RuntimeScriptId
   capabilityStatus?: BackendCapabilityStatus
+  locale?: Locale
   onSelectRuntimeScript?: (scriptId: RuntimeScriptId) => void
 }
 
@@ -45,7 +47,7 @@ function getEventDetail(event: Run['events'][number]) {
   return usageParts.length > 0 ? `${detail} · ${usageParts.join(' / ')}` : detail
 }
 
-export function RunRail({ run, open, onOpenArtifact, onStopRun, selectedRuntimeScript = 'success', capabilityStatus, onSelectRuntimeScript }: Props) {
+export function RunRail({ run, open, onOpenArtifact, onStopRun, selectedRuntimeScript = 'success', capabilityStatus, locale = 'en', onSelectRuntimeScript }: Props) {
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set())
   const toggleSection = (section: string) => {
     setCollapsedSections((current) => {
@@ -56,8 +58,8 @@ export function RunRail({ run, open, onOpenArtifact, onStopRun, selectedRuntimeS
     })
   }
 
-  const eventGroups = groupRuntimeEvents(run?.events ?? [])
-  const capabilityCopy = capabilityStatus ? getBackendCapabilityCopy(capabilityStatus) : null
+  const eventGroups = groupRuntimeEvents(run?.events ?? [], locale)
+  const capabilityCopy = capabilityStatus ? getBackendCapabilityCopy(capabilityStatus, locale) : null
 
   return (
     <aside className={open ? 'floating-rail open' : 'floating-rail'}>

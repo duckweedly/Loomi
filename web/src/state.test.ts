@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { Message, Run, Thread } from './domain'
-import { createWorkspaceSettingsState, mergeRunEvents, shouldApplyRunStreamEvent, getWorkspaceRefreshThreadId, shouldApplySendMessageResult, shouldApplyWorkspaceRefresh, shouldSelectWorkspaceRefreshThread } from './state'
+import { createWorkspaceSettingsState, mergeRunEvents, redactProviderCheckMessage, shouldApplyRunStreamEvent, getWorkspaceRefreshThreadId, shouldApplySendMessageResult, shouldApplyWorkspaceRefresh, shouldSelectWorkspaceRefreshThread } from './state'
 
 const threadA: Thread = {
   id: 'thread-a',
@@ -39,6 +39,26 @@ describe('workspace settings state', () => {
   test('captures the default workspace mode for future local behavior', () => {
     expect(createWorkspaceSettingsState({ defaultWorkspaceMode: 'work' }).defaultWorkspaceMode).toBe('work')
     expect(createWorkspaceSettingsState().defaultWorkspaceMode).toBe('chat')
+  })
+})
+
+describe('provider check state helpers', () => {
+  test('redacts provider check errors before displaying them', () => {
+    const message = redactProviderCheckMessage('Authorization: Bearer sk-secret123 api_key=secret token=hidden')
+
+    expect(message).toContain('[redacted]')
+    expect(message).not.toContain('sk-secret123')
+    expect(message).not.toContain('secret')
+    expect(message).not.toContain('hidden')
+  })
+
+  test('state hook exposes provider check action and result state', async () => {
+    const source = await Bun.file(new URL('./state.ts', import.meta.url)).text()
+
+    expect(source).toContain('providerCheckResults')
+    expect(source).toContain('checkProvider')
+    expect(source).toContain('apiClient.checkModelProvider')
+    expect(source).toContain('redactProviderCheckMessage')
   })
 })
 

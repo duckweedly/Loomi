@@ -1,7 +1,7 @@
-import type { AssistantDraft as AssistantDraftState, BackendCapabilityState, ChatCanvasState, Message, Run, StreamState, Thread } from '../domain'
+import type { AssistantDraft as AssistantDraftState, BackendCapabilityState, ChatCanvasState, Message, ProviderCapability, Run, StreamState, Thread } from '../domain'
 import type { Locale } from '../i18n'
 import { getDictionary } from '../i18n'
-import { deriveBackendCapabilityStatus, getBackendCapabilityCopy } from '../runtime/backendCapabilityStatus'
+import { deriveBackendCapabilityStatus, getBackendCapabilityCopy, shouldShowProviderUnavailableWarning } from '../runtime/backendCapabilityStatus'
 import { deriveChatCanvasState } from '../runtime/chatCanvasState'
 import { Composer } from './Composer'
 import { ToolCallCard } from './ToolCallCard'
@@ -23,6 +23,8 @@ type Props = {
     providerUnavailable?: boolean
     streamDisconnected?: boolean
   }
+  providerCapabilities?: ProviderCapability[]
+  onOpenProviderSettings?: () => void
   onSendMessage: (content: string) => void
   onStopRun: () => void
   onRetryRun?: () => void
@@ -113,7 +115,7 @@ function StatePanel({ state, error, locale }: { state: Exclude<ChatCanvasState, 
   )
 }
 
-export function ChatCanvas({ sidebarCollapsed, thread, messages, run, loading, error, dataSourceMode, streamState, backendCapability = 'available', backendUnavailableAttempted = false, capabilitySignals, onSendMessage, onStopRun, onRetryRun, onRegenerateRun, locale }: Props) {
+export function ChatCanvas({ sidebarCollapsed, thread, messages, run, loading, error, dataSourceMode, streamState, backendCapability = 'available', backendUnavailableAttempted = false, capabilitySignals, providerCapabilities = [], onOpenProviderSettings, onSendMessage, onStopRun, onRetryRun, onRegenerateRun, locale }: Props) {
   const state = deriveChatCanvasState({
     loading,
     error,
@@ -127,17 +129,18 @@ export function ChatCanvas({ sidebarCollapsed, thread, messages, run, loading, e
   const stateCopy = createStateCopy(locale)
   const composerDisabled = state === 'loading' || state === 'error' || state === 'no-thread' || state === 'backend-unavailable' || state === 'waiting-run' || state === 'running' || state === 'recovering' || state === 'stopping'
   const composerPlaceholder = state === 'history' ? copy.messageLoomi : stateCopy[state].title
+  const providerUnavailableBeforeSend = shouldShowProviderUnavailableWarning(dataSourceMode, providerCapabilities)
   const capabilityStatus = deriveBackendCapabilityStatus({
     dataSourceMode,
     runtimeSource: run?.context === 'model_gateway' ? 'model_gateway' : 'local_simulated',
     backendUnavailable: backendCapability === 'unavailable' || backendUnavailableAttempted || capabilitySignals?.backendUnavailable,
     modelSetupMissing: capabilitySignals?.modelSetupMissing,
-    providerUnavailable: capabilitySignals?.providerUnavailable,
+    providerUnavailable: capabilitySignals?.providerUnavailable || providerUnavailableBeforeSend,
     activeRun: Boolean(run && (run.status === 'pending' || run.status === 'queued' || run.status === 'running' || run.status === 'retrying' || run.status === 'recovering' || run.status === 'stopping')),
     streamDisconnected: Boolean(run && (run.status === 'pending' || run.status === 'queued' || run.status === 'running' || run.status === 'retrying' || run.status === 'recovering' || run.status === 'stopping') && (capabilitySignals?.streamDisconnected || streamState === 'recoverable_error')),
     runRecovering: run?.status === 'recovering' || run?.assistantDraft?.status === 'recovering',
   })
-  const capabilityCopy = getBackendCapabilityCopy(capabilityStatus)
+  const capabilityCopy = getBackendCapabilityCopy(capabilityStatus, locale)
   const hasPersistedCompletedDraftMessage = run?.assistantDraft?.status === 'completed' && messages.some((message) => (
     message.role === 'assistant' && (
       message.id === run.assistantDraft?.messageId ||
@@ -164,6 +167,12 @@ export function ChatCanvas({ sidebarCollapsed, thread, messages, run, loading, e
 
       {error && <div className="api-error">{error}</div>}
       <ToolBoundaryNotice run={run} locale={locale} />
+      {providerUnavailableBeforeSend && (
+        <div className="provider-warning" role="status">
+          <span>{copy.providerUnavailableWarning}</span>
+          <button type="button" onClick={onOpenProviderSettings}>{copy.openProviderSettings}</button>
+        </div>
+      )}
 
       <div className="message-list">
         {state === 'history' ? (

@@ -115,3 +115,16 @@ describe('createWorkspaceShellState', () => {
     expect(createWorkspaceShellState().snapshot()).toMatchObject({ defaultWorkspaceMode: 'chat', locale: 'zh', providerDraftSettings: { baseUrl: '', model: '', apiKeySet: false } })
   })
 })
+
+describe('Settings category routing', () => {
+  test('opens Providers directly when requested', () => {
+    const shell = createWorkspaceShellState({ settingsCategoryId: 'general' })
+
+    shell.openSettings('providers')
+
+    expect(shell.snapshot()).toMatchObject({
+      settingsOpen: true,
+      settingsCategoryId: 'providers',
+    })
+  })
+})

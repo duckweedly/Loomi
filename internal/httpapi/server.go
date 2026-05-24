@@ -3,7 +3,6 @@ package httpapi
 import (
 	"context"
 	"net/http"
-	"net/url"
 	"strings"
 
 	"github.com/sheridiany/loomi/internal/config"
@@ -60,7 +59,7 @@ func NewServerWithRuntimes(cfg config.Config, checker db.Checker, product produc
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if strings.HasPrefix(r.URL.Path, "/v1/") || r.URL.Path == "/v1" {
-		setCORSHeaders(w, r)
+		s.setCORSHeaders(w, r)
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return
@@ -69,9 +68,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.mux.ServeHTTP(w, r)
 }
 
-func setCORSHeaders(w http.ResponseWriter, r *http.Request) {
+func (s *Server) setCORSHeaders(w http.ResponseWriter, r *http.Request) {
 	origin := r.Header.Get("Origin")
-	if origin == "" || !isLocalOrigin(origin) {
+	if origin == "" || !s.isLocalWebDevOrigin(origin) {
 		return
 	}
 	w.Header().Set("Access-Control-Allow-Origin", origin)
@@ -80,15 +79,9 @@ func setCORSHeaders(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 }
 
-func isLocalOrigin(origin string) bool {
-	parsed, err := url.Parse(origin)
-	if err != nil {
+func (s *Server) isLocalWebDevOrigin(origin string) bool {
+	if s.cfg.AppEnv != "local" && s.cfg.AppEnv != "development" {
 		return false
 	}
-	switch parsed.Hostname() {
-	case "127.0.0.1", "localhost", "::1":
-		return parsed.Scheme == "http"
-	default:
-		return false
-	}
+	return origin == "http://127.0.0.1:5173" || origin == "http://localhost:5173"
 }

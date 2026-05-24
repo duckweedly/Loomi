@@ -23,6 +23,11 @@ describe('ChatCanvas state copy', () => {
     expect(source).toContain('模型网关')
     expect(source).toContain('工具调用未执行')
     expect(source).toContain('已停止生成')
+    expect(source).toContain('模型 Provider 未配置或不可用')
+    expect(source).toContain('打开设置')
+    expect(source).toContain('Retrying')
+    expect(source).toContain('重试中')
+    expect(source).toContain('已耗尽')
   })
 
   test('renders assistant draft bubble states from run.assistantDraft without duplicating final content', () => {
@@ -169,5 +174,94 @@ describe('ChatCanvas state copy', () => {
     expect(disconnectedHtml).toContain('Stream disconnected')
     expect(disconnectedHtml).toContain('event stream disconnected')
     expect(disconnectedHtml).not.toContain('model is thinking')
+  })
+})
+
+describe('ChatCanvas provider unavailable warning', () => {
+  const thread = { id: 'thread-a', title: 'Thread A', project: 'Loomi', mode: 'chat' as const, updatedAt: 'Now', lifecycleStatus: 'active' as const, runStatus: 'completed' as const }
+  const availableProvider = { id: 'custom', family: 'openai_compatible' as const, model: 'gpt-5.5', status: 'available' as const }
+  const unavailableProvider = { ...availableProvider, status: 'unavailable' as const }
+
+  test('does not show real provider warning in mock mode', () => {
+    const html = renderToStaticMarkup(createElement(ChatCanvas, {
+      sidebarCollapsed: false,
+      thread,
+      messages: [],
+      run: null,
+      loading: false,
+      error: null,
+      dataSourceMode: 'mock',
+      streamState: 'closed',
+      providerCapabilities: [],
+      onSendMessage: () => {},
+      onStopRun: () => {},
+      locale: 'en',
+    }))
+
+    expect(html).not.toContain('Model provider is not configured or unavailable')
+  })
+
+  test('shows guidance when real API has no available provider', () => {
+    const html = renderToStaticMarkup(createElement(ChatCanvas, {
+      sidebarCollapsed: false,
+      thread,
+      messages: [],
+      run: null,
+      loading: false,
+      error: null,
+      dataSourceMode: 'real_api',
+      streamState: 'closed',
+      providerCapabilities: [],
+      onOpenProviderSettings: () => {},
+      onSendMessage: () => {},
+      onStopRun: () => {},
+      locale: 'en',
+    }))
+
+    expect(html).toContain('Model provider is not configured or unavailable')
+    expect(html).toContain('Open Settings')
+    expect(html).toContain('Provider unavailable')
+  })
+
+  test('shows guidance when real API providers are configured but unavailable', () => {
+    const html = renderToStaticMarkup(createElement(ChatCanvas, {
+      sidebarCollapsed: false,
+      thread,
+      messages: [],
+      run: null,
+      loading: false,
+      error: null,
+      dataSourceMode: 'real_api',
+      streamState: 'closed',
+      providerCapabilities: [unavailableProvider],
+      onOpenProviderSettings: () => {},
+      onSendMessage: () => {},
+      onStopRun: () => {},
+      locale: 'zh',
+    }))
+
+    expect(html).toContain('模型 Provider 未配置或不可用')
+    expect(html).toContain('打开设置')
+  })
+
+  test('hides guidance when real API has an available provider', () => {
+    const html = renderToStaticMarkup(createElement(ChatCanvas, {
+      sidebarCollapsed: false,
+      thread,
+      messages: [],
+      run: null,
+      loading: false,
+      error: null,
+      dataSourceMode: 'real_api',
+      streamState: 'closed',
+      providerCapabilities: [availableProvider],
+      onOpenProviderSettings: () => {},
+      onSendMessage: () => {},
+      onStopRun: () => {},
+      locale: 'en',
+    }))
+
+    expect(html).not.toContain('Model provider is not configured or unavailable')
+    expect(html).not.toContain('Open Settings')
   })
 })

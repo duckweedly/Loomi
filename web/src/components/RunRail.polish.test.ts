@@ -95,3 +95,33 @@ describe('RunRail restrained runtime polish', () => {
     expect(html).toContain('provider rejected')
   })
 })
+
+describe('RunRail localized runtime copy', () => {
+  test('renders Chinese runtime group and capability copy when locale is zh', () => {
+    const html = renderToStaticMarkup(createElement(RunRail, {
+      open: true,
+      locale: 'zh',
+      onOpenArtifact: () => {},
+      capabilityStatus: 'provider-unavailable',
+      run: {
+        id: 'run-a',
+        threadId: 'thread-a',
+        status: 'failed',
+        model: 'Local simulated',
+        context: 'local_simulated',
+        events: [
+          { id: 'evt-run', runId: 'run-a', threadId: 'thread-a', sequence: 1, type: 'run.created', label: 'Run', detail: 'created', time: 'Now', status: 'running' },
+          { id: 'evt-worker', runId: 'run-a', threadId: 'thread-a', sequence: 2, type: 'worker.claimed', label: 'Worker', detail: 'claimed', time: 'Now', status: 'running' },
+          { id: 'evt-error', runId: 'run-a', threadId: 'thread-a', sequence: 3, type: 'provider.error', label: 'Provider', detail: 'provider failed', time: 'Now', status: 'failed' },
+        ],
+      },
+    }))
+
+    expect(html).toContain('运行生命周期')
+    expect(html).toContain('模型流')
+    expect(html).toContain('Worker/Job')
+    expect(html).toContain('错误')
+    expect(html).toContain('Provider 不可用')
+    expect(html).toContain('Provider 拒绝或未能完成生成')
+  })
+})
