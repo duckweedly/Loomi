@@ -463,7 +463,7 @@ func (r *PostgresRepository) ClaimBackgroundJob(ctx context.Context, ident ident
 		}
 		return cancelled, run, false, tx.Commit(ctx)
 	}
-	leased, err := scanBackgroundJob(tx.QueryRow(ctx, `update background_jobs set status='leased', leased_by=$1, lease_expires_at=now() + ($2 || ' seconds')::interval, attempt_count=attempt_count+1, ownership_version=ownership_version+1, updated_at=now() where id=$3 returning id, run_id, thread_id, user_id, kind, status, priority, attempt_count, max_attempts, scheduled_at, leased_by, lease_expires_at, ownership_version, metadata, last_error_code, last_error_message, created_at, updated_at`, workerID, leaseSeconds, job.ID))
+	leased, err := scanBackgroundJob(tx.QueryRow(ctx, `update background_jobs set status='leased', leased_by=$1, lease_expires_at=now() + ($2::int * interval '1 second'), attempt_count=attempt_count+1, ownership_version=ownership_version+1, updated_at=now() where id=$3 returning id, run_id, thread_id, user_id, kind, status, priority, attempt_count, max_attempts, scheduled_at, leased_by, lease_expires_at, ownership_version, metadata, last_error_code, last_error_message, created_at, updated_at`, workerID, leaseSeconds, job.ID))
 	if err != nil {
 		return BackgroundJob{}, Run{}, false, err
 	}
@@ -486,7 +486,7 @@ func (r *PostgresRepository) RenewBackgroundJobLease(ctx context.Context, ident 
 	if leaseSeconds <= 0 {
 		leaseSeconds = 30
 	}
-	job, err := scanBackgroundJob(r.Pool.QueryRow(ctx, `update background_jobs set lease_expires_at=now() + ($1 || ' seconds')::interval, updated_at=now() where id=$2 and user_id=$3 and leased_by=$4 and ownership_version=$5 and status='leased' returning id, run_id, thread_id, user_id, kind, status, priority, attempt_count, max_attempts, scheduled_at, leased_by, lease_expires_at, ownership_version, metadata, last_error_code, last_error_message, created_at, updated_at`, leaseSeconds, input.JobID, user.ID, strings.TrimSpace(input.WorkerID), input.OwnershipVersion))
+	job, err := scanBackgroundJob(r.Pool.QueryRow(ctx, `update background_jobs set lease_expires_at=now() + ($1::int * interval '1 second'), updated_at=now() where id=$2 and user_id=$3 and leased_by=$4 and ownership_version=$5 and status='leased' returning id, run_id, thread_id, user_id, kind, status, priority, attempt_count, max_attempts, scheduled_at, leased_by, lease_expires_at, ownership_version, metadata, last_error_code, last_error_message, created_at, updated_at`, leaseSeconds, input.JobID, user.ID, strings.TrimSpace(input.WorkerID), input.OwnershipVersion))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return BackgroundJob{}, false, nil
 	}

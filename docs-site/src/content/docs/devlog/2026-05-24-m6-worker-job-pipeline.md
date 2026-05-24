@@ -52,6 +52,7 @@ Latest recorded results:
 - `bun run --cwd web build` passed.
 - `bun run --cwd docs-site build` passed and generated the new M6 architecture/API/runbook/devlog pages.
 - Browser smoke passed in mock mode: RunRail displayed `run.queued`, `job.claimed`, `pipeline.step.started`, and `pipeline.step.completed` rows after a regenerated run, with no warning/error console messages.
+- Real OpenAI-compatible provider smoke passed through the queued model-gateway path with `model_output_delta`, `model_output_completed`, and `run_completed` events after fixing worker lease interval SQL.
 
 ## Final review fixes
 
@@ -62,4 +63,4 @@ Latest recorded results:
 
 ## Remaining follow-up
 
-- Validate the queued model-gateway path against a real local provider configuration during provider smoke testing.
+- Improve live frontend recovery when an old SSE connection fails during local API restarts.

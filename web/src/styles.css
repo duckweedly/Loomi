@@ -946,17 +946,17 @@ button, textarea, input, .sidebar, .chat-shell, .run-dock, .right-panel-menu, .r
 
 .composer {
   z-index: 1;
-  display: grid;
-  width: var(--composer-width);
-  max-width: var(--composer-width);
-  min-height: 78px;
-  grid-template-columns: auto 1fr auto;
-  gap: 10px;
-  align-items: end;
+  display: flex;
+  width: min(940px, calc(100% - 32px));
+  max-width: min(940px, calc(100% - 32px));
+  min-height: 150px;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 18px;
   margin: 0 auto;
   border: 1px solid var(--composer-border);
-  border-radius: 22px;
-  padding: 12px;
+  border-radius: 24px;
+  padding: 22px 26px 18px;
   background: var(--material-composer);
   box-shadow:
     0 18px 54px var(--composer-shadow),
@@ -966,22 +966,87 @@ button, textarea, input, .sidebar, .chat-shell, .run-dock, .right-panel-menu, .r
   -webkit-backdrop-filter: blur(48px) saturate(115%) brightness(1.04);
 }
 
+.composer-input {
+  width: 100%;
+  min-height: 58px;
+  border: 0;
+  outline: 0;
+  resize: none;
+  background: transparent;
+  color: var(--text-primary);
+  caret-color: var(--accent);
+  line-height: 1.45;
+  padding: 0;
+  font-size: 18px;
+  font-weight: 500;
+}
+
+.composer-input::placeholder {
+  color: var(--composer-placeholder);
+  font-size: 18px;
+  font-weight: 650;
+}
+
+.composer-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.composer-toolbar-left,
+.composer-toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+}
+
+.composer-folder,
+.composer-model,
+.composer-tool {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: transparent;
+  color: var(--composer-button-text);
+}
+
+.composer-folder,
+.composer-model {
+  gap: 8px;
+  padding: 0;
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.composer-folder:disabled,
+.composer-model:disabled,
+.composer-tool:disabled {
+  cursor: default;
+  opacity: 0.88;
+}
+
+.composer-tool {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+}
+
 .composer-actions {
   display: flex;
-  flex-direction: column;
-  gap: 6px;
-  align-self: stretch;
-  justify-content: flex-start;
+  align-items: center;
+  gap: 8px;
 }
 
 .composer-action {
   border: 1px solid var(--border-subtle);
-  border-radius: 9px;
-  padding: 5px 9px;
+  border-radius: 12px;
+  padding: 7px 12px;
   background: color-mix(in srgb, var(--bg-glass-soft) 70%, transparent);
   color: var(--composer-button-text);
   cursor: pointer;
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .composer-action:hover {
@@ -989,29 +1054,17 @@ button, textarea, input, .sidebar, .chat-shell, .run-dock, .right-panel-menu, .r
   color: var(--text-primary);
 }
 
-.composer-input {
-  width: 100%;
-  border: 0;
-  outline: 0;
-  resize: none;
-  background: transparent;
-  color: var(--text-primary);
-  line-height: 1.5;
-}
-
-.composer-input::placeholder { color: var(--composer-placeholder); }
-
 .composer .ant-btn {
   display: grid;
-  width: 32px;
-  height: 32px;
-  min-width: 32px;
+  width: 30px;
+  height: 30px;
+  min-width: 30px;
   place-items: center;
-  border: 0;
-  border-radius: 9px;
+  border: 1px solid var(--composer-submit-border);
+  border-radius: 10px;
   padding: 0;
-  background: var(--composer-button-bg) !important;
-  color: var(--composer-button-text) !important;
+  background: var(--composer-submit-bg) !important;
+  color: var(--composer-submit-text) !important;
   box-shadow: none;
 }
 
@@ -1020,15 +1073,9 @@ button, textarea, input, .sidebar, .chat-shell, .run-dock, .right-panel-menu, .r
   color: var(--text-primary) !important;
 }
 
-.composer .ant-btn-primary {
-  border: 1px solid var(--composer-submit-border);
-  background: var(--composer-submit-bg) !important;
-  color: var(--composer-submit-text) !important;
-}
-
 .composer .ant-btn-primary:disabled {
   color: var(--composer-submit-text) !important;
-  opacity: 0.68;
+  opacity: 0.58;
 }
 
 .floating-rail {

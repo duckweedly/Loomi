@@ -128,7 +128,7 @@ export function ChatCanvas({ sidebarCollapsed, thread, messages, run, loading, e
   const copy = getDictionary(locale).chatCanvas
   const stateCopy = createStateCopy(locale)
   const composerDisabled = state === 'loading' || state === 'error' || state === 'no-thread' || state === 'backend-unavailable' || state === 'waiting-run' || state === 'running' || state === 'recovering' || state === 'stopping'
-  const composerPlaceholder = state === 'history' ? copy.messageLoomi : stateCopy[state].title
+  const composerPlaceholder = composerDisabled ? stateCopy[state].title : copy.messageLoomi
   const providerUnavailableBeforeSend = shouldShowProviderUnavailableWarning(dataSourceMode, providerCapabilities)
   const capabilityStatus = deriveBackendCapabilityStatus({
     dataSourceMode,
