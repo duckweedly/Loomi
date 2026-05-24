@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sheridiany/loomi/internal/config"
 	"github.com/sheridiany/loomi/internal/identity"
@@ -33,6 +34,100 @@ func TestStartRunHandlerCreatesLocalSimulatedRun(t *testing.T) {
 	}
 	if body.Run.ThreadID != thread.ID || body.Run.Source != productdata.RunSourceLocalSimulated || body.Run.Status != productdata.RunStatusRunning {
 		t.Fatalf("run = %+v", body.Run)
+	}
+}
+
+func TestModelProviderHandlersExposeRedactedCapability(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	cfg := config.Config{AppEnv: "local", ModelProviders: []config.ModelProvider{{ID: "custom", Family: "openai_compatible", BaseURL: "https://user:secret@example.test/v1?token=secret", APIKey: "key", Model: "gpt-5.5", Enabled: true}}}
+	srv := NewServerWithProduct(cfg, fakeChecker{}, svc)
+
+	res := requestJSON(t, srv, http.MethodGet, "/v1/model-providers", "")
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", res.Code, res.Body.String())
+	}
+	if strings.Contains(res.Body.String(), "secret") || !strings.Contains(res.Body.String(), "gpt-5.5") {
+		t.Fatalf("body = %s", res.Body.String())
+	}
+
+	check := requestJSON(t, srv, http.MethodPost, "/v1/model-providers/check", `{"provider_id":"custom"}`)
+	if check.Code != http.StatusOK {
+		t.Fatalf("check status = %d body=%s", check.Code, check.Body.String())
+	}
+}
+
+func TestModelProviderHandlersExposeUnavailableAndMisconfigured(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	cfg := config.Config{AppEnv: "local", ModelProviders: []config.ModelProvider{
+		{ID: "disabled", Family: "openai", APIKey: "key", Model: "gpt-4.1", Enabled: false},
+		{ID: "custom", Family: "openai_compatible", APIKey: "key", Model: "gpt-5.5", Enabled: true},
+	}}
+	srv := NewServerWithProduct(cfg, fakeChecker{}, svc)
+
+	res := requestJSON(t, srv, http.MethodGet, "/v1/model-providers", "")
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", res.Code, res.Body.String())
+	}
+	body := res.Body.String()
+	if !strings.Contains(body, `"status":"unavailable"`) || !strings.Contains(body, `"status":"misconfigured"`) {
+		t.Fatalf("body = %s", body)
+	}
+
+	unavailable := requestJSON(t, srv, http.MethodPost, "/v1/model-providers/check", `{"provider_id":"disabled"}`)
+	if unavailable.Code != http.StatusServiceUnavailable || !strings.Contains(unavailable.Body.String(), "provider_unavailable") {
+		t.Fatalf("unavailable status = %d body=%s", unavailable.Code, unavailable.Body.String())
+	}
+
+	misconfigured := requestJSON(t, srv, http.MethodPost, "/v1/model-providers/check", `{"provider_id":"custom"}`)
+	if misconfigured.Code != http.StatusBadRequest || !strings.Contains(misconfigured.Body.String(), "provider_misconfigured") {
+		t.Fatalf("misconfigured status = %d body=%s", misconfigured.Code, misconfigured.Body.String())
+	}
+}
+
+func TestStartRunHandlerCreatesModelGatewayRun(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	thread := createRuntimeTestThread(t, svc)
+	srv := NewServerWithProduct(config.Config{AppEnv: "local"}, fakeChecker{}, svc)
+
+	res := requestJSON(t, srv, http.MethodPost, "/v1/threads/"+thread.ID+"/runs", `{"message_id":"msg_1","source":"model_gateway","provider_id":"custom","model":"gpt-5.5"}`)
+
+	if res.Code != http.StatusCreated {
+		t.Fatalf("status = %d body=%s", res.Code, res.Body.String())
+	}
+	var body struct {
+		Run productdata.Run `json:"run"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Run.Source != productdata.RunSourceModelGateway || body.Run.Title != "Model gateway run" {
+		t.Fatalf("run = %+v", body.Run)
+	}
+}
+
+func TestStartRunHandlerTriggersModelGateway(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	thread := createRuntimeTestThread(t, svc)
+	message, _, err := svc.CreateMessage(context.Background(), identity.LocalDevIdentity(), thread.ID, productdata.CreateMessageInput{Content: "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := productruntime.StaticProvider{ProviderConfig: productruntime.ProviderConfig{ID: "custom", Family: productruntime.ProviderFamilyOpenAICompatible, BaseURL: "https://example.test", APIKey: "key", Model: "gpt-5.5", Enabled: true}, Events: []productruntime.ProviderEvent{{Type: productruntime.ProviderEventTextDelta, Text: "hi"}, {Type: productruntime.ProviderEventCompleted}}}
+	srv := NewServerWithRuntimes(config.Config{AppEnv: "local"}, fakeChecker{}, svc, productruntime.NewBroadcaster(), nil, productruntime.NewGateway(svc, productruntime.NewBroadcaster(), []productruntime.Provider{provider}))
+
+	res := requestJSON(t, srv, http.MethodPost, "/v1/threads/"+thread.ID+"/runs", `{"message_id":"`+message.ID+`","source":"model_gateway","provider_id":"custom"}`)
+	if res.Code != http.StatusCreated {
+		t.Fatalf("status = %d body=%s", res.Code, res.Body.String())
+	}
+	var body struct {
+		Run productdata.Run `json:"run"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	events := waitForRuntimeTestEvents(t, svc, body.Run.ID, "run_completed")
+	if events[len(events)-2].Type != "model_output_completed" {
+		t.Fatalf("events = %+v", events)
 	}
 }
 
@@ -229,4 +324,24 @@ func appendRuntimeTestEvent(t *testing.T, svc *productdata.MemoryService, runID 
 		t.Fatal(err)
 	}
 	return event
+}
+
+func waitForRuntimeTestEvents(t *testing.T, svc *productdata.MemoryService, runID string, eventType string) []productdata.RunEvent {
+	t.Helper()
+	var last []productdata.RunEvent
+	for attempt := 0; attempt < 100; attempt++ {
+		events, err := svc.ListRunEvents(context.Background(), identity.LocalDevIdentity(), runID, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		last = events
+		for _, event := range events {
+			if event.Type == eventType {
+				return events
+			}
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("event %s not found; events = %+v", eventType, last)
+	return nil
 }

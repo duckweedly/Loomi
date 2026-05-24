@@ -127,7 +127,18 @@ export const mockApiClient: ApiClient = {
   async stopRun(runId: string) {
     const run = runStore.find((item) => item.id === runId)
     if (!run) throw new Error('Run not found')
-    const stopped = await mockExecutionAdapter.stopRun(run.threadId, runId)
+    let stopped: Run
+    try {
+      stopped = await mockExecutionAdapter.stopRun(run.threadId, runId)
+    } catch (err) {
+      if (!(err instanceof Error) || err.message !== 'Run not found') throw err
+      stopped = {
+        ...run,
+        status: 'stopped',
+        assistantDraft: { content: run.assistantDraft?.content ?? '', status: 'stopped' },
+        events: [...run.events, { id: `${runId}-stopped`, type: 'run.stopped', label: 'Stopped', detail: '已停止', time: 'Now', status: 'stopped' }],
+      }
+    }
     updateRunStore(stopped)
     threadStore = threadStore.map((thread) => (thread.id === stopped.threadId ? { ...thread, runStatus: 'stopped' } : thread))
     return cloneRun(stopped)

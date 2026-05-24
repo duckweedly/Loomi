@@ -15,6 +15,28 @@ func TestRepositoryContractUsesPostgresImplementation(t *testing.T) {
 	var _ Repository = (*PostgresRepository)(nil)
 }
 
+func TestRepositoryContractCoversM5AssistantAndModelGateway(t *testing.T) {
+	var repo Repository = NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := repo.CreateThread(context.Background(), ident, CreateThreadInput{Title: "M5", Mode: ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, err := repo.AppendAssistantMessage(context.Background(), ident, thread.ID, AppendAssistantMessageInput{Content: "hello", Metadata: map[string]any{"run_id": "run_1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if message.Role != MessageRoleAssistant || message.Metadata["run_id"] != "run_1" {
+		t.Fatalf("message = %+v", message)
+	}
+	if _, err := repo.StartRun(context.Background(), ident, thread.ID, StartRunInput{Source: RunSourceModelGateway, MessageID: "msg_1", ProviderID: "custom", Model: "model"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.AppendAssistantMessage(context.Background(), ident, thread.ID, AppendAssistantMessageInput{Content: "again", Metadata: map[string]any{"run_id": "run_1"}}); err == nil || ErrorCode(err) != CodeInvalidRequest {
+		t.Fatalf("duplicate err = %v", err)
+	}
+}
+
 func TestPostgresRunEventsUseUniqueSequenceOrdering(t *testing.T) {
 	databaseURL := os.Getenv("LOOMI_TEST_DATABASE_URL")
 	if databaseURL == "" {

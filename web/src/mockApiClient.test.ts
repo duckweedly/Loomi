@@ -17,6 +17,13 @@ describe('mockApiClient thread runs', () => {
     })
   })
 
+  test('stops a seeded mock run without adapter store coupling', async () => {
+    const run = await mockApiClient.stopRun('run-1')
+
+    expect(run.status).toBe('stopped')
+    expect(run.events.at(-1)?.type).toBe('run.stopped')
+  })
+
   test('persists the completed M3.5 mock run created by the first message in a new mock thread', async () => {
     const thread = await mockApiClient.createThread?.('New thread', 'chat')
 

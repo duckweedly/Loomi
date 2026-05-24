@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { apiClient, executionAdapter } from './apiClient'
 import { setMockRuntimeScript } from './mockApiClient'
 import type { BackendCapabilityState, Message, Run, RunEvent, RuntimeEvent, RuntimeScriptId, StaleEventGuard, StreamState, Thread, ThreadRuntimeState } from './domain'
+import { applyRealRunEvent } from './runtime/realExecutionAdapter'
 import { createNextThreadTitle } from './threadTitles'
 
 type RefreshResult = {
@@ -90,6 +91,19 @@ export function applyAssistantDeltaToRun(run: Run, delta: string): Run {
   }
 }
 
+export function applyModelGatewayEventToRun(run: Run, event: RuntimeEvent): Run {
+  return applyRealRunEvent(run, event)
+}
+
+export function shouldApplyIncomingRunEvent(run: Run, event: RunEvent) {
+  if (shouldIgnoreTerminalRuntimeEvent(run)) return false
+  return !run.events.some((existing) => (existing.id || String(existing.sequence)) === (event.id || String(event.sequence)))
+}
+
+export function shouldUpdateStreamStateForRunEvent(run: Run, event: RunEvent) {
+  return shouldApplyIncomingRunEvent(run, event)
+}
+
 export function shouldIgnoreTerminalRuntimeEvent(run: Run) {
   return run.status === 'completed' || run.status === 'failed' || run.status === 'stopped'
 }
@@ -158,17 +172,22 @@ export function useWorkspaceState() {
       run.id,
       afterSequence,
       (event) => {
+        let streamEventApplied = false
         setRun((currentRun) => {
-          if (!currentRun || !shouldApplyRunStreamEvent({ eventThreadId: event.threadId ?? '', eventRunId: event.runId ?? '', selectedThreadId: selectedThreadIdRef.current, currentRunId: currentRun.id })) return currentRun
-          const status = event.status === 'running' ? currentRun.status : event.status
-          const nextRun = { ...currentRun, status, events: mergeRunEvents(currentRun.events, [event]) }
-          runRef.current = nextRun
-          return nextRun
+          if (!currentRun || !shouldApplyRunStreamEvent({ eventThreadId: event.threadId ?? '', eventRunId: event.runId ?? '', selectedThreadId: selectedThreadIdRef.current, currentRunId: currentRun.id }) || !shouldApplyIncomingRunEvent(currentRun, event)) return currentRun
+          const nextEvent: RuntimeEvent = { ...event, runId: event.runId ?? currentRun.id, threadId: event.threadId ?? currentRun.threadId, status: event.status === 'running' ? currentRun.status : event.status }
+          const nextRun = applyModelGatewayEventToRun(currentRun, nextEvent)
+          const mergedRun = nextRun === currentRun ? currentRun : { ...nextRun, events: mergeRunEvents(currentRun.events, [nextEvent]) }
+          streamEventApplied = mergedRun !== currentRun
+          runRef.current = mergedRun
+          return mergedRun
         })
-        setStreamState((current) => {
-          const next = event.status === 'running' ? 'live' : 'closed'
-          return current === next ? current : next
-        })
+        if (streamEventApplied) {
+          setStreamState((current) => {
+            const next = event.status === 'running' ? 'live' : 'closed'
+            return current === next ? current : next
+          })
+        }
       },
       () => setStreamState((current) => (current === 'recoverable_error' ? current : 'recoverable_error')),
     )

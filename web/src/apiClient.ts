@@ -1,4 +1,4 @@
-import type { Message, Run, Thread } from './domain'
+import type { Message, ProviderCapability, Run, Thread } from './domain'
 import { mockApiClient } from './mockApiClient'
 import { hasRealApiBase, realApiClient } from './realApiClient'
 import type { ExecutionAdapter } from './runtime/executionAdapter'
@@ -11,7 +11,9 @@ export type ApiClient = {
   getThreadMessages(threadId: string): Promise<Message[]>
   getThreadRun(threadId: string): Promise<Run>
   getRunEvents(runId: string): Promise<Run['events']>
-  startRun?(threadId: string): Promise<Run>
+  listModelProviders?(): Promise<ProviderCapability[]>
+  checkModelProvider?(providerId: string): Promise<ProviderCapability>
+  startRun?(threadId: string, input?: { messageId?: string; source?: Run['source']; providerId?: string; model?: string }): Promise<Run>
   subscribeRunEvents?(runId: string, afterSequence: number, onEvent: (event: Run['events'][number]) => void, onError: () => void): () => void
   createThread?(title: string, mode: Thread['mode']): Promise<Thread>
   updateThread?(threadId: string, input: Partial<Pick<Thread, 'title' | 'mode'>>): Promise<Thread>

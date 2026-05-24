@@ -6,7 +6,18 @@ export type RunEventCategory = 'lifecycle' | 'progress' | 'message' | 'error' | 
 
 export type StreamState = 'connecting' | 'live' | 'recoverable_error' | 'closed'
 
-export type BackendCapabilityState = 'available' | 'unavailable'
+export type BackendCapabilityState = 'available' | 'unavailable' | 'misconfigured'
+
+export type ProviderFamily = 'anthropic' | 'openai' | 'gemini' | 'openai_compatible'
+
+export type ProviderCapability = {
+  id: string
+  family: ProviderFamily
+  baseUrl?: string | null
+  model: string
+  status: BackendCapabilityState
+  message?: string | null
+}
 
 export type ChatCanvasState =
   | 'no-thread'
@@ -85,12 +96,15 @@ export type AssistantDraft = {
   messageId?: string
 }
 
+export type RunSource = 'local_simulated' | 'model_gateway'
+
 export type Run = {
   id: string
   threadId: string
   status: RunStatus
   model: string
   context: string
+  source?: RunSource
   events: RunEvent[]
   scriptId?: RuntimeScriptId
   assistantDraft?: AssistantDraft

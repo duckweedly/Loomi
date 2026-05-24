@@ -8,6 +8,17 @@ import (
 	"github.com/sheridiany/loomi/internal/productdata"
 )
 
+const (
+	EventModelRequestStarted  = "model_request_started"
+	EventModelOutputDelta     = "model_output_delta"
+	EventModelOutputCompleted = "model_output_completed"
+	EventModelRefusal         = "model_refusal"
+	EventToolCallBlocked      = "tool_call_blocked"
+	EventProviderError        = "provider_error"
+	EventProviderTimeout      = "provider_timeout"
+	EventProviderRateLimited  = "provider_rate_limited"
+)
+
 type LocalRunner struct {
 	Service     productdata.Service
 	Broadcaster *Broadcaster

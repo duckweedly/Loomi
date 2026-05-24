@@ -10,10 +10,29 @@ import (
 	"github.com/sheridiany/loomi/internal/diagnostics"
 	"github.com/sheridiany/loomi/internal/identity"
 	"github.com/sheridiany/loomi/internal/productdata"
+	productruntime "github.com/sheridiany/loomi/internal/runtime"
 )
 
 type startRunRequest struct {
-	ScriptName string `json:"script_name"`
+	ScriptName string                `json:"script_name"`
+	MessageID  string                `json:"message_id"`
+	Source     productdata.RunSource `json:"source"`
+	ProviderID string                `json:"provider_id"`
+	Model      string                `json:"model"`
+}
+
+type modelProviderListResponse struct {
+	Providers []productruntime.ProviderCapability `json:"providers"`
+	RequestID string                              `json:"request_id"`
+}
+
+type checkModelProviderRequest struct {
+	ProviderID string `json:"provider_id"`
+}
+
+type modelProviderCheckResponse struct {
+	Provider  productruntime.ProviderCapability `json:"provider"`
+	RequestID string                            `json:"request_id"`
 }
 
 type runResponse struct {
@@ -30,6 +49,39 @@ type stopRunResponse struct {
 	Run       productdata.Run           `json:"run"`
 	Result    productdata.StopRunResult `json:"result"`
 	RequestID string                    `json:"request_id"`
+}
+
+func (s *Server) handleModelProviders(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeMethodNotAllowed(w, "GET")
+		return
+	}
+	writeJSON(w, http.StatusOK, modelProviderListResponse{Providers: productruntime.ProviderCapabilities(s.providers), RequestID: diagnostics.NewRequestID()})
+}
+
+func (s *Server) handleModelProviderCheck(w http.ResponseWriter, r *http.Request) {
+	var req checkModelProviderRequest
+	if err := decodeJSONRequest(r, &req); err != nil {
+		writeAPIError(w, productdata.NewError(productdata.CodeInvalidRequest, "Invalid JSON request."))
+		return
+	}
+	for _, provider := range s.providers {
+		if provider.ID != req.ProviderID {
+			continue
+		}
+		capability := provider.Capability()
+		if capability.Status == productruntime.ProviderStatusUnavailable {
+			writeAPIError(w, productdata.NewError(productdata.CodeProviderUnavailable, capability.Message))
+			return
+		}
+		if capability.Status == productruntime.ProviderStatusMisconfigured {
+			writeAPIError(w, productdata.NewError(productdata.CodeProviderMisconfigured, capability.Message))
+			return
+		}
+		writeJSON(w, http.StatusOK, modelProviderCheckResponse{Provider: capability, RequestID: diagnostics.NewRequestID()})
+		return
+	}
+	writeAPIError(w, productdata.NewError(productdata.CodeProviderMisconfigured, "Provider is not configured."))
 }
 
 func (s *Server) handleThreadRuns(w http.ResponseWriter, r *http.Request, threadID string) {
@@ -60,12 +112,16 @@ func (s *Server) handleThreadRuns(w http.ResponseWriter, r *http.Request, thread
 			return
 		}
 	}
-	run, err := s.product.StartRun(r.Context(), identity.LocalDevIdentity(), threadID, productdata.StartRunInput{ScriptName: req.ScriptName})
+	run, err := s.product.StartRun(r.Context(), identity.LocalDevIdentity(), threadID, productdata.StartRunInput{ScriptName: req.ScriptName, Source: req.Source, MessageID: req.MessageID, ProviderID: req.ProviderID, Model: req.Model})
 	if err != nil {
 		writeAPIError(w, err)
 		return
 	}
-	if s.runner != nil {
+	if run.Source == productdata.RunSourceModelGateway {
+		if s.gatewayRunner != nil {
+			s.gatewayRunner.RunAsync(r.Context(), run, productruntime.GatewayRunInput{ThreadID: threadID, MessageID: req.MessageID, ProviderID: req.ProviderID, Model: req.Model})
+		}
+	} else if s.runner != nil {
 		s.runner.RunAsync(run, req.ScriptName)
 	}
 	writeJSON(w, http.StatusCreated, runResponse{Run: run, RequestID: diagnostics.NewRequestID()})

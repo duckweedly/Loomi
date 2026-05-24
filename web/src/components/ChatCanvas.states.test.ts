@@ -15,6 +15,9 @@ describe('ChatCanvas state copy', () => {
     expect(source).toContain('已完成')
     expect(source).toContain('执行失败')
     expect(source).toContain('后端能力未接入')
+    expect(source).toContain('模型网关')
+    expect(source).toContain('工具调用未执行')
+    expect(source).toContain('已停止生成')
   })
 
   test('routes ChatCanvas rendering through deriveChatCanvasState', () => {

@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"net/http"
 	"net/url"
 	"strings"
@@ -15,13 +16,19 @@ type RuntimeRunner interface {
 	RunAsync(productdata.Run, string)
 }
 
+type GatewayRunner interface {
+	RunAsync(context.Context, productdata.Run, productruntime.GatewayRunInput)
+}
+
 type Server struct {
 	cfg         config.Config
 	checker     db.Checker
 	product     productdata.Service
 	broadcaster *productruntime.Broadcaster
-	runner      RuntimeRunner
-	mux         *http.ServeMux
+	runner        RuntimeRunner
+	gatewayRunner GatewayRunner
+	providers     []productruntime.ProviderConfig
+	mux           *http.ServeMux
 }
 
 func NewServer(cfg config.Config, checker db.Checker) *Server {
@@ -33,10 +40,17 @@ func NewServerWithProduct(cfg config.Config, checker db.Checker, product product
 }
 
 func NewServerWithRuntime(cfg config.Config, checker db.Checker, product productdata.Service, broadcaster *productruntime.Broadcaster, runner RuntimeRunner) *Server {
-	s := &Server{cfg: cfg, checker: checker, product: product, broadcaster: broadcaster, runner: runner, mux: http.NewServeMux()}
+	s := NewServerWithRuntimes(cfg, checker, product, broadcaster, runner, nil)
+	return s
+}
+
+func NewServerWithRuntimes(cfg config.Config, checker db.Checker, product productdata.Service, broadcaster *productruntime.Broadcaster, runner RuntimeRunner, gatewayRunner GatewayRunner) *Server {
+	s := &Server{cfg: cfg, checker: checker, product: product, broadcaster: broadcaster, runner: runner, gatewayRunner: gatewayRunner, providers: productruntime.ProviderConfigsFromConfig(cfg), mux: http.NewServeMux()}
 	s.mux.HandleFunc("GET /healthz", s.handleHealthz)
 	s.mux.HandleFunc("GET /readyz", s.handleReadyz)
 	s.mux.HandleFunc("GET /v1/me", s.handleCurrentIdentity)
+	s.mux.HandleFunc("/v1/model-providers", s.handleModelProviders)
+	s.mux.HandleFunc("POST /v1/model-providers/check", s.handleModelProviderCheck)
 	s.mux.HandleFunc("/v1/threads", s.handleThreads)
 	s.mux.HandleFunc("/v1/threads/", s.handleThreadByID)
 	s.mux.HandleFunc("/v1/runs/", s.handleRunByID)

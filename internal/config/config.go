@@ -15,6 +15,16 @@ type Config struct {
 	DatabaseURL             string
 	LogLevel                string
 	ReadinessTimeoutSeconds int
+	ModelProviders          []ModelProvider
+}
+
+type ModelProvider struct {
+	ID      string
+	Family  string
+	BaseURL string
+	APIKey  string
+	Model   string
+	Enabled bool
 }
 
 func Load() (Config, error) {
@@ -24,6 +34,7 @@ func Load() (Config, error) {
 		DatabaseURL:             os.Getenv("DATABASE_URL"),
 		LogLevel:                getenv("LOG_LEVEL", "info"),
 		ReadinessTimeoutSeconds: 5,
+		ModelProviders:          loadModelProviders(),
 	}
 
 	if raw := os.Getenv("READINESS_TIMEOUT_SECONDS"); raw != "" {
@@ -61,6 +72,19 @@ func (c Config) Validate() error {
 	default:
 		return errors.New("LOG_LEVEL must be debug, info, warn, or error")
 	}
+	for _, provider := range c.ModelProviders {
+		if provider.ID == "" {
+			return errors.New("model provider id is required")
+		}
+		switch provider.Family {
+		case "anthropic", "openai", "gemini", "openai_compatible":
+		default:
+			return errors.New("model provider family must be anthropic, openai, gemini, or openai_compatible")
+		}
+		if provider.Model == "" {
+			return errors.New("model provider model is required")
+		}
+	}
 	return nil
 }
 
@@ -78,6 +102,23 @@ func (c Config) RedactedDatabaseURL() string {
 		}
 	}
 	return u.String()
+}
+
+func loadModelProviders() []ModelProvider {
+	providers := make([]ModelProvider, 0, 4)
+	if apiKey := os.Getenv("LOOMI_ANTHROPIC_API_KEY"); apiKey != "" {
+		providers = append(providers, ModelProvider{ID: "anthropic", Family: "anthropic", APIKey: apiKey, Model: getenv("LOOMI_ANTHROPIC_MODEL", "claude-sonnet-4-6"), Enabled: true})
+	}
+	if apiKey := os.Getenv("LOOMI_OPENAI_API_KEY"); apiKey != "" {
+		providers = append(providers, ModelProvider{ID: "openai", Family: "openai", APIKey: apiKey, Model: getenv("LOOMI_OPENAI_MODEL", "gpt-4.1"), Enabled: true})
+	}
+	if apiKey := os.Getenv("LOOMI_GEMINI_API_KEY"); apiKey != "" {
+		providers = append(providers, ModelProvider{ID: "gemini", Family: "gemini", APIKey: apiKey, Model: getenv("LOOMI_GEMINI_MODEL", "gemini-3.5-flash"), Enabled: true})
+	}
+	if apiKey := os.Getenv("LOOMI_CUSTOM_MODEL_API_KEY"); apiKey != "" {
+		providers = append(providers, ModelProvider{ID: getenv("LOOMI_CUSTOM_MODEL_PROVIDER_ID", "custom"), Family: "openai_compatible", BaseURL: os.Getenv("LOOMI_CUSTOM_MODEL_BASE_URL"), APIKey: apiKey, Model: os.Getenv("LOOMI_CUSTOM_MODEL_NAME"), Enabled: true})
+	}
+	return providers
 }
 
 func getenv(key, fallback string) string {

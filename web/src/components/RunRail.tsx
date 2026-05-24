@@ -24,6 +24,14 @@ function getEventMark(event: Run['events'][number], index: number) {
   return <Check size={11} />
 }
 
+function formatRuntimeEventDetail(event: Run['events'][number]) {
+  if (event.type === 'error.provider_error' || event.type === 'error.provider_timeout' || event.type === 'error.provider_rate_limited') return `Provider failure · ${event.detail}`
+  if (event.type === 'progress.tool_call_blocked') return `Tool request blocked · ${event.detail}`
+  if (event.type === 'message.model_output_delta') return 'Model gateway streaming output'
+  if (event.type === 'message.model_output_completed') return 'Model gateway response completed'
+  return event.detail
+}
+
 export function RunRail({ run, open, onOpenArtifact, onStopRun, selectedRuntimeScript = 'success', onSelectRuntimeScript }: Props) {
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set())
   const toggleSection = (section: string) => {
@@ -55,7 +63,7 @@ export function RunRail({ run, open, onOpenArtifact, onStopRun, selectedRuntimeS
           {run?.events.map((event, index) => (
             <div key={event.id} className={getEventClassName(event.status)}>
               <span className="progress-mark">{getEventMark(event, index)}</span>
-              <span>{event.detail}</span>
+              <span>{formatRuntimeEventDetail(event)}</span>
               <small>{event.time}</small>
             </div>
           ))}
