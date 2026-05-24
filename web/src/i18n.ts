@@ -1,0 +1,423 @@
+export type Locale = 'zh' | 'en'
+
+type Dictionary = {
+  app: {
+    chat: string
+    work: string
+    collapseSidebar: string
+    openSidebar: string
+    search: string
+    openRunDetails: string
+    openRightTools: string
+  }
+  sidebar: {
+    newChat: string
+    projects: string
+    scheduled: string
+    threads: string
+    settings: string
+    theme: string
+    update: string
+    current: string
+    open: string
+    light: string
+    dark: string
+    archiveThread: string
+    renameThread: string
+    loadingThreads: string
+    retry: string
+    emptyThreads: (mode: string) => string
+  }
+  chatCanvas: {
+    noThreadTitle: string
+    noThreadDetail: string
+    emptyThreadTitle: string
+    emptyThreadDetail: string
+    loadingTitle: string
+    loadingDetail: string
+    errorTitle: string
+    errorDetail: string
+    waitingRunTitle: string
+    waitingRunDetail: string
+    runningTitle: string
+    runningDetail: string
+    completedTitle: string
+    completedDetail: string
+    failedTitle: string
+    failedDetail: string
+    stoppedTitle: string
+    stoppedDetail: string
+    recoveringTitle: string
+    recoveringDetail: string
+    stoppingTitle: string
+    stoppingDetail: string
+    backendUnavailableTitle: string
+    backendUnavailableDetail: string
+    assistant: string
+    user: string
+    modelGateway: string
+    toolBoundaryNotice: string
+    context: string
+    localSimulated: string
+    stop: string
+    retry: string
+    regenerate: string
+    attach: string
+    messageLoomi: string
+    stoppedDraft: string
+    recoveringDraft: string
+    modelDrafting: string
+    generating: string
+  }
+  settings: {
+    title: string
+    back: string
+    language: string
+    languageHelper: string
+    chinese: string
+    english: string
+    working: string
+    readOnly: string
+    previewOnly: string
+    disabled: string
+    mixed: string
+    available: string
+    unavailable: string
+    misconfigured: string
+    notConnected: string
+    noThreadSelected: string
+    noActiveRun: string
+    general: string
+    generalDescription: string
+    workspaceDefaults: string
+    workspaceDefaultsDescription: string
+    defaultWorkspaceMode: string
+    defaultWorkspaceModeHelper: string
+    mockRuntimeScenario: string
+    mockRuntimeScenarioHelper: string
+    success: string
+    failure: string
+    runtimeStatus: string
+    runtimeStatusDescription: string
+    dataSourceMode: string
+    dataSourceModeHelper: string
+    backendCapability: string
+    backendCapabilityHelper: string
+    streamState: string
+    streamStateHelper: string
+    selectedThread: string
+    selectedThreadHelper: string
+    selectedRunStatus: string
+    selectedRunStatusHelper: string
+    providerCapability: string
+    providerCapabilityHelper: string
+    providerSummaryTitle: string
+    providerSummaryDescription: string
+    providerManagement: string
+    providerManagementHelper: string
+    providerBaseUrl: string
+    providerBaseUrlHelper: string
+    providerModel: string
+    providerModelHelper: string
+    providerApiKey: string
+    providerApiKeyHelper: string
+    providerConfigured: string
+    providerNotConfigured: string
+    aboutLocalApp: string
+    aboutLocalAppDescription: string
+    appName: string
+    appNameHelper: string
+    appVersion: string
+    appVersionHelper: string
+    appStatus: string
+    appStatusHelper: string
+    previewControl: string
+    previewControlHelper: string
+    connectionState: string
+    connectionStateHelper: string
+    categoryPreview: (label: string) => string
+  }
+}
+
+export const dictionaries: Record<Locale, Dictionary> = {
+  zh: {
+    app: {
+      chat: '聊天',
+      work: '工作',
+      collapseSidebar: '收起侧边栏',
+      openSidebar: '打开侧边栏',
+      search: '搜索',
+      openRunDetails: '打开运行详情',
+      openRightTools: '打开右侧工具',
+    },
+    sidebar: {
+      newChat: '新对话',
+      projects: '项目',
+      scheduled: '计划任务',
+      threads: '会话',
+      settings: '设置',
+      theme: '主题',
+      update: '更新',
+      current: '当前',
+      open: '打开',
+      light: '浅色',
+      dark: '深色',
+      archiveThread: '归档会话',
+      renameThread: '重命名会话',
+      loadingThreads: '加载会话中',
+      retry: '重试',
+      emptyThreads: (mode) => `暂无 ${mode} 会话`,
+    },
+    chatCanvas: {
+      noThreadTitle: '未选择会话',
+      noThreadDetail: '创建新对话',
+      emptyThreadTitle: '新对话',
+      emptyThreadDetail: '输入第一条消息',
+      loadingTitle: '加载中',
+      loadingDetail: '同步会话',
+      errorTitle: '加载失败',
+      errorDetail: '重试',
+      waitingRunTitle: '等待执行',
+      waitingRunDetail: '消息已发送',
+      runningTitle: '执行中',
+      runningDetail: '查看右侧时间线',
+      completedTitle: '已完成',
+      completedDetail: '回复已生成',
+      failedTitle: '执行失败',
+      failedDetail: '未生成成功回复',
+      stoppedTitle: '已停止',
+      stoppedDetail: '保留已生成内容',
+      recoveringTitle: '恢复中',
+      recoveringDetail: '正在恢复运行状态',
+      stoppingTitle: '停止中',
+      stoppingDetail: '等待后台 worker 确认',
+      backendUnavailableTitle: '后端能力未接入',
+      backendUnavailableDetail: '等待 M4/M5 run/event',
+      assistant: 'Loomi',
+      user: '你',
+      modelGateway: '模型网关',
+      toolBoundaryNotice: '工具调用未执行：M5 只记录边界事件，不执行外部动作。',
+      context: '上下文',
+      localSimulated: '本地模拟',
+      stop: '停止',
+      retry: '重试',
+      regenerate: '重新生成',
+      attach: '附件',
+      messageLoomi: '给 Loomi 发消息',
+      stoppedDraft: '已停止生成，保留已生成内容',
+      recoveringDraft: '恢复中…',
+      modelDrafting: '模型正在生成回复',
+      generating: '生成中',
+    },
+    settings: {
+      title: '设置',
+      back: '返回工作区',
+      language: '语言',
+      languageHelper: '当前会话内切换界面语言。默认中文，不写入持久化设置。',
+      chinese: '中文',
+      english: 'English',
+      working: '可用',
+      readOnly: '只读',
+      previewOnly: '预览',
+      disabled: '禁用',
+      mixed: '混合',
+      available: '可用',
+      unavailable: '不可用',
+      misconfigured: '配置错误',
+      notConnected: '未连接',
+      noThreadSelected: '未选择会话',
+      noActiveRun: '无活动运行',
+      general: '通用',
+      generalDescription: '当前会话的工作区默认值和运行状态可见性。',
+      workspaceDefaults: '工作区默认值',
+      workspaceDefaultsDescription: '只影响后续本地工作区动作的当前会话偏好。',
+      defaultWorkspaceMode: '默认工作区模式',
+      defaultWorkspaceModeHelper: '影响之后从侧边栏创建的本地会话。',
+      mockRuntimeScenario: 'Mock 运行场景',
+      mockRuntimeScenarioHelper: '只影响之后的 mock 发送，不修改正在运行的任务。',
+      success: '成功',
+      failure: '失败',
+      runtimeStatus: '运行状态',
+      runtimeStatusDescription: '当前工作区运行状态的只读视图。',
+      dataSourceMode: '数据源模式',
+      dataSourceModeHelper: '显示前端正在使用 mock 数据还是本地 API。',
+      backendCapability: '后端能力',
+      backendCapabilityHelper: '显示运行能力可用性，不暴露凭证。',
+      streamState: '流状态',
+      streamStateHelper: '显示当前运行事件流状态。',
+      selectedThread: '当前会话',
+      selectedThreadHelper: '显示打开设置时保留的工作区上下文。',
+      selectedRunStatus: '当前运行状态',
+      selectedRunStatusHelper: '显示当前运行状态，不修改运行。',
+      providerCapability: 'Provider 能力',
+      providerCapabilityHelper: '可用时只显示已脱敏的 provider id、family、model 和 status。',
+      providerSummaryTitle: 'Provider 能力摘要',
+      providerSummaryDescription: '只读显示模型网关能力；密钥管理留到后续里程碑。',
+      providerManagement: 'Provider 配置草稿',
+      providerManagementHelper: '仅保存在当前浏览器会话，用于记录中转站配置草稿；不会写入后端。',
+      providerBaseUrl: 'Base URL',
+      providerBaseUrlHelper: '填写 OpenAI-compatible 中转站地址。',
+      providerModel: '模型 ID',
+      providerModelHelper: '填写后续真实调用要使用的模型名称。',
+      providerApiKey: 'API Key',
+      providerApiKeyHelper: '仅显示是否已填写，不回显密钥内容。',
+      providerConfigured: '已填写',
+      providerNotConfigured: '未填写',
+      aboutLocalApp: '本地应用状态',
+      aboutLocalAppDescription: '显示已知本地状态；构建和账号信息仍是占位。',
+      appName: '应用',
+      appNameHelper: '当前运行的 Loomi web shell。',
+      appVersion: '版本',
+      appVersionHelper: 'M5.5 暂不读取构建版本。',
+      appStatus: '状态',
+      appStatusHelper: '当前数据源和后端能力的组合状态。',
+      previewControl: '预览控件',
+      previewControlHelper: 'Mock only。该控件未连接 provider、工具、文件或后端写入。',
+      connectionState: '连接状态',
+      connectionStateHelper: 'M5.5 未连接。未来设置需要单独实现计划。',
+      categoryPreview: (label) => `${label} 预览`,
+    },
+  },
+  en: {
+    app: {
+      chat: 'Chat',
+      work: 'Work',
+      collapseSidebar: 'Collapse sidebar',
+      openSidebar: 'Open sidebar',
+      search: 'Search',
+      openRunDetails: 'Open run details',
+      openRightTools: 'Open right tools',
+    },
+    sidebar: {
+      newChat: 'New Chat',
+      projects: 'Projects',
+      scheduled: 'Scheduled',
+      threads: 'Threads',
+      settings: 'Settings',
+      theme: 'Theme',
+      update: 'Update',
+      current: 'Current',
+      open: 'Open',
+      light: 'Light',
+      dark: 'Dark',
+      archiveThread: 'Archive thread',
+      renameThread: 'Rename thread',
+      loadingThreads: 'Loading threads',
+      retry: 'Retry',
+      emptyThreads: (mode) => `No ${mode} threads`,
+    },
+    chatCanvas: {
+      noThreadTitle: 'No thread selected',
+      noThreadDetail: 'Create a new conversation',
+      emptyThreadTitle: 'New conversation',
+      emptyThreadDetail: 'Send the first message',
+      loadingTitle: 'Loading',
+      loadingDetail: 'Syncing workspace',
+      errorTitle: 'Load failed',
+      errorDetail: 'Retry',
+      waitingRunTitle: 'Waiting to run',
+      waitingRunDetail: 'Message sent',
+      runningTitle: 'Running',
+      runningDetail: 'View the timeline',
+      completedTitle: 'Completed',
+      completedDetail: 'Reply generated',
+      failedTitle: 'Run failed',
+      failedDetail: 'No successful reply generated',
+      stoppedTitle: 'Stopped',
+      stoppedDetail: 'Generated content was preserved',
+      recoveringTitle: 'Recovering',
+      recoveringDetail: 'Recovering the latest run state',
+      stoppingTitle: 'Stopping',
+      stoppingDetail: 'Waiting for the background worker to confirm',
+      backendUnavailableTitle: 'Backend capability unavailable',
+      backendUnavailableDetail: 'Waiting for M4/M5 run/event',
+      assistant: 'Loomi',
+      user: 'You',
+      modelGateway: 'Model gateway',
+      toolBoundaryNotice: 'Tool call not executed: M5 records the boundary event only and does not run external actions.',
+      context: 'Context',
+      localSimulated: 'Local simulated',
+      stop: 'Stop',
+      retry: 'Retry',
+      regenerate: 'Regenerate',
+      attach: 'Attach',
+      messageLoomi: 'Message Loomi',
+      stoppedDraft: 'Generation stopped; generated content was preserved',
+      recoveringDraft: 'Recovering…',
+      modelDrafting: 'Model is drafting a reply',
+      generating: 'Generating',
+    },
+    settings: {
+      title: 'Settings',
+      back: 'Back to workspace',
+      language: 'Language',
+      languageHelper: 'Switch the interface language for the current session. Chinese is the default and nothing is persisted.',
+      chinese: '中文',
+      english: 'English',
+      working: 'Working',
+      readOnly: 'Read-only',
+      previewOnly: 'Preview only',
+      disabled: 'Disabled',
+      mixed: 'Mixed',
+      available: 'Available',
+      unavailable: 'Unavailable',
+      misconfigured: 'Misconfigured',
+      notConnected: 'Not connected',
+      noThreadSelected: 'No thread selected',
+      noActiveRun: 'No active run',
+      general: 'General',
+      generalDescription: 'Current-session workspace defaults and runtime visibility.',
+      workspaceDefaults: 'Workspace defaults',
+      workspaceDefaultsDescription: 'Session-local preferences for future local workspace actions.',
+      defaultWorkspaceMode: 'Default workspace mode',
+      defaultWorkspaceModeHelper: 'Applies to future local conversations created from the sidebar.',
+      mockRuntimeScenario: 'Mock runtime scenario',
+      mockRuntimeScenarioHelper: 'Applies only to future mock sends and does not mutate active runs.',
+      success: 'Success',
+      failure: 'Failure',
+      runtimeStatus: 'Runtime status',
+      runtimeStatusDescription: 'Read-only visibility for the currently selected workspace runtime.',
+      dataSourceMode: 'Data source mode',
+      dataSourceModeHelper: 'Shows whether the frontend is using mock data or the local API.',
+      backendCapability: 'Backend capability',
+      backendCapabilityHelper: 'Displays runtime availability without exposing credentials.',
+      streamState: 'Stream state',
+      streamStateHelper: 'Shows the selected run event stream state.',
+      selectedThread: 'Selected thread',
+      selectedThreadHelper: 'Shows the workspace context preserved while Settings is open.',
+      selectedRunStatus: 'Selected run status',
+      selectedRunStatusHelper: 'Shows the current run state without changing the run.',
+      providerCapability: 'Provider capability',
+      providerCapabilityHelper: 'Shows redacted provider id, family, model, and status when available.',
+      providerSummaryTitle: 'Provider capability summary',
+      providerSummaryDescription: 'Read-only model gateway capability; secret management is deferred.',
+      providerManagement: 'Provider configuration draft',
+      providerManagementHelper: 'Stored only in the current browser session for OpenAI-compatible gateway notes; it is not written to the backend.',
+      providerBaseUrl: 'Base URL',
+      providerBaseUrlHelper: 'Enter the OpenAI-compatible gateway URL.',
+      providerModel: 'Model ID',
+      providerModelHelper: 'Enter the model name to use for a later real call path.',
+      providerApiKey: 'API Key',
+      providerApiKeyHelper: 'Only whether a key was entered is shown; the key itself is not echoed back.',
+      providerConfigured: 'Set',
+      providerNotConfigured: 'Not set',
+      aboutLocalApp: 'Local app status',
+      aboutLocalAppDescription: 'Shows known local state; build and account metadata remain placeholders.',
+      appName: 'Application',
+      appNameHelper: 'The current Loomi web shell.',
+      appVersion: 'Version',
+      appVersionHelper: 'M5.5 does not read build metadata yet.',
+      appStatus: 'Status',
+      appStatusHelper: 'Combined current data source and backend capability.',
+      previewControl: 'Preview control',
+      previewControlHelper: 'Mock only. This control is not connected to providers, tools, files, or backend writes.',
+      connectionState: 'Connection state',
+      connectionStateHelper: 'Not connected in M5.5. Future settings will require a separate implementation plan.',
+      categoryPreview: (label) => `${label} preview`,
+    },
+  },
+}
+
+export function getDictionary(locale: Locale) {
+  return dictionaries[locale]
+}

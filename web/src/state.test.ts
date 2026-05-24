@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { Message, Run, Thread } from './domain'
-import { mergeRunEvents, shouldApplyRunStreamEvent, getWorkspaceRefreshThreadId, shouldApplySendMessageResult, shouldApplyWorkspaceRefresh, shouldSelectWorkspaceRefreshThread } from './state'
+import { createWorkspaceSettingsState, mergeRunEvents, shouldApplyRunStreamEvent, getWorkspaceRefreshThreadId, shouldApplySendMessageResult, shouldApplyWorkspaceRefresh, shouldSelectWorkspaceRefreshThread } from './state'
 
 const threadA: Thread = {
   id: 'thread-a',
@@ -34,6 +34,13 @@ const messageA: Message = {
   content: 'A',
   createdAt: '2026-05-23T00:00:00Z',
 }
+
+describe('workspace settings state', () => {
+  test('captures the default workspace mode for future local behavior', () => {
+    expect(createWorkspaceSettingsState({ defaultWorkspaceMode: 'work' }).defaultWorkspaceMode).toBe('work')
+    expect(createWorkspaceSettingsState().defaultWorkspaceMode).toBe('chat')
+  })
+})
 
 describe('getWorkspaceRefreshThreadId', () => {
   test('falls back to the first returned thread when the requested thread is missing', () => {

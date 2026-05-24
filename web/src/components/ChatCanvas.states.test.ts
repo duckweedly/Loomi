@@ -6,8 +6,8 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { ChatCanvas } from './ChatCanvas'
 
 describe('ChatCanvas state copy', () => {
-  test('contains sparse Chinese labels for explicit workspace states', () => {
-    const source = readFileSync(resolve(import.meta.dir, 'ChatCanvas.tsx'), 'utf8')
+  test('gets sparse Chinese labels from the i18n dictionary', () => {
+    const source = readFileSync(resolve(import.meta.dir, '../i18n.ts'), 'utf8')
 
     expect(source).toContain('未选择会话')
     expect(source).toContain('新对话')
@@ -37,8 +37,8 @@ describe('ChatCanvas state copy', () => {
     expect(source).toContain('recovering')
     expect(source).not.toContain("draft.status === 'completed') return null")
     expect(source).not.toContain('message.runId !== run.id')
-    expect(source).toContain("draft.status === 'failed'")
-    expect(source).toContain("content || statusFallback")
+    expect(source).toContain("status === 'failed'")
+    expect(source).toContain('draft.content || draftFallback')
   })
 
   test('routes ChatCanvas rendering through deriveChatCanvasState', () => {
@@ -68,6 +68,7 @@ describe('ChatCanvas state copy', () => {
       streamState: 'closed',
       onSendMessage: () => {},
       onStopRun: () => {},
+      locale: 'en',
     }))
 
     expect(html.match(/Final answer/g)).toHaveLength(1)
@@ -93,6 +94,7 @@ describe('ChatCanvas state copy', () => {
       streamState: 'closed',
       onSendMessage: () => {},
       onStopRun: () => {},
+      locale: 'en',
     }))
 
     expect(html.match(/Real final/g)).toHaveLength(1)
@@ -112,6 +114,7 @@ describe('ChatCanvas state copy', () => {
       onStopRun: () => {},
       onRetryRun: () => {},
       onRegenerateRun: () => {},
+      locale: 'en',
     }))
     const completedHtml = renderToStaticMarkup(createElement(ChatCanvas, {
       sidebarCollapsed: false,
@@ -126,6 +129,7 @@ describe('ChatCanvas state copy', () => {
       onStopRun: () => {},
       onRetryRun: () => {},
       onRegenerateRun: () => {},
+      locale: 'en',
     }))
 
     expect(failedHtml).toContain('Retry')
@@ -144,6 +148,7 @@ describe('ChatCanvas state copy', () => {
       streamState: 'closed',
       onSendMessage: () => {},
       onStopRun: () => {},
+      locale: 'en',
     }))
     const disconnectedHtml = renderToStaticMarkup(createElement(ChatCanvas, {
       sidebarCollapsed: false,
@@ -156,6 +161,7 @@ describe('ChatCanvas state copy', () => {
       streamState: 'recoverable_error',
       onSendMessage: () => {},
       onStopRun: () => {},
+      locale: 'en',
     }))
 
     expect(mockHtml).toContain('Mock')

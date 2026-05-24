@@ -67,6 +67,23 @@ describe('mockApiClient thread runs', () => {
     expect(messages.filter((message) => message.role === 'assistant' && message.threadId === thread!.id)).toHaveLength(0)
   })
 
+  test('applies mock runtime scenario changes only to future sends', async () => {
+    const first = await mockApiClient.createThread?.('Scenario failure', 'chat')
+    const second = await mockApiClient.createThread?.('Scenario success', 'chat')
+
+    setMockRuntimeScript('failure')
+    const failed = await mockApiClient.sendMessage(first!.id, 'fail later')
+    mockApiClient.subscribeRunEvents?.(failed.run.id, 0, () => {}, () => {})
+    setMockRuntimeScript('success')
+    const completed = await mockApiClient.sendMessage(second!.id, 'succeed now')
+    mockApiClient.subscribeRunEvents?.(completed.run.id, 0, () => {}, () => {})
+    await new Promise((resolve) => setTimeout(resolve, 220))
+
+    expect(failed.run.status).toBe('running')
+    expect((await mockApiClient.getThreadRun(first!.id)).status).toBe('failed')
+    expect((await mockApiClient.getThreadRun(second!.id)).status).toBe('completed')
+  })
+
   test('lists only active mock threads after archiving', async () => {
     const thread = await mockApiClient.createThread?.('Archive candidate', 'chat')
 

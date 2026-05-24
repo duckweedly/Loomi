@@ -4,7 +4,9 @@ import { AlertCircle, PanelLeft, PanelRight, Search } from 'lucide-react'
 import { motion } from 'motion/react'
 import { ChatCanvas } from './components/ChatCanvas'
 import { RunTimeline } from './components/RunTimeline'
+import { SettingsView } from './components/SettingsView'
 import { ThreadSidebar } from './components/ThreadSidebar'
+import { getDictionary } from './i18n'
 import { deriveBackendCapabilityStatus } from './runtime/backendCapabilityStatus'
 import { useWorkspaceState } from './state'
 import { filterThreadsByMode } from './threadFilters'
@@ -36,8 +38,10 @@ export default function App() {
     stopRun,
     retryRun,
     regenerateRun,
-  } = useWorkspaceState()
+    providerCapabilities,
+  } = useWorkspaceState(shell.defaultWorkspaceMode)
 
+  const dictionary = getDictionary(shell.locale)
   const selectedMode = selectedThread?.mode ?? 'chat'
   const visibleThreads = filterThreadsByMode(threads, selectedMode)
   const capabilityStatus = deriveBackendCapabilityStatus({
@@ -54,7 +58,7 @@ export default function App() {
   const workspaceClass = [
     'workspace-grid',
     shell.sidebarCollapsed ? 'sidebar-collapsed' : '',
-    shell.rightPanelOpen ? 'right-tools-open' : '',
+    shell.rightPanelOpen && !shell.settingsOpen ? 'right-tools-open' : '',
   ].filter(Boolean).join(' ')
 
   const handleSidebarResize = (event: PointerEvent<HTMLDivElement>) => {
@@ -89,10 +93,10 @@ export default function App() {
             {!shell.sidebarCollapsed && (
               <aside className="sidebar-shell glass-panel">
                 <div className="sidebar-titlebar">
-                  <button className="titlebar-button" aria-label="Collapse sidebar" onClick={() => shell.setSidebarCollapsed(true)}>
+                  <button className="titlebar-button" aria-label={dictionary.app.collapseSidebar} onClick={() => shell.setSidebarCollapsed(true)}>
                     <PanelLeft size={15} strokeWidth={1.7} />
                   </button>
-                  <button className="titlebar-button" aria-label="Search">
+                  <button className="titlebar-button" aria-label={dictionary.app.search}>
                     <Search size={14} strokeWidth={1.65} />
                   </button>
                 </div>
@@ -104,12 +108,14 @@ export default function App() {
                   theme={shell.theme}
                   loading={loading}
                   error={error}
+                  copy={dictionary.sidebar}
                   onRefresh={() => void refresh()}
                   onSelectThread={selectThread}
                   onCreateThread={() => void createThread()}
                   onRenameThread={(threadId, title) => void renameThread(threadId, title)}
                   onArchiveThread={(threadId) => void archiveThread(threadId)}
                   onToggleTheme={shell.toggleTheme}
+                  onOpenSettings={shell.openSettings}
                 />
               </aside>
             )}
@@ -118,7 +124,7 @@ export default function App() {
               <header className="main-titlebar">
                 <div className="titlebar-left">
                   {shell.sidebarCollapsed && (
-                    <button className="titlebar-button" aria-label="Open sidebar" onClick={() => shell.setSidebarCollapsed(false)}>
+                    <button className="titlebar-button" aria-label={dictionary.app.openSidebar} onClick={() => shell.setSidebarCollapsed(false)}>
                       <PanelRight size={15} strokeWidth={1.7} />
                     </button>
                   )}
@@ -131,7 +137,7 @@ export default function App() {
                       if (threadId) selectThread(threadId)
                     }}
                   >
-                    Chat
+                    {dictionary.app.chat}
                   </button>
                   <button
                     className={selectedThread?.mode === 'work' ? 'selected' : undefined}
@@ -140,49 +146,72 @@ export default function App() {
                       if (threadId) selectThread(threadId)
                     }}
                   >
-                    Work
+                    {dictionary.app.work}
                   </button>
                 </div>
                 <div className="titlebar-right">
                   <button
                     className="titlebar-button"
-                    aria-label="Open run details"
+                    aria-label={dictionary.app.openRunDetails}
                     onClick={shell.toggleRunDetails}
                   >
                     <AlertCircle size={15} strokeWidth={1.7} />
                   </button>
                   <button
                     className="titlebar-button"
-                    aria-label="Open right tools"
+                    aria-label={dictionary.app.openRightTools}
                     onClick={shell.toggleRightPanelMenu}
                   >
                     <PanelRight size={15} strokeWidth={1.7} />
                   </button>
                 </div>
               </header>
-              <ChatCanvas
-                sidebarCollapsed={shell.sidebarCollapsed}
-                thread={selectedThread}
-                messages={messages}
-                run={run}
-                loading={loading}
-                error={error}
-                dataSourceMode={dataSourceMode}
-                streamState={streamState}
-                backendCapability={backendCapability}
-                backendUnavailableAttempted={backendUnavailableAttempted}
-                capabilitySignals={capabilitySignals}
-                onSendMessage={(content) => void sendMessage(content)}
-                onStopRun={() => void stopRun()}
-                onRetryRun={retryRun}
-                onRegenerateRun={regenerateRun}
-              />
+              {shell.settingsOpen ? (
+                <SettingsView
+                  locale={shell.locale}
+                  selectedCategoryId={shell.settingsCategoryId}
+                  defaultWorkspaceMode={shell.defaultWorkspaceMode}
+                  selectedRuntimeScript={selectedRuntimeScript}
+                  dataSourceMode={dataSourceMode}
+                  backendCapability={backendCapability}
+                  streamState={streamState}
+                  selectedThreadTitle={selectedThread?.title}
+                  selectedRunStatus={run?.status}
+                  providerCapabilities={providerCapabilities}
+                  providerDraftSettings={shell.providerDraftSettings}
+                  onSelectLocale={shell.setLocale}
+                  onSelectCategory={shell.setSettingsCategory}
+                  onSelectDefaultWorkspaceMode={shell.setDefaultWorkspaceMode}
+                  onSelectRuntimeScript={selectRuntimeScript}
+                  onProviderDraftSettingsChange={shell.setProviderDraftSettings}
+                  onBack={shell.closeSettings}
+                />
+              ) : (
+                <ChatCanvas
+                  sidebarCollapsed={shell.sidebarCollapsed}
+                  thread={selectedThread}
+                  messages={messages}
+                  run={run}
+                  loading={loading}
+                  error={error}
+                  dataSourceMode={dataSourceMode}
+                  streamState={streamState}
+                  backendCapability={backendCapability}
+                  backendUnavailableAttempted={backendUnavailableAttempted}
+                  capabilitySignals={capabilitySignals}
+                  onSendMessage={(content) => void sendMessage(content)}
+                  onStopRun={() => void stopRun()}
+                  onRetryRun={retryRun}
+                  onRegenerateRun={regenerateRun}
+                  locale={shell.locale}
+                />
+              )}
             </section>
             <RunTimeline
               run={run}
-              runDetailsOpen={shell.runDetailsOpen}
-              rightPanelMenuOpen={shell.rightPanelMenuOpen}
-              rightToolsOpen={shell.rightPanelOpen}
+              runDetailsOpen={!shell.settingsOpen && shell.runDetailsOpen}
+              rightPanelMenuOpen={!shell.settingsOpen && shell.rightPanelMenuOpen}
+              rightToolsOpen={!shell.settingsOpen && shell.rightPanelOpen}
               selectedPanelId={shell.selectedRightPanelId}
               onSelectPanel={shell.openRightPanel}
               onOpenArtifact={shell.openArtifact}

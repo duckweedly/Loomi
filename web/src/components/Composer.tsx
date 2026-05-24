@@ -14,9 +14,13 @@ type Props = {
   onStop?: () => void
   onRetry?: () => void
   onRegenerate?: () => void
+  attachLabel?: string
+  stopLabel?: string
+  retryLabel?: string
+  regenerateLabel?: string
 }
 
-export function Composer({ disabled, placeholder = 'Message Loomi', threadSelected, run, messages, onSubmit, onStop, onRetry, onRegenerate }: Props) {
+export function Composer({ disabled, placeholder = 'Message Loomi', threadSelected, run, messages, onSubmit, onStop, onRetry, onRegenerate, attachLabel = 'Attach', stopLabel = 'Stop', retryLabel = 'Retry', regenerateLabel = 'Regenerate' }: Props) {
   const [value, setValue] = useState('')
   const actions = deriveComposerActions({ threadSelected, text: value, run, messages })
   const canSubmit = actions.canSend || actions.canContinue
@@ -32,11 +36,11 @@ export function Composer({ disabled, placeholder = 'Message Loomi', threadSelect
   return (
     <form className="composer glass-panel" onSubmit={handleSubmit}>
       <div className="composer-actions">
-        {actions.canStop && onStop && <button type="button" className="composer-action" onClick={onStop}>Stop</button>}
-        {actions.canRetry && onRetry && <button type="button" className="composer-action" onClick={onRetry}>Retry</button>}
-        {actions.canRegenerate && onRegenerate && <button type="button" className="composer-action" onClick={onRegenerate}>Regenerate</button>}
+        {actions.canStop && onStop && <button type="button" className="composer-action" onClick={onStop}>{stopLabel}</button>}
+        {actions.canRetry && onRetry && <button type="button" className="composer-action" onClick={onRetry}>{retryLabel}</button>}
+        {actions.canRegenerate && onRegenerate && <button type="button" className="composer-action" onClick={onRegenerate}>{regenerateLabel}</button>}
       </div>
-      <Button aria-label="Attach" icon={<Paperclip size={15} />} size="small" />
+      <Button aria-label={attachLabel} icon={<Paperclip size={15} />} size="small" />
       <textarea
         className="composer-input"
         disabled={disabled}

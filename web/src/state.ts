@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { apiClient, executionAdapter } from './apiClient'
 import { setMockRuntimeScript } from './mockApiClient'
-import type { BackendCapabilityState, Message, Run, RunEvent, RuntimeEvent, RuntimeScriptId, StaleEventGuard, StreamState, Thread, ThreadRuntimeState } from './domain'
+import type { BackendCapabilityState, Message, ProviderCapability, Run, RunEvent, RuntimeEvent, RuntimeScriptId, StaleEventGuard, StreamState, Thread, ThreadRuntimeState } from './domain'
 import { isRuntimeActive, isRuntimeTerminal } from './runtime/executionAdapter'
 import { deriveCapabilitySignalFromEvent } from './runtime/backendCapabilityStatus'
 import { applyRealRunEvent, mapRealRuntimeCapabilitySignal } from './runtime/realExecutionAdapter'
@@ -188,7 +188,14 @@ export function createRegenerateAttemptRun(run: Run, attemptOfMessageId: string)
   }
 }
 
-export function useWorkspaceState() {
+export function createWorkspaceSettingsState(input: Partial<{ defaultWorkspaceMode: Thread['mode']; selectedRuntimeScript: RuntimeScriptId }> = {}) {
+  return {
+    defaultWorkspaceMode: input.defaultWorkspaceMode ?? 'chat',
+    selectedRuntimeScript: input.selectedRuntimeScript ?? 'success',
+  }
+}
+
+export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat') {
   const [threads, setThreads] = useState<Thread[]>([])
   const [selectedThreadId, setSelectedThreadId] = useState('thread-brief')
   const [messages, setMessages] = useState<Message[]>([])
@@ -199,6 +206,7 @@ export function useWorkspaceState() {
   const [backendUnavailableAttempted, setBackendUnavailableAttempted] = useState(false)
   const [capabilitySignals, setCapabilitySignals] = useState({ backendUnavailable: false, modelSetupMissing: false, providerUnavailable: false, streamDisconnected: false })
   const [selectedRuntimeScript, setSelectedRuntimeScript] = useState<RuntimeScriptId>('success')
+  const [providerCapabilities, setProviderCapabilities] = useState<ProviderCapability[]>([])
   const selectedThreadIdRef = useRef(selectedThreadId)
   const runRef = useRef<Run | null>(run)
 
@@ -240,6 +248,24 @@ export function useWorkspaceState() {
   useEffect(() => {
     void refresh(selectedThreadId)
   }, [refresh, selectedThreadId])
+
+  useEffect(() => {
+    if (!apiClient.listModelProviders) {
+      setProviderCapabilities([])
+      return
+    }
+    let cancelled = false
+    apiClient.listModelProviders()
+      .then((providers) => {
+        if (!cancelled) setProviderCapabilities(providers)
+      })
+      .catch(() => {
+        if (!cancelled) setProviderCapabilities([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   useEffect(() => {
     if (!run || !shouldBlockRuntimeSubmit(run) || !apiClient.subscribeRunEvents) {
@@ -305,13 +331,13 @@ export function useWorkspaceState() {
     if (!apiClient.createThread) return
     setError(null)
     try {
-      const thread = await apiClient.createThread(createNextThreadTitle(threads), 'chat')
+      const thread = await apiClient.createThread(createNextThreadTitle(threads), defaultWorkspaceMode)
       setSelectedThreadId(thread.id)
       await refresh(thread.id)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'API request failed')
     }
-  }, [refresh, threads])
+  }, [defaultWorkspaceMode, refresh, threads])
 
   const renameThread = useCallback(async (threadId: string, title: string) => {
     if (!apiClient.updateThread) return
@@ -400,6 +426,7 @@ export function useWorkspaceState() {
     backendUnavailableAttempted: backendUnavailableAttempted || capabilitySignals.backendUnavailable,
     capabilitySignals,
     selectedRuntimeScript,
+    providerCapabilities,
     selectRuntimeScript,
     refresh,
     selectThread,
