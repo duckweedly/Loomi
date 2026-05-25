@@ -71,9 +71,17 @@ type ProviderRequest struct {
 	Model     string
 }
 
+const (
+	ProviderMessageRoleAssistantToolCall = "assistant_tool_call"
+	ProviderMessageRoleToolResult        = "tool_result"
+)
+
 type ProviderMessage struct {
-	Role    string
-	Content string
+	Role             string
+	Content          string
+	ToolCallID       string
+	ToolName         string
+	ArgumentsSummary map[string]any
 }
 
 type ProviderEvent struct {
@@ -401,21 +409,21 @@ func dispatchOpenAIEvent(ctx context.Context, data string, ch chan<- ProviderEve
 		for _, toolCall := range choice.Delta.ToolCalls {
 			if toolCall.Function.Name != "" {
 				metadata := map[string]any{}
-					if toolCall.ID != "" {
-						metadata["tool_call_id"] = toolCall.ID
-					}
-					if toolCall.Function.Arguments != "" {
-						metadata["arguments_summary"] = parseToolArgumentsSummary(toolCall.Function.Arguments)
-					}
-					_ = sendProviderEvent(ctx, ch, ProviderEvent{Type: ProviderEventToolCall, ToolName: toolCall.Function.Name, Metadata: metadata})
+				if toolCall.ID != "" {
+					metadata["tool_call_id"] = toolCall.ID
+				}
+				if toolCall.Function.Arguments != "" {
+					metadata["arguments_summary"] = parseToolArgumentsSummary(toolCall.Function.Arguments)
+				}
+				_ = sendProviderEvent(ctx, ch, ProviderEvent{Type: ProviderEventToolCall, ToolName: toolCall.Function.Name, Metadata: metadata})
 			}
 		}
 		if choice.Delta.FunctionCall.Name != "" {
 			metadata := map[string]any{}
-				if choice.Delta.FunctionCall.Arguments != "" {
-					metadata["arguments_summary"] = parseToolArgumentsSummary(choice.Delta.FunctionCall.Arguments)
-				}
-				_ = sendProviderEvent(ctx, ch, ProviderEvent{Type: ProviderEventToolCall, ToolName: choice.Delta.FunctionCall.Name, Metadata: metadata})
+			if choice.Delta.FunctionCall.Arguments != "" {
+				metadata["arguments_summary"] = parseToolArgumentsSummary(choice.Delta.FunctionCall.Arguments)
+			}
+			_ = sendProviderEvent(ctx, ch, ProviderEvent{Type: ProviderEventToolCall, ToolName: choice.Delta.FunctionCall.Name, Metadata: metadata})
 		}
 		if choice.FinishReason == "stop" || choice.FinishReason == "length" {
 			_ = sendProviderEvent(ctx, ch, ProviderEvent{Type: ProviderEventCompleted, FinishInfo: choice.FinishReason})
@@ -602,18 +610,42 @@ type openAIRequestBody struct {
 }
 
 type openAIMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role       string           `json:"role"`
+	Content    *string          `json:"content,omitempty"`
+	ToolCalls  []openAIToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string           `json:"tool_call_id,omitempty"`
+}
+
+type openAIToolCall struct {
+	ID       string             `json:"id"`
+	Type     string             `json:"type"`
+	Function openAIToolFunction `json:"function"`
+}
+
+type openAIToolFunction struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
 }
 
 func openAIMessages(messages []ProviderMessage) []openAIMessage {
 	result := make([]openAIMessage, 0, len(messages))
 	for _, message := range messages {
+		if message.Role == ProviderMessageRoleAssistantToolCall {
+			arguments, _ := json.Marshal(message.ArgumentsSummary)
+			result = append(result, openAIMessage{Role: "assistant", ToolCalls: []openAIToolCall{{ID: message.ToolCallID, Type: "function", Function: openAIToolFunction{Name: message.ToolName, Arguments: string(arguments)}}}})
+			continue
+		}
+		if message.Role == ProviderMessageRoleToolResult {
+			content := message.Content
+			result = append(result, openAIMessage{Role: "tool", Content: &content, ToolCallID: message.ToolCallID})
+			continue
+		}
 		role := message.Role
 		if role != "assistant" {
 			role = "user"
 		}
-		result = append(result, openAIMessage{Role: role, Content: message.Content})
+		content := message.Content
+		result = append(result, openAIMessage{Role: role, Content: &content})
 	}
 	return result
 }
@@ -644,8 +676,8 @@ func geminiContents(messages []ProviderMessage) []geminiContent {
 }
 
 type anthropicStreamEvent struct {
-	Type         string `json:"type"`
-	Delta        struct {
+	Type  string `json:"type"`
+	Delta struct {
 		Type       string `json:"type"`
 		Text       string `json:"text"`
 		StopReason string `json:"stop_reason"`

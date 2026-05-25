@@ -3,7 +3,7 @@ title: Local M7 Tool Call Approval Runbook
 description: Local validation commands and smoke expectations for the M7 tool-call approval foundation.
 ---
 
-M7 currently has the Phase 2 foundation plus the US1 observable request slice: schema, product-data services, runtime tool definition, provider-to-approval-required conversion for `runtime.get_current_time`, scoped tool-call reads, stream replay tests, diagnostics counters, and frontend approval-required placeholders. Full approve/deny UI and execution smoke paths are later M7 tasks.
+M7 currently has the Phase 2 foundation plus the US1 observable request slice: schema, product-data services, runtime tool definition, provider-to-approval-required conversion for `runtime.get_current_time`, scoped tool-call reads, stream replay tests, diagnostics counters, frontend approval-required placeholders, and a minimal tool-result continuation boundary. Full approve/deny UI and execution smoke paths are later M7 tasks.
 
 ## Start local services
 
@@ -43,6 +43,10 @@ Until approve/deny endpoints land, validate the foundation and observable reques
 - gateway provider tool-call events for `runtime.get_current_time` become `tool_call_requested` and `tool_call_approval_required` without assistant message persistence or tool execution.
 - scoped `GET /v1/threads/{thread_id}/runs/{run_id}/tool-calls/{tool_call_id}` returns the redacted current projection.
 - ToolCallCard renders approval-required placeholders with disabled controls until approve/deny handlers land.
+- tool-result continuation can build a provider request from `tool_call_requested` and `tool_call_succeeded`.
+- OpenAI-compatible continuation requests include an assistant tool call followed by a matching tool result.
+- continuation provider deltas are recorded with `model_phase = continuation`.
+- a second tool request during continuation fails with `unsupported_tool_loop`.
 
 ## Validation commands
 
@@ -51,6 +55,13 @@ go test ./internal/productdata ./internal/runtime ./internal/db ./internal/httpa
 bun test ./web/src/realApiClient.test.ts ./web/src/runtime/realExecutionAdapter.test.ts ./web/src/runtime/executionAdapter.test.ts ./web/src/runtime/runtimeEventGroups.test.ts
 bun run --cwd web build
 bun run --cwd docs-site build
+```
+
+For the continuation slice specifically:
+
+```bash
+go test ./internal/runtime -run 'TestHTTPProviderSerializesOpenAIToolResultContinuation|TestGatewayBuildsContinuationContextFromToolResultEvents|TestGatewayContinuesAfterToolResultAndPersistsFinalAssistant|TestGatewayFailsWhenContinuationRequestsAnotherTool'
+bun test ./web/src/runtime/realExecutionAdapter.test.ts
 ```
 
 If a local Postgres integration database is available, also run the repository tests with the appropriate database environment for the Postgres path.

@@ -20,11 +20,11 @@ Spec Kit 已接入仓库，并写入 Loomi constitution。文档站已作为 `do
 - M5.5：Settings Placeholder、General session-local controls、read-only runtime/provider status，以及安全的 mock/preview future settings categories。
 - M6：queued run acknowledgement、durable background job、local in-process worker、pipeline events、frontend queued/worker timeline replay、lease recovery、cancellation 和 worker diagnostics。
 - M6.5：Provider Test Console、real mode provider unavailable guidance、read-only Background tasks observer、M6 worker/job Timeline labels、Composer 状态收口和本地真实测试 runbook。
-- M7 Phase 2 foundation + US1 observable request：approval-blocked tool-call projection、`runtime.get_current_time` allowlist/schema、tool lifecycle events、safe metadata redaction、worker diagnostics counters、frontend tool-event replay mapping、provider tool-call conversion、scoped tool-call read API 和 approval-required UI placeholder。
+- M7 Phase 2 foundation + US1 observable request：approval-blocked tool-call projection、`runtime.get_current_time` allowlist/schema、tool lifecycle events、safe metadata redaction、worker diagnostics counters、frontend tool-event replay mapping、provider tool-call conversion、scoped tool-call read API、approval-required UI placeholder，以及 tool-result continuation 的 provider-neutral context / OpenAI-compatible tool-result serialization / continuation model phase replay 边界。
 
 ## 建议下一步
 
-下一步适合继续完成 M7 的 approve/deny API、approval UI actions 和 approved `runtime.get_current_time` worker execution。Desktop runtime、多 Agent、RAG/memory、持久化 settings、provider 管理、shell/filesystem/MCP/browser automation 等能力仍应通过后续 Spec Kit 功能单独推进。
+下一步适合继续完成 M7 的 approve/deny API、approval UI actions 和 approved `runtime.get_current_time` worker execution，并把执行成功后的 `tool_call_succeeded` 接到已实现的 continuation boundary。Desktop runtime、多 Agent、RAG/memory、持久化 settings、provider 管理、shell/filesystem/MCP/browser automation 等能力仍应通过后续 Spec Kit 功能单独推进。
 
 ## 开发要求
 

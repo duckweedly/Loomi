@@ -16,6 +16,25 @@ describe('applyRealRunEvent', () => {
     expect(final.events.map((event) => event.id)).toEqual(['evt-1', 'evt-2'])
   })
 
+  test('uses continuation deltas as the final assistant draft after tool success', () => {
+    const run = { id: 'run-a', threadId: 'thread-a', status: 'running', model: 'Model gateway', context: 'model_gateway', source: 'model_gateway', events: [] } as const
+    const initialDelta: RuntimeEvent = { id: 'evt-1', runId: 'run-a', threadId: 'thread-a', sequence: 1, type: 'message.model_output_delta', label: 'message', detail: 'Model output delta', content: 'I will check.', assistantDelta: 'I will check.', time: 'Now', status: 'running', metadata: { model_phase: 'initial' } }
+    const toolSucceeded: RuntimeEvent = { id: 'evt-2', runId: 'run-a', threadId: 'thread-a', sequence: 2, type: 'tool.call.succeeded', label: 'tool', detail: 'Tool call succeeded', time: 'Now', status: 'running', group: 'tool-call', metadata: { tool_call_id: 'tc_1', tool_name: 'runtime.get_current_time', result_summary: { iso_time: '2026-05-25T10:00:00Z' } } }
+    const continuationDelta: RuntimeEvent = { id: 'evt-3', runId: 'run-a', threadId: 'thread-a', sequence: 3, type: 'message.model_output_delta', label: 'message', detail: 'Model output delta', content: 'It is 2026-05-25T10:00:00Z.', assistantDelta: 'It is 2026-05-25T10:00:00Z.', time: 'Now', status: 'running', metadata: { model_phase: 'continuation' } }
+    const completed: RuntimeEvent = { id: 'evt-4', runId: 'run-a', threadId: 'thread-a', sequence: 4, type: 'message.model_output_completed', label: 'message', detail: 'Model output completed', content: 'It is 2026-05-25T10:00:00Z.', time: 'Now', status: 'running', metadata: { model_phase: 'continuation' } }
+
+    const afterInitial = applyRealRunEvent(run, initialDelta)
+    const afterTool = applyRealRunEvent(afterInitial, toolSucceeded)
+    const afterContinuation = applyRealRunEvent(afterTool, continuationDelta)
+    const final = applyRealRunEvent(afterContinuation, completed)
+
+    expect(afterInitial.assistantDraft?.content).toBe('I will check.')
+    expect(afterTool.assistantDraft).toMatchObject({ content: 'I will check.', status: 'paused_for_tool' })
+    expect(afterContinuation.assistantDraft?.content).toBe('It is 2026-05-25T10:00:00Z.')
+    expect(final.assistantDraft).toMatchObject({ content: 'It is 2026-05-25T10:00:00Z.', status: 'completed' })
+    expect(final.toolCalls?.[0].resultSummary).toEqual({ iso_time: '2026-05-25T10:00:00Z' })
+  })
+
   test('ignores late provider events after a terminal run', () => {
     const run = { id: 'run-a', threadId: 'thread-a', status: 'stopped', model: 'Model gateway', context: 'model_gateway', source: 'model_gateway', events: [], assistantDraft: { content: '', status: 'stopped' } } as const
     const event: RuntimeEvent = { id: 'evt-late', runId: 'run-a', threadId: 'thread-a', type: 'message.model_output_delta', label: 'message', detail: 'Late delta', content: 'late', assistantDelta: 'late', time: 'Now', status: 'running' }

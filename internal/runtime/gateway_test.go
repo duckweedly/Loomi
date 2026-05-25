@@ -194,23 +194,169 @@ func TestGatewayLoadsCurrentThreadContextThroughTriggerMessage(t *testing.T) {
 		t.Fatalf("messages = %+v", provider.request.Messages)
 	}
 	for i := range want {
-		if provider.request.Messages[i] != want[i] {
+		if provider.request.Messages[i].Role != want[i].Role || provider.request.Messages[i].Content != want[i].Content {
 			t.Fatalf("messages = %+v", provider.request.Messages)
 		}
+	}
+}
+
+func TestGatewayBuildsContinuationContextFromToolResultEvents(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, productdata.CreateThreadInput{Title: "Gateway", Mode: productdata.ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _, err := svc.CreateMessage(context.Background(), ident, thread.ID, productdata.CreateMessageInput{Content: "What time is it?"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, productdata.StartRunInput{Source: productdata.RunSourceModelGateway, MessageID: message.ID, ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.AppendRunEvent(context.Background(), ident, run.ID, productdata.AppendRunEventInput{Category: productdata.RunEventCategoryProgress, Type: productdata.EventToolCallRequested, Summary: "Tool call requested", Metadata: map[string]any{"tool_call_id": "tc_1", "tool_name": productdata.ToolNameCurrentTime, "arguments_summary": map[string]any{"timezone": "UTC"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.AppendRunEvent(context.Background(), ident, run.ID, productdata.AppendRunEventInput{Category: productdata.RunEventCategoryProgress, Type: productdata.EventToolCallSucceeded, Summary: "Tool call succeeded", Metadata: map[string]any{"tool_call_id": "tc_1", "tool_name": productdata.ToolNameCurrentTime, "result_summary": map[string]any{"iso_time": "2026-05-25T10:00:00Z", "timezone": "UTC", "source": "runtime", "api_key": "sk-secret"}}}); err != nil {
+		t.Fatal(err)
+	}
+	gateway := NewGateway(svc, nil, nil)
+
+	messages, err := gateway.loadContinuationMessages(context.Background(), thread.ID, message.ID, run.ID, "tc_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(messages) != 3 {
+		t.Fatalf("messages = %+v", messages)
+	}
+	if messages[1].Role != ProviderMessageRoleAssistantToolCall || messages[1].ToolCallID != "tc_1" || messages[1].ToolName != productdata.ToolNameCurrentTime {
+		t.Fatalf("tool call message = %+v", messages[1])
+	}
+	if messages[2].Role != ProviderMessageRoleToolResult || messages[2].ToolCallID != "tc_1" {
+		t.Fatalf("tool result message = %+v", messages[2])
+	}
+	if messages[2].Content == "" || messages[2].Content == "sk-secret" {
+		t.Fatalf("tool result content = %q", messages[2].Content)
+	}
+}
+
+func TestGatewayContinuesAfterToolResultAndPersistsFinalAssistant(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, productdata.CreateThreadInput{Title: "Gateway", Mode: productdata.ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _, err := svc.CreateMessage(context.Background(), ident, thread.ID, productdata.CreateMessageInput{Content: "What time is it?"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, productdata.StartRunInput{Source: productdata.RunSourceModelGateway, MessageID: message.ID, ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.AppendRunEvent(context.Background(), ident, run.ID, productdata.AppendRunEventInput{Category: productdata.RunEventCategoryProgress, Type: productdata.EventToolCallRequested, Summary: "Tool call requested", Metadata: map[string]any{"tool_call_id": "tc_1", "tool_name": productdata.ToolNameCurrentTime, "arguments_summary": map[string]any{"timezone": "UTC"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.AppendRunEvent(context.Background(), ident, run.ID, productdata.AppendRunEventInput{Category: productdata.RunEventCategoryProgress, Type: productdata.EventToolCallSucceeded, Summary: "Tool call succeeded", Metadata: map[string]any{"tool_call_id": "tc_1", "tool_name": productdata.ToolNameCurrentTime, "result_summary": map[string]any{"iso_time": "2026-05-25T10:00:00Z", "timezone": "UTC", "source": "runtime"}}}); err != nil {
+		t.Fatal(err)
+	}
+	provider := &capturingProvider{config: ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: "https://example.test/v1", APIKey: "key", Model: "model", Enabled: true}, events: []ProviderEvent{{Type: ProviderEventTextDelta, Text: "It is "}, {Type: ProviderEventCompleted, Text: "It is 2026-05-25T10:00:00Z."}}}
+
+	NewGateway(svc, nil, []Provider{provider}).ContinueAfterToolResult(context.Background(), run, GatewayContinuationInput{ThreadID: thread.ID, MessageID: message.ID, ProviderID: "custom", Model: "model", ToolCallID: "tc_1"})
+
+	if provider.request.Messages[1].Role != ProviderMessageRoleAssistantToolCall || provider.request.Messages[2].Role != ProviderMessageRoleToolResult {
+		t.Fatalf("request = %+v", provider.request.Messages)
+	}
+	events, err := svc.ListRunEvents(context.Background(), ident, run.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var succeeded, continuationDelta, completed bool
+	for _, event := range events {
+		if event.Type == productdata.EventToolCallSucceeded {
+			succeeded = true
+		}
+		if succeeded && event.Type == "model_output_delta" && event.Metadata["model_phase"] == "continuation" {
+			continuationDelta = true
+		}
+		if continuationDelta && event.Type == productdata.EventRunCompleted {
+			completed = true
+		}
+	}
+	if !completed {
+		t.Fatalf("events = %+v", events)
+	}
+	messages, err := svc.ListMessages(context.Background(), ident, thread.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 2 || messages[1].Role != productdata.MessageRoleAssistant || messages[1].Content != "It is 2026-05-25T10:00:00Z." {
+		t.Fatalf("messages = %+v", messages)
+	}
+}
+
+func TestGatewayFailsWhenContinuationRequestsAnotherTool(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, productdata.CreateThreadInput{Title: "Gateway", Mode: productdata.ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _, err := svc.CreateMessage(context.Background(), ident, thread.ID, productdata.CreateMessageInput{Content: "What time is it?"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, productdata.StartRunInput{Source: productdata.RunSourceModelGateway, MessageID: message.ID, ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.AppendRunEvent(context.Background(), ident, run.ID, productdata.AppendRunEventInput{Category: productdata.RunEventCategoryProgress, Type: productdata.EventToolCallRequested, Summary: "Tool call requested", Metadata: map[string]any{"tool_call_id": "tc_1", "tool_name": productdata.ToolNameCurrentTime, "arguments_summary": map[string]any{"timezone": "UTC"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.AppendRunEvent(context.Background(), ident, run.ID, productdata.AppendRunEventInput{Category: productdata.RunEventCategoryProgress, Type: productdata.EventToolCallSucceeded, Summary: "Tool call succeeded", Metadata: map[string]any{"tool_call_id": "tc_1", "tool_name": productdata.ToolNameCurrentTime, "result_summary": map[string]any{"iso_time": "2026-05-25T10:00:00Z", "timezone": "UTC", "source": "runtime"}}}); err != nil {
+		t.Fatal(err)
+	}
+	provider := &capturingProvider{config: ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: "https://example.test/v1", APIKey: "key", Model: "model", Enabled: true}, events: []ProviderEvent{{Type: ProviderEventToolCall, ToolName: productdata.ToolNameCurrentTime, Metadata: map[string]any{"tool_call_id": "tc_2"}}}}
+
+	NewGateway(svc, nil, []Provider{provider}).ContinueAfterToolResult(context.Background(), run, GatewayContinuationInput{ThreadID: thread.ID, MessageID: message.ID, ProviderID: "custom", Model: "model", ToolCallID: "tc_1"})
+
+	got, err := svc.GetRun(context.Background(), ident, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != productdata.RunStatusFailed || got.ErrorCode == nil || *got.ErrorCode != "unsupported_tool_loop" {
+		t.Fatalf("run = %+v", got)
+	}
+	messages, err := svc.ListMessages(context.Background(), ident, thread.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 1 {
+		t.Fatalf("messages = %+v", messages)
 	}
 }
 
 type capturingProvider struct {
 	config  ProviderConfig
 	request ProviderRequest
+	events  []ProviderEvent
 }
 
 func (p *capturingProvider) Config() ProviderConfig { return p.config }
 
 func (p *capturingProvider) Stream(_ context.Context, request ProviderRequest) (<-chan ProviderEvent, error) {
 	p.request = request
-	ch := make(chan ProviderEvent, 1)
-	ch <- ProviderEvent{Type: ProviderEventCompleted, Text: "ok"}
+	events := p.events
+	if len(events) == 0 {
+		events = []ProviderEvent{{Type: ProviderEventCompleted, Text: "ok"}}
+	}
+	ch := make(chan ProviderEvent, len(events))
+	for _, event := range events {
+		ch <- event
+	}
 	close(ch)
 	return ch, nil
 }

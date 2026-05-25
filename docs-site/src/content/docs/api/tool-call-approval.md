@@ -87,6 +87,45 @@ Tool events are persisted as run events with redacted metadata:
 
 Frontend API mapping converts these backend types to dotted runtime types such as `tool.call.approval_required` and keeps safe metadata available for replaying a stable `ToolCall` view model.
 
+`tool_call_succeeded` may include a redacted result for model continuation:
+
+```json
+{
+  "type": "tool_call_succeeded",
+  "category": "progress",
+  "metadata": {
+    "tool_call_id": "tc_1",
+    "tool_name": "runtime.get_current_time",
+    "result_summary": {
+      "iso_time": "2026-05-25T10:00:00Z",
+      "timezone": "UTC",
+      "source": "runtime"
+    }
+  }
+}
+```
+
+If `result_for_model_redacted` is present, continuation uses that field. Otherwise it uses the safe `result_summary`. Raw executor output is never eligible for provider continuation.
+
+## Tool result continuation
+
+After an approved tool succeeds, runtime can build one continuation request from:
+
+- persisted thread messages through the triggering user message
+- the matching `tool_call_requested` event
+- the matching `tool_call_succeeded` event
+
+The provider-neutral continuation context uses in-memory roles:
+
+| Role | Purpose |
+| --- | --- |
+| `assistant_tool_call` | Replays the model's prior tool request to the provider adapter. |
+| `tool_result` | Supplies the redacted tool result for the same `tool_call_id`. |
+
+OpenAI-compatible providers serialize these as an assistant `tool_calls` message followed by a matching `tool` message. Loomi does not persist a durable `messages.role = tool` row for this MVP.
+
+The second model stream reuses existing run events with `metadata.model_phase = "continuation"`. If the continuation provider asks for another tool, runtime records `unsupported_tool_loop` and fails the run without executing another tool.
+
 ## Diagnostics
 
 `GET /v1/diagnostics/worker-queue` now includes M7 counters:

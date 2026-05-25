@@ -82,9 +82,15 @@ export function applyRealRunEvent(run: Run, event: RuntimeEvent): Run {
   const completedAt = event.status === 'completed' || event.status === 'failed' || event.status === 'stopped' ? event.time : run.completedAt
   const toolMapping = toolEventMapping(event.type)
   if (toolMapping) {
-    return { ...run, status: event.status, events, completedAt, toolCalls: applyToolEvent(run.toolCalls, event, toolMapping) }
+    const assistantDraft = event.type === 'tool.call.succeeded' && run.assistantDraft?.status === 'streaming'
+      ? { ...run.assistantDraft, status: 'paused_for_tool' as const, lastEventId: event.id }
+      : run.assistantDraft
+    return { ...run, status: event.status, events, completedAt, assistantDraft, toolCalls: applyToolEvent(run.toolCalls, event, toolMapping) }
   }
   if (event.type === 'model.delta' || event.type === 'message.model_output_delta') {
+    const delta = event.assistantDelta ?? event.content ?? ''
+    const isContinuation = event.metadata?.model_phase === 'continuation'
+    const baseContent = isContinuation && run.assistantDraft?.status === 'paused_for_tool' ? '' : run.assistantDraft?.content ?? ''
     return {
       ...run,
       status: event.status,
@@ -92,7 +98,7 @@ export function applyRealRunEvent(run: Run, event: RuntimeEvent): Run {
       completedAt,
       assistantDraft: {
         ...run.assistantDraft,
-        content: `${run.assistantDraft?.content ?? ''}${event.assistantDelta ?? event.content ?? ''}`,
+        content: `${baseContent}${delta}`,
         status: 'streaming',
         lastEventId: event.id,
       },

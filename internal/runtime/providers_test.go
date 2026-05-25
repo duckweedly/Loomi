@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -77,7 +78,7 @@ func TestHTTPProviderStreamsOpenAICompatibleTextAndToolEvents(t *testing.T) {
 		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n"))
 	}))
 	defer server.Close()
-	provider := NewHTTPProvider(ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: server.URL+"/v1", APIKey: "secret-key", Model: "gpt-5.5", Enabled: true}, server.Client())
+	provider := NewHTTPProvider(ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: server.URL + "/v1", APIKey: "secret-key", Model: "gpt-5.5", Enabled: true}, server.Client())
 
 	events := collectProviderEvents(t, provider)
 
@@ -92,7 +93,7 @@ func TestHTTPProviderPreservesOpenAIToolArgumentsAsMetadata(t *testing.T) {
 		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"id\":\"tc_1\",\"function\":{\"name\":\"runtime.get_current_time\",\"arguments\":\"{\\\"timezone\\\":\\\"Asia/Shanghai\\\"}\"}}]}}]}\n\n"))
 	}))
 	defer server.Close()
-	provider := NewHTTPProvider(ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: server.URL+"/v1", APIKey: "secret-key", Model: "gpt-5.5", Enabled: true}, server.Client())
+	provider := NewHTTPProvider(ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: server.URL + "/v1", APIKey: "secret-key", Model: "gpt-5.5", Enabled: true}, server.Client())
 
 	events := collectProviderEvents(t, provider)
 
@@ -105,13 +106,54 @@ func TestHTTPProviderPreservesOpenAIToolArgumentsAsMetadata(t *testing.T) {
 	}
 }
 
+func TestHTTPProviderSerializesOpenAIToolResultContinuation(t *testing.T) {
+	var body struct {
+		Messages []map[string]any `json:"messages"`
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"done\"}}]}\n\n"))
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n"))
+	}))
+	defer server.Close()
+	provider := NewHTTPProvider(ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: server.URL + "/v1", APIKey: "secret-key", Model: "gpt-5.5", Enabled: true}, server.Client())
+
+	events := collectProviderEventsForRequest(t, provider, ProviderRequest{ThreadID: "thr_1", MessageID: "msg_1", Model: "gpt-5.5", Messages: []ProviderMessage{
+		{Role: "user", Content: "What time is it?"},
+		{Role: ProviderMessageRoleAssistantToolCall, ToolCallID: "tc_1", ToolName: "runtime.get_current_time", ArgumentsSummary: map[string]any{"timezone": "UTC"}},
+		{Role: ProviderMessageRoleToolResult, ToolCallID: "tc_1", ToolName: "runtime.get_current_time", Content: `{"iso_time":"2026-05-25T10:00:00Z","timezone":"UTC","source":"runtime"}`},
+	}})
+
+	if len(events) != 2 || events[0].Type != ProviderEventTextDelta || events[1].Type != ProviderEventCompleted {
+		t.Fatalf("events = %+v", events)
+	}
+	if len(body.Messages) != 3 {
+		t.Fatalf("messages = %+v", body.Messages)
+	}
+	assistant := body.Messages[1]
+	if assistant["role"] != "assistant" || assistant["content"] != nil {
+		t.Fatalf("assistant tool call message = %+v", assistant)
+	}
+	toolCalls, ok := assistant["tool_calls"].([]any)
+	if !ok || len(toolCalls) != 1 {
+		t.Fatalf("tool_calls = %+v", assistant["tool_calls"])
+	}
+	tool := body.Messages[2]
+	if tool["role"] != "tool" || tool["tool_call_id"] != "tc_1" || tool["content"] == "" {
+		t.Fatalf("tool result message = %+v", tool)
+	}
+}
+
 func TestHTTPProviderNormalizesStreamingErrors(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = w.Write([]byte("data: {\"error\":{\"type\":\"rate_limit_error\",\"message\":\"raw secret body\"}}\n\n"))
 	}))
 	defer server.Close()
-	provider := NewHTTPProvider(ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: server.URL+"/v1", APIKey: "secret-key", Model: "gpt-5.5", Enabled: true}, server.Client())
+	provider := NewHTTPProvider(ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: server.URL + "/v1", APIKey: "secret-key", Model: "gpt-5.5", Enabled: true}, server.Client())
 
 	events := collectProviderEvents(t, provider)
 
@@ -141,7 +183,12 @@ func TestHTTPProviderStreamsGeminiTextAndFunctionEvents(t *testing.T) {
 
 func collectProviderEvents(t *testing.T, provider Provider) []ProviderEvent {
 	t.Helper()
-	stream, err := provider.Stream(context.Background(), ProviderRequest{ThreadID: "thr_1", MessageID: "msg_1", Model: provider.Config().Model, Messages: []ProviderMessage{{Role: "user", Content: "hello"}}})
+	return collectProviderEventsForRequest(t, provider, ProviderRequest{ThreadID: "thr_1", MessageID: "msg_1", Model: provider.Config().Model, Messages: []ProviderMessage{{Role: "user", Content: "hello"}}})
+}
+
+func collectProviderEventsForRequest(t *testing.T, provider Provider, request ProviderRequest) []ProviderEvent {
+	t.Helper()
+	stream, err := provider.Stream(context.Background(), request)
 	if err != nil {
 		t.Fatalf("Stream() error = %v", err)
 	}
