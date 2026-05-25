@@ -152,6 +152,35 @@ describe('RunTimeline runtime linkage', () => {
     expect(html).not.toContain('secret')
   })
 
+  test('renders M11 MCP discovery labels without sensitive config data', () => {
+    const html = renderToStaticMarkup(createElement(RunTimeline, {
+      runDetailsOpen: true,
+      rightPanelMenuOpen: false,
+      rightToolsOpen: true,
+      selectedPanelId: 'background-tasks',
+      onSelectPanel: () => {},
+      onOpenArtifact: () => {},
+      run: {
+        id: 'run-a',
+        threadId: 'thread-a',
+        status: 'completed',
+        model: 'Model gateway',
+        context: 'model_gateway',
+        events: [
+          { id: 'evt-mcp', runId: 'run-a', threadId: 'thread-a', sequence: 1, type: 'mcp.discovery.succeeded', label: 'progress', detail: 'MCP discovery succeeded · mcp_candidate_count: 1 · mcp_non_executable_candidate_names: mcp.local-search.search', time: 'Now', status: 'running', group: 'worker-job', metadata: { mcp_candidate_count: 1, mcp_non_executable_candidate_names: ['mcp.local-search.search'], mcp_execution_enabled: false } },
+          { id: 'evt-mcp-disabled', runId: 'run-a', threadId: 'thread-a', sequence: 2, type: 'mcp.tools.non_executable', label: 'progress', detail: 'MCP execution disabled', time: 'Now', status: 'running', group: 'worker-job', metadata: { mcp_execution_enabled: false } },
+        ],
+      },
+    }))
+
+    expect(html).toContain('MCP discovery succeeded')
+    expect(html).toContain('mcp.local-search.search')
+    expect(html).toContain('MCP execution disabled')
+    expect(html).not.toContain('sk-live')
+    expect(html).not.toContain('command_path')
+    expect(html).not.toContain('stderr')
+  })
+
   test('renders two model phases around tool result continuation', () => {
     const html = renderToStaticMarkup(createElement(RunTimeline, {
       runDetailsOpen: true,

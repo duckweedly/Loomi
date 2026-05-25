@@ -233,6 +233,11 @@ function canonicalRunEventType(event: ApiRunEvent) {
     pipeline_step_started: 'pipeline.step.started',
     pipeline_step_completed: 'pipeline.step.completed',
     pipeline_step_failed: 'pipeline.step.failed',
+    mcp_discovery_succeeded: 'mcp.discovery.succeeded',
+    mcp_discovery_failed: 'mcp.discovery.failed',
+    mcp_discovery_rejected: 'mcp.discovery.rejected',
+    mcp_tools_available: 'mcp.tools.available',
+    mcp_tools_non_executable: 'mcp.tools.non_executable',
     job_recovering: 'job.recovering',
     job_retry_scheduled: 'job.retry_scheduled',
     stop_requested: 'run.stopping',
@@ -321,6 +326,7 @@ export function mapApiRunEvent(event: ApiRunEvent): RunEvent {
   const isError = /(^|\.)(error|failed|unavailable|timeout)$/.test(type) || event.category === 'error'
   const isModelStream = type.startsWith('model.') || type.startsWith('assistant.') || type === 'message.model_output_delta' || type === 'message.model_output_completed'
   const isToolCall = type.startsWith('tool.call.')
+  const isMCP = type.startsWith('mcp.discovery.') || type.startsWith('mcp.tools.')
   return {
     id: event.id,
     runId: event.run_id,
@@ -340,6 +346,8 @@ export function mapApiRunEvent(event: ApiRunEvent): RunEvent {
         ? 'model-stream'
         : isToolCall
           ? 'tool-call'
+          : isMCP
+            ? 'worker-job'
           : type.startsWith('worker.') || type.startsWith('job.') || type.startsWith('pipeline.')
             ? 'worker-job'
             : 'run-lifecycle',

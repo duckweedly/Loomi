@@ -434,7 +434,7 @@ func (s *MemoryService) PrepareRunContext(ctx context.Context, ident identity.Lo
 	s.mu.Lock()
 	context.Persona = s.personaSnapshots[run.ID]
 	s.mu.Unlock()
-	applyPersonaToRunContext(&context)
+	applyPersonaToRunContext(&context, events)
 	return context, nil
 }
 
@@ -568,18 +568,21 @@ func buildRunContext(run Run, thread Thread, messages []Message, job BackgroundJ
 	return context, nil
 }
 
-func applyPersonaToRunContext(context *RunContext) {
-	if context == nil || context.Persona.ID == "" {
+func applyPersonaToRunContext(context *RunContext, events []RunEvent) {
+	if context == nil {
 		return
 	}
-	if context.Persona.ModelRoute.ProviderID != "" {
-		context.ProviderRoute.ProviderID = context.Persona.ModelRoute.ProviderID
-		context.ProviderRoute.Available = true
+	if context.Persona.ID != "" {
+		if context.Persona.ModelRoute.ProviderID != "" {
+			context.ProviderRoute.ProviderID = context.Persona.ModelRoute.ProviderID
+			context.ProviderRoute.Available = true
+		}
+		if context.Persona.ModelRoute.Model != "" {
+			context.ProviderRoute.Model = context.Persona.ModelRoute.Model
+		}
+		context.EnabledTools = toolResolutionsForNames(context.Persona.AllowedToolNames)
 	}
-	if context.Persona.ModelRoute.Model != "" {
-		context.ProviderRoute.Model = context.Persona.ModelRoute.Model
-	}
-	context.EnabledTools = toolResolutionsForNames(context.Persona.AllowedToolNames)
+	context.MCPAvailability = mcpAvailabilityForToolResolutions(context.EnabledTools, events)
 }
 
 func validateBuiltInPersonaConfigs(configs []BuiltInPersonaConfig) error {
@@ -592,7 +595,8 @@ func validateBuiltInPersonaConfigs(configs []BuiltInPersonaConfig) error {
 			return NewError(CodeInvalidRequest, "Built-in persona requires a model route.")
 		}
 		for _, name := range config.AllowedToolNames {
-			if strings.TrimSpace(name) != ToolNameCurrentTime {
+			toolName := strings.TrimSpace(name)
+			if toolName != ToolNameCurrentTime && !IsMCPToolName(toolName) {
 				return NewError(CodeInvalidRequest, "Built-in persona references an unsupported tool.")
 			}
 		}
@@ -656,12 +660,214 @@ func (s *MemoryService) activePersonaVersionLocked(personaID string) (Persona, P
 func toolResolutionsForNames(names []string) []ToolResolution {
 	tools := make([]ToolResolution, 0, len(names))
 	for _, name := range names {
-		if strings.TrimSpace(name) != ToolNameCurrentTime {
+		toolName := strings.TrimSpace(name)
+		if toolName != ToolNameCurrentTime {
+			if IsMCPToolName(toolName) {
+				tools = append(tools, ToolResolution{Name: toolName, ApprovalPolicy: "always_required", ExecutionState: "discovered_non_executable"})
+			}
 			continue
 		}
 		tools = append(tools, ToolResolution{Name: ToolNameCurrentTime, ApprovalPolicy: "always_required", ExecutionState: "allowlisted"})
 	}
 	return tools
+}
+
+func mcpAvailabilityForToolResolutions(tools []ToolResolution, events []RunEvent) MCPToolAvailabilitySummary {
+	names := make([]string, 0)
+	byServer := map[string]*MCPServerAvailabilitySummary{}
+	for _, tool := range tools {
+		if IsMCPToolName(tool.Name) {
+			names = append(names, tool.Name)
+			slug := mcpServerSlugFromToolName(tool.Name)
+			server := ensureMCPServerAvailability(byServer, slug)
+			server.CandidateNames = appendUniqueString(server.CandidateNames, tool.Name)
+			server.CandidateCount = len(server.CandidateNames)
+		}
+	}
+	for _, event := range events {
+		applyMCPDiscoveryEvent(byServer, event)
+	}
+	if len(names) == 0 && len(byServer) == 0 {
+		return MCPToolAvailabilitySummary{}
+	}
+	serverSlugs := make([]string, 0, len(byServer))
+	for slug := range byServer {
+		serverSlugs = append(serverSlugs, slug)
+	}
+	sort.Strings(serverSlugs)
+	serverSummaries := make([]MCPServerAvailabilitySummary, 0, len(serverSlugs))
+	errorCodes := make([]string, 0)
+	lastDiscoveredAt := ""
+	serversEnabled := 0
+	serversSucceeded := 0
+	serversFailed := 0
+	for _, slug := range serverSlugs {
+		server := byServer[slug]
+		sort.Strings(server.CandidateNames)
+		if len(server.CandidateNames) > 0 {
+			server.CandidateCount = len(server.CandidateNames)
+			names = append(names, server.CandidateNames...)
+		}
+		if server.Enabled {
+			serversEnabled++
+		}
+		switch server.DiscoveryStatus {
+		case "succeeded":
+			serversSucceeded++
+		case "failed", "rejected":
+			serversFailed++
+		}
+		if server.RedactedErrorCode != "" {
+			errorCodes = appendUniqueString(errorCodes, server.RedactedErrorCode)
+		}
+		if server.LastDiscoveredAt != "" && server.LastDiscoveredAt > lastDiscoveredAt {
+			lastDiscoveredAt = server.LastDiscoveredAt
+		}
+		serverSummaries = append(serverSummaries, *server)
+	}
+	names = uniqueSortedStrings(names)
+	return MCPToolAvailabilitySummary{
+		ServersConfigured:           len(serverSummaries),
+		ServersEnabled:              serversEnabled,
+		ServersSucceeded:            serversSucceeded,
+		ServersFailed:               serversFailed,
+		ServerSummaries:             serverSummaries,
+		CandidateNames:              names,
+		NonExecutableCandidateNames: append([]string(nil), names...),
+		ExecutionEnabled:            false,
+		RedactedErrorCodes:          errorCodes,
+		LastDiscoveredAt:            lastDiscoveredAt,
+	}
+}
+
+func ensureMCPServerAvailability(byServer map[string]*MCPServerAvailabilitySummary, slug string) *MCPServerAvailabilitySummary {
+	server := byServer[slug]
+	if server == nil {
+		server = &MCPServerAvailabilitySummary{
+			ServerSafeID:    "mcp:" + slug,
+			ServerSlug:      slug,
+			Enabled:         true,
+			DiscoveryStatus: "unavailable",
+		}
+		byServer[slug] = server
+	}
+	return server
+}
+
+func applyMCPDiscoveryEvent(byServer map[string]*MCPServerAvailabilitySummary, event RunEvent) {
+	if event.Type != "mcp_discovery_succeeded" && event.Type != "mcp_discovery_failed" && event.Type != "mcp_discovery_rejected" {
+		return
+	}
+	slug := firstNonEmpty(metadataStringValue(event.Metadata, "server_slug"), metadataStringValue(event.Metadata, "mcp_server_slug"))
+	if slug == "" || !isSafeMCPNamePart(slug, true) {
+		return
+	}
+	server := ensureMCPServerAvailability(byServer, slug)
+	status := metadataStringValue(event.Metadata, "status")
+	if status == "" {
+		status = strings.TrimPrefix(event.Type, "mcp_discovery_")
+	}
+	server.DiscoveryStatus = status
+	if status == "disabled" {
+		server.Enabled = false
+	}
+	for _, name := range metadataStringSlice(event.Metadata, "candidate_names") {
+		if IsMCPToolName(name) && mcpServerSlugFromToolName(name) == slug {
+			server.CandidateNames = appendUniqueString(server.CandidateNames, name)
+		}
+	}
+	if server.CandidateCount == 0 {
+		server.CandidateCount = metadataIntValue(event.Metadata, "tool_count")
+	}
+	if len(server.CandidateNames) > 0 {
+		server.CandidateCount = len(server.CandidateNames)
+	}
+	server.RedactedErrorCode = metadataStringValue(event.Metadata, "error_code")
+	server.LastDiscoveredAt = event.CreatedAt.Format(time.RFC3339Nano)
+}
+
+func mcpServerSlugFromToolName(name string) string {
+	parts := strings.Split(strings.TrimSpace(name), ".")
+	if len(parts) != 3 {
+		return ""
+	}
+	return parts[1]
+}
+
+func metadataStringSlice(metadata map[string]any, key string) []string {
+	switch value := metadata[key].(type) {
+	case []string:
+		return append([]string(nil), value...)
+	case []any:
+		items := make([]string, 0, len(value))
+		for _, item := range value {
+			if text, ok := item.(string); ok {
+				items = append(items, strings.TrimSpace(text))
+			}
+		}
+		return items
+	default:
+		return nil
+	}
+}
+
+func metadataIntValue(metadata map[string]any, key string) int {
+	switch value := metadata[key].(type) {
+	case int:
+		return value
+	case int64:
+		return int(value)
+	case float64:
+		return int(value)
+	default:
+		return 0
+	}
+}
+
+func appendUniqueString(values []string, value string) []string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return values
+	}
+	for _, existing := range values {
+		if existing == value {
+			return values
+		}
+	}
+	return append(values, value)
+}
+
+func uniqueSortedStrings(values []string) []string {
+	unique := make([]string, 0, len(values))
+	for _, value := range values {
+		unique = appendUniqueString(unique, value)
+	}
+	sort.Strings(unique)
+	return unique
+}
+
+func IsMCPToolName(name string) bool {
+	parts := strings.Split(strings.TrimSpace(name), ".")
+	if len(parts) != 3 || parts[0] != "mcp" {
+		return false
+	}
+	return isSafeMCPNamePart(parts[1], true) && isSafeMCPNamePart(parts[2], false)
+}
+
+func isSafeMCPNamePart(value string, allowHyphenStart bool) bool {
+	if value == "" || len(value) > 64 {
+		return false
+	}
+	for i, r := range value {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '-' {
+			if i == 0 && r == '-' && !allowHyphenStart {
+				return false
+			}
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func firstNonEmpty(values ...string) string {

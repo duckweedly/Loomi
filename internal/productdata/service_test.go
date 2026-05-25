@@ -384,6 +384,80 @@ func TestSyncBuiltInPersonasRejectsUnsupportedTool(t *testing.T) {
 	}
 }
 
+func TestSyncBuiltInPersonasAllowsMCPToolReferenceAsNonExecutable(t *testing.T) {
+	svc := NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	if _, err := svc.SyncBuiltInPersonas(context.Background(), ident, []BuiltInPersonaConfig{{
+		Slug:             "default",
+		Name:             "Default",
+		Description:      "Default persona",
+		SystemPrompt:     "secret prompt",
+		ModelRoute:       PersonaModelRoute{ProviderID: "custom", Model: "model"},
+		AllowedToolNames: []string{ToolNameCurrentTime, "mcp.local-search.search"},
+		ReasoningMode:    "balanced",
+		BudgetSummary:    "budget",
+		Version:          "1",
+		IsDefault:        true,
+	}}); err != nil {
+		t.Fatalf("SyncBuiltInPersonas() error = %v", err)
+	}
+	thread, err := svc.CreateThread(context.Background(), ident, CreateThreadInput{Title: "MCP persona", Mode: ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.StartRun(context.Background(), ident, thread.ID, StartRunInput{}); err != nil {
+		t.Fatal(err)
+	}
+	job, _, ok, err := svc.ClaimBackgroundJob(context.Background(), ident, ClaimBackgroundJobInput{WorkerID: "worker_mcp_persona", LeaseSeconds: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("claim ok = false")
+	}
+	ctxData, err := svc.PrepareRunContext(context.Background(), ident, job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ctxData.EnabledTools) != 2 {
+		t.Fatalf("enabled tools = %+v", ctxData.EnabledTools)
+	}
+	mcp := ctxData.EnabledTools[1]
+	if mcp.Name != "mcp.local-search.search" || mcp.ExecutionState != "discovered_non_executable" {
+		t.Fatalf("mcp tool resolution = %+v", mcp)
+	}
+}
+
+func TestMCPAvailabilityIncludesDiscoveryFailureSummary(t *testing.T) {
+	createdAt := time.Date(2026, 5, 25, 10, 0, 0, 0, time.UTC)
+	summary := mcpAvailabilityForToolResolutions([]ToolResolution{{
+		Name:           "mcp.local-search.search",
+		ApprovalPolicy: "always_required",
+		ExecutionState: "discovered_non_executable",
+	}}, []RunEvent{{
+		Type:      "mcp_discovery_failed",
+		Metadata:  map[string]any{"server_slug": "local-search", "status": "failed", "error_code": "mcp_discovery_timeout"},
+		CreatedAt: createdAt,
+	}})
+
+	if summary.ServersConfigured != 1 || summary.ServersEnabled != 1 || summary.ServersFailed != 1 {
+		t.Fatalf("mcp server counts = %+v", summary)
+	}
+	if len(summary.RedactedErrorCodes) != 1 || summary.RedactedErrorCodes[0] != "mcp_discovery_timeout" {
+		t.Fatalf("mcp error codes = %+v", summary.RedactedErrorCodes)
+	}
+	if summary.LastDiscoveredAt != createdAt.Format(time.RFC3339Nano) {
+		t.Fatalf("mcp last discovered = %q", summary.LastDiscoveredAt)
+	}
+	if len(summary.ServerSummaries) != 1 {
+		t.Fatalf("mcp server summaries = %+v", summary.ServerSummaries)
+	}
+	server := summary.ServerSummaries[0]
+	if server.ServerSafeID != "mcp:local-search" || server.ServerSlug != "local-search" || server.DiscoveryStatus != "failed" || server.RedactedErrorCode != "mcp_discovery_timeout" {
+		t.Fatalf("mcp server summary = %+v", server)
+	}
+}
+
 func TestRunValidation(t *testing.T) {
 	if err := ValidateRunStatus(RunStatusRunning); err != nil {
 		t.Fatalf("ValidateRunStatus(running) error = %v", err)

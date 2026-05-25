@@ -26,16 +26,21 @@ type ToolDefinition struct {
 	Name           string
 	ApprovalPolicy ToolApprovalPolicy
 	SafetyClass    ToolSafetyClass
+	Source         ToolSource
+	ExecutionState ToolExecutionState
 }
 
 func CurrentTimeToolDefinition() ToolDefinition {
-	return ToolDefinition{Name: "runtime.get_current_time", ApprovalPolicy: ToolApprovalAlwaysRequired, SafetyClass: ToolSafetyNoSideEffectInternal}
+	return ToolDefinition{Name: "runtime.get_current_time", ApprovalPolicy: ToolApprovalAlwaysRequired, SafetyClass: ToolSafetyNoSideEffectInternal, Source: ToolSourceInternal, ExecutionState: ToolExecutionAllowlisted}
 }
 
 func ToolResolutionsForPersona(allowedToolNames []string) []productdata.ToolResolution {
 	resolutions := make([]productdata.ToolResolution, 0, len(allowedToolNames))
 	for _, name := range allowedToolNames {
 		if name != productdata.ToolNameCurrentTime {
+			if IsMCPToolName(name) {
+				resolutions = append(resolutions, productdata.ToolResolution{Name: name, ApprovalPolicy: string(ToolApprovalAlwaysRequired), ExecutionState: "discovered_non_executable"})
+			}
 			continue
 		}
 		resolutions = append(resolutions, productdata.ToolResolution{Name: productdata.ToolNameCurrentTime, ApprovalPolicy: string(ToolApprovalAlwaysRequired), ExecutionState: "allowlisted"})

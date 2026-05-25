@@ -363,6 +363,7 @@ type RunContext struct {
 	Job                    BackgroundJob
 	ProviderRoute          ProviderRoute
 	EnabledTools           []ToolResolution
+	MCPAvailability        MCPToolAvailabilitySummary
 	ContinuationProjection ContinuationProjection
 	Persona                PersonaSnapshot
 }
@@ -377,6 +378,30 @@ type ToolResolution struct {
 	Name           string
 	ApprovalPolicy string
 	ExecutionState string
+}
+
+type MCPToolAvailabilitySummary struct {
+	ServersConfigured           int
+	ServersEnabled              int
+	ServersSucceeded            int
+	ServersFailed               int
+	ServerSummaries             []MCPServerAvailabilitySummary
+	CandidateNames              []string
+	NonExecutableCandidateNames []string
+	ExecutionEnabled            bool
+	RedactedErrorCodes          []string
+	LastDiscoveredAt            string
+}
+
+type MCPServerAvailabilitySummary struct {
+	ServerSafeID      string
+	ServerSlug        string
+	Enabled           bool
+	DiscoveryStatus   string
+	CandidateCount    int
+	CandidateNames    []string
+	RedactedErrorCode string
+	LastDiscoveredAt  string
 }
 
 type ContinuationProjection struct {
@@ -400,7 +425,47 @@ func (c RunContext) SafeSummary() map[string]any {
 	for key, value := range c.Persona.SafeSummary() {
 		summary[key] = value
 	}
+	for key, value := range c.MCPAvailability.SafeSummary() {
+		summary[key] = value
+	}
 	return RedactEventMetadata(summary)
+}
+
+func (m MCPToolAvailabilitySummary) SafeSummary() map[string]any {
+	if m.ServersConfigured == 0 && len(m.CandidateNames) == 0 && len(m.RedactedErrorCodes) == 0 {
+		return map[string]any{}
+	}
+	return RedactEventMetadata(map[string]any{
+		"mcp_servers_configured":             m.ServersConfigured,
+		"mcp_servers_enabled":                m.ServersEnabled,
+		"mcp_servers_succeeded":              m.ServersSucceeded,
+		"mcp_servers_failed":                 m.ServersFailed,
+		"mcp_server_summaries":               m.safeServerSummaries(),
+		"mcp_candidate_count":                len(m.CandidateNames),
+		"mcp_candidate_names":                append([]string(nil), m.CandidateNames...),
+		"mcp_non_executable_candidate_names": append([]string(nil), m.NonExecutableCandidateNames...),
+		"mcp_execution_enabled":              m.ExecutionEnabled,
+		"mcp_error_codes":                    append([]string(nil), m.RedactedErrorCodes...),
+		"mcp_last_discovered_at":             m.LastDiscoveredAt,
+	})
+}
+
+func (m MCPToolAvailabilitySummary) safeServerSummaries() []any {
+	summaries := make([]any, 0, len(m.ServerSummaries))
+	for _, server := range m.ServerSummaries {
+		summaries = append(summaries, map[string]any{
+			"server_safe_id":      server.ServerSafeID,
+			"server_slug":         server.ServerSlug,
+			"enabled":             server.Enabled,
+			"discovery_status":    server.DiscoveryStatus,
+			"candidate_count":     server.CandidateCount,
+			"candidate_names":     append([]string(nil), server.CandidateNames...),
+			"redacted_error_code": server.RedactedErrorCode,
+			"last_discovered_at":  server.LastDiscoveredAt,
+			"execution_enabled":   false,
+		})
+	}
+	return summaries
 }
 
 func (c RunContext) ToolResolutionSummary() map[string]any {

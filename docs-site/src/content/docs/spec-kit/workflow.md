@@ -36,7 +36,25 @@ Claude Code 项目内命令使用横线格式：
 
 `/speckit-implement` 按任务实现，并在必要时回到 spec 或 plan 修正前提。
 
-## 当前功能：M10 Persona Skill Foundation
+## 当前功能：M11 MCP Stdio Foundation
+
+当前 Spec Kit 功能目录：
+
+```text
+specs/016-mcp-stdio-foundation/
+```
+
+关键产物：
+
+- `spec.md`：定义本地 stdio MCP 配置、discover/list-tools、read-only ToolSpec candidate、persona 非执行引用、RunContext availability summary 和安全边界。
+- `plan.md`：确定复用 M7 approval、M9 RunContext/pipeline、M10 persona allowed-tools、M6 worker/job 和现有 Timeline/debug 边界。
+- `research.md`：记录 local explicit config、sensitive redaction、discovery-only、namespacing、persona non-executable reference 和 future approval execution 决策。
+- `data-model.md`：定义 MCP Server Config、Discovery Session、Tool Candidate、Availability Summary、Safety Error 和 Execution Boundary。
+- `contracts/`：定义 config、discovery/mapping、RunContext observability 和 future execution boundary 契约。
+- `quickstart.md`：记录 backend/web/docs validation 和 browser/debug smoke。
+- `tasks.md`：按 setup、foundation、US1-US3 和 docs/validation 拆分实现任务。
+
+## 近期已完成：M10 Persona Skill Foundation
 
 当前 Spec Kit 功能目录：
 

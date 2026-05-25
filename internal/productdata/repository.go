@@ -421,7 +421,7 @@ func (r *PostgresRepository) PrepareRunContext(ctx context.Context, ident identi
 	snapshot, err := r.getPersonaSnapshot(ctx, run.ID)
 	if err == nil {
 		context.Persona = snapshot
-		applyPersonaToRunContext(&context)
+		applyPersonaToRunContext(&context, events)
 	}
 	return context, nil
 }

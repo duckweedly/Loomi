@@ -101,6 +101,40 @@ describe('M7 tool-call mapping', () => {
   })
 })
 
+describe('M11 MCP event mapping', () => {
+  test('maps MCP discovery events to worker job or error groups', () => {
+    const succeeded = mapApiRunEvent({
+      id: 'evt-mcp-ok',
+      run_id: 'run-1',
+      thread_id: 'thread-1',
+      sequence: 1,
+      category: 'progress',
+      type: 'mcp_discovery_succeeded',
+      summary: 'MCP discovery succeeded',
+      content: null,
+      metadata: { mcp_candidate_count: 1, mcp_execution_enabled: false },
+      created_at: '2026-05-25T00:00:00Z',
+    })
+    const failed = mapApiRunEvent({
+      id: 'evt-mcp-failed',
+      run_id: 'run-1',
+      thread_id: 'thread-1',
+      sequence: 2,
+      category: 'error',
+      type: 'mcp_discovery_failed',
+      summary: 'MCP discovery failed',
+      content: null,
+      metadata: { error_code: 'mcp_discovery_timeout' },
+      created_at: '2026-05-25T00:00:01Z',
+    })
+
+    expect(succeeded.type).toBe('mcp.discovery.succeeded')
+    expect(succeeded.group).toBe('worker-job')
+    expect(failed.type).toBe('mcp.discovery.failed')
+    expect(failed.group).toBe('error')
+  })
+})
+
 describe('M6 worker queue diagnostics mapping', () => {
   test('maps worker queue diagnostics without credential fields', () => {
     const diagnostics = mapApiWorkerQueueDiagnostics({
