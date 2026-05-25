@@ -328,8 +328,8 @@ func (s *MemoryService) StartRun(_ context.Context, ident identity.LocalIdentity
 		metadata["script_name"] = NormalizeScriptName(input.ScriptName)
 	} else {
 		metadata["message_id"] = input.MessageID
-		metadata["provider_id"] = firstNonEmpty(snapshot.ModelRoute.ProviderID, input.ProviderID)
-		metadata["model"] = firstNonEmpty(snapshot.ModelRoute.Model, input.Model)
+		metadata["provider_id"] = runProviderID(input.ProviderID, snapshot)
+		metadata["model"] = runModel(input.ProviderID, input.Model, snapshot)
 	}
 	if snapshot.ID != "" {
 		metadata["persona_id"] = snapshot.ID
@@ -1086,16 +1086,34 @@ func applyPersonaToRunContext(context *RunContext, events []RunEvent) {
 		return
 	}
 	if context.Persona.ID != "" {
-		if context.Persona.ModelRoute.ProviderID != "" {
+		if context.Persona.ModelRoute.ProviderID != "" && !isExplicitLocalProviderRoute(context.ProviderRoute.ProviderID) {
 			context.ProviderRoute.ProviderID = context.Persona.ModelRoute.ProviderID
 			context.ProviderRoute.Available = true
 		}
-		if context.Persona.ModelRoute.Model != "" {
+		if context.Persona.ModelRoute.Model != "" && !isExplicitLocalProviderRoute(context.ProviderRoute.ProviderID) {
 			context.ProviderRoute.Model = context.Persona.ModelRoute.Model
 		}
 		context.EnabledTools = toolResolutionsForNamesAndEvents(context.Persona.AllowedToolNames, events)
 	}
 	context.MCPAvailability = mcpAvailabilityForToolResolutions(context.EnabledTools, events)
+}
+
+func runProviderID(inputProviderID string, snapshot PersonaSnapshot) string {
+	if isExplicitLocalProviderRoute(inputProviderID) {
+		return strings.TrimSpace(inputProviderID)
+	}
+	return firstNonEmpty(snapshot.ModelRoute.ProviderID, inputProviderID)
+}
+
+func runModel(inputProviderID string, inputModel string, snapshot PersonaSnapshot) string {
+	if isExplicitLocalProviderRoute(inputProviderID) {
+		return strings.TrimSpace(inputModel)
+	}
+	return firstNonEmpty(snapshot.ModelRoute.Model, inputModel)
+}
+
+func isExplicitLocalProviderRoute(providerID string) bool {
+	return strings.HasPrefix(strings.TrimSpace(providerID), "local_")
 }
 
 func validateBuiltInPersonaConfigs(configs []BuiltInPersonaConfig) error {

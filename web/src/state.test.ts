@@ -66,10 +66,23 @@ describe('provider check state helpers', () => {
 
     expect(source).toContain('localProviderDetections')
     expect(source).toContain('detectLocalProviders')
+    expect(source).toContain('enableLocalProvider')
+    expect(source).toContain('disableLocalProvider')
     expect(source).toContain('apiClient.listLocalProviderDetections')
     expect(source).toContain('setLocalProviderDetections')
     expect(source).not.toContain('apiClient.listLocalProviderDetections()\\n      .then')
     expect(source).not.toContain('setProviderCapabilities(localProviderDetections')
+  })
+
+  test('local provider enablement refreshes configured providers without exposing secrets', async () => {
+    const source = await Bun.file(new URL('./state.ts', import.meta.url)).text()
+
+    expect(source).toContain('apiClient.enableLocalProvider')
+    expect(source).toContain('apiClient.disableLocalProvider')
+    expect(source).toContain('setProviderCapabilities')
+    expect(source).toContain('redactProviderCapabilityMessage')
+    expect(source).not.toContain('access_token')
+    expect(source).not.toContain('refresh_token')
   })
 })
 

@@ -88,7 +88,7 @@ export function ThreadSidebar({
 
       <div className="sidebar-divider" />
 
-      <div className="sidebar-section">
+      <div className="sidebar-section thread-list-section">
         <div className="section-label">
           <span>{copy.threads}</span>
         </div>

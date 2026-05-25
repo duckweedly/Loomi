@@ -56,12 +56,16 @@ type ProviderConfig struct {
 }
 
 type ProviderCapability struct {
-	ID      string         `json:"id"`
-	Family  ProviderFamily `json:"family"`
-	BaseURL string         `json:"base_url,omitempty"`
-	Model   string         `json:"model"`
-	Status  ProviderStatus `json:"status"`
-	Message string         `json:"message,omitempty"`
+	ID                  string         `json:"id"`
+	Family              ProviderFamily `json:"family"`
+	BaseURL             string         `json:"base_url,omitempty"`
+	Model               string         `json:"model"`
+	Status              ProviderStatus `json:"status"`
+	Message             string         `json:"message,omitempty"`
+	LocalProvider       bool           `json:"local_provider,omitempty"`
+	SessionLocal        bool           `json:"session_local,omitempty"`
+	CredentialReference string         `json:"credential_reference,omitempty"`
+	ExecutionState      string         `json:"execution_state,omitempty"`
 }
 
 type ProviderRequest struct {
@@ -162,7 +166,7 @@ func (p *HTTPProvider) Stream(ctx context.Context, request ProviderRequest) (<-c
 	}
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 		defer response.Body.Close()
-		return singleProviderEvent(eventForHTTPStatus(response.StatusCode)), nil
+		return singleProviderEvent(eventForHTTPResponse(response.StatusCode, response.Body)), nil
 	}
 	ch := make(chan ProviderEvent)
 	go func() {
@@ -484,17 +488,54 @@ func singleProviderEvent(event ProviderEvent) <-chan ProviderEvent {
 	return ch
 }
 
-func eventForHTTPStatus(status int) ProviderEvent {
+func eventForHTTPResponse(status int, body io.Reader) ProviderEvent {
+	metadata := map[string]any{"http_status": status}
+	if errorType, errorCode := providerHTTPErrorFields(body); errorType != "" || errorCode != "" {
+		if errorType != "" {
+			metadata["provider_error_type"] = errorType
+		}
+		if errorCode != "" {
+			metadata["provider_error_code"] = errorCode
+		}
+	}
 	switch status {
 	case http.StatusTooManyRequests:
-		return ProviderEvent{Type: ProviderEventRateLimited, Message: "Provider rate limit reached."}
+		return ProviderEvent{Type: ProviderEventRateLimited, Message: "Provider rate limit reached.", Metadata: metadata}
 	case http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound:
-		return ProviderEvent{Type: ProviderEventMisconfigured, Message: "Provider configuration is incomplete."}
+		return ProviderEvent{Type: ProviderEventMisconfigured, Message: fmt.Sprintf("Provider rejected the credential or endpoint (HTTP %d).", status), Metadata: metadata}
 	case http.StatusRequestTimeout, http.StatusGatewayTimeout:
-		return ProviderEvent{Type: ProviderEventTimeout, Message: "Provider request timed out."}
+		return ProviderEvent{Type: ProviderEventTimeout, Message: "Provider request timed out.", Metadata: metadata}
 	default:
-		return ProviderEvent{Type: ProviderEventError, ErrorCode: "provider_error", Message: "Provider request failed."}
+		return ProviderEvent{Type: ProviderEventError, ErrorCode: "provider_error", Message: fmt.Sprintf("Provider request failed with HTTP %d.", status), Metadata: metadata}
 	}
+}
+
+func providerHTTPErrorFields(body io.Reader) (string, string) {
+	raw, err := io.ReadAll(io.LimitReader(body, 64*1024))
+	if err != nil || len(raw) == 0 {
+		return "", ""
+	}
+	var parsed struct {
+		Error struct {
+			Type string `json:"type"`
+			Code any    `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		return "", ""
+	}
+	return sanitizeProviderErrorField(parsed.Error.Type), sanitizeProviderErrorField(fmt.Sprint(parsed.Error.Code))
+}
+
+func sanitizeProviderErrorField(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" || value == "<nil>" || strings.Contains(value, "/") || strings.Contains(value, "\\") || strings.Contains(strings.ToLower(value), "token") || strings.Contains(strings.ToLower(value), "key") {
+		return ""
+	}
+	if len(value) > 80 {
+		return value[:80]
+	}
+	return value
 }
 
 func eventForProviderError(errorType string) ProviderEvent {

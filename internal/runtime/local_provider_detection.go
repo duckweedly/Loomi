@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -59,6 +60,91 @@ type LocalProviderCapability struct {
 	Source           LocalProviderSource   `json:"source"`
 	RedactionApplied bool                  `json:"redaction_applied"`
 	Message          string                `json:"message,omitempty"`
+}
+
+const localCodexDefaultModel = "gpt-5.5"
+
+func LocalProviderRouteCapability(provider LocalProviderCapability) ProviderCapability {
+	model := localCodexDefaultModel
+	if len(provider.ModelCandidates) > 0 && strings.TrimSpace(provider.ModelCandidates[0]) != "" {
+		model = strings.TrimSpace(provider.ModelCandidates[0])
+	}
+	if provider.ProviderID == "local_codex" && provider.ProviderKind == LocalProviderKindCodex && provider.Status == LocalProviderStatusAvailable {
+		return ProviderCapability{
+			ID:                  provider.ProviderID,
+			Family:              ProviderFamilyOpenAICompatible,
+			Model:               model,
+			Status:              ProviderStatusAvailable,
+			Message:             "Local Codex is enabled for this session.",
+			LocalProvider:       true,
+			SessionLocal:        true,
+			CredentialReference: "redacted",
+			ExecutionState:      "supported",
+		}
+	}
+	return ProviderCapability{
+		ID:                  provider.ProviderID,
+		Family:              ProviderFamilyOpenAICompatible,
+		Model:               model,
+		Status:              ProviderStatusUnavailable,
+		Message:             provider.DisplayName + " is enabled for this session, but execution is unsupported until the local provider execution bridge is implemented.",
+		LocalProvider:       true,
+		SessionLocal:        true,
+		CredentialReference: "redacted",
+		ExecutionState:      "unsupported",
+	}
+}
+
+type LocalCodexCredentialSnapshot struct {
+	AuthMode  LocalProviderAuthMode
+	BaseURL   string
+	APIKey    string
+	Model     string
+	AccountID string
+}
+
+func LoadLocalCodexCredentialSnapshot(input LocalProviderDetectionInput) (LocalCodexCredentialSnapshot, error) {
+	env := input.Env
+	if env == nil {
+		env = map[string]string{}
+	}
+	model := strings.TrimSpace(env["CODEX_MODEL"])
+	if model == "" {
+		model = strings.TrimSpace(env["OPENAI_MODEL"])
+	}
+	if model == "" {
+		model = localCodexDefaultModel
+	}
+	baseURL := firstNonEmpty(env["CODEX_BASE_URL"], env["OPENAI_BASE_URL"], env["LOOMI_LOCAL_CODEX_BASE_URL"])
+	if baseURL == "" {
+		baseURL = "https://api.openai.com/v1"
+	}
+	if key := firstNonEmpty(env["CODEX_API_KEY"], env["OPENAI_API_KEY"]); key != "" {
+		return LocalCodexCredentialSnapshot{AuthMode: LocalProviderAuthModeAPIKey, BaseURL: baseURL, APIKey: key, Model: model}, nil
+	}
+	auth := readJSONObject(codexAuthPath(input))
+	if authModel, ok := auth["model"].(string); ok && strings.TrimSpace(authModel) != "" {
+		model = strings.TrimSpace(authModel)
+	}
+	if authBaseURL, ok := auth["base_url"].(string); ok && strings.TrimSpace(authBaseURL) != "" {
+		baseURL = strings.TrimSpace(authBaseURL)
+	}
+	if key := firstNonEmpty(stringValue(auth, "CODEX_API_KEY"), stringValue(auth, "OPENAI_API_KEY"), stringValue(auth, "api_key")); key != "" {
+		return LocalCodexCredentialSnapshot{AuthMode: LocalProviderAuthModeAPIKey, BaseURL: baseURL, APIKey: key, Model: model}, nil
+	}
+	if token := oauthAccessToken(auth); token != "" {
+		oauthBaseURL := strings.TrimSpace(env["LOOMI_LOCAL_CODEX_BASE_URL"])
+		if oauthBaseURL == "" {
+			if authBaseURL, ok := auth["base_url"].(string); ok && strings.TrimSpace(authBaseURL) != "" {
+				oauthBaseURL = strings.TrimSpace(authBaseURL)
+			}
+		}
+		if oauthBaseURL == "" || oauthBaseURL == "https://api.openai.com/v1" {
+			oauthBaseURL = "https://chatgpt.com/backend-api/codex"
+		}
+		return LocalCodexCredentialSnapshot{AuthMode: LocalProviderAuthModeOAuth, BaseURL: oauthBaseURL, APIKey: token, Model: model, AccountID: oauthAccountID(auth)}, nil
+	}
+	return LocalCodexCredentialSnapshot{}, errors.New("Local Codex login is unavailable.")
 }
 
 func DetectLocalProviders(input LocalProviderDetectionInput) []LocalProviderCapability {
@@ -189,7 +275,7 @@ func baseCodexLocalProvider(status LocalProviderStatus, authMode LocalProviderAu
 		ProviderKind:     LocalProviderKindCodex,
 		AuthMode:         authMode,
 		Status:           status,
-		ModelCandidates:  []string{"gpt-5"},
+		ModelCandidates:  []string{localCodexDefaultModel},
 		Source:           source,
 		RedactionApplied: true,
 		Message:          message,
@@ -216,18 +302,63 @@ func nonEmptyString(values map[string]any, key string) bool {
 	return ok && strings.TrimSpace(value) != ""
 }
 
+func stringValue(values map[string]any, key string) string {
+	value, ok := values[key].(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(value)
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
 func hasOAuthToken(values map[string]any) bool {
+	return oauthAccessToken(values) != ""
+}
+
+func oauthAccessToken(values map[string]any) string {
 	if len(values) == 0 {
-		return false
+		return ""
 	}
 	if nonEmptyString(values, "access_token") || nonEmptyString(values, "accessToken") {
-		return true
+		return firstNonEmpty(stringValue(values, "access_token"), stringValue(values, "accessToken"))
 	}
 	if tokens, ok := values["tokens"].(map[string]any); ok {
-		return nonEmptyString(tokens, "access_token") || nonEmptyString(tokens, "accessToken")
+		if token := firstNonEmpty(stringValue(tokens, "access_token"), stringValue(tokens, "accessToken")); token != "" {
+			return token
+		}
 	}
 	if oauth, ok := values["oauth"].(map[string]any); ok {
-		return nonEmptyString(oauth, "access_token") || nonEmptyString(oauth, "accessToken")
+		if token := firstNonEmpty(stringValue(oauth, "access_token"), stringValue(oauth, "accessToken")); token != "" {
+			return token
+		}
 	}
-	return false
+	return ""
+}
+
+func oauthAccountID(values map[string]any) string {
+	if len(values) == 0 {
+		return ""
+	}
+	if accountID := firstNonEmpty(stringValue(values, "account_id"), stringValue(values, "accountId")); accountID != "" {
+		return accountID
+	}
+	if tokens, ok := values["tokens"].(map[string]any); ok {
+		if accountID := firstNonEmpty(stringValue(tokens, "account_id"), stringValue(tokens, "accountId")); accountID != "" {
+			return accountID
+		}
+	}
+	if oauth, ok := values["oauth"].(map[string]any); ok {
+		if accountID := firstNonEmpty(stringValue(oauth, "account_id"), stringValue(oauth, "accountId")); accountID != "" {
+			return accountID
+		}
+	}
+	return ""
 }

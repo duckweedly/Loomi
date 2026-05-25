@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/sheridiany/loomi/internal/identity"
 	"github.com/sheridiany/loomi/internal/productdata"
@@ -16,6 +17,7 @@ import (
 type Gateway struct {
 	Service     productdata.Service
 	Broadcaster *Broadcaster
+	mu          sync.RWMutex
 	Providers   []Provider
 }
 
@@ -45,8 +47,28 @@ func (g *Gateway) SaveProviderConfig(provider ProviderConfig) ProviderConfig {
 	provider.ID = "custom"
 	provider.Family = ProviderFamilyOpenAICompatible
 	provider.Enabled = true
+	g.mu.Lock()
+	defer g.mu.Unlock()
 	g.Providers = replaceProvider(g.Providers, NewHTTPProvider(provider, http.DefaultClient))
 	return provider
+}
+
+func (g *Gateway) SaveProvider(provider Provider) {
+	if g == nil || provider == nil {
+		return
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.Providers = replaceProvider(g.Providers, provider)
+}
+
+func (g *Gateway) RemoveProvider(providerID string) {
+	if g == nil || strings.TrimSpace(providerID) == "" {
+		return
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.Providers = removeProvider(g.Providers, providerID)
 }
 
 func (g *Gateway) RunAsync(_ context.Context, run productdata.Run, input GatewayRunInput) {
@@ -152,16 +174,16 @@ func (g *Gateway) streamProviderResponse(ctx context.Context, run productdata.Ru
 			g.fail(ctx, run.ID, "provider_timeout", "Provider request timed out.")
 			return
 		case ProviderEventRateLimited:
-			g.fail(ctx, run.ID, "provider_rate_limited", "Provider rate limit reached.")
+			g.failWithMetadata(ctx, run.ID, "provider_rate_limited", "Provider rate limit reached.", event.Metadata)
 			return
 		case ProviderEventEmptyResponse:
 			g.fail(ctx, run.ID, "empty_response", "Model returned an empty response.")
 			return
 		case ProviderEventMisconfigured:
-			g.fail(ctx, run.ID, "provider_misconfigured", fallbackMessage(event.Message, "Provider configuration is incomplete."))
+			g.failWithMetadata(ctx, run.ID, "provider_misconfigured", fallbackMessage(event.Message, "Provider configuration is incomplete."), event.Metadata)
 			return
 		case ProviderEventError:
-			g.fail(ctx, run.ID, fallbackMessage(event.ErrorCode, "provider_error"), fallbackMessage(event.Message, "Provider request failed."))
+			g.failWithMetadata(ctx, run.ID, fallbackMessage(event.ErrorCode, "provider_error"), fallbackMessage(event.Message, "Provider request failed."), event.Metadata)
 			return
 		}
 	}
@@ -169,6 +191,8 @@ func (g *Gateway) streamProviderResponse(ctx context.Context, run productdata.Ru
 }
 
 func (g *Gateway) selectProvider(providerID string) (Provider, error) {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
 	for _, provider := range g.Providers {
 		if provider.Config().ID == providerID {
 			return provider, nil
@@ -187,6 +211,16 @@ func replaceProvider(providers []Provider, provider Provider) []Provider {
 		}
 	}
 	return append(providers, provider)
+}
+
+func removeProvider(providers []Provider, providerID string) []Provider {
+	next := make([]Provider, 0, len(providers))
+	for _, provider := range providers {
+		if provider.Config().ID != providerID {
+			next = append(next, provider)
+		}
+	}
+	return next
 }
 
 func (g *Gateway) loadRequestMessages(ctx context.Context, threadID string, triggerMessageID string) ([]ProviderMessage, error) {
@@ -334,8 +368,12 @@ func toolArgumentsSummary(metadata map[string]any) map[string]any {
 }
 
 func (g *Gateway) fail(ctx context.Context, runID string, code string, message string) {
-	_ = g.append(ctx, runID, productdata.AppendRunEventInput{Category: productdata.RunEventCategoryError, Type: code, Summary: message, ErrorCode: code, ErrorMessage: message})
-	_ = g.append(ctx, runID, productdata.AppendRunEventInput{Category: productdata.RunEventCategoryFinal, Type: "run_failed", Summary: message, ErrorCode: code, ErrorMessage: message})
+	g.failWithMetadata(ctx, runID, code, message, nil)
+}
+
+func (g *Gateway) failWithMetadata(ctx context.Context, runID string, code string, message string, metadata map[string]any) {
+	_ = g.append(ctx, runID, productdata.AppendRunEventInput{Category: productdata.RunEventCategoryError, Type: code, Summary: message, ErrorCode: code, ErrorMessage: message, Metadata: metadata})
+	_ = g.append(ctx, runID, productdata.AppendRunEventInput{Category: productdata.RunEventCategoryFinal, Type: "run_failed", Summary: message, ErrorCode: code, ErrorMessage: message, Metadata: metadata})
 }
 
 func (g *Gateway) currentStatus(ctx context.Context, runID string) productdata.RunStatus {

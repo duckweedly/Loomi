@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { createClientMessageID, mapApiLocalProviderDetection, mapApiMemoryAuditItem, mapApiMemoryEntry, mapApiProviderCapability, mapApiRun, mapApiRunEvent, mapApiToolCall, mapApiWorkerQueueDiagnostics, realApiClient } from './realApiClient'
+import { createClientMessageID, mapApiLocalProviderDetection, mapApiMemoryAuditItem, mapApiMemoryEntry, mapApiProviderCapability, mapApiRun, mapApiRunEvent, mapApiToolCall, mapApiWorkerQueueDiagnostics, realApiClient, selectSendProvider } from './realApiClient'
 
 describe('createClientMessageID', () => {
   test('does not rely on Date.now alone', () => {
@@ -151,7 +151,7 @@ describe('M18.5 local provider detection mapping', () => {
       provider_kind: 'codex',
       auth_mode: 'oauth',
       status: 'available',
-      model_candidates: ['gpt-5'],
+      model_candidates: ['gpt-5.5'],
       source: 'local_config',
       redaction_applied: true,
       message: 'Detected but not enabled. Explicit opt-in is required before use.',
@@ -163,13 +163,39 @@ describe('M18.5 local provider detection mapping', () => {
       providerKind: 'codex',
       authMode: 'oauth',
       status: 'available',
-      modelCandidates: ['gpt-5'],
+      modelCandidates: ['gpt-5.5'],
       source: 'local_config',
       redactionApplied: true,
       message: 'Detected but not enabled. Explicit opt-in is required before use.',
     })
     expect(JSON.stringify(detection)).not.toContain('access_token')
     expect(JSON.stringify(detection)).not.toContain('sk-')
+  })
+
+  test('maps enabled local provider capability without secrets or paths', () => {
+    const provider = mapApiProviderCapability({
+      id: 'local_codex',
+      family: 'openai_compatible',
+      model: 'gpt-5.5',
+      status: 'available',
+      message: 'Local Codex enabled.',
+      local_provider: true,
+      session_local: true,
+      credential_reference: 'redacted',
+      execution_state: 'supported',
+    })
+
+    expect(provider).toMatchObject({
+      id: 'local_codex',
+      localProvider: true,
+      sessionLocal: true,
+      credentialReference: 'redacted',
+      executionState: 'supported',
+      status: 'available',
+    })
+    expect(JSON.stringify(provider)).not.toContain('access_token')
+    expect(JSON.stringify(provider)).not.toContain('/Users/')
+    expect(JSON.stringify(provider)).not.toContain('sk-')
   })
 
   test('calls the dedicated local provider detection endpoint', async () => {
@@ -187,6 +213,38 @@ describe('M18.5 local provider detection mapping', () => {
 
     const url = new URL(requested[0], 'http://loomi.local')
     expect(url.pathname).toBe('/v1/local-provider-detections')
+  })
+
+  test('calls explicit local provider enable and disable endpoints', async () => {
+    const originalFetch = globalThis.fetch
+    const requested: { url: string; method: string }[] = []
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      requested.push({ url: String(input), method: init?.method ?? 'GET' })
+      return new Response(JSON.stringify({
+        provider: {
+          id: 'local_codex',
+          family: 'openai_compatible',
+          model: 'gpt-5.5',
+          status: 'unavailable',
+          local_provider: true,
+          session_local: true,
+          credential_reference: 'redacted',
+          execution_state: 'unsupported',
+        },
+        request_id: 'req_local_enable',
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    }) as typeof fetch
+    try {
+      await realApiClient.enableLocalProvider?.('local_codex')
+      await realApiClient.disableLocalProvider?.('local_codex')
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+
+    expect(new URL(requested[0].url, 'http://loomi.local').pathname).toBe('/v1/local-provider-detections/local_codex/enable')
+    expect(requested[0].method).toBe('POST')
+    expect(new URL(requested[1].url, 'http://loomi.local').pathname).toBe('/v1/local-provider-detections/local_codex/enable')
+    expect(requested[1].method).toBe('DELETE')
   })
 })
 
@@ -587,6 +645,16 @@ describe('M4 run mapping', () => {
     const source = Bun.file(new URL('./realApiClient.ts', import.meta.url)).text()
 
     return expect(source).resolves.toContain("source: 'model_gateway'")
+  })
+
+  test('real sendMessage prefers supported local codex over saved custom provider', () => {
+    const provider = selectSendProvider([
+      { id: 'custom', family: 'openai_compatible', model: 'gpt-5.5', status: 'available' },
+      { id: 'local_codex', family: 'openai_compatible', model: 'gpt-5.5', status: 'available', localProvider: true, sessionLocal: true, credentialReference: 'redacted', executionState: 'supported' },
+    ])
+
+    expect(provider?.id).toBe('local_codex')
+    expect(provider?.model).toBe('gpt-5.5')
   })
 
   test('exposes saveModelProvider for local desktop provider settings', () => {

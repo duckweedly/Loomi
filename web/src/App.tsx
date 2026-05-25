@@ -63,6 +63,8 @@ export default function App() {
     pendingDeleteMemoryEntry,
     checkProvider,
     detectLocalProviders,
+    enableLocalProvider,
+    disableLocalProvider,
     saveProvider,
     setMemorySearchQuery,
     updateMemoryFilters,
@@ -82,7 +84,7 @@ export default function App() {
     runtimeSource: run?.context === 'model_gateway' ? 'model_gateway' : 'local_simulated',
     backendUnavailable: backendCapability === 'unavailable' || backendUnavailableAttempted || capabilitySignals.backendUnavailable,
     modelSetupMissing: capabilitySignals.modelSetupMissing,
-    providerUnavailable: capabilitySignals.providerUnavailable || providerUnavailableBeforeSend,
+    providerUnavailable: providerUnavailableBeforeSend,
     activeRun: Boolean(run && (run.status === 'pending' || run.status === 'queued' || run.status === 'running' || run.status === 'retrying' || run.status === 'recovering' || run.status === 'blocked_on_tool_approval' || run.status === 'stopping')),
     streamDisconnected: Boolean(run && (run.status === 'pending' || run.status === 'queued' || run.status === 'running' || run.status === 'retrying' || run.status === 'recovering' || run.status === 'blocked_on_tool_approval' || run.status === 'stopping') && (capabilitySignals.streamDisconnected || streamState === 'recoverable_error')),
     runRecovering: run?.status === 'recovering' || run?.assistantDraft?.status === 'recovering',
@@ -240,6 +242,8 @@ export default function App() {
                   }}
                   onCheckProvider={(providerId) => void checkProvider(providerId)}
                   onDetectLocalProviders={() => void detectLocalProviders()}
+                  onEnableLocalProvider={(providerId) => void enableLocalProvider(providerId)}
+                  onDisableLocalProvider={(providerId) => void disableLocalProvider(providerId)}
                   onMemoryQueryChange={setMemorySearchQuery}
                   onMemoryFiltersChange={updateMemoryFilters}
                   onOpenMemoryDetail={(entry) => void openMemoryDetail(entry)}

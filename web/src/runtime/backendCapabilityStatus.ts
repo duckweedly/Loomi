@@ -24,7 +24,15 @@ export type BackendCapabilityInput = {
 }
 
 export function shouldShowProviderUnavailableWarning(dataSourceMode: 'mock' | 'real_api' | 'model_gateway', providerCapabilities: ProviderCapability[]) {
-  return dataSourceMode !== 'mock' && !providerCapabilities.some((provider) => provider.status === 'available')
+  return dataSourceMode !== 'mock' && !providerCapabilities.some((provider) => provider.status === 'available' && provider.executionState !== 'unsupported')
+}
+
+export function getProviderUnavailableWarning(providerCapabilities: ProviderCapability[], locale: Locale = 'en') {
+  const copy = getDictionary(locale).chatCanvas
+  const localCodex = providerCapabilities.find((provider) => provider.id === 'local_codex' && provider.localProvider)
+  if (localCodex?.executionState === 'unsupported') return copy.localCodexUnsupportedWarning
+  if (localCodex?.status === 'unavailable') return copy.localCodexUnavailableWarning
+  return copy.providerUnavailableWarning
 }
 
 export function deriveBackendCapabilityStatus(input: BackendCapabilityInput): BackendCapabilityStatus {

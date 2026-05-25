@@ -9,6 +9,11 @@ export function hasRealApiBase() {
   return apiBaseUrl.length > 0
 }
 
+export function selectSendProvider(providers: ProviderCapability[] = []) {
+  return providers.find((candidate) => candidate.id === 'local_codex' && candidate.status === 'available' && candidate.executionState === 'supported')
+    ?? providers.find((candidate) => candidate.status === 'available')
+}
+
 type ApiThread = {
   id: string
   title: string
@@ -59,6 +64,10 @@ export type ApiProviderCapability = {
   model: string
   status: ProviderCapability['status']
   message?: string | null
+  local_provider?: boolean
+  session_local?: boolean
+  credential_reference?: string | null
+  execution_state?: string | null
 }
 
 export type ApiLocalProviderDetection = {
@@ -357,6 +366,10 @@ export function mapApiProviderCapability(provider: ApiProviderCapability): Provi
     model: provider.model,
     status: provider.status,
     message: provider.message ?? null,
+    localProvider: provider.local_provider ?? false,
+    sessionLocal: provider.session_local ?? false,
+    credentialReference: provider.credential_reference ?? undefined,
+    executionState: provider.execution_state ?? undefined,
   }
 }
 
@@ -603,6 +616,16 @@ export const realApiClient: ApiClient = {
     return body.providers.map(mapApiLocalProviderDetection)
   },
 
+  async enableLocalProvider(providerId: string) {
+    const body = await requestJSON<{ provider: ApiProviderCapability }>(`/v1/local-provider-detections/${encodeURIComponent(providerId)}/enable`, { method: 'POST' })
+    return mapApiProviderCapability(body.provider)
+  },
+
+  async disableLocalProvider(providerId: string) {
+    const body = await requestJSON<{ provider: ApiProviderCapability }>(`/v1/local-provider-detections/${encodeURIComponent(providerId)}/enable`, { method: 'DELETE' })
+    return mapApiProviderCapability(body.provider)
+  },
+
   async checkModelProvider(providerId: string) {
     const body = await requestJSON<{ provider: ApiProviderCapability }>('/v1/model-providers/check', {
       method: 'POST',
@@ -724,7 +747,7 @@ export const realApiClient: ApiClient = {
     let run: Run | undefined
     try {
       const providers = await this.listModelProviders?.()
-      const provider = providers?.find((candidate) => candidate.status === 'available')
+      const provider = selectSendProvider(providers)
       if (!provider) throw new ApiRequestError('Model provider is unavailable.', 'provider_unavailable', 503)
       run = await this.startRun?.(threadId, { messageId: created.message.id, source: 'model_gateway', providerId: provider.id, model: provider.model, personaId })
     } catch (err) {

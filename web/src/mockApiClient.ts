@@ -1,5 +1,5 @@
 import type { ApiClient } from './apiClient'
-import type { Message, Run, RuntimeScriptId, ToolCatalogItem } from './domain'
+import type { LocalProviderDetection, Message, ProviderCapability, Run, RuntimeScriptId, ToolCatalogItem } from './domain'
 import { messages, runs, threads } from './mockData'
 import { isRuntimeTerminal } from './runtime/executionAdapter'
 import { mockExecutionAdapter } from './runtime/mockExecutionAdapter'
@@ -10,6 +10,8 @@ let threadStore = [...threads]
 let messageStore = [...messages]
 let runStore = runs.map((run) => ({ ...run, events: [...run.events] }))
 let selectedRuntimeScriptId: RuntimeScriptId = 'success'
+let mockLocalProviderDetections: LocalProviderDetection[] = []
+let mockProviderCapabilities: ProviderCapability[] = []
 
 const mockToolCatalog: ToolCatalogItem[] = [{
   name: 'runtime.get_current_time',
@@ -147,8 +149,12 @@ export const mockApiClient: ApiClient = {
     return runStore.find((run) => run.id === runId)?.events ?? []
   },
 
+  async listModelProviders() {
+    return mockProviderCapabilities
+  },
+
   async listLocalProviderDetections() {
-    return [
+    mockLocalProviderDetections = [
       {
         providerId: 'local_claude_code',
         displayName: 'Local Claude Code',
@@ -165,13 +171,39 @@ export const mockApiClient: ApiClient = {
         displayName: 'Local Codex',
         providerKind: 'codex',
         authMode: 'unknown',
-        status: 'unavailable',
-        modelCandidates: ['gpt-5'],
+        status: 'available',
+        modelCandidates: ['gpt-5.5'],
         source: 'unknown',
         redactionApplied: true,
-        message: 'Not detected.',
+        message: 'Detected but not enabled. Explicit opt-in is required before use.',
       },
     ]
+    return mockLocalProviderDetections
+  },
+
+  async enableLocalProvider(providerId: string) {
+    const detection = mockLocalProviderDetections.find((provider) => provider.providerId === providerId)
+    if (!detection || detection.status !== 'available') throw new Error('Local provider is not available.')
+    const capability: ProviderCapability = {
+      id: detection.providerId,
+      family: 'openai_compatible',
+      model: detection.modelCandidates[0] ?? 'gpt-5.5',
+      status: 'unavailable',
+      message: `${detection.displayName} is enabled for this session, but execution is unsupported until the local provider execution bridge is implemented.`,
+      localProvider: true,
+      sessionLocal: true,
+      credentialReference: 'redacted',
+      executionState: 'unsupported',
+    }
+    mockProviderCapabilities = [...mockProviderCapabilities.filter((provider) => provider.id !== providerId), capability]
+    return capability
+  },
+
+  async disableLocalProvider(providerId: string) {
+    const capability = mockProviderCapabilities.find((provider) => provider.id === providerId)
+    mockProviderCapabilities = mockProviderCapabilities.filter((provider) => provider.id !== providerId)
+    if (!capability) throw new Error('Local provider is not enabled.')
+    return capability
   },
 
   async listToolCatalog() {

@@ -1,7 +1,7 @@
 import type { AssistantDraft as AssistantDraftState, BackendCapabilityState, ChatCanvasState, Message, Persona, ProviderCapability, Run, StreamState, Thread } from '../domain'
 import type { Locale } from '../i18n'
 import { getDictionary } from '../i18n'
-import { deriveBackendCapabilityStatus, getBackendCapabilityCopy, shouldShowProviderUnavailableWarning } from '../runtime/backendCapabilityStatus'
+import { deriveBackendCapabilityStatus, getBackendCapabilityCopy, getProviderUnavailableWarning, shouldShowProviderUnavailableWarning } from '../runtime/backendCapabilityStatus'
 import { deriveChatCanvasState } from '../runtime/chatCanvasState'
 import { deriveWorkPlanProjection } from '../workModeProjection'
 import { Composer } from './Composer'
@@ -150,12 +150,16 @@ export function ChatCanvas({ sidebarCollapsed, thread, messages, run, loading, e
   const composerDisabled = isWorkModeReadOnly || state === 'loading' || state === 'error' || state === 'no-thread' || state === 'backend-unavailable' || state === 'waiting-run' || state === 'running' || state === 'recovering' || state === 'stopping'
   const composerPlaceholder = isWorkModeReadOnly ? copy.workReadOnlyComposer : state === 'history' || !composerDisabled ? copy.messageLoomi : stateCopy[state].title
   const providerUnavailableBeforeSend = !isWorkModeReadOnly && shouldShowProviderUnavailableWarning(dataSourceMode, providerCapabilities)
+  const providerUnavailableWarning = getProviderUnavailableWarning(providerCapabilities, locale)
+  const activeProvider = providerCapabilities.find((provider) => provider.id === 'local_codex' && provider.status === 'available' && provider.executionState === 'supported')
+    ?? providerCapabilities.find((provider) => provider.status === 'available' && provider.executionState !== 'unsupported')
+  const activeProviderLabel = activeProvider ? `${activeProvider.id} · ${activeProvider.model}` : undefined
   const capabilityStatus = deriveBackendCapabilityStatus({
     dataSourceMode,
     runtimeSource: run?.context === 'model_gateway' ? 'model_gateway' : 'local_simulated',
     backendUnavailable: backendCapability === 'unavailable' || backendUnavailableAttempted || capabilitySignals?.backendUnavailable,
     modelSetupMissing: capabilitySignals?.modelSetupMissing,
-    providerUnavailable: capabilitySignals?.providerUnavailable || providerUnavailableBeforeSend,
+    providerUnavailable: providerUnavailableBeforeSend,
     activeRun: Boolean(run && (run.status === 'pending' || run.status === 'queued' || run.status === 'running' || run.status === 'retrying' || run.status === 'recovering' || run.status === 'blocked_on_tool_approval' || run.status === 'stopping')),
     streamDisconnected: Boolean(run && (run.status === 'pending' || run.status === 'queued' || run.status === 'running' || run.status === 'retrying' || run.status === 'recovering' || run.status === 'blocked_on_tool_approval' || run.status === 'stopping') && (capabilitySignals?.streamDisconnected || streamState === 'recoverable_error')),
     runRecovering: run?.status === 'recovering' || run?.assistantDraft?.status === 'recovering',
@@ -190,7 +194,7 @@ export function ChatCanvas({ sidebarCollapsed, thread, messages, run, loading, e
       <ToolBoundaryNotice run={run} locale={locale} />
       {providerUnavailableBeforeSend && (
         <div className="provider-warning" role="status">
-          <span>{copy.providerUnavailableWarning}</span>
+          <span>{providerUnavailableWarning}</span>
           <button type="button" onClick={onOpenProviderSettings}>{copy.openProviderSettings}</button>
         </div>
       )}
@@ -222,6 +226,7 @@ export function ChatCanvas({ sidebarCollapsed, thread, messages, run, loading, e
         messages={messages}
         personas={personas}
         selectedPersonaId={selectedPersonaId}
+        activeProviderLabel={activeProviderLabel}
         onSelectPersona={onSelectPersona}
         attachLabel={copy.attach}
         stopLabel={copy.stop}

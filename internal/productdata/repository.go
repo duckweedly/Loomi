@@ -346,8 +346,8 @@ func (r *PostgresRepository) StartRun(ctx context.Context, ident identity.LocalI
 		metadata["script_name"] = NormalizeScriptName(input.ScriptName)
 	} else {
 		metadata["message_id"] = input.MessageID
-		metadata["provider_id"] = firstNonEmpty(snapshot.ModelRoute.ProviderID, input.ProviderID)
-		metadata["model"] = firstNonEmpty(snapshot.ModelRoute.Model, input.Model)
+		metadata["provider_id"] = runProviderID(input.ProviderID, snapshot)
+		metadata["model"] = runModel(input.ProviderID, input.Model, snapshot)
 	}
 	if snapshot.ID != "" {
 		metadata["persona_id"] = snapshot.ID

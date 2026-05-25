@@ -86,6 +86,26 @@ func TestModelProviderHandlersExposeRedactedCapability(t *testing.T) {
 	}
 }
 
+func TestModelProviderCheckAcceptsEnabledLocalProvider(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	home := t.TempDir()
+	writeHTTPRuntimeTestFile(t, filepath.Join(home, ".codex", "auth.json"), `{"tokens":{"access_token":"access-runtime-secret","refresh_token":"refresh-runtime-secret"},"base_url":"https://gateway.example.test/v1","model":"gpt-local-fixture"}`)
+	srv := NewServerWithRuntimes(config.Config{AppEnv: "local"}, fakeChecker{}, svc, nil, nil, productruntime.NewGateway(svc, nil, nil))
+	srv.localProviderDetectionInput = productruntime.LocalProviderDetectionInput{HomeDir: home}
+
+	enable := requestJSON(t, srv, http.MethodPost, "/v1/local-provider-detections/local_codex/enable", "")
+	if enable.Code != http.StatusOK {
+		t.Fatalf("enable status = %d body=%s", enable.Code, enable.Body.String())
+	}
+	check := requestJSON(t, srv, http.MethodPost, "/v1/model-providers/check", `{"provider_id":"local_codex"}`)
+	if check.Code != http.StatusOK {
+		t.Fatalf("check status = %d body=%s", check.Code, check.Body.String())
+	}
+	if strings.Contains(check.Body.String(), "access-runtime-secret") || strings.Contains(check.Body.String(), "refresh-runtime-secret") || strings.Contains(check.Body.String(), home) {
+		t.Fatalf("check leaked local secret/path: %s", check.Body.String())
+	}
+}
+
 func TestModelProviderHandlerSavesLocalCustomProvider(t *testing.T) {
 	svc := productdata.NewMemoryService()
 	srv := NewServerWithProduct(config.Config{AppEnv: "local"}, fakeChecker{}, svc)
@@ -152,6 +172,19 @@ func TestLocalProviderDetectionHandlerReturnsSafeProviders(t *testing.T) {
 	}
 }
 
+func TestLocalProviderDetectionHandlerAcceptsTrailingSlash(t *testing.T) {
+	home := t.TempDir()
+	writeHTTPRuntimeTestFile(t, home+"/.codex/auth.json", `{"auth_mode":"chatgpt","tokens":{"access_token":"access-http-secret"}}`)
+	srv := NewServerWithProduct(config.Config{AppEnv: "local"}, fakeChecker{}, productdata.NewMemoryService())
+	srv.localProviderDetectionInput = productruntime.LocalProviderDetectionInput{HomeDir: home, Env: map[string]string{}}
+
+	res := requestJSON(t, srv, http.MethodGet, "/v1/local-provider-detections/", "")
+
+	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), "local_codex") {
+		t.Fatalf("status = %d body=%s", res.Code, res.Body.String())
+	}
+}
+
 func TestLocalProviderDetectionHandlerDoesNotExposeSecretsOrPrivatePaths(t *testing.T) {
 	home := t.TempDir()
 	writeHTTPRuntimeTestFile(t, home+"/.claude/settings.json", `{"env":{"ANTHROPIC_AUTH_TOKEN":"Bearer private-token","ANTHROPIC_BASE_URL":"https://example.test/private/path","ANTHROPIC_MODEL":"claude-test"}}`)
@@ -187,6 +220,231 @@ func TestLocalProviderDetectionHandlerReturnsDisabledAndUnsupportedStableStatuse
 	disabled := requestJSON(t, srv, http.MethodGet, "/v1/local-provider-detections", "")
 	if disabled.Code != http.StatusOK || !strings.Contains(disabled.Body.String(), `"status":"disabled"`) {
 		t.Fatalf("disabled status = %d body=%s", disabled.Code, disabled.Body.String())
+	}
+}
+
+func TestLocalProviderEnablementRequiresExplicitOptInBeforeModelProviderList(t *testing.T) {
+	home := t.TempDir()
+	providerServer := newOpenAICompatibleRuntimeTestServer(t, "M20 local codex works.")
+	writeHTTPRuntimeTestFile(t, home+"/.codex/auth.json", `{"auth_mode":"chatgpt","tokens":{"access_token":"access-enable-secret","refresh_token":"refresh-enable-secret"},"base_url":"`+providerServer.URL+`/v1","model":"gpt-local-fixture"}`)
+	svc := productdata.NewMemoryService()
+	gateway := productruntime.NewGateway(svc, nil, nil)
+	srv := NewServerWithRuntimes(config.Config{AppEnv: "local"}, fakeChecker{}, svc, productruntime.NewBroadcaster(), nil, gateway)
+	srv.localProviderDetectionInput = productruntime.LocalProviderDetectionInput{HomeDir: home, Env: map[string]string{}}
+
+	before := requestJSON(t, srv, http.MethodGet, "/v1/model-providers", "")
+	if strings.Contains(before.Body.String(), "local_codex") {
+		t.Fatalf("detected-only provider leaked into model list: %s", before.Body.String())
+	}
+
+	enabled := requestJSON(t, srv, http.MethodPost, "/v1/local-provider-detections/local_codex/enable", "")
+	if enabled.Code != http.StatusOK {
+		t.Fatalf("enable status = %d body=%s", enabled.Code, enabled.Body.String())
+	}
+	body := enabled.Body.String()
+	for _, expected := range []string{`"id":"local_codex"`, `"local_provider":true`, `"session_local":true`, `"credential_reference":"redacted"`, `"execution_state":"supported"`, `"status":"available"`} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("enabled body missing %q: %s", expected, body)
+		}
+	}
+	for _, forbidden := range []string{"access-enable-secret", "refresh-enable-secret", "access_token", "refresh_token", home} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("enabled body leaked %q: %s", forbidden, body)
+		}
+	}
+
+	listed := requestJSON(t, srv, http.MethodGet, "/v1/model-providers", "")
+	if listed.Code != http.StatusOK || !strings.Contains(listed.Body.String(), `"id":"local_codex"`) || strings.Contains(listed.Body.String(), "access-enable-secret") {
+		t.Fatalf("listed status = %d body=%s", listed.Code, listed.Body.String())
+	}
+
+	disabled := requestJSON(t, srv, http.MethodDelete, "/v1/local-provider-detections/local_codex/enable", "")
+	if disabled.Code != http.StatusOK {
+		t.Fatalf("disable status = %d body=%s", disabled.Code, disabled.Body.String())
+	}
+	after := requestJSON(t, srv, http.MethodGet, "/v1/model-providers", "")
+	if strings.Contains(after.Body.String(), "local_codex") {
+		t.Fatalf("disabled provider remained in model list: %s", after.Body.String())
+	}
+
+	thread := createRuntimeTestThread(t, svc)
+	message, _, err := svc.CreateMessage(context.Background(), identity.LocalDevIdentity(), thread.ID, productdata.CreateMessageInput{Content: "disabled local codex"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runRes := requestJSON(t, srv, http.MethodPost, "/v1/threads/"+thread.ID+"/runs", `{"message_id":"`+message.ID+`","source":"model_gateway","provider_id":"local_codex","model":"gpt-local-fixture"}`)
+	if runRes.Code != http.StatusServiceUnavailable || !strings.Contains(runRes.Body.String(), "not enabled") {
+		t.Fatalf("disabled local codex start status = %d body=%s", runRes.Code, runRes.Body.String())
+	}
+}
+
+func TestLocalCodexEnabledProviderRunsThroughGatewayWorker(t *testing.T) {
+	home := t.TempDir()
+	providerServer := newOpenAICompatibleRuntimeTestServer(t, "Local Codex assistant reply.")
+	writeHTTPRuntimeTestFile(t, home+"/.codex/auth.json", `{"auth_mode":"chatgpt","tokens":{"access_token":"access-chat-secret","refresh_token":"refresh-chat-secret"},"base_url":"`+providerServer.URL+`/v1","model":"gpt-local-fixture"}`)
+	svc := productdata.NewMemoryService()
+	broadcaster := productruntime.NewBroadcaster()
+	gateway := productruntime.NewGateway(svc, broadcaster, nil)
+	worker := productruntime.NewWorker(svc, broadcaster, productruntime.QueuedRunRouter{Gateway: gateway})
+	srv := NewServerWithRuntimes(config.Config{AppEnv: "local"}, fakeChecker{}, svc, broadcaster, nil, gateway)
+	srv.localProviderDetectionInput = productruntime.LocalProviderDetectionInput{HomeDir: home, Env: map[string]string{}}
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, productdata.CreateThreadInput{Title: "Local Codex", Mode: productdata.ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _, err := svc.CreateMessage(context.Background(), ident, thread.ID, productdata.CreateMessageInput{Content: "hello local codex"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	enabled := requestJSON(t, srv, http.MethodPost, "/v1/local-provider-detections/local_codex/enable", "")
+	if enabled.Code != http.StatusOK || !strings.Contains(enabled.Body.String(), `"execution_state":"supported"`) || !strings.Contains(enabled.Body.String(), `"status":"available"`) {
+		t.Fatalf("enable status = %d body=%s", enabled.Code, enabled.Body.String())
+	}
+	runRes := requestJSON(t, srv, http.MethodPost, "/v1/threads/"+thread.ID+"/runs", `{"message_id":"`+message.ID+`","source":"model_gateway","provider_id":"local_codex","model":"gpt-local-fixture"}`)
+	if runRes.Code != http.StatusAccepted {
+		t.Fatalf("run status = %d body=%s", runRes.Code, runRes.Body.String())
+	}
+	var runBody struct {
+		Run productdata.Run `json:"run"`
+	}
+	if err := json.Unmarshal(runRes.Body.Bytes(), &runBody); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := worker.ProcessOne(context.Background()); err != nil || !ok {
+		t.Fatalf("worker ok=%v err=%v", ok, err)
+	}
+
+	events := waitForRuntimeTestEvents(t, svc, runBody.Run.ID, productdata.EventRunCompleted)
+	for _, want := range []string{"model_request_started", "model_output_delta", productdata.EventRunCompleted} {
+		if !runtimeTestEventsContain(events, want) {
+			t.Fatalf("events missing %s: %+v", want, events)
+		}
+	}
+	messages, err := svc.ListMessages(context.Background(), ident, thread.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 2 || messages[1].Role != productdata.MessageRoleAssistant || messages[1].Content != "Local Codex assistant reply." {
+		t.Fatalf("messages = %+v", messages)
+	}
+	assertRuntimeTestNoLeak(t, enabled.Body.String()+runRes.Body.String()+runtimeTestEventsJSON(t, events)+runtimeTestMessagesJSON(t, messages), "access-chat-secret", "refresh-chat-secret", "Authorization", home)
+}
+
+func TestLocalCodexProviderFailureDoesNotFabricateAssistantMessage(t *testing.T) {
+	home := t.TempDir()
+	providerServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, `{"error":{"type":"authentication_error"}}`, http.StatusUnauthorized)
+	}))
+	t.Cleanup(providerServer.Close)
+	writeHTTPRuntimeTestFile(t, home+"/.codex/auth.json", `{"OPENAI_API_KEY":"sk-failure-secret","base_url":"`+providerServer.URL+`/v1"}`)
+	svc := productdata.NewMemoryService()
+	gateway := productruntime.NewGateway(svc, nil, nil)
+	worker := productruntime.NewWorker(svc, nil, productruntime.QueuedRunRouter{Gateway: gateway})
+	srv := NewServerWithRuntimes(config.Config{AppEnv: "local"}, fakeChecker{}, svc, productruntime.NewBroadcaster(), nil, gateway)
+	srv.localProviderDetectionInput = productruntime.LocalProviderDetectionInput{HomeDir: home, Env: map[string]string{}}
+	thread := createRuntimeTestThread(t, svc)
+	message, _, err := svc.CreateMessage(context.Background(), identity.LocalDevIdentity(), thread.ID, productdata.CreateMessageInput{Content: "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res := requestJSON(t, srv, http.MethodPost, "/v1/local-provider-detections/local_codex/enable", ""); res.Code != http.StatusOK {
+		t.Fatalf("enable status=%d body=%s", res.Code, res.Body.String())
+	}
+	runRes := requestJSON(t, srv, http.MethodPost, "/v1/threads/"+thread.ID+"/runs", `{"message_id":"`+message.ID+`","source":"model_gateway","provider_id":"local_codex"}`)
+	if runRes.Code != http.StatusAccepted {
+		t.Fatalf("run status=%d body=%s", runRes.Code, runRes.Body.String())
+	}
+	var runBody struct {
+		Run productdata.Run `json:"run"`
+	}
+	if err := json.Unmarshal(runRes.Body.Bytes(), &runBody); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := worker.ProcessOne(context.Background()); !ok || err == nil {
+		t.Fatalf("worker ok=%v err=%v", ok, err)
+	}
+	events := waitForRuntimeTestEvents(t, svc, runBody.Run.ID, "run_failed")
+	messages, err := svc.ListMessages(context.Background(), identity.LocalDevIdentity(), thread.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 1 {
+		t.Fatalf("fabricated assistant message: %+v", messages)
+	}
+	assertRuntimeTestNoLeak(t, runtimeTestEventsJSON(t, events), "sk-failure-secret", home)
+}
+
+func TestLocalProviderConcurrentEnableDisableListSaveAndCheck(t *testing.T) {
+	home := t.TempDir()
+	providerServer := newOpenAICompatibleRuntimeTestServer(t, "ok")
+	writeHTTPRuntimeTestFile(t, home+"/.codex/auth.json", `{"OPENAI_API_KEY":"sk-concurrent-secret","base_url":"`+providerServer.URL+`/v1"}`)
+	svc := productdata.NewMemoryService()
+	gateway := productruntime.NewGateway(svc, nil, nil)
+	srv := NewServerWithRuntimes(config.Config{AppEnv: "local"}, fakeChecker{}, svc, productruntime.NewBroadcaster(), nil, gateway)
+	srv.localProviderDetectionInput = productruntime.LocalProviderDetectionInput{HomeDir: home, Env: map[string]string{}}
+
+	errs := make(chan string, 80)
+	for i := 0; i < 10; i++ {
+		go func() {
+			for j := 0; j < 8; j++ {
+				for _, res := range []httptest.ResponseRecorder{
+					*requestJSON(t, srv, http.MethodPost, "/v1/local-provider-detections/local_codex/enable", ""),
+					*requestJSON(t, srv, http.MethodGet, "/v1/model-providers", ""),
+					*requestJSON(t, srv, http.MethodPost, "/v1/model-providers", `{"base_url":"https://gateway.example.test/v1","model":"gpt-5.5","api_key":"secret-key"}`),
+					*requestJSON(t, srv, http.MethodPost, "/v1/model-providers/check", `{"provider_id":"custom"}`),
+				} {
+					if strings.Contains(res.Body.String(), "sk-concurrent-secret") || strings.Contains(res.Body.String(), home) {
+						errs <- res.Body.String()
+					}
+				}
+				_ = requestJSON(t, srv, http.MethodDelete, "/v1/local-provider-detections/local_codex/enable", "")
+			}
+			errs <- ""
+		}()
+	}
+	for i := 0; i < 10; i++ {
+		if err := <-errs; err != "" {
+			t.Fatalf("leak during concurrent provider operations: %s", err)
+		}
+	}
+}
+
+func TestLocalProviderEnablementRejectsUnavailableUnsupportedAndClaudeCode(t *testing.T) {
+	home := t.TempDir()
+	writeHTTPRuntimeTestFile(t, home+"/.claude.json", `{"primaryApiKey":"sk-ant-enable-secret"}`)
+	srv := NewServerWithProduct(config.Config{AppEnv: "local"}, fakeChecker{}, productdata.NewMemoryService())
+	srv.localProviderDetectionInput = productruntime.LocalProviderDetectionInput{HomeDir: home, Env: map[string]string{}}
+
+	claude := requestJSON(t, srv, http.MethodPost, "/v1/local-provider-detections/local_claude_code/enable", "")
+	if claude.Code != http.StatusBadRequest || !strings.Contains(claude.Body.String(), "unsupported") {
+		t.Fatalf("claude enable status = %d body=%s", claude.Code, claude.Body.String())
+	}
+
+	codex := requestJSON(t, srv, http.MethodPost, "/v1/local-provider-detections/local_codex/enable", "")
+	if codex.Code != http.StatusServiceUnavailable || !strings.Contains(codex.Body.String(), "not available") {
+		t.Fatalf("codex enable status = %d body=%s", codex.Code, codex.Body.String())
+	}
+
+	listed := requestJSON(t, srv, http.MethodGet, "/v1/model-providers", "")
+	if strings.Contains(listed.Body.String(), "local_claude_code") || strings.Contains(listed.Body.String(), "local_codex") || strings.Contains(listed.Body.String(), "sk-ant-enable-secret") {
+		t.Fatalf("rejected provider leaked into model list: %s", listed.Body.String())
+	}
+}
+
+func TestStartRunRejectsUnsupportedEnabledLocalProvider(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	thread := createRuntimeTestThread(t, svc)
+	srv := NewServerWithProduct(config.Config{AppEnv: "local"}, fakeChecker{}, svc)
+	srv.localProviderEnablements["local_claude_code"] = productruntime.LocalProviderCapability{ProviderID: "local_claude_code", DisplayName: "Local Claude Code", ProviderKind: productruntime.LocalProviderKindClaudeCode, AuthMode: productruntime.LocalProviderAuthModeAPIKey, Status: productruntime.LocalProviderStatusAvailable, ModelCandidates: []string{"claude-sonnet-4-5"}, Source: productruntime.LocalProviderSourceLocalConfig, RedactionApplied: true}
+
+	res := requestJSON(t, srv, http.MethodPost, "/v1/threads/"+thread.ID+"/runs", `{"source":"model_gateway","provider_id":"local_claude_code","model":"claude-sonnet-4-5"}`)
+	if res.Code != http.StatusServiceUnavailable || !strings.Contains(res.Body.String(), "execution is unsupported") {
+		t.Fatalf("start run status = %d body=%s", res.Code, res.Body.String())
+	}
+	if strings.Contains(res.Body.String(), "access-run-secret") {
+		t.Fatalf("start run leaked local secret/path: %s", res.Body.String())
 	}
 }
 
@@ -732,4 +990,61 @@ func waitForRuntimeTestEvents(t *testing.T, svc *productdata.MemoryService, runI
 	}
 	t.Fatalf("event %s not found; events = %+v", eventType, last)
 	return nil
+}
+
+func newOpenAICompatibleRuntimeTestServer(t *testing.T, responseText string) *httptest.Server {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" && r.URL.Path != "/v1/responses" {
+			t.Fatalf("path = %s", r.URL.Path)
+		}
+		if !strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") {
+			t.Fatalf("missing authorization header")
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		if r.URL.Path == "/v1/responses" {
+			_, _ = w.Write([]byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"" + responseText + "\"}\n\n"))
+			_, _ = w.Write([]byte("data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\"}}\n\n"))
+			return
+		}
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"" + responseText + "\"},\"finish_reason\":\"stop\"}]}\n\n"))
+	}))
+	t.Cleanup(server.Close)
+	return server
+}
+
+func runtimeTestEventsContain(events []productdata.RunEvent, eventType string) bool {
+	for _, event := range events {
+		if event.Type == eventType {
+			return true
+		}
+	}
+	return false
+}
+
+func runtimeTestEventsJSON(t *testing.T, events []productdata.RunEvent) string {
+	t.Helper()
+	raw, err := json.Marshal(events)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
+}
+
+func runtimeTestMessagesJSON(t *testing.T, messages []productdata.Message) string {
+	t.Helper()
+	raw, err := json.Marshal(messages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
+}
+
+func assertRuntimeTestNoLeak(t *testing.T, body string, forbidden ...string) {
+	t.Helper()
+	for _, value := range forbidden {
+		if value != "" && strings.Contains(body, value) {
+			t.Fatalf("body leaked %q: %s", value, body)
+		}
+	}
 }

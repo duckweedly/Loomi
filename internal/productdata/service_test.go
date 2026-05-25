@@ -365,6 +365,47 @@ func TestPrepareRunContextResolvesRunThreadAndDefaultPersona(t *testing.T) {
 	}
 }
 
+func TestPrepareRunContextPreservesExplicitLocalProviderOverDefaultPersonaRoute(t *testing.T) {
+	svc := NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	if _, err := svc.SyncBuiltInPersonas(context.Background(), ident, []BuiltInPersonaConfig{{
+		Slug:             "default",
+		Name:             "Default",
+		Description:      "Default persona",
+		SystemPrompt:     "default prompt",
+		ModelRoute:       PersonaModelRoute{ProviderID: "custom", Model: "default-model"},
+		AllowedToolNames: []string{ToolNameCurrentTime},
+		ReasoningMode:    "balanced",
+		BudgetSummary:    "default budget",
+		Version:          "1",
+		IsDefault:        true,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	thread, err := svc.CreateThread(context.Background(), ident, CreateThreadInput{Title: "Local Codex", Mode: ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _, err := svc.CreateMessage(context.Background(), ident, thread.ID, CreateMessageInput{Content: "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.StartRun(context.Background(), ident, thread.ID, StartRunInput{Source: RunSourceModelGateway, MessageID: message.ID, ProviderID: "local_codex", Model: "gpt-5"}); err != nil {
+		t.Fatal(err)
+	}
+	job, _, ok, err := svc.ClaimBackgroundJob(context.Background(), ident, ClaimBackgroundJobInput{WorkerID: "worker_local_codex", LeaseSeconds: 5})
+	if err != nil || !ok {
+		t.Fatalf("claim ok=%v err=%v", ok, err)
+	}
+	context, err := svc.PrepareRunContext(context.Background(), ident, job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if context.ProviderRoute.ProviderID != "local_codex" || context.ProviderRoute.Model != "gpt-5" {
+		t.Fatalf("provider route = %+v", context.ProviderRoute)
+	}
+}
+
 func TestSyncBuiltInPersonasRejectsUnsupportedTool(t *testing.T) {
 	svc := NewMemoryService()
 	_, err := svc.SyncBuiltInPersonas(context.Background(), identity.LocalDevIdentity(), []BuiltInPersonaConfig{{

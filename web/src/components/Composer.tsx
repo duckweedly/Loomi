@@ -13,6 +13,7 @@ type Props = {
   messages: Message[]
   personas?: Persona[]
   selectedPersonaId?: string
+  activeProviderLabel?: string
   onSubmit: (content: string) => void
   onSelectPersona?: (personaId: string) => void
   onStop?: () => void
@@ -24,7 +25,7 @@ type Props = {
   regenerateLabel?: string
 }
 
-export function Composer({ disabled, providerUnavailable = false, placeholder = 'Message Loomi', threadSelected, run, messages, personas = [], selectedPersonaId = '', onSubmit, onSelectPersona, onStop, onRetry, onRegenerate, attachLabel = 'Attach', stopLabel = 'Stop', retryLabel = 'Retry', regenerateLabel = 'Regenerate' }: Props) {
+export function Composer({ disabled, providerUnavailable = false, placeholder = 'Message Loomi', threadSelected, run, messages, personas = [], selectedPersonaId = '', activeProviderLabel, onSubmit, onSelectPersona, onStop, onRetry, onRegenerate, attachLabel = 'Attach', stopLabel = 'Stop', retryLabel = 'Retry', regenerateLabel = 'Regenerate' }: Props) {
   const [value, setValue] = useState('')
   const actions = deriveComposerActions({ threadSelected, text: value, run, messages, providerUnavailable })
   const composerDisabled = Boolean(disabled || providerUnavailable)
@@ -73,7 +74,7 @@ export function Composer({ disabled, providerUnavailable = false, placeholder = 
             </select>
           )}
           <button className="composer-model" disabled type="button">
-            <span>{run?.model ?? 'gpt-5.5'}</span>
+            <span>{activeProviderLabel ?? run?.model ?? 'gpt-5.5'}</span>
             <ChevronDown size={16} />
           </button>
           <button className="composer-tool" disabled type="button">

@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/sheridiany/loomi/internal/config"
 	"github.com/sheridiany/loomi/internal/db"
@@ -18,6 +19,8 @@ type RuntimeRunner interface {
 type GatewayRunner interface {
 	RunAsync(context.Context, productdata.Run, productruntime.GatewayRunInput)
 	SaveProviderConfig(productruntime.ProviderConfig) productruntime.ProviderConfig
+	SaveProvider(productruntime.Provider)
+	RemoveProvider(string)
 }
 
 type Server struct {
@@ -27,8 +30,10 @@ type Server struct {
 	broadcaster                 *productruntime.Broadcaster
 	runner                      RuntimeRunner
 	gatewayRunner               GatewayRunner
+	providerMu                  sync.RWMutex
 	providers                   []productruntime.ProviderConfig
 	localProviderDetectionInput productruntime.LocalProviderDetectionInput
+	localProviderEnablements    map[string]productruntime.LocalProviderCapability
 	mux                         *http.ServeMux
 }
 
@@ -46,7 +51,7 @@ func NewServerWithRuntime(cfg config.Config, checker db.Checker, product product
 }
 
 func NewServerWithRuntimes(cfg config.Config, checker db.Checker, product productdata.Service, broadcaster *productruntime.Broadcaster, runner RuntimeRunner, gatewayRunner GatewayRunner) *Server {
-	s := &Server{cfg: cfg, checker: checker, product: product, broadcaster: broadcaster, runner: runner, gatewayRunner: gatewayRunner, providers: productruntime.ProviderConfigsFromConfig(cfg), mux: http.NewServeMux()}
+	s := &Server{cfg: cfg, checker: checker, product: product, broadcaster: broadcaster, runner: runner, gatewayRunner: gatewayRunner, providers: productruntime.ProviderConfigsFromConfig(cfg), localProviderEnablements: map[string]productruntime.LocalProviderCapability{}, mux: http.NewServeMux()}
 	s.mux.HandleFunc("GET /healthz", s.handleHealthz)
 	s.mux.HandleFunc("GET /readyz", s.handleReadyz)
 	s.mux.HandleFunc("GET /v1/me", s.handleCurrentIdentity)
@@ -55,6 +60,7 @@ func NewServerWithRuntimes(cfg config.Config, checker db.Checker, product produc
 	s.mux.HandleFunc("/v1/model-providers", s.handleModelProviders)
 	s.mux.HandleFunc("POST /v1/model-providers/check", s.handleModelProviderCheck)
 	s.mux.HandleFunc("GET /v1/local-provider-detections", s.handleLocalProviderDetections)
+	s.mux.HandleFunc("/v1/local-provider-detections/", s.handleLocalProviderDetectionByID)
 	s.mux.HandleFunc("/v1/tools/catalog", s.handleToolsCatalog)
 	s.mux.HandleFunc("/v1/memory", s.handleMemory)
 	s.mux.HandleFunc("/v1/memory/", s.handleMemoryByID)

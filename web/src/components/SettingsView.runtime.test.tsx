@@ -57,7 +57,7 @@ describe('SettingsView provider test console', () => {
     expect(source).toContain('apiKeySet')
   })
 
-  test('renders local provider autodetect status without opt-in controls or secrets', async () => {
+  test('renders local provider autodetect opt-in status without secrets', async () => {
     const source = await Bun.file(new URL('./SettingsView.tsx', import.meta.url)).text()
     const copy = await Bun.file(new URL('../i18n.ts', import.meta.url)).text()
 
@@ -69,9 +69,17 @@ describe('SettingsView provider test console', () => {
     expect(source).toContain('t.localProviderAutodetectTitle')
     expect(source).toContain('t.localProviderExplicitOptIn')
     expect(source).toContain('t.localProviderNoSecrets')
+    expect(source).toContain('onEnableLocalProvider(provider.providerId)')
+    expect(source).toContain('onDisableLocalProvider(provider.providerId)')
+    expect(source).toContain('t.localProviderEnableForSession')
+    expect(source).toContain('t.localProviderDisableForSession')
+    expect(source).toContain('t.localProviderExecutionUnsupported')
+    expect(source).toContain('t.localProviderExecutionSupported')
     expect(source).not.toContain('access_token')
     expect(source).not.toContain('refresh_token')
     expect(source).not.toContain('sk-')
     expect(copy).toContain("localProviderAutodetectTitle: 'Local provider autodetect'")
+    expect(copy).toContain("localProviderExecutionUnsupported: 'Local Codex is enabled but execution is not supported yet'")
+    expect(copy).toContain("localProviderExecutionSupported: 'execution supported'")
   })
 })

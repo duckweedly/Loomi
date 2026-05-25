@@ -15,6 +15,8 @@ export type ApiClient = {
   listModelProviders?(): Promise<ProviderCapability[]>
   listToolCatalog?(): Promise<ToolCatalogItem[]>
   listLocalProviderDetections?(): Promise<LocalProviderDetection[]>
+  enableLocalProvider?(providerId: string): Promise<ProviderCapability>
+  disableLocalProvider?(providerId: string): Promise<ProviderCapability>
   checkModelProvider?(providerId: string): Promise<ProviderCapability>
   saveModelProvider?(input: { baseUrl: string; model: string; apiKey: string }): Promise<ProviderCapability>
   getWorkerQueueDiagnostics?(): Promise<WorkerQueueDiagnostics>

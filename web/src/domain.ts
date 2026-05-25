@@ -27,6 +27,10 @@ export type ProviderCapability = {
   model: string
   status: BackendCapabilityState
   message?: string | null
+  localProvider?: boolean
+  sessionLocal?: boolean
+  credentialReference?: 'redacted' | string
+  executionState?: 'supported' | 'unsupported' | string
 }
 
 export type LocalProviderDetection = {

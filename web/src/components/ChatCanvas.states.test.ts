@@ -24,6 +24,8 @@ describe('ChatCanvas state copy', () => {
     expect(source).toContain('工具调用未执行')
     expect(source).toContain('已停止生成')
     expect(source).toContain('模型 Provider 未配置或不可用')
+    expect(source).toContain('Local Codex 已启用，但暂不支持执行')
+    expect(source).toContain('Local Codex 登录态不可用，请重新检测或配置 OpenAI-compatible provider')
     expect(source).toContain('打开设置')
     expect(source).toContain('Retrying')
     expect(source).toContain('重试中')
@@ -247,6 +249,71 @@ describe('ChatCanvas provider unavailable warning', () => {
 
     expect(html).toContain('模型 Provider 未配置或不可用')
     expect(html).toContain('打开设置')
+  })
+
+  test('keeps guidance when only enabled local provider execution is unsupported', () => {
+    const html = renderToStaticMarkup(createElement(ChatCanvas, {
+      sidebarCollapsed: false,
+      thread,
+      messages: [],
+      run: null,
+      loading: false,
+      error: null,
+      dataSourceMode: 'real_api',
+      streamState: 'closed',
+      providerCapabilities: [{ ...unavailableProvider, id: 'local_codex', localProvider: true, sessionLocal: true, credentialReference: 'redacted', executionState: 'unsupported', message: 'enabled but execution unsupported' }],
+      onOpenProviderSettings: () => {},
+      onSendMessage: () => {},
+      onStopRun: () => {},
+      locale: 'en',
+    }))
+
+    expect(html).toContain('Local Codex is enabled but execution is not supported yet')
+    expect(html).toContain('Provider unavailable')
+    expect(html).toContain('<textarea class="composer-input" disabled=""')
+  })
+
+  test('shows local unavailable guidance when enabled local codex login is unavailable', () => {
+    const html = renderToStaticMarkup(createElement(ChatCanvas, {
+      sidebarCollapsed: false,
+      thread,
+      messages: [],
+      run: null,
+      loading: false,
+      error: null,
+      dataSourceMode: 'real_api',
+      streamState: 'closed',
+      providerCapabilities: [{ ...unavailableProvider, id: 'local_codex', localProvider: true, sessionLocal: true, credentialReference: 'redacted', executionState: 'supported', message: 'login unavailable' }],
+      onOpenProviderSettings: () => {},
+      onSendMessage: () => {},
+      onStopRun: () => {},
+      locale: 'zh',
+    }))
+
+    expect(html).toContain('Local Codex 登录态不可用，请重新检测或配置 OpenAI-compatible provider')
+    expect(html).toContain('<textarea class="composer-input" disabled=""')
+  })
+
+  test('hides guidance for available supported local codex provider', () => {
+    const html = renderToStaticMarkup(createElement(ChatCanvas, {
+      sidebarCollapsed: false,
+      thread,
+      messages: [],
+      run: null,
+      loading: false,
+      error: null,
+      dataSourceMode: 'real_api',
+      streamState: 'closed',
+      providerCapabilities: [{ ...availableProvider, id: 'local_codex', localProvider: true, sessionLocal: true, credentialReference: 'redacted', executionState: 'supported' }],
+      onOpenProviderSettings: () => {},
+      onSendMessage: () => {},
+      onStopRun: () => {},
+      locale: 'en',
+    }))
+
+    expect(html).not.toContain('Model provider is not configured or unavailable')
+    expect(html).not.toContain('Provider unavailable')
+    expect(html).not.toContain('<textarea class="composer-input" disabled=""')
   })
 
   test('hides guidance when real API has an available provider', () => {

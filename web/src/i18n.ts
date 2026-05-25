@@ -107,6 +107,8 @@ type Dictionary = {
     messageLoomi: string
     workReadOnlyComposer: string
     providerUnavailableWarning: string
+    localCodexUnsupportedWarning: string
+    localCodexUnavailableWarning: string
     openProviderSettings: string
     stoppedDraft: string
     recoveringDraft: string
@@ -189,6 +191,12 @@ type Dictionary = {
     localProviderNoSecrets: string
     localProviderDetectAction: string
     localProviderDetectionIdle: string
+    localProviderEnableForSession: string
+    localProviderDisableForSession: string
+    localProviderSessionLocal: string
+    localProviderCredentialRedacted: string
+    localProviderExecutionUnsupported: string
+    localProviderExecutionSupported: string
     aboutLocalApp: string
     aboutLocalAppDescription: string
     appName: string
@@ -325,6 +333,8 @@ export const dictionaries: Record<Locale, Dictionary> = {
       messageLoomi: '给 Loomi 发消息',
       workReadOnlyComposer: 'M16 Work mode 只读展示计划和进度',
       providerUnavailableWarning: '模型 Provider 未配置或不可用',
+      localCodexUnsupportedWarning: 'Local Codex 已启用，但暂不支持执行',
+      localCodexUnavailableWarning: 'Local Codex 登录态不可用，请重新检测或配置 OpenAI-compatible provider',
       openProviderSettings: '打开设置',
       stoppedDraft: '已停止生成，保留已生成内容',
       recoveringDraft: '恢复中…',
@@ -407,6 +417,12 @@ export const dictionaries: Record<Locale, Dictionary> = {
       localProviderNoSecrets: 'no secrets shown',
       localProviderDetectAction: '检测本机 Provider',
       localProviderDetectionIdle: '点击检测后才会读取本机 Provider 可用性摘要。',
+      localProviderEnableForSession: '本会话启用',
+      localProviderDisableForSession: '禁用本会话',
+      localProviderSessionLocal: 'session-local',
+      localProviderCredentialRedacted: 'credential redacted',
+      localProviderExecutionUnsupported: 'Local Codex is enabled but execution is not supported yet',
+      localProviderExecutionSupported: 'execution supported',
       aboutLocalApp: '本地应用状态',
       aboutLocalAppDescription: '显示已知本地状态；构建和账号信息仍是占位。',
       appName: '应用',
@@ -541,6 +557,8 @@ export const dictionaries: Record<Locale, Dictionary> = {
       messageLoomi: 'Message Loomi',
       workReadOnlyComposer: 'M16 Work mode is read-only for plan and progress',
       providerUnavailableWarning: 'Model provider is not configured or unavailable',
+      localCodexUnsupportedWarning: 'Local Codex is enabled but execution is not supported yet',
+      localCodexUnavailableWarning: 'Local Codex login is unavailable. Detect again or configure an OpenAI-compatible provider',
       openProviderSettings: 'Open Settings',
       stoppedDraft: 'Generation stopped; generated content was preserved',
       recoveringDraft: 'Recovering…',
@@ -623,6 +641,12 @@ export const dictionaries: Record<Locale, Dictionary> = {
       localProviderNoSecrets: 'no secrets shown',
       localProviderDetectAction: 'Detect local providers',
       localProviderDetectionIdle: 'Run detection to inspect local provider availability.',
+      localProviderEnableForSession: 'Enable for this session',
+      localProviderDisableForSession: 'Disable for this session',
+      localProviderSessionLocal: 'session-local',
+      localProviderCredentialRedacted: 'credential redacted',
+      localProviderExecutionUnsupported: 'Local Codex is enabled but execution is not supported yet',
+      localProviderExecutionSupported: 'execution supported',
       aboutLocalApp: 'Local app status',
       aboutLocalAppDescription: 'Shows known local state; build and account metadata remain placeholders.',
       appName: 'Application',

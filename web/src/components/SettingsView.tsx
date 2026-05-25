@@ -45,6 +45,8 @@ type Props = {
   onSaveProvider: (settings: ProviderDraftSettings) => void
   onCheckProvider: (providerId: string) => void
   onDetectLocalProviders: () => void
+  onEnableLocalProvider: (providerId: string) => void
+  onDisableLocalProvider: (providerId: string) => void
   onMemoryQueryChange: (query: string) => void
   onMemoryFiltersChange: (filters: MemoryFilters) => void
   onOpenMemoryDetail: (entry: MemoryEntry) => void
@@ -119,6 +121,9 @@ function ProviderCapabilityList({ providerCapabilities, t }: { providerCapabilit
       {providerCapabilities.map((provider) => (
         <span key={provider.id}>
           {provider.id} · {provider.family} · {provider.model} · {capabilityLabel(provider.status, t)}
+          {provider.localProvider && ` · ${t.localProviderSessionLocal} · ${t.localProviderCredentialRedacted}`}
+          {provider.executionState === 'unsupported' && ` · ${t.localProviderExecutionUnsupported}`}
+          {provider.executionState === 'supported' && ` · ${t.localProviderExecutionSupported}`}
         </span>
       ))}
     </div>
@@ -152,6 +157,10 @@ function ProviderCheckConsole({ providerCapabilities, providerCheckResults, onCh
                 <span>{provider.family}</span>
                 <span>{provider.model}</span>
                 {provider.baseUrl && <span>{provider.baseUrl}</span>}
+                {provider.localProvider && <span>{t.localProviderSessionLocal}</span>}
+                {provider.credentialReference === 'redacted' && <span>{t.localProviderCredentialRedacted}</span>}
+                {provider.executionState === 'unsupported' && <span>{t.localProviderExecutionUnsupported}</span>}
+                {provider.executionState === 'supported' && <span>{t.localProviderExecutionSupported}</span>}
               </div>
               {resultText && <p className={`provider-check-result ${result?.status ?? 'idle'}`}>{resultText}</p>}
             </div>
@@ -173,34 +182,47 @@ function localProviderStatusLabel(status: LocalProviderDetection['status'], t: R
   return t.localProviderNotDetected
 }
 
-function LocalProviderDetectionList({ localProviderDetections, localProviderDetectionError, t }: Pick<Props, 'localProviderDetections' | 'localProviderDetectionError'> & { t: ReturnType<typeof getDictionary>['settings'] }) {
+function LocalProviderDetectionList({ localProviderDetections, localProviderDetectionError, providerCapabilities, onEnableLocalProvider, onDisableLocalProvider, t }: Pick<Props, 'localProviderDetections' | 'localProviderDetectionError' | 'providerCapabilities' | 'onEnableLocalProvider' | 'onDisableLocalProvider'> & { t: ReturnType<typeof getDictionary>['settings'] }) {
   if (localProviderDetectionError) {
     return <p className="provider-check-result failed">{localProviderDetectionError}</p>
   }
   if (!localProviderDetections.length) {
     return <p className="provider-check-result idle">{t.localProviderDetectionIdle}</p>
   }
+  const enabledLocalProviders = new Set(providerCapabilities.filter((provider) => provider.localProvider).map((provider) => provider.id))
   return (
     <div className="provider-console-list">
-      {localProviderDetections.map((provider) => (
-        <article className="provider-console-card" key={provider.providerId}>
-          <div className="provider-console-main">
-            <div className="provider-console-title">
-              <strong>{provider.displayName}</strong>
-              <span className={`setting-status-badge ${provider.status === 'available' ? 'available' : 'unavailable'}`}>{localProviderStatusLabel(provider.status, t)}</span>
+      {localProviderDetections.map((provider) => {
+        const enabled = enabledLocalProviders.has(provider.providerId)
+        return (
+          <article className="provider-console-card" key={provider.providerId}>
+            <div className="provider-console-main">
+              <div className="provider-console-title">
+                <strong>{provider.displayName}</strong>
+                <span className={`setting-status-badge ${provider.status === 'available' ? 'available' : 'unavailable'}`}>{localProviderStatusLabel(provider.status, t)}</span>
+              </div>
+              <div className="provider-console-meta">
+                <span>{provider.providerId}</span>
+                <span>{provider.providerKind}</span>
+                <span>{provider.authMode}</span>
+                <span>{provider.source}</span>
+                <span>{provider.modelCandidates.join(', ')}</span>
+                {enabled && <span>{t.localProviderSessionLocal}</span>}
+                {enabled && <span>{t.localProviderCredentialRedacted}</span>}
+                {enabled && providerCapabilities.find((candidate) => candidate.id === provider.providerId)?.executionState === 'supported' && <span>{t.localProviderExecutionSupported}</span>}
+                {enabled && providerCapabilities.find((candidate) => candidate.id === provider.providerId)?.executionState !== 'supported' && <span>{t.localProviderExecutionUnsupported}</span>}
+              </div>
+              <p className="provider-check-result idle">{provider.message ?? (provider.status === 'available' ? t.localProviderDetected : t.localProviderNotDetected)}</p>
+              <p className="provider-check-result idle">{t.localProviderExplicitOptIn} · {t.localProviderNoSecrets}</p>
             </div>
-            <div className="provider-console-meta">
-              <span>{provider.providerId}</span>
-              <span>{provider.providerKind}</span>
-              <span>{provider.authMode}</span>
-              <span>{provider.source}</span>
-              <span>{provider.modelCandidates.join(', ')}</span>
-            </div>
-            <p className="provider-check-result idle">{provider.message ?? (provider.status === 'available' ? t.localProviderDetected : t.localProviderNotDetected)}</p>
-            <p className="provider-check-result idle">{t.localProviderExplicitOptIn} · {t.localProviderNoSecrets}</p>
-          </div>
-        </article>
-      ))}
+            {provider.status === 'available' && (
+              <button className="provider-test-button" onClick={() => enabled ? onDisableLocalProvider(provider.providerId) : onEnableLocalProvider(provider.providerId)}>
+                {enabled ? t.localProviderDisableForSession : t.localProviderEnableForSession}
+              </button>
+            )}
+          </article>
+        )
+      })}
     </div>
   )
 }
@@ -302,6 +324,8 @@ export function SettingsView({
   onSaveProvider,
   onCheckProvider,
   onDetectLocalProviders,
+  onEnableLocalProvider,
+  onDisableLocalProvider,
   onMemoryQueryChange,
   onMemoryFiltersChange,
   onOpenMemoryDetail,
@@ -433,7 +457,7 @@ export function SettingsView({
                 <p>{t.localProviderAutodetectDescription}</p>
                 <button className="provider-test-button" onClick={onDetectLocalProviders}>{t.localProviderDetectAction}</button>
               </div>
-              <LocalProviderDetectionList localProviderDetections={localProviderDetections} localProviderDetectionError={localProviderDetectionError} t={t} />
+              <LocalProviderDetectionList localProviderDetections={localProviderDetections} localProviderDetectionError={localProviderDetectionError} providerCapabilities={providerCapabilities} onEnableLocalProvider={onEnableLocalProvider} onDisableLocalProvider={onDisableLocalProvider} t={t} />
             </section>
 
             <section className="settings-card">

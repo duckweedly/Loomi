@@ -2,6 +2,11 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -41,6 +46,74 @@ func TestGatewayPersistsProviderDeltasAndCompletion(t *testing.T) {
 	}
 	if len(messages) != 2 || messages[1].Role != productdata.MessageRoleAssistant || messages[1].Content != "hello" {
 		t.Fatalf("messages = %+v", messages)
+	}
+}
+
+func TestLocalCodexProviderProducesAssistantMessageThroughGateway(t *testing.T) {
+	providerServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/responses" {
+			t.Fatalf("path = %s", r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer access-runtime-secret" {
+			t.Fatalf("authorization header = %q", r.Header.Get("Authorization"))
+		}
+		if r.Header.Get("ChatGPT-Account-ID") != "account_runtime" {
+			t.Fatalf("account header = %q", r.Header.Get("ChatGPT-Account-ID"))
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"Local \"}\n\n"))
+		_, _ = w.Write([]byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"Codex\"}\n\n"))
+		_, _ = w.Write([]byte("data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\"}}\n\n"))
+	}))
+	t.Cleanup(providerServer.Close)
+	home := t.TempDir()
+	writeRuntimeGatewayTestFile(t, filepath.Join(home, ".codex", "auth.json"), `{"auth_mode":"chatgpt","tokens":{"access_token":"access-runtime-secret","refresh_token":"refresh-runtime-secret","account_id":"account_runtime"},"base_url":"`+providerServer.URL+`/v1","model":"gpt-local-fixture"}`)
+	svc := productdata.NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, productdata.CreateThreadInput{Title: "Gateway", Mode: productdata.ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _, err := svc.CreateMessage(context.Background(), ident, thread.ID, productdata.CreateMessageInput{Content: "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, productdata.StartRunInput{Source: productdata.RunSourceModelGateway, MessageID: message.ID, ProviderID: "local_codex", Model: "gpt-local-fixture"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := NewLocalCodexProvider(LocalProviderDetectionInput{HomeDir: home, Env: map[string]string{}})
+
+	NewGateway(svc, nil, []Provider{provider}).run(context.Background(), run, GatewayRunInput{ThreadID: thread.ID, MessageID: message.ID, ProviderID: "local_codex"})
+
+	messages, err := svc.ListMessages(context.Background(), ident, thread.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 2 || messages[1].Content != "Local Codex" {
+		t.Fatalf("messages = %+v", messages)
+	}
+	events, err := svc.ListRunEvents(context.Background(), ident, run.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := runtimeGatewayEventsJSON(t, events) + runtimeGatewayMessagesJSON(t, messages)
+	for _, forbidden := range []string{"access-runtime-secret", "refresh-runtime-secret", home, "Authorization"} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("leaked %q: %s", forbidden, body)
+		}
+	}
+}
+
+func TestGatewayRemoveProviderPreventsSelection(t *testing.T) {
+	gateway := NewGateway(productdata.NewMemoryService(), nil, []Provider{
+		StaticProvider{ProviderConfig: ProviderConfig{ID: "local_codex", Family: ProviderFamilyOpenAICompatible, APIKey: "redacted", Model: "gpt-local-fixture", Enabled: true}},
+	})
+
+	gateway.RemoveProvider("local_codex")
+
+	if _, err := gateway.selectProvider("local_codex"); err == nil {
+		t.Fatal("expected removed provider to be unavailable")
 	}
 }
 
@@ -631,4 +704,32 @@ func waitForTerminalRun(t *testing.T, svc productdata.Service, runID string) pro
 		t.Fatal(err)
 	}
 	return run
+}
+
+func writeRuntimeGatewayTestFile(t *testing.T, path string, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func runtimeGatewayEventsJSON(t *testing.T, events []productdata.RunEvent) string {
+	t.Helper()
+	raw, err := json.Marshal(events)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
+}
+
+func runtimeGatewayMessagesJSON(t *testing.T, messages []productdata.Message) string {
+	t.Helper()
+	raw, err := json.Marshal(messages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
 }

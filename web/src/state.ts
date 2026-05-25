@@ -5,6 +5,7 @@ import type { BackendCapabilityState, LocalProviderDetection, MemoryAuditItem, M
 import { isRuntimeActive, isRuntimeTerminal } from './runtime/executionAdapter'
 import { deriveCapabilitySignalFromEvent } from './runtime/backendCapabilityStatus'
 import { applyRealRunEvent, mapRealRuntimeCapabilitySignal } from './runtime/realExecutionAdapter'
+import { selectSendProvider } from './realApiClient'
 import { createNextThreadTitle } from './threadTitles'
 
 type RefreshResult = {
@@ -41,6 +42,14 @@ export function redactProviderCheckMessage(message: string) {
 
 function redactProviderCapabilityMessage(provider: ProviderCapability) {
   return provider.message ? { ...provider, message: redactProviderCheckMessage(provider.message) } : provider
+}
+
+function runMessageId(run: Run, messages: Message[]) {
+  for (const event of run.events) {
+    const messageId = event.metadata?.message_id
+    if (typeof messageId === 'string' && messageId.trim()) return messageId
+  }
+  return [...messages].reverse().find((message) => message.role === 'user')?.id
 }
 
 export function getWorkspaceRefreshThreadId(requestedThreadId: string, threads: Thread[]) {
@@ -362,6 +371,37 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
     }
   }, [])
 
+  const enableLocalProvider = useCallback(async (providerId: string) => {
+    if (!apiClient.enableLocalProvider) {
+      setLocalProviderDetectionError('Local provider enable endpoint unavailable')
+      return
+    }
+    setLocalProviderDetectionError(null)
+    try {
+      const provider = redactProviderCapabilityMessage(await apiClient.enableLocalProvider(providerId))
+      setProviderCapabilities((current) => {
+        const exists = current.some((candidate) => candidate.id === provider.id)
+        return exists ? current.map((candidate) => (candidate.id === provider.id ? provider : candidate)) : [...current, provider]
+      })
+    } catch (err) {
+      setLocalProviderDetectionError(err instanceof Error ? redactProviderCheckMessage(err.message) : 'Local provider enable failed')
+    }
+  }, [])
+
+  const disableLocalProvider = useCallback(async (providerId: string) => {
+    if (!apiClient.disableLocalProvider) {
+      setLocalProviderDetectionError('Local provider disable endpoint unavailable')
+      return
+    }
+    setLocalProviderDetectionError(null)
+    try {
+      await apiClient.disableLocalProvider(providerId)
+      setProviderCapabilities((current) => current.filter((provider) => provider.id !== providerId))
+    } catch (err) {
+      setLocalProviderDetectionError(err instanceof Error ? redactProviderCheckMessage(err.message) : 'Local provider disable failed')
+    }
+  }, [])
+
   useEffect(() => {
     if (!apiClient.listToolCatalog) {
       setToolCatalog([])
@@ -649,18 +689,24 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
     setError(null)
     try {
       if (apiClient.startRun) {
-        const nextRun = await apiClient.startRun(run.threadId)
+        const providers = await apiClient.listModelProviders?.()
+        const provider = selectSendProvider(providers)
+        const messageId = runMessageId(run, messages)
+        if (apiClient.mode === 'real_api' && (!provider || !messageId)) throw new Error('Model provider is unavailable.')
+        const nextRun = provider && messageId
+          ? await apiClient.startRun(run.threadId, { messageId, source: 'model_gateway', providerId: provider.id, model: provider.model, personaId: selectedPersonaId || undefined })
+          : await apiClient.startRun(run.threadId)
         setRun(nextRun)
       } else {
         setRun(createRetryAttemptRun(run))
       }
-      setCapabilitySignals((current) => ({ ...current, streamDisconnected: false }))
+      setCapabilitySignals({ backendUnavailable: false, modelSetupMissing: false, providerUnavailable: false, streamDisconnected: false })
       setStreamState('connecting')
     } catch (err) {
       setError(err instanceof Error ? err.message : 'API request failed')
       setCapabilitySignals((current) => ({ ...current, ...mapRealRuntimeCapabilitySignal(err) }))
     }
-  }, [run])
+  }, [messages, run, selectedPersonaId])
 
   const regenerateRun = useCallback(async () => {
     const lastAssistant = [...messages].reverse().find((message) => message.role === 'assistant')
@@ -668,18 +714,24 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
     setError(null)
     try {
       if (apiClient.startRun) {
-        const nextRun = await apiClient.startRun(run.threadId)
+        const providers = await apiClient.listModelProviders?.()
+        const provider = selectSendProvider(providers)
+        const messageId = runMessageId(run, messages)
+        if (apiClient.mode === 'real_api' && (!provider || !messageId)) throw new Error('Model provider is unavailable.')
+        const nextRun = provider && messageId
+          ? await apiClient.startRun(run.threadId, { messageId, source: 'model_gateway', providerId: provider.id, model: provider.model, personaId: selectedPersonaId || undefined })
+          : await apiClient.startRun(run.threadId)
         setRun({ ...nextRun, attemptOfMessageId: lastAssistant.id })
       } else {
         setRun(createRegenerateAttemptRun(run, lastAssistant.id))
       }
-      setCapabilitySignals((current) => ({ ...current, streamDisconnected: false }))
+      setCapabilitySignals({ backendUnavailable: false, modelSetupMissing: false, providerUnavailable: false, streamDisconnected: false })
       setStreamState('connecting')
     } catch (err) {
       setError(err instanceof Error ? err.message : 'API request failed')
       setCapabilitySignals((current) => ({ ...current, ...mapRealRuntimeCapabilitySignal(err) }))
     }
-  }, [messages, run])
+  }, [messages, run, selectedPersonaId])
 
   const selectRuntimeScript = useCallback((scriptId: RuntimeScriptId) => {
     setSelectedRuntimeScript(scriptId)
@@ -764,6 +816,8 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
     setSelectedPersonaId,
     checkProvider,
     detectLocalProviders,
+    enableLocalProvider,
+    disableLocalProvider,
     saveProvider,
     setMemorySearchQuery,
     updateMemoryFilters,

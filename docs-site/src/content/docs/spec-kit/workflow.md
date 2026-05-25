@@ -36,7 +36,47 @@ Claude Code 项目内命令使用横线格式：
 
 `/speckit-implement` 按任务实现，并在必要时回到 spec 或 plan 修正前提。
 
-## 当前候选完成：M18.5 Local Provider Autodetect Foundation
+## 当前候选完成：M20 Local Codex Execution Bridge
+
+当前 Spec Kit 功能目录：
+
+```text
+specs/028-local-codex-execution-bridge/
+```
+
+关键产物：
+
+- `spec.md`：定义显式启用后的 Local Codex 可执行 provider、Chat 发送、run event 可观察性和 redaction 边界。
+- `plan.md`：确定 auth.json direct bridge、复用 runtime.Provider/Gateway/worker，不新增聊天链路。
+- `research.md`：记录 auth.json direct 与 CLI 的 tradeoff，拒绝 CLI 交互/泄漏风险。
+- `data-model.md`：定义 LocalCodexCredentialSnapshot、LocalCodexProvider、LocalProviderEnablement 和 ProviderCapability extension。
+- `contracts/`：定义 enable/model provider/run event/UI contract。
+- `quickstart.md`：记录自动验证、手动 smoke 和 fixture proof。
+- `tasks.md`：按 backend/web/docs/validation 拆分。
+
+状态：M20 complete candidate。Local Codex 只有显式 detect + enable 后才会注册为 session-local Gateway provider；`GET /v1/model-providers` 返回 `local_codex` 为 available/supported；Chat Composer 对 supported Local Codex 不再显示 provider unavailable warning。发送后走现有 model_gateway run、worker、Gateway、run events、SSE、RunTimeline/RunRail。M20 不调用 CLI、不刷新 OAuth、不读 keychain、不安装 CLI、不新增 sandbox/browser/filesystem/shell/workspace tools；自动化证据使用 temp `CODEX_HOME` fixture 和本地 OpenAI-compatible server。真实本机 Chat 需要在目标机器手动 smoke 验证，失败时记录 provider failure，不伪造回复。
+
+## 近期已完成：M19 Local Provider Opt-in Bridge
+
+当前 Spec Kit 功能目录：
+
+```text
+specs/027-local-provider-opt-in-bridge/
+```
+
+关键产物：
+
+- `spec.md`：定义 Local Codex 显式本会话启用、安全 provider capability、unsupported execution 和非目标。
+- `plan.md`：确定 enable action 可触发安全 detection，model provider list 不触发 detection，状态仅保存在进程内。
+- `research.md`：记录 session-local enablement、no auto detection、unsupported execution 等决策。
+- `data-model.md`：定义 LocalProviderEnablement、ProviderCapability extension 和 redaction rules。
+- `contracts/`：定义 enable/disable API 和 Settings provider UI 契约。
+- `quickstart.md`：记录 focused/full validation。
+- `tasks.md`：按 backend tests/API、web tests/UI、docs/validation 拆分。
+
+状态：M19 complete candidate。`POST /v1/local-provider-detections/local_codex/enable` 在显式动作后把 Local Codex 加入 session-local configured provider list；`DELETE` 禁用；`GET /v1/model-providers` 只返回已显式启用的 local provider safe capability，不做 detection。Local Codex 当前 `execution_state=unsupported`，所以 Chat 仍阻止发送。M19 不执行 CLI、不刷新 OAuth、不读 keychain、不调用外网、不保存 token，也不新增 sandbox/browser/filesystem/shell/workspace tools。
+
+## 近期已完成：M18.5 Local Provider Autodetect Foundation
 
 当前 Spec Kit 功能目录：
 

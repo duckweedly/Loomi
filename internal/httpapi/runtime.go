@@ -76,7 +76,8 @@ type stopRunResponse struct {
 func (s *Server) handleModelProviders(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		writeJSON(w, http.StatusOK, modelProviderListResponse{Providers: productruntime.ProviderCapabilities(s.providers), RequestID: diagnostics.NewRequestID()})
+		providers := s.modelProviderCapabilities()
+		writeJSON(w, http.StatusOK, modelProviderListResponse{Providers: providers, RequestID: diagnostics.NewRequestID()})
 	case http.MethodPost:
 		s.handleModelProviderSave(w, r)
 	default:
@@ -90,6 +91,81 @@ func (s *Server) handleLocalProviderDetections(w http.ResponseWriter, r *http.Re
 		input = productruntime.LocalProviderDetectionInputFromProcess()
 	}
 	writeJSON(w, http.StatusOK, localProviderDetectionResponse{Providers: productruntime.DetectLocalProviders(input), RequestID: diagnostics.NewRequestID()})
+}
+
+func (s *Server) handleLocalProviderDetectionByID(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/v1/local-provider-detections/" {
+		if r.Method != http.MethodGet {
+			writeMethodNotAllowed(w, "GET")
+			return
+		}
+		s.handleLocalProviderDetections(w, r)
+		return
+	}
+	providerID, ok := strings.CutSuffix(strings.TrimPrefix(r.URL.Path, "/v1/local-provider-detections/"), "/enable")
+	if !ok || strings.TrimSpace(providerID) == "" {
+		writeAPIError(w, productdata.NewError(productdata.CodeInvalidRequest, "Local provider action is invalid."))
+		return
+	}
+	switch r.Method {
+	case http.MethodPost:
+		s.handleLocalProviderEnable(w, providerID)
+	case http.MethodDelete:
+		s.handleLocalProviderDisable(w, providerID)
+	default:
+		writeMethodNotAllowed(w, "POST, DELETE")
+	}
+}
+
+func (s *Server) handleLocalProviderEnable(w http.ResponseWriter, providerID string) {
+	if providerID != "local_codex" {
+		writeAPIError(w, productdata.NewError(productdata.CodeProviderMisconfigured, "Local provider execution is unsupported."))
+		return
+	}
+	input := s.localProviderDetectionInput
+	if input.HomeDir == "" && input.CodexHome == "" && input.ClaudeConfigDir == "" && input.Env == nil && !input.Disabled {
+		input = productruntime.LocalProviderDetectionInputFromProcess()
+	}
+	for _, provider := range productruntime.DetectLocalProviders(input) {
+		if provider.ProviderID != providerID {
+			continue
+		}
+		if provider.Status != productruntime.LocalProviderStatusAvailable {
+			writeAPIError(w, productdata.NewError(productdata.CodeProviderUnavailable, "Local provider is not available."))
+			return
+		}
+		if s.gatewayRunner == nil {
+			writeAPIError(w, productdata.NewError(productdata.CodeProviderUnavailable, "Local Codex execution bridge is unavailable."))
+			return
+		}
+		if _, err := productruntime.LoadLocalCodexCredentialSnapshot(input); err != nil {
+			writeAPIError(w, productdata.NewError(productdata.CodeProviderUnavailable, "Local Codex login is unavailable."))
+			return
+		}
+		s.gatewayRunner.SaveProvider(productruntime.NewLocalCodexProvider(input))
+		s.providerMu.Lock()
+		s.localProviderEnablements[providerID] = provider
+		s.providerMu.Unlock()
+		writeJSON(w, http.StatusOK, modelProviderSaveResponse{Provider: productruntime.LocalProviderRouteCapability(provider), RequestID: diagnostics.NewRequestID()})
+		return
+	}
+	writeAPIError(w, productdata.NewError(productdata.CodeProviderUnavailable, "Local provider is not available."))
+}
+
+func (s *Server) handleLocalProviderDisable(w http.ResponseWriter, providerID string) {
+	s.providerMu.Lock()
+	provider, ok := s.localProviderEnablements[providerID]
+	if ok {
+		delete(s.localProviderEnablements, providerID)
+		s.providerMu.Unlock()
+		if s.gatewayRunner != nil {
+			s.gatewayRunner.RemoveProvider(providerID)
+		}
+		writeJSON(w, http.StatusOK, modelProviderSaveResponse{Provider: productruntime.LocalProviderRouteCapability(provider), RequestID: diagnostics.NewRequestID()})
+		return
+	}
+	s.providerMu.Unlock()
+	writeAPIError(w, productdata.NewError(productdata.CodeProviderUnavailable, "Local provider is not enabled."))
 }
 
 func (s *Server) handleModelProviderSave(w http.ResponseWriter, r *http.Request) {
@@ -112,6 +188,8 @@ func (s *Server) saveProviderConfig(provider productruntime.ProviderConfig) prod
 	if s.gatewayRunner != nil {
 		provider = s.gatewayRunner.SaveProviderConfig(provider)
 	}
+	s.providerMu.Lock()
+	defer s.providerMu.Unlock()
 	for index, candidate := range s.providers {
 		if candidate.ID == provider.ID {
 			s.providers[index] = provider
@@ -128,10 +206,8 @@ func (s *Server) handleModelProviderCheck(w http.ResponseWriter, r *http.Request
 		writeAPIError(w, productdata.NewError(productdata.CodeInvalidRequest, "Invalid JSON request."))
 		return
 	}
-	for _, provider := range s.providers {
-		if provider.ID != req.ProviderID {
-			continue
-		}
+	provider, ok := s.findProviderConfig(req.ProviderID)
+	if ok {
 		capability := provider.Capability()
 		if capability.Status == productruntime.ProviderStatusUnavailable {
 			writeAPIError(w, productdata.NewError(productdata.CodeProviderUnavailable, capability.Message))
@@ -144,7 +220,51 @@ func (s *Server) handleModelProviderCheck(w http.ResponseWriter, r *http.Request
 		writeJSON(w, http.StatusOK, modelProviderCheckResponse{Provider: capability, RequestID: diagnostics.NewRequestID()})
 		return
 	}
+	capability, ok := s.localProviderRouteCapability(req.ProviderID)
+	if ok {
+		if capability.Status == productruntime.ProviderStatusUnavailable {
+			writeAPIError(w, productdata.NewError(productdata.CodeProviderUnavailable, capability.Message))
+			return
+		}
+		if capability.Status == productruntime.ProviderStatusMisconfigured {
+			writeAPIError(w, productdata.NewError(productdata.CodeProviderMisconfigured, capability.Message))
+			return
+		}
+		writeJSON(w, http.StatusOK, modelProviderCheckResponse{Provider: capability, RequestID: diagnostics.NewRequestID()})
+		return
+	}
 	writeAPIError(w, productdata.NewError(productdata.CodeProviderMisconfigured, "Provider is not configured."))
+}
+
+func (s *Server) modelProviderCapabilities() []productruntime.ProviderCapability {
+	s.providerMu.RLock()
+	defer s.providerMu.RUnlock()
+	providers := productruntime.ProviderCapabilities(s.providers)
+	for _, provider := range s.localProviderEnablements {
+		providers = append(providers, productruntime.LocalProviderRouteCapability(provider))
+	}
+	return providers
+}
+
+func (s *Server) findProviderConfig(providerID string) (productruntime.ProviderConfig, bool) {
+	s.providerMu.RLock()
+	defer s.providerMu.RUnlock()
+	for _, provider := range s.providers {
+		if provider.ID == providerID {
+			return provider, true
+		}
+	}
+	return productruntime.ProviderConfig{}, false
+}
+
+func (s *Server) localProviderRouteCapability(providerID string) (productruntime.ProviderCapability, bool) {
+	s.providerMu.RLock()
+	defer s.providerMu.RUnlock()
+	provider, ok := s.localProviderEnablements[providerID]
+	if !ok {
+		return productruntime.ProviderCapability{}, false
+	}
+	return productruntime.LocalProviderRouteCapability(provider), true
 }
 
 func (s *Server) handleThreadRuns(w http.ResponseWriter, r *http.Request, threadID string) {
@@ -172,6 +292,17 @@ func (s *Server) handleThreadRuns(w http.ResponseWriter, r *http.Request, thread
 	if r.Body != nil && r.ContentLength != 0 {
 		if err := decodeJSONRequest(r, &req); err != nil {
 			writeAPIError(w, productdata.NewError(productdata.CodeInvalidRequest, "Invalid JSON request."))
+			return
+		}
+	}
+	if req.ProviderID != "" {
+		capability, ok := s.localProviderRouteCapability(req.ProviderID)
+		if req.ProviderID == "local_codex" && !ok {
+			writeAPIError(w, productdata.NewError(productdata.CodeProviderUnavailable, "Local Codex is not enabled for this session."))
+			return
+		}
+		if ok && (capability.Status != productruntime.ProviderStatusAvailable || capability.ExecutionState != "supported") {
+			writeAPIError(w, productdata.NewError(productdata.CodeProviderUnavailable, capability.Message))
 			return
 		}
 	}

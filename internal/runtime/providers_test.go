@@ -162,6 +162,24 @@ func TestHTTPProviderNormalizesStreamingErrors(t *testing.T) {
 	}
 }
 
+func TestHTTPProviderReportsRedactedHTTPErrorStatus(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":{"type":"invalid_request_error","code":"unsupported_parameter","message":"raw token secret should not appear"}}`))
+	}))
+	defer server.Close()
+	provider := NewHTTPProvider(ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: server.URL + "/v1", APIKey: "secret-key", Model: "gpt-5.5", Enabled: true}, server.Client())
+
+	events := collectProviderEvents(t, provider)
+
+	if len(events) != 1 || events[0].Type != ProviderEventError || events[0].Message != "Provider request failed with HTTP 400." {
+		t.Fatalf("events = %+v", events)
+	}
+	if events[0].Metadata["http_status"] != http.StatusBadRequest || events[0].Metadata["provider_error_type"] != "invalid_request_error" || events[0].Metadata["provider_error_code"] != "unsupported_parameter" {
+		t.Fatalf("metadata = %+v", events[0].Metadata)
+	}
+}
+
 func TestHTTPProviderStreamsGeminiTextAndFunctionEvents(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1beta/models/gemini-3.5-flash:streamGenerateContent" || r.URL.Query().Get("alt") != "sse" || r.Header.Get("x-goog-api-key") != "secret-key" {
