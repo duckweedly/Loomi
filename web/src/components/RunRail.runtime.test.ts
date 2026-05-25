@@ -28,4 +28,29 @@ describe('RunRail tool continuation runtime states', () => {
     expect(html).toContain('Continuation model phase')
     expect(html).toContain('Run completed')
   })
+
+  test('shows M9 pipeline foundation stage rows', () => {
+    const html = renderToStaticMarkup(createElement(RunRail, {
+      run: {
+        id: 'run-a',
+        threadId: 'thread-a',
+        status: 'completed',
+        model: 'Model gateway',
+        context: 'model_gateway',
+        events: [
+          { id: 'evt-context', sequence: 1, type: 'pipeline.step.completed', label: 'progress', detail: 'Pipeline step completed · step: prepare_context', time: 'Now', status: 'running', group: 'worker-job', metadata: { step: 'prepare_context' } },
+          { id: 'evt-tools', sequence: 2, type: 'pipeline.step.completed', label: 'progress', detail: 'Pipeline step completed · step: resolve_tools', time: 'Now', status: 'running', group: 'worker-job', metadata: { step: 'resolve_tools' } },
+          { id: 'evt-runtime', sequence: 3, type: 'pipeline.step.completed', label: 'progress', detail: 'Pipeline step completed · step: invoke_runtime', time: 'Now', status: 'running', group: 'worker-job', metadata: { step: 'invoke_runtime' } },
+          { id: 'evt-finalize', sequence: 4, type: 'pipeline.step.completed', label: 'progress', detail: 'Pipeline step completed · step: finalize', time: 'Now', status: 'running', group: 'worker-job', metadata: { step: 'finalize' } },
+        ],
+      },
+      open: true,
+      onOpenArtifact: () => {},
+    }))
+
+    expect(html).toContain('prepare_context')
+    expect(html).toContain('resolve_tools')
+    expect(html).toContain('invoke_runtime')
+    expect(html).toContain('finalize')
+  })
 })

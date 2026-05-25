@@ -375,6 +375,29 @@ func (r *PostgresRepository) ListRunEvents(ctx context.Context, ident identity.L
 	return events, rows.Err()
 }
 
+func (r *PostgresRepository) PrepareRunContext(ctx context.Context, ident identity.LocalIdentity, job BackgroundJob) (RunContext, error) {
+	run, err := r.GetRun(ctx, ident, job.RunID)
+	if err != nil {
+		return RunContext{}, err
+	}
+	thread, err := r.GetThread(ctx, ident, run.ThreadID)
+	if err != nil {
+		return RunContext{}, err
+	}
+	if job.ID == "" || job.RunID != run.ID || job.ThreadID != thread.ID || job.UserID != run.UserID {
+		return RunContext{}, NewError(CodeInvalidRequest, "Run context job boundary is invalid.")
+	}
+	messages, err := r.ListMessages(ctx, ident, thread.ID)
+	if err != nil {
+		return RunContext{}, err
+	}
+	events, err := r.ListRunEvents(ctx, ident, run.ID, 0)
+	if err != nil {
+		return RunContext{}, err
+	}
+	return buildRunContext(run, thread, messages, job, events)
+}
+
 func (r *PostgresRepository) AppendRunEvent(ctx context.Context, ident identity.LocalIdentity, runID string, input AppendRunEventInput) (RunEvent, error) {
 	input, err := NormalizeRunEventInput(input)
 	if err != nil {

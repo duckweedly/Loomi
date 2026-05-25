@@ -37,6 +37,37 @@ func TestRepositoryContractCoversM5AssistantAndModelGateway(t *testing.T) {
 	}
 }
 
+func TestRepositoryContractPreparesRunContext(t *testing.T) {
+	var repo Repository = NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := repo.CreateThread(context.Background(), ident, CreateThreadInput{Title: "M9 context", Mode: ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _, err := repo.CreateMessage(context.Background(), ident, thread.ID, CreateMessageInput{Content: "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := repo.StartRun(context.Background(), ident, thread.ID, StartRunInput{Source: RunSourceModelGateway, MessageID: message.ID, ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, _, ok, err := repo.ClaimBackgroundJob(context.Background(), ident, ClaimBackgroundJobInput{WorkerID: "worker_context", LeaseSeconds: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("claim ok = false")
+	}
+	context, err := repo.PrepareRunContext(context.Background(), ident, job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if context.Run.ID != run.ID || context.Thread.ID != thread.ID || len(context.Messages) != 1 || context.ProviderRoute.ProviderID != "custom" {
+		t.Fatalf("context = %+v", context)
+	}
+}
+
 func TestRepositoryContractCoversM7ToolCallRequestProjection(t *testing.T) {
 	var repo Repository = NewMemoryService()
 	ident := identity.LocalDevIdentity()

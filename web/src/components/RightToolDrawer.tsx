@@ -43,9 +43,15 @@ function backgroundEventLabel(type: string, locale: Locale) {
     'job.attempt_failed': copy.attemptFailed,
     job_retry_exhausted: copy.retryExhausted,
     'job.retry_exhausted': copy.retryExhausted,
+    pipeline_step_started: 'Pipeline stage started',
+    'pipeline.step.started': 'Pipeline stage started',
+    pipeline_step_completed: 'Pipeline stage completed',
+    'pipeline.step.completed': 'Pipeline stage completed',
+    pipeline_step_failed: 'Pipeline stage failed',
+    'pipeline.step.failed': 'Pipeline stage failed',
     worker_diagnostics: copy.diagnostics,
   }
-  return labels[type] ?? (type.includes('worker') || type.includes('job') ? `${copy.unknownWorkerEvent} · ${type}` : type)
+  return labels[type] ?? (type.includes('worker') || type.includes('job') || type.includes('pipeline') ? `${copy.unknownWorkerEvent} · ${type}` : type)
 }
 
 function jobStatusLabel(status: Run['status'], locale: Locale) {
@@ -66,7 +72,7 @@ function jobStatusLabel(status: Run['status'], locale: Locale) {
 
 function BackgroundTasksPanel({ run, Icon, locale }: { run?: Run | null; Icon: React.ComponentType<{ size?: number; strokeWidth?: number }>; locale: Locale }) {
   const copy = getDictionary(locale).runtime.workerJob
-  const workerEvents = run?.events.filter((event) => event.type.includes('worker') || event.type.includes('job') || event.type.includes('lease')) ?? []
+  const workerEvents = run?.events.filter((event) => event.type.includes('worker') || event.type.includes('job') || event.type.includes('lease') || event.type.includes('pipeline')) ?? []
   const diagnostics = workerEvents.find((event) => event.type === 'worker_diagnostics' || event.type.includes('diagnostic'))
 
   if (!run || workerEvents.length === 0) {

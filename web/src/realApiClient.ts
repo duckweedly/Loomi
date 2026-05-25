@@ -211,6 +211,7 @@ function canonicalRunEventType(event: ApiRunEvent) {
     lease_renewed: 'worker.lease_renewed',
     pipeline_step_started: 'pipeline.step.started',
     pipeline_step_completed: 'pipeline.step.completed',
+    pipeline_step_failed: 'pipeline.step.failed',
     job_recovering: 'job.recovering',
     job_retry_scheduled: 'job.retry_scheduled',
     stop_requested: 'run.stopping',
@@ -334,7 +335,7 @@ function statusFromApiEvent(event: ApiRunEvent): RunStatus {
   if (type === 'job.recovering' || type === 'run.recovering') return 'recovering'
   if (type === 'run.stopping') return 'stopping'
   if (type === 'run.stopped') return 'stopped'
-  if (type === 'run.failed' || type === 'job.retry_exhausted') return 'failed'
+  if (type === 'run.failed' || type === 'job.retry_exhausted' || type === 'pipeline.step.failed') return 'failed'
   if (type === 'run.cancelled') return 'cancelled'
   if (type === 'run.completed') return 'completed'
   if (event.category !== 'final') return event.category === 'error' ? 'failed' : 'running'

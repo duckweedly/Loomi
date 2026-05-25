@@ -396,6 +396,79 @@ func TestStartRunSupportsModelGatewaySource(t *testing.T) {
 	}
 }
 
+func TestPrepareRunContextRestoresDurableRunThreadMessagesJobRouteAndTools(t *testing.T) {
+	svc := NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, CreateThreadInput{Title: "Context", Mode: ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _, err := svc.CreateMessage(context.Background(), ident, thread.ID, CreateMessageInput{Content: "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, StartRunInput{Source: RunSourceModelGateway, MessageID: message.ID, ProviderID: "custom", Model: "model-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, _, ok, err := svc.ClaimBackgroundJob(context.Background(), ident, ClaimBackgroundJobInput{WorkerID: "worker_context", LeaseSeconds: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("claim ok = false")
+	}
+
+	context, err := svc.PrepareRunContext(context.Background(), ident, job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if context.Run.ID != run.ID || context.Thread.ID != thread.ID || context.Job.ID != job.ID {
+		t.Fatalf("context boundary = %+v", context)
+	}
+	if len(context.Messages) != 1 || context.Messages[0].ID != message.ID {
+		t.Fatalf("messages = %+v", context.Messages)
+	}
+	if context.ProviderRoute.ProviderID != "custom" || context.ProviderRoute.Model != "model-a" || !context.ProviderRoute.Available {
+		t.Fatalf("provider route = %+v", context.ProviderRoute)
+	}
+	if len(context.EnabledTools) != 1 || context.EnabledTools[0].Name != ToolNameCurrentTime {
+		t.Fatalf("tools = %+v", context.EnabledTools)
+	}
+	summary := context.SafeSummary()
+	if summary["message_count"] != 1 || summary["provider_id"] != "custom" || summary["enabled_tool_count"] != 1 {
+		t.Fatalf("summary = %+v", summary)
+	}
+}
+
+func TestPrepareRunContextFailsBeforeRuntimeForMissingProviderRoute(t *testing.T) {
+	svc := NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, CreateThreadInput{Title: "Context missing", Mode: ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _, err := svc.CreateMessage(context.Background(), ident, thread.ID, CreateMessageInput{Content: "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.StartRun(context.Background(), ident, thread.ID, StartRunInput{Source: RunSourceModelGateway, MessageID: message.ID}); err != nil {
+		t.Fatal(err)
+	}
+	job, _, ok, err := svc.ClaimBackgroundJob(context.Background(), ident, ClaimBackgroundJobInput{WorkerID: "worker_context", LeaseSeconds: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("claim ok = false")
+	}
+
+	_, err = svc.PrepareRunContext(context.Background(), ident, job)
+	if err == nil || ErrorCode(err) != CodeInvalidRequest {
+		t.Fatalf("PrepareRunContext() err = %v", err)
+	}
+}
+
 func TestStartRunRejectsSecondActiveRunForThread(t *testing.T) {
 	svc := NewMemoryService()
 	ident := identity.LocalDevIdentity()

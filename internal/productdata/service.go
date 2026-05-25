@@ -25,6 +25,7 @@ type Service interface {
 	GetCurrentRun(context.Context, identity.LocalIdentity, string) (Run, error)
 	ListRunEvents(context.Context, identity.LocalIdentity, string, int) ([]RunEvent, error)
 	AppendRunEvent(context.Context, identity.LocalIdentity, string, AppendRunEventInput) (RunEvent, error)
+	PrepareRunContext(context.Context, identity.LocalIdentity, BackgroundJob) (RunContext, error)
 	StopRun(context.Context, identity.LocalIdentity, string) (StopRunOutput, error)
 	GetToolCall(context.Context, identity.LocalIdentity, string, string, string) (ToolCall, error)
 	RecordToolCallRequest(context.Context, identity.LocalIdentity, string, RecordToolCallRequestInput) (ToolCall, []RunEvent, error)
@@ -368,6 +369,117 @@ func (s *MemoryService) AppendRunEvent(_ context.Context, ident identity.LocalId
 	}
 	s.runs[run.ID] = run
 	return event, nil
+}
+
+func (s *MemoryService) PrepareRunContext(ctx context.Context, ident identity.LocalIdentity, job BackgroundJob) (RunContext, error) {
+	run, err := s.GetRun(ctx, ident, job.RunID)
+	if err != nil {
+		return RunContext{}, err
+	}
+	thread, err := s.GetThread(ctx, ident, run.ThreadID)
+	if err != nil {
+		return RunContext{}, err
+	}
+	if job.ID == "" || job.RunID != run.ID || job.ThreadID != thread.ID || job.UserID != run.UserID {
+		return RunContext{}, NewError(CodeInvalidRequest, "Run context job boundary is invalid.")
+	}
+	messages, err := s.ListMessages(ctx, ident, thread.ID)
+	if err != nil {
+		return RunContext{}, err
+	}
+	events, err := s.ListRunEvents(ctx, ident, run.ID, 0)
+	if err != nil {
+		return RunContext{}, err
+	}
+	return buildRunContext(run, thread, messages, job, events)
+}
+
+func buildRunContext(run Run, thread Thread, messages []Message, job BackgroundJob, events []RunEvent) (RunContext, error) {
+	if run.Source == RunSourceModelGateway && len(messages) == 0 {
+		return RunContext{}, NewError(CodeInvalidRequest, "Run context message history is required.")
+	}
+	metadata := job.Metadata
+	if metadata == nil {
+		metadata = map[string]any{}
+	}
+	created := runCreatedMetadata(events)
+	providerID := firstMetadataString(metadata, created, "provider_id")
+	model := firstMetadataString(metadata, created, "model")
+	messageID := firstMetadataString(metadata, created, "message_id")
+	toolCallID := metadataStringValue(metadata, "tool_call_id")
+	if run.Source == RunSourceModelGateway {
+		if providerID == "" || messageID == "" {
+			return RunContext{}, NewError(CodeInvalidRequest, "Run context provider route is required.")
+		}
+		if !containsMessage(messages, messageID) {
+			return RunContext{}, NewError(CodeInvalidRequest, "Run context message history is incomplete.")
+		}
+	}
+	context := RunContext{
+		Run:      run,
+		Thread:   thread,
+		Messages: append([]Message(nil), messages...),
+		Job:      job,
+		ProviderRoute: ProviderRoute{
+			ProviderID: providerID,
+			Model:      model,
+			Available:  providerID != "",
+		},
+		EnabledTools: []ToolResolution{{
+			Name:           ToolNameCurrentTime,
+			ApprovalPolicy: "always_required",
+			ExecutionState: "allowlisted",
+		}},
+	}
+	if toolCallID != "" {
+		context.ContinuationProjection = ContinuationProjection{ToolCallID: toolCallID, Available: hasToolResult(events, toolCallID)}
+	}
+	return context, nil
+}
+
+func runCreatedMetadata(events []RunEvent) map[string]any {
+	for _, event := range events {
+		if event.Type == "run_created" {
+			return event.Metadata
+		}
+	}
+	return map[string]any{}
+}
+
+func firstMetadataString(primary map[string]any, fallback map[string]any, key string) string {
+	if value := metadataStringValue(primary, key); value != "" {
+		return value
+	}
+	return metadataStringValue(fallback, key)
+}
+
+func metadataStringValue(metadata map[string]any, key string) string {
+	value, ok := metadata[key].(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(value)
+}
+
+func containsMessage(messages []Message, messageID string) bool {
+	for _, message := range messages {
+		if message.ID == messageID {
+			return true
+		}
+	}
+	return false
+}
+
+func hasToolResult(events []RunEvent, toolCallID string) bool {
+	for _, event := range events {
+		if event.Type != EventToolCallSucceeded {
+			continue
+		}
+		if toolCallID == "" || metadataStringValue(event.Metadata, "tool_call_id") == toolCallID {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *MemoryService) GetToolCall(_ context.Context, ident identity.LocalIdentity, threadID string, runID string, toolCallID string) (ToolCall, error) {

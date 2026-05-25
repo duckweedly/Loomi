@@ -121,6 +121,37 @@ describe('RunTimeline runtime linkage', () => {
     expect(html).toContain('stream failed')
   })
 
+  test('renders M9 pipeline foundation stage trace safely', () => {
+    const html = renderToStaticMarkup(createElement(RunTimeline, {
+      runDetailsOpen: true,
+      rightPanelMenuOpen: false,
+      rightToolsOpen: true,
+      selectedPanelId: 'background-tasks',
+      onSelectPanel: () => {},
+      onOpenArtifact: () => {},
+      run: {
+        id: 'run-a',
+        threadId: 'thread-a',
+        status: 'completed',
+        model: 'Model gateway',
+        context: 'model_gateway',
+        events: [
+          { id: 'evt-context', runId: 'run-a', threadId: 'thread-a', sequence: 1, type: 'pipeline.step.completed', label: 'progress', detail: 'Pipeline step completed · step: prepare_context · message_count: 1', time: 'Now', status: 'running', group: 'worker-job', metadata: { step: 'prepare_context', message_count: 1 } },
+          { id: 'evt-tools', runId: 'run-a', threadId: 'thread-a', sequence: 2, type: 'pipeline.step.completed', label: 'progress', detail: 'Pipeline step completed · step: resolve_tools · enabled_tool_count: 1', time: 'Now', status: 'running', group: 'worker-job', metadata: { step: 'resolve_tools', enabled_tool_count: 1 } },
+          { id: 'evt-runtime', runId: 'run-a', threadId: 'thread-a', sequence: 3, type: 'pipeline.step.completed', label: 'progress', detail: 'Pipeline step completed · step: invoke_runtime', time: 'Now', status: 'running', group: 'worker-job', metadata: { step: 'invoke_runtime' } },
+          { id: 'evt-finalize', runId: 'run-a', threadId: 'thread-a', sequence: 4, type: 'pipeline.step.completed', label: 'progress', detail: 'Pipeline step completed · step: finalize', time: 'Now', status: 'running', group: 'worker-job', metadata: { step: 'finalize' } },
+        ],
+      },
+    }))
+
+    expect(html).toContain('prepare_context')
+    expect(html).toContain('resolve_tools')
+    expect(html).toContain('invoke_runtime')
+    expect(html).toContain('finalize')
+    expect(html).not.toContain('api_key')
+    expect(html).not.toContain('secret')
+  })
+
   test('renders two model phases around tool result continuation', () => {
     const html = renderToStaticMarkup(createElement(RunTimeline, {
       runDetailsOpen: true,

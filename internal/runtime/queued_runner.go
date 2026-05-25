@@ -14,6 +14,32 @@ type QueuedRunRouter struct {
 }
 
 func (r QueuedRunRouter) Run(ctx context.Context, run productdata.Run, job productdata.BackgroundJob) error {
+	svc := r.service()
+	if svc != nil && job.ID != "" {
+		state := &PipelineState{RunContext: productdata.RunContext{Run: run, Job: job}}
+		pipeline := Pipeline{Recorder: PipelineRecorder{Service: svc, Broadcaster: r.broadcaster()}}
+		if err := pipeline.Execute(ctx, state, []PipelineStage{
+			{Name: productdata.PipelineStepPrepareContext, Run: func(ctx context.Context, state *PipelineState) error {
+				context, err := svc.PrepareRunContext(ctx, identity.LocalDevIdentity(), job)
+				if err != nil {
+					return err
+				}
+				state.RunContext = context
+				return nil
+			}},
+			{Name: productdata.PipelineStepResolveTools},
+			{Name: productdata.PipelineStepInvokeRuntime},
+			{Name: productdata.PipelineStepFinalize},
+		}); err != nil {
+			return err
+		}
+		run = state.RunContext.Run
+		job = state.RunContext.Job
+	}
+	return r.dispatch(ctx, run, job)
+}
+
+func (r QueuedRunRouter) dispatch(ctx context.Context, run productdata.Run, job productdata.BackgroundJob) error {
 	if toolCallID := metadataString(job.Metadata, "tool_call_id"); toolCallID != "" {
 		return r.runApprovedTool(ctx, run, toolCallID)
 	}
@@ -26,6 +52,26 @@ func (r QueuedRunRouter) Run(ctx context.Context, run productdata.Run, job produ
 	}
 	if r.Local != nil {
 		return r.Local.Run(ctx, run, job)
+	}
+	return nil
+}
+
+func (r QueuedRunRouter) service() productdata.Service {
+	if r.Gateway != nil && r.Gateway.Service != nil {
+		return r.Gateway.Service
+	}
+	if r.Local != nil && r.Local.Service != nil {
+		return r.Local.Service
+	}
+	return nil
+}
+
+func (r QueuedRunRouter) broadcaster() *Broadcaster {
+	if r.Gateway != nil && r.Gateway.Broadcaster != nil {
+		return r.Gateway.Broadcaster
+	}
+	if r.Local != nil && r.Local.Broadcaster != nil {
+		return r.Local.Broadcaster
 	}
 	return nil
 }

@@ -36,7 +36,25 @@ Claude Code 项目内命令使用横线格式：
 
 `/speckit-implement` 按任务实现，并在必要时回到 spec 或 plan 修正前提。
 
-## 当前功能：M6 Worker Job Pipeline
+## 当前功能：M9 RunContext Pipeline Foundation
+
+当前 Spec Kit 功能目录：
+
+```text
+specs/014-run-context-pipeline-foundation/
+```
+
+关键产物：
+
+- `spec.md`：定义 durable RunContext loader、worker 不依赖 API request memory、线性 pipeline trace 和非目标。
+- `plan.md`：确定复用 M6/M8 worker/job queue、M7 continuation、现有 run/event/SSE 和 frontend Timeline/RunRail 边界。
+- `research.md`：记录 durable context、窄 RunContext 字段、线性 stage list、safe stage metadata 和 M7 continuation preservation 决策。
+- `data-model.md`：定义 RunContext、ContextSource、Pipeline Stage、Pipeline State、Pipeline Trace Event 和 Stage Failure。
+- `contracts/`：定义 RunContext loader、pipeline stage events、frontend debug trace 契约。
+- `quickstart.md`：记录 backend/web/docs validation 和 browser smoke。
+- `tasks.md`：按 setup、foundation、US1-US3 和 docs/validation 拆分实现任务。
+
+## 近期已完成：M6 Worker Job Pipeline
 
 当前 Spec Kit 功能目录：
 

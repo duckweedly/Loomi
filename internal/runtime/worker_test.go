@@ -247,6 +247,96 @@ func TestWorkerProcessesQueuedLocalRun(t *testing.T) {
 	}
 }
 
+func TestQueuedRunRouterPreparesContextBeforeRuntimeInvocation(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, productdata.CreateThreadInput{Title: "Context pipeline", Mode: productdata.ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, productdata.StartRunInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := NewLocalRunner(svc, nil)
+	runner.StepDelay = 0
+	worker := NewWorker(svc, nil, QueuedRunRouter{Local: runner})
+	worker.WorkerID = "worker_context"
+
+	ok, err := worker.ProcessOne(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("ProcessOne() ok = false")
+	}
+	events, err := svc.ListRunEvents(context.Background(), ident, run.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepareCompleted := -1
+	invokeStarted := -1
+	resolveCompleted := false
+	finalizeCompleted := false
+	for index, event := range events {
+		if event.Type == productdata.EventPipelineStepCompleted && event.Metadata["step"] == string(productdata.PipelineStepPrepareContext) {
+			prepareCompleted = index
+		}
+		if event.Type == productdata.EventPipelineStepCompleted && event.Metadata["step"] == string(productdata.PipelineStepResolveTools) {
+			resolveCompleted = true
+		}
+		if event.Type == productdata.EventPipelineStepStarted && event.Metadata["step"] == string(productdata.PipelineStepInvokeRuntime) && invokeStarted == -1 {
+			invokeStarted = index
+		}
+		if event.Type == productdata.EventPipelineStepCompleted && event.Metadata["step"] == string(productdata.PipelineStepFinalize) {
+			finalizeCompleted = true
+		}
+	}
+	if prepareCompleted == -1 || invokeStarted == -1 || prepareCompleted > invokeStarted || !resolveCompleted || !finalizeCompleted {
+		t.Fatalf("events = %+v", events)
+	}
+}
+
+func TestQueuedRunRouterFailsBeforeRuntimeWhenContextIsMissing(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, productdata.CreateThreadInput{Title: "Missing context", Mode: productdata.ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _, err := svc.CreateMessage(context.Background(), ident, thread.ID, productdata.CreateMessageInput{Content: "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, productdata.StartRunInput{Source: productdata.RunSourceModelGateway, MessageID: message.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := StaticProvider{ProviderConfig: ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: "https://example.test/v1", APIKey: "key", Model: "model", Enabled: true}, Events: []ProviderEvent{{Type: ProviderEventCompleted, Text: "should not run"}}}
+	worker := NewWorker(svc, nil, QueuedRunRouter{Gateway: NewGateway(svc, nil, []Provider{provider})})
+	worker.WorkerID = "worker_context"
+
+	if _, err := worker.ProcessOne(context.Background()); err == nil {
+		t.Fatal("ProcessOne() err = nil")
+	}
+	events, err := svc.ListRunEvents(context.Background(), ident, run.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var failedPrepare bool
+	for _, event := range events {
+		if event.Type == productdata.EventPipelineStepFailed && event.Metadata["step"] == string(productdata.PipelineStepPrepareContext) {
+			failedPrepare = true
+		}
+		if event.Type == EventModelRequestStarted {
+			t.Fatalf("runtime invoked despite missing context: %+v", events)
+		}
+	}
+	if !failedPrepare {
+		t.Fatalf("prepare_context failure not recorded: %+v", events)
+	}
+}
+
 func TestWorkerLeavesQueuedGatewayRunBlockedOnToolApproval(t *testing.T) {
 	svc := productdata.NewMemoryService()
 	ident := identity.LocalDevIdentity()

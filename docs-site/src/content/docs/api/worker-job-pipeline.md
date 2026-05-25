@@ -62,6 +62,7 @@ M6 uses the existing run event object shape with new event `type` values:
 | `progress` | `lease_renewed` | `worker.lease_renewed` | `running` |
 | `progress` | `pipeline_step_started` | `pipeline.step.started` | `running` |
 | `progress` | `pipeline_step_completed` | `pipeline.step.completed` | `running` |
+| `error` | `pipeline_step_failed` | `pipeline.step.failed` | `failed` |
 | `progress` | `job_recovering` | `job.recovering` | `recovering` |
 | `progress` | `job_retry_scheduled` | `job.retry_scheduled` | `recovering` |
 | `progress` | `stop_requested` | `run.stopping` | `stopping` |
@@ -72,6 +73,54 @@ M6 uses the existing run event object shape with new event `type` values:
 | `final` | `run_stopped` | `run.stopped` | `stopped` |
 
 SSE still sends history-first `run_event` frames and supports `after_sequence` replay. The frontend keeps queued and worker events visible in RunRail.
+
+## M9 pipeline stage metadata
+
+M9 uses existing run events for RunContext/Pipeline foundation trace. Stage names are carried in `metadata.step`:
+
+```json
+{
+  "type": "pipeline_step_completed",
+  "category": "progress",
+  "summary": "Pipeline step completed",
+  "metadata": {
+    "step": "prepare_context",
+    "job_id": "job_...",
+    "attempt": 1,
+    "message_count": 1,
+    "provider_id": "custom",
+    "model": "model-a",
+    "enabled_tool_count": 1
+  }
+}
+```
+
+Normal M9 order:
+
+```text
+prepare_context
+resolve_tools
+invoke_runtime
+finalize
+```
+
+Failure example:
+
+```json
+{
+  "type": "pipeline_step_failed",
+  "category": "error",
+  "summary": "Pipeline step failed",
+  "metadata": {
+    "step": "prepare_context",
+    "job_id": "job_...",
+    "attempt": 1,
+    "error_code": "invalid_request"
+  }
+}
+```
+
+Stage metadata is a safe summary only. It may include ids, counts, stage names, provider/model labels, and allowlisted tool names. It must not include credentials, authorization headers, raw provider request/response bodies, message text, raw tool result payloads, shell output, file contents, desktop/browser captured state, or hidden local state.
 
 ## Worker configuration
 

@@ -102,6 +102,7 @@ const (
 	PipelineStepEnqueue        PipelineStepName = "enqueue"
 	PipelineStepClaim          PipelineStepName = "claim"
 	PipelineStepPrepareContext PipelineStepName = "prepare_context"
+	PipelineStepResolveTools   PipelineStepName = "resolve_tools"
 	PipelineStepInvokeRuntime  PipelineStepName = "invoke_runtime"
 	PipelineStepFinalize       PipelineStepName = "finalize"
 	PipelineStepRecover        PipelineStepName = "recover"
@@ -112,6 +113,7 @@ const (
 	EventLeaseRenewed             = "lease_renewed"
 	EventPipelineStepStarted      = "pipeline_step_started"
 	EventPipelineStepCompleted    = "pipeline_step_completed"
+	EventPipelineStepFailed       = "pipeline_step_failed"
 	EventJobRecovering            = "job_recovering"
 	EventJobRetryScheduled        = "job_retry_scheduled"
 	EventStopRequested            = "stop_requested"
@@ -256,6 +258,61 @@ type WorkerQueueDiagnostics struct {
 	ResumableToolCallCount   int               `json:"resumable_tool_call_count"`
 	DeadCount                int               `json:"dead_count"`
 	UpdatedAt                time.Time         `json:"updated_at"`
+}
+
+type RunContext struct {
+	Run                    Run
+	Thread                 Thread
+	Messages               []Message
+	Job                    BackgroundJob
+	ProviderRoute          ProviderRoute
+	EnabledTools           []ToolResolution
+	ContinuationProjection ContinuationProjection
+}
+
+type ProviderRoute struct {
+	ProviderID string
+	Model      string
+	Available  bool
+}
+
+type ToolResolution struct {
+	Name           string
+	ApprovalPolicy string
+	ExecutionState string
+}
+
+type ContinuationProjection struct {
+	ToolCallID string
+	Available  bool
+}
+
+func (c RunContext) SafeSummary() map[string]any {
+	summary := map[string]any{
+		"message_count":               len(c.Messages),
+		"has_job_metadata":            len(c.Job.Metadata) > 0,
+		"enabled_tool_count":          len(c.EnabledTools),
+		"has_continuation_projection": c.ContinuationProjection.Available,
+	}
+	if c.ProviderRoute.ProviderID != "" {
+		summary["provider_id"] = c.ProviderRoute.ProviderID
+	}
+	if c.ProviderRoute.Model != "" {
+		summary["model"] = c.ProviderRoute.Model
+	}
+	return RedactEventMetadata(summary)
+}
+
+func (c RunContext) ToolResolutionSummary() map[string]any {
+	names := make([]string, 0, len(c.EnabledTools))
+	for _, tool := range c.EnabledTools {
+		names = append(names, tool.Name)
+	}
+	return RedactEventMetadata(map[string]any{
+		"enabled_tool_count":          len(c.EnabledTools),
+		"enabled_tools":               names,
+		"has_continuation_projection": c.ContinuationProjection.Available,
+	})
 }
 
 type RunEvent struct {
