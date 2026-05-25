@@ -1,7 +1,9 @@
 package runtime
 
 import (
+	"encoding/json"
 	"errors"
+	"os"
 	"regexp"
 	"strings"
 )
@@ -27,14 +29,14 @@ const (
 )
 
 type MCPServerConfig struct {
-	Slug        string
-	DisplayName string
-	Enabled     bool
-	Transport   MCPTransport
-	Command     string
-	Args        []string
-	Env         map[string]string
-	TimeoutMS   int
+	Slug        string            `json:"slug"`
+	DisplayName string            `json:"display_name"`
+	Enabled     bool              `json:"enabled"`
+	Transport   MCPTransport      `json:"transport"`
+	Command     string            `json:"command"`
+	Args        []string          `json:"args"`
+	Env         map[string]string `json:"env"`
+	TimeoutMS   int               `json:"timeout_ms"`
 }
 
 type MCPDiscoveryResult struct {
@@ -71,6 +73,29 @@ func ValidateMCPServerConfig(config MCPServerConfig) (MCPServerConfig, error) {
 		config.TimeoutMS = 5000
 	}
 	return config, nil
+}
+
+func MCPServerConfigsFromEnv() (map[string]MCPServerConfig, error) {
+	raw := strings.TrimSpace(os.Getenv("LOOMI_MCP_SERVERS_JSON"))
+	if raw == "" {
+		return map[string]MCPServerConfig{}, nil
+	}
+	var configs []MCPServerConfig
+	if err := json.Unmarshal([]byte(raw), &configs); err != nil {
+		return nil, errors.New("mcp config json is invalid")
+	}
+	bySlug := make(map[string]MCPServerConfig, len(configs))
+	for _, config := range configs {
+		validated, err := ValidateMCPServerConfig(config)
+		if err != nil {
+			return nil, err
+		}
+		if _, exists := bySlug[validated.Slug]; exists {
+			return nil, errors.New("mcp server slug is duplicated")
+		}
+		bySlug[validated.Slug] = validated
+	}
+	return bySlug, nil
 }
 
 func (c MCPServerConfig) SafeSummary() map[string]any {

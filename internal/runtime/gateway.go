@@ -252,7 +252,15 @@ func (g *Gateway) recordToolCallRequest(ctx context.Context, run productdata.Run
 		toolCallID = "tc_1"
 	}
 	arguments := toolArgumentsSummary(event.Metadata)
-	_, events, err := g.Service.RecordToolCallRequest(ctx, identity.LocalDevIdentity(), run.ID, productdata.RecordToolCallRequestInput{ToolCallID: toolCallID, ToolName: event.ToolName, ArgumentsSummary: arguments, ArgumentsHash: argumentsHash(arguments), ApprovalStatus: productdata.ToolCallApprovalRequired, ExecutionStatus: productdata.ToolCallExecutionBlocked})
+	candidateSchemaHash := ""
+	if IsMCPToolName(event.ToolName) {
+		var allowed bool
+		allowed, candidateSchemaHash = g.mcpToolAllowedForRun(ctx, run.ID, event.ToolName)
+		if !allowed {
+			return false
+		}
+	}
+	_, events, err := g.Service.RecordToolCallRequest(ctx, identity.LocalDevIdentity(), run.ID, productdata.RecordToolCallRequestInput{ToolCallID: toolCallID, ToolName: event.ToolName, CandidateSchemaHash: candidateSchemaHash, ArgumentsSummary: arguments, ArgumentsHash: argumentsHash(arguments), ApprovalStatus: productdata.ToolCallApprovalRequired, ExecutionStatus: productdata.ToolCallExecutionBlocked})
 	if err != nil {
 		return false
 	}
@@ -264,12 +272,56 @@ func (g *Gateway) recordToolCallRequest(ctx context.Context, run productdata.Run
 	return true
 }
 
-func argumentsHash(arguments map[string]any) string {
-	value := "timezone=UTC"
-	if timezone, ok := arguments["timezone"].(string); ok {
-		value = "timezone=" + timezone
+func (g *Gateway) mcpToolAllowedForRun(ctx context.Context, runID string, toolName string) (bool, string) {
+	events, err := g.Service.ListRunEvents(ctx, identity.LocalDevIdentity(), runID, 0)
+	if err != nil {
+		return false, ""
 	}
-	sum := sha256.Sum256([]byte(value))
+	discovered := false
+	allowed := false
+	candidateSchemaHash := ""
+	for _, event := range events {
+		if event.Type == "mcp_discovery_succeeded" && metadataString(event.Metadata, "status") == "succeeded" {
+			for _, name := range metadataStringList(event.Metadata, "candidate_names", "mcp_candidate_names") {
+				if name == toolName {
+					discovered = true
+					candidateSchemaHash = mcpCandidateSchemaHash(event.Metadata, toolName)
+				}
+			}
+		}
+		for _, name := range metadataStringList(event.Metadata, "enabled_tools") {
+			if name == toolName {
+				allowed = true
+			}
+		}
+	}
+	return discovered && allowed && candidateSchemaHash != "", candidateSchemaHash
+}
+
+func mcpCandidateSchemaHash(metadata map[string]any, toolName string) string {
+	for _, key := range []string{"candidate_schema_hashes", "schema_hashes"} {
+		hashes, ok := metadata[key].(map[string]any)
+		if !ok {
+			continue
+		}
+		if hash, ok := hashes[toolName].(string); ok && strings.TrimSpace(hash) != "" {
+			return strings.TrimSpace(hash)
+		}
+	}
+	for _, key := range []string{"candidate_schema_hash", "schema_hash"} {
+		if hash := metadataString(metadata, key); hash != "" {
+			return hash
+		}
+	}
+	return ""
+}
+
+func argumentsHash(arguments map[string]any) string {
+	raw, err := json.Marshal(productdata.RedactEventMetadata(arguments))
+	if err != nil {
+		raw = []byte("{}")
+	}
+	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:])
 }
 
@@ -355,6 +407,23 @@ func metadataMap(metadata map[string]any, key string) map[string]any {
 		return value
 	}
 	return map[string]any{}
+}
+
+func metadataStringList(metadata map[string]any, keys ...string) []string {
+	var values []string
+	for _, key := range keys {
+		switch typed := metadata[key].(type) {
+		case []string:
+			values = append(values, typed...)
+		case []any:
+			for _, item := range typed {
+				if text, ok := item.(string); ok {
+					values = append(values, strings.TrimSpace(text))
+				}
+			}
+		}
+	}
+	return values
 }
 
 func selectedModel(override string, configured string) string {

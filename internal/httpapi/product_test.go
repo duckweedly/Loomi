@@ -88,6 +88,27 @@ func TestPersonaHandlersListBuiltInPersonasAndThreadSelection(t *testing.T) {
 	}
 }
 
+func TestThreadPersonaHandlersRejectUnknownPersona(t *testing.T) {
+	srv := NewServerWithProduct(config.Config{AppEnv: "local"}, fakeChecker{}, productdata.NewMemoryService())
+	create := requestJSON(t, srv, http.MethodPost, "/v1/threads", `{"title":"Thread","mode":"chat","persona_id":"persona_unknown"}`)
+	if create.Code != http.StatusBadRequest {
+		t.Fatalf("create status=%d body=%s", create.Code, create.Body.String())
+	}
+	if !strings.Contains(create.Body.String(), "invalid_request") || strings.Contains(strings.ToLower(create.Body.String()), "foreign key") || strings.Contains(strings.ToLower(create.Body.String()), "sql") {
+		t.Fatalf("create body leaked details: %s", create.Body.String())
+	}
+
+	thread := requestJSON(t, srv, http.MethodPost, "/v1/threads", `{"title":"Thread","mode":"chat"}`)
+	threadID := decodeThreadID(t, thread.Body.Bytes())
+	patch := requestJSON(t, srv, http.MethodPatch, "/v1/threads/"+threadID, `{"persona_id":"persona_unknown"}`)
+	if patch.Code != http.StatusBadRequest {
+		t.Fatalf("patch status=%d body=%s", patch.Code, patch.Body.String())
+	}
+	if !strings.Contains(patch.Body.String(), "invalid_request") || strings.Contains(strings.ToLower(patch.Body.String()), "foreign key") || strings.Contains(strings.ToLower(patch.Body.String()), "sql") {
+		t.Fatalf("patch body leaked details: %s", patch.Body.String())
+	}
+}
+
 func TestMessageHandlers(t *testing.T) {
 	srv := NewServerWithProduct(config.Config{AppEnv: "local"}, fakeChecker{}, productdata.NewMemoryService())
 	create := requestJSON(t, srv, http.MethodPost, "/v1/threads", `{"title":"Thread","mode":"chat"}`)

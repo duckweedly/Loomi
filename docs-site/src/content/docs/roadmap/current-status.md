@@ -5,7 +5,7 @@ description: Loomi 当前已完成内容和建议下一步。
 
 ## 已有基础
 
-当前仓库已经有 Web/Electron 前端壳、Go API/DB 基座、本地 identity/thread/message、M4 run/event/SSE、M3.5 前端 Agent runtime 骨架、M5 LLM Gateway 的 backend/provider/frontend 基础切片、M5.5 Settings Placeholder 的前端设置占位面、M6 Worker Job Pipeline 的 queued background execution MVP、M6.5 Real Testing Console and Background UX、M7 Tool Call Approval Execution + Tool Result Continuation 的最小闭环、M9 RunContext + Pipeline foundation 的最小薄片、M10 Persona/Skill foundation 的 persona 选择与版本快照薄片，以及 M11 MCP stdio foundation 的本地 discovery/read-only candidate 薄片。
+当前仓库已经有 Web/Electron 前端壳、Go API/DB 基座、本地 identity/thread/message、M4 run/event/SSE、M3.5 前端 Agent runtime 骨架、M5 LLM Gateway 的 backend/provider/frontend 基础切片、M5.5 Settings Placeholder 的前端设置占位面、M6 Worker Job Pipeline 的 queued background execution MVP、M6.5 Real Testing Console and Background UX、M7 Tool Call Approval Execution + Tool Result Continuation 的最小闭环、M9 RunContext + Pipeline foundation 的最小薄片、M10 Persona/Skill foundation 的 persona 选择与版本快照薄片、M11 MCP stdio foundation 的本地 discovery/read-only candidate 薄片，以及 M12 MCP approval-gated execution 的单工具本地 stdio 执行薄片。
 
 原路线 M8 Worker + Job Queue 已由 M6 Worker Job Pipeline 覆盖并通过 013 closeout：`background_jobs` 表、API 同事务 queued run + job、worker claim、lease renew、retry/backoff、failed terminal、lost-lock ownership guard、202 queued acknowledgement、worker crash recovery、旧 worker 失锁后不能写 terminal 均已有证据或已由 closeout 补齐。M8 closeout passed；下一步不要重做 worker/job queue。
 
@@ -28,11 +28,12 @@ Spec Kit 已接入仓库，并写入 Loomi constitution。文档站已作为 `do
 - M9 RunContext/Pipeline foundation：worker 执行前从 durable run/thread/messages/job/provider route/tool summary 准备 RunContext，按 `prepare_context`、`resolve_tools`、`invoke_runtime`、`finalize` 记录线性 pipeline trace，Timeline/debug/Background tasks 可从 live SSE 与 history replay 看到安全摘要。
 - M10 Persona/Skill foundation：内置 persona 配置同步到 DB，thread/run 可选择或继承 persona，run 创建时记录 persona snapshot/version，RunContext 应用 persona model route 和 allowed tool names，Timeline/debug 只显示安全 persona summary，前端提供最小 persona selector。
 - M11 MCP stdio foundation：显式本地 stdio MCP 配置校验、bounded discovery/list-tools parser、namespaced read-only ToolSpec candidate、persona allowed-tools 非执行引用、RunContext MCP availability 安全摘要、Timeline/debug discovery 成功/失败/禁用标签；MCP 工具执行仍未开放。
+- M12 MCP approval-gated execution：已发现且 persona allowed-tools 引用的本地 stdio MCP candidate 可以进入 M7 approval projection；approve 后由 worker 执行一个 bounded stdio `tools/call`，记录 redacted result/error，并进行一次 provider continuation；retry/recovery 不重复执行已 started/terminal 的 MCP call。
 
 ## 建议下一步
 
-下一步适合继续做 M11 的真实本地 MCP server smoke 证据收集，或把 MCP execution 单独切成 approval-gated 后续 Spec Kit。M11 foundation 不应被解读为 MCP 工具执行、远程 MCP、marketplace/plugin install、sandbox、shell/filesystem/browser automation 已完成；worker/job queue 也不应重做。
+下一步适合补 M12 浏览器端 approval 操作 smoke 和真实本地 MCP server `tools/call` fixture 证据。M12 不应被解读为远程 MCP、marketplace/plugin install、sandbox、shell/filesystem/browser automation、admin UI、DB-managed MCP server 或多工具循环已完成；worker/job queue 也不应重做。
 
 ## 开发要求
 
-后续非平凡开发必须同步更新 `docs-site/`。M5.5 已更新 Settings 架构页、runbook、开发日志和验证命令；M6 已新增 worker/job pipeline API、架构页、runbook、开发日志、Spec Kit 状态和验证命令；013 已记录 M8 closeout passed 和 retry/backoff 补丁；M6.5 已新增 Provider Test Console/Background tasks 架构页、本地 provider testing runbook、开发日志和验证命令；M7 已新增并更新 tool-call approval architecture/API/runbook/devlog，并新增 tool-result continuation architecture/devlog；M9 foundation 已更新 worker-job pipeline 架构/API、本地 M9 runbook、devlog 和 Spec Kit 状态；M10 foundation 已新增 persona architecture/API/runbook/devlog，并更新当前状态与 Spec Kit 状态；M11 foundation 已新增 MCP stdio architecture/API/runbook/devlog，并更新当前状态与 Spec Kit 状态。后续真实 provider/browser/MCP server smoke 结果应继续追加到相关 devlog。
+后续非平凡开发必须同步更新 `docs-site/`。M5.5 已更新 Settings 架构页、runbook、开发日志和验证命令；M6 已新增 worker/job pipeline API、架构页、runbook、开发日志、Spec Kit 状态和验证命令；013 已记录 M8 closeout passed 和 retry/backoff 补丁；M6.5 已新增 Provider Test Console/Background tasks 架构页、本地 provider testing runbook、开发日志和验证命令；M7 已新增并更新 tool-call approval architecture/API/runbook/devlog，并新增 tool-result continuation architecture/devlog；M9 foundation 已更新 worker-job pipeline 架构/API、本地 M9 runbook、devlog 和 Spec Kit 状态；M10 foundation 已新增 persona architecture/API/runbook/devlog，并更新当前状态与 Spec Kit 状态；M11 foundation 已新增 MCP stdio architecture/API/runbook/devlog，并更新当前状态与 Spec Kit 状态；M12 已新增 MCP approval execution architecture/API/runbook/devlog，并更新当前状态与 Spec Kit 状态。后续真实 provider/browser/MCP server smoke 结果应继续追加到相关 devlog。

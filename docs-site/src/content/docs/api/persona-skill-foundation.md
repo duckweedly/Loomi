@@ -40,6 +40,8 @@ The response excludes system prompt text, model route internals, budget details,
 
 Thread persona is used only when a run does not provide its own override.
 
+When `persona_id` is non-empty, thread create/update validates that the persona exists, is active, and has an active version before writing the thread. Unknown or inactive persona references return `400 invalid_request` with the stable message `Persona could not be resolved for this thread.`; database constraint details are not exposed through the API.
+
 ## Run Persona Override
 
 `POST /v1/threads/{thread_id}/runs` accepts an optional `persona_id`:

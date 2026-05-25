@@ -3,7 +3,7 @@ title: M7 Tool Call Approval API
 description: Tool-call projection, event payloads, diagnostics fields, and Phase 2 API-facing contracts.
 ---
 
-M7 now supports the minimal approval execution loop for `runtime.get_current_time`: provider-requested calls are recorded, blocked for approval, approved or denied idempotently, executed by the worker after approval, and replayed through history-first SSE.
+M7 supports the minimal approval execution loop for `runtime.get_current_time`: provider-requested calls are recorded, blocked for approval, approved or denied idempotently, executed by the worker after approval, and replayed through history-first SSE. M12 reuses the same approval projection for already-discovered local stdio MCP tools.
 
 Local desktop Settings can also save one OpenAI-compatible `custom` model provider into the running local API process. That endpoint only returns redacted capability data and never echoes the API key.
 
@@ -86,6 +86,26 @@ Tool events are persisted as run events with redacted metadata:
 ```
 
 Frontend API mapping converts these backend types to dotted runtime types such as `tool.call.approval_required` and keeps safe metadata available for replaying a stable `ToolCall` view model.
+
+For MCP calls, the same event names include safe source metadata:
+
+```json
+{
+  "type": "tool_call_approval_required",
+  "category": "progress",
+  "metadata": {
+    "tool_call_id": "tc_mcp_1",
+    "tool_name": "mcp.local-search.search",
+    "tool_source": "mcp",
+    "server_slug": "local-search",
+    "arguments_summary": { "query": "status" },
+    "approval_status": "required",
+    "execution_status": "blocked"
+  }
+}
+```
+
+MCP approval is offered only when a prior discovery event lists the namespaced candidate and the selected persona allowed-tools snapshot resolves that same tool.
 
 `tool_call_succeeded` may include a redacted result for model continuation:
 
@@ -181,7 +201,7 @@ Approved worker execution writes:
 }
 ```
 
-Failures use `tool_call_failed` with redacted `error_code` and `error_message`, then `run_failed`.
+Failures use `tool_call_failed` with redacted `error_code` and `error_message`, then `run_failed`. MCP failures use safe codes such as `mcp_config_unavailable`, `mcp_stdio_timeout`, `mcp_stdio_exit`, `mcp_stdio_invalid_response`, or `mcp_tool_execution_failed`.
 
 ## Redaction and validation
 

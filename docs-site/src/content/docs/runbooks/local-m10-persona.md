@@ -46,6 +46,7 @@ Expected:
 - run event history includes a `prepare_context` pipeline event
 - safe persona fields include name/version
 - raw prompt text is absent
+- unknown or inactive thread `persona_id` returns `400 invalid_request` without SQL or foreign-key details
 
 ## Browser Smoke
 

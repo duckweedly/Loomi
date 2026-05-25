@@ -36,7 +36,25 @@ Claude Code 项目内命令使用横线格式：
 
 `/speckit-implement` 按任务实现，并在必要时回到 spec 或 plan 修正前提。
 
-## 当前功能：M11 MCP Stdio Foundation
+## 当前功能：M12 MCP Approval-Gated Execution
+
+当前 Spec Kit 功能目录：
+
+```text
+specs/017-mcp-approval-gated-execution/
+```
+
+关键产物：
+
+- `spec.md`：定义已发现本地 stdio MCP tool 如何进入 M7 approval/tool-call/audit/worker/run-event 边界并执行一个最小安全闭环。
+- `plan.md`：确定复用 M7 approval、M6 worker/job、M9 RunContext/pipeline、M10 persona allowed-tools、M11 discovery/candidate mapping 和现有 Timeline/debug。
+- `research.md`：记录 approval-only entry、discovered+persona gate、at-most-once execution、stdio lifecycle redaction、single continuation 和 deferred scope 决策。
+- `data-model.md`：定义 MCP Tool Execution Request、Scoped Tool-Call Projection、Execution Attempt、Stdio Invocation、Result Summary、Continuation Context 和 Audit Event。
+- `contracts/`：定义 approval gate、worker execution、continuation、redaction/events 契约。
+- `quickstart.md`：记录 backend/web/docs validation 和 local smoke expectations。
+- `tasks.md`：按 setup、foundation、US1-US3 和 docs/validation 拆分实现任务。
+
+## 近期已完成：M11 MCP Stdio Foundation
 
 当前 Spec Kit 功能目录：
 

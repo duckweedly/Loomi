@@ -9,8 +9,13 @@ import (
 )
 
 type QueuedRunRouter struct {
-	Local   *LocalRunner
-	Gateway *Gateway
+	Local       *LocalRunner
+	Gateway     *Gateway
+	MCPExecutor MCPToolExecutor
+}
+
+type MCPToolExecutor interface {
+	ExecuteMCPTool(context.Context, productdata.ToolCall) (map[string]any, error)
 }
 
 func (r QueuedRunRouter) Run(ctx context.Context, run productdata.Run, job productdata.BackgroundJob) error {
@@ -80,9 +85,36 @@ func (r QueuedRunRouter) runApprovedTool(ctx context.Context, run productdata.Ru
 	if r.Gateway == nil || r.Gateway.Service == nil {
 		return nil
 	}
+	existing, err := r.Gateway.Service.GetToolCall(ctx, identity.LocalDevIdentity(), run.ThreadID, run.ID, toolCallID)
+	if err != nil {
+		return err
+	}
+	if existing.ExecutionStatus != productdata.ToolCallExecutionNotStarted {
+		return nil
+	}
 	call, _, err := r.Gateway.Service.StartToolCallExecution(ctx, identity.LocalDevIdentity(), run.ThreadID, run.ID, toolCallID)
 	if err != nil {
 		return err
+	}
+	if productdata.IsMCPToolName(call.ToolName) {
+		if r.MCPExecutor == nil {
+			_, _, _ = r.Gateway.Service.FailToolCallExecution(ctx, identity.LocalDevIdentity(), run.ThreadID, run.ID, toolCallID, "mcp_executor_unavailable", "MCP executor is unavailable.")
+			return nil
+		}
+		result, err := r.MCPExecutor.ExecuteMCPTool(ctx, call)
+		if err != nil {
+			_, _, _ = r.Gateway.Service.FailToolCallExecution(ctx, identity.LocalDevIdentity(), run.ThreadID, run.ID, toolCallID, "mcp_tool_execution_failed", err.Error())
+			return nil
+		}
+		if _, _, err = r.Gateway.Service.CompleteToolCallSuccess(ctx, identity.LocalDevIdentity(), run.ThreadID, run.ID, toolCallID, RedactMCPSummary(result)); err != nil {
+			return err
+		}
+		input := r.gatewayContinuationInput(ctx, run, toolCallID)
+		if input.MessageID == "" || input.ProviderID == "" {
+			return productdata.NewError(productdata.CodeInvalidRequest, "Continuation context is missing.")
+		}
+		r.Gateway.ContinueAfterToolResult(ctx, run, input)
+		return r.gatewayResult(ctx, run.ID)
 	}
 	tool := CurrentTimeToolDefinition()
 	if call.ToolName != tool.Name {

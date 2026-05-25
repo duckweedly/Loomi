@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -239,6 +240,40 @@ func TestGatewayBuildsContinuationContextFromToolResultEvents(t *testing.T) {
 	}
 	if messages[2].Content == "" || messages[2].Content == "sk-secret" {
 		t.Fatalf("tool result content = %q", messages[2].Content)
+	}
+}
+
+func TestGatewayBuildsMCPContinuationContextFromRedactedToolResult(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, productdata.CreateThreadInput{Title: "MCP continuation", Mode: productdata.ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _, err := svc.CreateMessage(context.Background(), ident, thread.ID, productdata.CreateMessageInput{Content: "Search"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, productdata.StartRunInput{Source: productdata.RunSourceModelGateway, MessageID: message.ID, ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.AppendRunEvent(context.Background(), ident, run.ID, productdata.AppendRunEventInput{Category: productdata.RunEventCategoryProgress, Type: productdata.EventToolCallRequested, Summary: "Tool call requested", Metadata: map[string]any{"tool_call_id": "tc_mcp_1", "tool_name": "mcp.local-search.search", "tool_source": "mcp", "arguments_summary": map[string]any{"query": "status"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.AppendRunEvent(context.Background(), ident, run.ID, productdata.AppendRunEventInput{Category: productdata.RunEventCategoryProgress, Type: productdata.EventToolCallSucceeded, Summary: "Tool call succeeded", Metadata: map[string]any{"tool_call_id": "tc_mcp_1", "tool_name": "mcp.local-search.search", "tool_source": "mcp", "result_summary": map[string]any{"raw": "sk-secret"}, "result_for_model_redacted": map[string]any{"summary": "safe"}}}); err != nil {
+		t.Fatal(err)
+	}
+	provider := &capturingProvider{config: ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: "https://example.test/v1", APIKey: "key", Model: "model", Enabled: true}}
+
+	NewGateway(svc, nil, []Provider{provider}).ContinueAfterToolResult(context.Background(), run, GatewayContinuationInput{ThreadID: thread.ID, MessageID: message.ID, ProviderID: "custom", ToolCallID: "tc_mcp_1"})
+
+	if len(provider.request.Messages) != 3 {
+		t.Fatalf("messages = %+v", provider.request.Messages)
+	}
+	toolResult := provider.request.Messages[2]
+	if toolResult.Role != ProviderMessageRoleToolResult || toolResult.ToolName != "mcp.local-search.search" || !strings.Contains(toolResult.Content, "safe") || strings.Contains(toolResult.Content, "sk-secret") {
+		t.Fatalf("tool result = %+v", toolResult)
 	}
 }
 

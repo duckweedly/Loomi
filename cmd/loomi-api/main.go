@@ -55,8 +55,12 @@ func main() {
 	providers := productruntime.NewHTTPProviders(productruntime.ProviderConfigsFromConfig(cfg), http.DefaultClient)
 	gateway := productruntime.NewGateway(product, broadcaster, providers)
 	localRunner := productruntime.NewLocalRunner(product, broadcaster)
+	mcpConfigs, err := productruntime.MCPServerConfigsFromEnv()
+	if err != nil {
+		logger.Warn("mcp server config unavailable", "operation_id", opID, "error", productruntime.RedactMCPText(err.Error()))
+	}
 	if product != nil && cfg.WorkerQueueEnabled && !cfg.WorkerQueuePaused {
-		worker := productruntime.NewWorker(product, broadcaster, productruntime.QueuedRunRouter{Local: localRunner, Gateway: gateway})
+		worker := productruntime.NewWorker(product, broadcaster, productruntime.QueuedRunRouter{Local: localRunner, Gateway: gateway, MCPExecutor: productruntime.StdioMCPToolExecutor{Configs: mcpConfigs}})
 		worker.LeaseSeconds = cfg.WorkerLeaseSeconds
 		worker.PollInterval = time.Duration(cfg.WorkerPollMillis) * time.Millisecond
 		worker.Start(context.Background())

@@ -965,7 +965,7 @@ func (s *MemoryService) RecordToolCallRequest(_ context.Context, ident identity.
 	}
 	now := s.now()
 	arguments := RedactEventMetadata(input.ArgumentsSummary)
-	call := ToolCall{ID: NewToolCallID(), ThreadID: run.ThreadID, RunID: run.ID, ToolCallID: input.ToolCallID, ToolName: input.ToolName, ArgumentsSummary: arguments, ApprovalStatus: input.ApprovalStatus, ExecutionStatus: input.ExecutionStatus, RequestedAt: now, UpdatedAt: now}
+	call := ToolCall{ID: NewToolCallID(), ThreadID: run.ThreadID, RunID: run.ID, ToolCallID: input.ToolCallID, ToolName: input.ToolName, CandidateSchemaHash: input.CandidateSchemaHash, ArgumentsSummary: arguments, ApprovalStatus: input.ApprovalStatus, ExecutionStatus: input.ExecutionStatus, RequestedAt: now, UpdatedAt: now}
 	s.toolCalls[key] = call
 	run.Status = RunStatusBlockedOnToolApproval
 	run.UpdatedAt = now
@@ -977,7 +977,7 @@ func (s *MemoryService) RecordToolCallRequest(_ context.Context, ident identity.
 			s.backgroundJobs[id] = job
 		}
 	}
-	metadata := map[string]any{"tool_call_id": call.ToolCallID, "tool_name": call.ToolName, "arguments_summary": call.ArgumentsSummary, "approval_status": string(call.ApprovalStatus), "execution_status": string(call.ExecutionStatus)}
+	metadata := toolCallEventMetadata(call)
 	requested := s.appendRunEventLocked(run, RunEventCategoryProgress, EventToolCallRequested, "Tool call requested", nil, metadata, now)
 	required := s.appendRunEventLocked(run, RunEventCategoryProgress, EventToolCallApprovalRequired, "Tool approval required", nil, metadata, now)
 	return call, []RunEvent{requested, required}, nil
@@ -1195,6 +1195,13 @@ func (s *MemoryService) scopedToolCallLocked(userID string, threadID string, run
 
 func toolCallEventMetadata(call ToolCall) map[string]any {
 	metadata := map[string]any{"tool_call_id": call.ToolCallID, "tool_name": call.ToolName, "arguments_summary": call.ArgumentsSummary, "approval_status": string(call.ApprovalStatus), "execution_status": string(call.ExecutionStatus)}
+	if IsMCPToolName(call.ToolName) {
+		metadata["tool_source"] = ToolSourceMCP
+		metadata["server_slug"] = mcpServerSlugFromToolName(call.ToolName)
+		metadata["candidate_schema_hash"] = call.CandidateSchemaHash
+	} else {
+		metadata["tool_source"] = ToolSourceInternal
+	}
 	if call.ResultSummary != nil {
 		metadata["result_summary"] = call.ResultSummary
 	}

@@ -345,6 +345,40 @@ func TestScopedToolCallHandlerReturnsProjection(t *testing.T) {
 	}
 }
 
+func TestScopedToolCallHandlerReturnsMCPProjection(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	thread := createRuntimeTestThread(t, svc)
+	run, err := svc.StartRun(context.Background(), identity.LocalDevIdentity(), thread.ID, productdata.StartRunInput{Source: productdata.RunSourceModelGateway, ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.RecordToolCallRequest(context.Background(), identity.LocalDevIdentity(), run.ID, productdata.RecordToolCallRequestInput{
+		ToolCallID:          "tc_mcp",
+		ToolName:            "mcp.local-search.search",
+		CandidateSchemaHash: "sha256:test-local-search",
+		ArgumentsSummary:    map[string]any{"query": "public", "api_key": "[redacted]"},
+		ArgumentsHash:       "hash_mcp",
+		ApprovalStatus:      productdata.ToolCallApprovalRequired,
+		ExecutionStatus:     productdata.ToolCallExecutionBlocked,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	srv := NewServerWithProduct(config.Config{AppEnv: "local"}, fakeChecker{}, svc)
+
+	res := requestJSON(t, srv, http.MethodGet, "/v1/threads/"+thread.ID+"/runs/"+run.ID+"/tool-calls/tc_mcp", "")
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", res.Code, res.Body.String())
+	}
+	body := res.Body.String()
+	if !strings.Contains(body, `"tool_name":"mcp.local-search.search"`) || !strings.Contains(body, `"query":"public"`) || !strings.Contains(body, `"api_key":"[redacted]"`) {
+		t.Fatalf("body=%s", body)
+	}
+	if strings.Contains(body, "secret") {
+		t.Fatalf("unredacted MCP projection: %s", body)
+	}
+}
+
 func TestToolCallApproveDenyHandlersAreIdempotentAndScoped(t *testing.T) {
 	svc := productdata.NewMemoryService()
 	thread := createRuntimeTestThread(t, svc)

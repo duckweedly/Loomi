@@ -126,6 +126,21 @@ func TestRepositoryContractPreservesThreadPersonaOnMetadataUpdate(t *testing.T) 
 	}
 }
 
+func TestRepositoryContractRejectsUnknownThreadPersona(t *testing.T) {
+	var repo Repository = NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	if _, err := repo.CreateThread(context.Background(), ident, CreateThreadInput{Title: "Unknown persona", Mode: ThreadModeChat, PersonaID: "persona_unknown"}); err == nil || ErrorCode(err) != CodeInvalidRequest {
+		t.Fatalf("create err = %v", err)
+	}
+	thread, err := repo.CreateThread(context.Background(), ident, CreateThreadInput{Title: "Thread", Mode: ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.UpdateThread(context.Background(), ident, thread.ID, UpdateThreadInput{PersonaID: ptr("persona_unknown")}); err == nil || ErrorCode(err) != CodeInvalidRequest {
+		t.Fatalf("update err = %v", err)
+	}
+}
+
 func TestRepositoryContractCoversM7ToolCallRequestProjection(t *testing.T) {
 	var repo Repository = NewMemoryService()
 	ident := identity.LocalDevIdentity()
@@ -176,6 +191,36 @@ func TestRepositoryContractCoversM7ToolCallRequestProjection(t *testing.T) {
 	}
 	if diagnostics.BlockedToolApprovalCount != 1 {
 		t.Fatalf("BlockedToolApprovalCount = %d, want 1", diagnostics.BlockedToolApprovalCount)
+	}
+}
+
+func TestRepositoryContractCoversMCPToolCallRequestProjection(t *testing.T) {
+	var repo Repository = NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := repo.CreateThread(context.Background(), ident, CreateThreadInput{Title: "MCP projection", Mode: ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := repo.StartRun(context.Background(), ident, thread.ID, StartRunInput{Source: RunSourceModelGateway, MessageID: "msg_1", ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	call, events, err := repo.RecordToolCallRequest(context.Background(), ident, run.ID, RecordToolCallRequestInput{ToolCallID: "tc_mcp_1", ToolName: "mcp.local-search.search", CandidateSchemaHash: "sha256:test-local-search", ArgumentsSummary: map[string]any{"query": "status", "api_key": "sk-secret"}, ArgumentsHash: "hash_mcp", ApprovalStatus: ToolCallApprovalRequired, ExecutionStatus: ToolCallExecutionBlocked})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if call.ToolName != "mcp.local-search.search" || call.CandidateSchemaHash != "sha256:test-local-search" || call.ArgumentsSummary["api_key"] == "sk-secret" {
+		t.Fatalf("call = %+v", call)
+	}
+	if len(events) != 2 || events[1].Metadata["tool_source"] != ToolSourceMCP || events[1].Metadata["server_slug"] != "local-search" || events[1].Metadata["candidate_schema_hash"] != "sha256:test-local-search" {
+		t.Fatalf("events = %+v", events)
+	}
+	again, againEvents, err := repo.RecordToolCallRequest(context.Background(), ident, run.ID, RecordToolCallRequestInput{ToolCallID: "tc_mcp_1", ToolName: "mcp.local-search.search", CandidateSchemaHash: "sha256:test-local-search", ArgumentsSummary: map[string]any{"query": "status"}, ArgumentsHash: "hash_mcp", ApprovalStatus: ToolCallApprovalRequired, ExecutionStatus: ToolCallExecutionBlocked})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.ID != call.ID || len(againEvents) != 0 {
+		t.Fatalf("again=%+v events=%+v", again, againEvents)
 	}
 }
 
@@ -477,7 +522,7 @@ func TestPostgresRunEventsUseUniqueSequenceOrdering(t *testing.T) {
 	defer pool.Close()
 
 	repo := NewPostgresRepository(pool)
-	ident := identity.LocalDevIdentity()
+	ident := postgresTestIdentity()
 	thread, err := repo.CreateThread(ctx, ident, CreateThreadInput{Title: "Repository run events", Mode: ThreadModeChat})
 	if err != nil {
 		t.Fatal(err)
@@ -496,7 +541,7 @@ func TestPostgresRunEventsUseUniqueSequenceOrdering(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(events) != 3 {
+	if len(events) != 4 {
 		t.Fatalf("events = %+v", events)
 	}
 	for i, event := range events {
@@ -520,7 +565,7 @@ func TestPostgresPreservesThreadPersonaOnMetadataUpdate(t *testing.T) {
 	defer pool.Close()
 
 	repo := NewPostgresRepository(pool)
-	ident := identity.LocalDevIdentity()
+	ident := postgresTestIdentity()
 	persona := syncContractPersona(t, repo, ident, "postgres-thread-persona-"+NewThreadID())
 	thread, err := repo.CreateThread(ctx, ident, CreateThreadInput{Title: "Postgres persona thread", Mode: ThreadModeChat, PersonaID: persona.ID})
 	if err != nil {
@@ -570,6 +615,48 @@ func TestPostgresPreservesThreadPersonaOnMetadataUpdate(t *testing.T) {
 	if context.Run.ID != run.ID || context.Persona.ID != persona.ID || context.Persona.ResolvedFrom != PersonaResolvedFromThread {
 		t.Fatalf("context persona = %+v", context.Persona)
 	}
+}
+
+func TestPostgresRejectsUnknownThreadPersona(t *testing.T) {
+	databaseURL := os.Getenv("LOOMI_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("LOOMI_TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	repo := NewPostgresRepository(pool)
+	ident := postgresTestIdentity()
+	if _, err := repo.CreateThread(ctx, ident, CreateThreadInput{Title: "Unknown postgres persona", Mode: ThreadModeChat, PersonaID: "persona_unknown"}); err == nil || ErrorCode(err) != CodeInvalidRequest {
+		t.Fatalf("create err = %v", err)
+	}
+	thread, err := repo.CreateThread(ctx, ident, CreateThreadInput{Title: "Postgres thread", Mode: ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.UpdateThread(ctx, ident, thread.ID, UpdateThreadInput{PersonaID: ptr("persona_unknown")}); err == nil || ErrorCode(err) != CodeInvalidRequest {
+		t.Fatalf("update err = %v", err)
+	}
+	persona := syncContractPersona(t, repo, ident, "postgres-inactive-thread-persona-"+NewThreadID())
+	if _, err := pool.Exec(ctx, `update personas set is_active=false where id=$1`, persona.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.CreateThread(ctx, ident, CreateThreadInput{Title: "Inactive postgres persona", Mode: ThreadModeChat, PersonaID: persona.ID}); err == nil || ErrorCode(err) != CodeInvalidRequest {
+		t.Fatalf("inactive create err = %v", err)
+	}
+	if _, err := repo.UpdateThread(ctx, ident, thread.ID, UpdateThreadInput{PersonaID: ptr(persona.ID)}); err == nil || ErrorCode(err) != CodeInvalidRequest {
+		t.Fatalf("inactive update err = %v", err)
+	}
+}
+
+func postgresTestIdentity() identity.LocalIdentity {
+	id := "user_" + NewThreadID()
+	return identity.LocalIdentity{UserID: id, DisplayName: "Postgres Test", Source: "test"}
 }
 
 func syncContractPersona(t *testing.T, repo Repository, ident identity.LocalIdentity, slug string) Persona {

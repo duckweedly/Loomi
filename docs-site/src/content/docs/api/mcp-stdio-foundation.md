@@ -30,6 +30,10 @@ Successful discovery produces safe candidate metadata:
   "server_slug": "local-search",
   "status": "succeeded",
   "tool_count": 1,
+  "candidate_names": ["mcp.local-search.search"],
+  "candidate_schema_hashes": {
+    "mcp.local-search.search": "sha256:..."
+  },
   "candidates": [
     {
       "mcp_tool_name": "search",
@@ -41,6 +45,10 @@ Successful discovery produces safe candidate metadata:
   ]
 }
 ```
+
+The M11.5 local stdio smoke verifies this shape with an enabled local fixture server and a discovered `mcp.local-smoke.echo` candidate. The fixture only answers discovery/list-tools and treats any `tools/call` request as a test failure.
+
+Discovery uses MCP stdio `Content-Length` frames. M12 execution uses the same framing for `initialize`, `notifications/initialized`, and the single approved `tools/call`.
 
 Failure output is redacted:
 
@@ -114,4 +122,4 @@ The following must not appear in API responses, run events, Timeline/debug, or d
 
 ## Execution Boundary
 
-MCP execution is not implemented. Any future execution must go through M7 approval and audit with redacted arguments/results and scoped run/thread/user checks.
+M12 implements the first approval-gated execution bridge for already-discovered local stdio candidates. Execution still must go through M7 approval and audit with redacted arguments/results and scoped run/thread/user checks. Remote MCP, OAuth, marketplace installs, DB-managed server admin, sandboxing, automation tools, and multi-step loops remain out of scope.

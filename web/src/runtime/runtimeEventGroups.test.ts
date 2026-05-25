@@ -30,6 +30,7 @@ describe('runtime event groups', () => {
     expect(mapRuntimeEventGroup(event({ type: 'mcp.discovery.succeeded' }))).toBe('worker-job')
     expect(mapRuntimeEventGroup(event({ type: 'mcp.tools.available' }))).toBe('worker-job')
     expect(mapRuntimeEventGroup(event({ type: 'mcp.discovery.failed' }))).toBe('error')
+    expect(mapRuntimeEventGroup(event({ type: 'tool.call.executing', metadata: { tool_source: 'mcp' } }))).toBe('tool-call')
     expect(mapRuntimeEventGroup(event({ type: 'provider.error', status: 'failed' }))).toBe('error')
     expect(mapRuntimeEventGroup(event({ type: 'backend.unavailable' }))).toBe('error')
     expect(mapRuntimeEventGroup(event({ type: 'provider.timeout' }))).toBe('error')

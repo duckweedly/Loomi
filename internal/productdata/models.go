@@ -155,6 +155,8 @@ const (
 	MaxThreadTitleLength     = 120
 	MaxClientMessageIDLength = 120
 	ToolNameCurrentTime      = "runtime.get_current_time"
+	ToolSourceInternal       = "internal"
+	ToolSourceMCP            = "mcp"
 )
 
 type ProductError struct {
@@ -223,19 +225,20 @@ type Run struct {
 }
 
 type ToolCall struct {
-	ID               string                  `json:"id"`
-	ThreadID         string                  `json:"thread_id"`
-	RunID            string                  `json:"run_id"`
-	ToolCallID       string                  `json:"tool_call_id"`
-	ToolName         string                  `json:"tool_name"`
-	ArgumentsSummary map[string]any          `json:"arguments_summary"`
-	ApprovalStatus   ToolCallApprovalStatus  `json:"approval_status"`
-	ExecutionStatus  ToolCallExecutionStatus `json:"execution_status"`
-	ResultSummary    map[string]any          `json:"result_summary,omitempty"`
-	ErrorCode        *string                 `json:"error_code,omitempty"`
-	ErrorMessage     *string                 `json:"error_message,omitempty"`
-	RequestedAt      time.Time               `json:"requested_at"`
-	UpdatedAt        time.Time               `json:"updated_at"`
+	ID                  string                  `json:"id"`
+	ThreadID            string                  `json:"thread_id"`
+	RunID               string                  `json:"run_id"`
+	ToolCallID          string                  `json:"tool_call_id"`
+	ToolName            string                  `json:"tool_name"`
+	CandidateSchemaHash string                  `json:"candidate_schema_hash,omitempty"`
+	ArgumentsSummary    map[string]any          `json:"arguments_summary"`
+	ApprovalStatus      ToolCallApprovalStatus  `json:"approval_status"`
+	ExecutionStatus     ToolCallExecutionStatus `json:"execution_status"`
+	ResultSummary       map[string]any          `json:"result_summary,omitempty"`
+	ErrorCode           *string                 `json:"error_code,omitempty"`
+	ErrorMessage        *string                 `json:"error_message,omitempty"`
+	RequestedAt         time.Time               `json:"requested_at"`
+	UpdatedAt           time.Time               `json:"updated_at"`
 }
 
 type BackgroundJob struct {
@@ -581,12 +584,13 @@ type RecoverBackgroundJobsInput struct {
 }
 
 type RecordToolCallRequestInput struct {
-	ToolCallID       string
-	ToolName         string
-	ArgumentsSummary map[string]any
-	ArgumentsHash    string
-	ApprovalStatus   ToolCallApprovalStatus
-	ExecutionStatus  ToolCallExecutionStatus
+	ToolCallID          string
+	ToolName            string
+	CandidateSchemaHash string
+	ArgumentsSummary    map[string]any
+	ArgumentsHash       string
+	ApprovalStatus      ToolCallApprovalStatus
+	ExecutionStatus     ToolCallExecutionStatus
 }
 
 type BackgroundJobRecovery struct {
@@ -664,11 +668,12 @@ func ValidateToolCallExecutionStatus(status ToolCallExecutionStatus) error {
 func ValidateToolCallRequestInput(input RecordToolCallRequestInput) (RecordToolCallRequestInput, error) {
 	input.ToolCallID = strings.TrimSpace(input.ToolCallID)
 	input.ToolName = strings.TrimSpace(input.ToolName)
+	input.CandidateSchemaHash = strings.TrimSpace(input.CandidateSchemaHash)
 	input.ArgumentsHash = strings.TrimSpace(input.ArgumentsHash)
 	if input.ToolCallID == "" || input.ToolName == "" {
 		return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Tool call id and name are required.")
 	}
-	if input.ToolName != ToolNameCurrentTime {
+	if input.ToolName != ToolNameCurrentTime && !IsMCPToolName(input.ToolName) {
 		return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Tool is not supported.")
 	}
 	if input.ApprovalStatus != ToolCallApprovalRequired || input.ExecutionStatus != ToolCallExecutionBlocked {
@@ -682,6 +687,12 @@ func ValidateToolCallRequestInput(input RecordToolCallRequestInput) (RecordToolC
 	}
 	if input.ArgumentsSummary == nil {
 		input.ArgumentsSummary = map[string]any{}
+	}
+	if IsMCPToolName(input.ToolName) {
+		if input.CandidateSchemaHash == "" {
+			return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "MCP tool candidate schema hash is required.")
+		}
+		return input, nil
 	}
 	for key := range input.ArgumentsSummary {
 		if key != "timezone" {
@@ -879,10 +890,13 @@ func redactMetadataValue(value any) any {
 
 func RedactEventText(value string) string {
 	lower := strings.ToLower(value)
-	for _, marker := range []string{"postgres://", "postgresql://", "password=", "api_key", "bearer ", "secret", "token"} {
+	for _, marker := range []string{"postgres://", "postgresql://", "password=", "api_key", "bearer ", "secret", "token", "credential", "authorization", "sk-", ".ssh", "id_ed25519", "id_rsa", ".env"} {
 		if strings.Contains(lower, marker) {
 			return "[redacted]"
 		}
+	}
+	if strings.Contains(value, "/Users/") || strings.Contains(value, "\\Users\\") {
+		return "[redacted]"
 	}
 	return value
 }
