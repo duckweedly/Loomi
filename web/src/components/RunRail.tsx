@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Check, ChevronDown, FileText, Folder, Globe2, Minus } from 'lucide-react'
 import type { Run, RuntimeScriptId } from '../domain'
 import type { Locale } from '../i18n'
+import { getDictionary } from '../i18n'
 import type { BackendCapabilityStatus } from '../runtime/backendCapabilityStatus'
 import { getBackendCapabilityCopy } from '../runtime/backendCapabilityStatus'
 import { groupRuntimeEvents } from '../runtime/runtimeEventGroups'
@@ -32,18 +33,40 @@ function getEventMark(event: Run['events'][number], index: number) {
   return <Check size={11} />
 }
 
-function getEventDetail(event: Run['events'][number]) {
+function getEventDetail(event: Run['events'][number], locale: Locale) {
+  const workerCopy = getDictionary(locale).runtime.workerJob
   const usage = event.usage
   const usageParts = usage ? [
     usage.inputTokens !== undefined ? `${usage.inputTokens} in` : null,
     usage.outputTokens !== undefined ? `${usage.outputTokens} out` : null,
     usage.totalTokens !== undefined ? `${usage.totalTokens} total` : null,
   ].filter(Boolean) : []
+  const eventLabels: Record<string, string> = {
+    job_claimed: workerCopy.jobClaimed,
+    'job.claimed': workerCopy.jobClaimed,
+    lease_renewed: workerCopy.leaseRenewed,
+    'worker.lease_renewed': workerCopy.leaseRenewed,
+    job_recovering: workerCopy.jobRecovering,
+    'job.recovering': workerCopy.jobRecovering,
+    job_retry_scheduled: workerCopy.retryScheduled,
+    'job.retry_scheduled': workerCopy.retryScheduled,
+    job_attempt_failed: workerCopy.attemptFailed,
+    'job.attempt_failed': workerCopy.attemptFailed,
+    job_retry_exhausted: workerCopy.retryExhausted,
+    'job.retry_exhausted': workerCopy.retryExhausted,
+    cancellation: workerCopy.cancellationRequested,
+    'run.cancelled': workerCopy.cancellationRequested,
+    worker_diagnostics: workerCopy.diagnostics,
+  }
   const detail = event.type === 'error.provider_error' || event.type === 'error.provider_timeout' || event.type === 'error.provider_rate_limited'
     ? `Provider failure · ${event.detail}`
     : event.type === 'progress.tool_call_blocked'
       ? `Tool request blocked · ${event.detail}`
-      : event.detail
+      : eventLabels[event.type]
+        ? `${eventLabels[event.type]} · ${event.detail}`
+        : event.type.includes('worker') || event.type.includes('job')
+          ? `${workerCopy.unknownWorkerEvent} · ${event.type} · ${event.detail}`
+          : event.detail
   return usageParts.length > 0 ? `${detail} · ${usageParts.join(' / ')}` : detail
 }
 
@@ -85,7 +108,7 @@ export function RunRail({ run, open, onOpenArtifact, onStopRun, selectedRuntimeS
               {group.events.length === 0 ? <p className="runtime-event-empty">No events yet</p> : group.events.map((event, index) => (
                 <div key={event.id} className={getEventClassName(event)}>
                   <span className="progress-mark">{getEventMark(event, index)}</span>
-                  <span>{getEventDetail(event)}</span>
+                  <span>{getEventDetail(event, locale)}</span>
                   <small>{event.time}</small>
                 </div>
               ))}

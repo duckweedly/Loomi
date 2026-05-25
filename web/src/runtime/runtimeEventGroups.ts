@@ -11,7 +11,7 @@ export type RuntimeEventGroupView = {
 const eventGroups: RuntimeEventGroup[] = ['run-lifecycle', 'model-stream', 'worker-job', 'tool-call', 'error']
 
 function isErrorEvent(event: RunEvent) {
-  return event.status === 'failed' || event.severity === 'error' || /(^|\.)(error|failed|unavailable|timeout)$/.test(event.type)
+  return event.status === 'failed' || event.severity === 'error' || /(^|[._])(error|failed|unavailable|timeout|attempt_failed|retry_exhausted)$/.test(event.type)
 }
 
 export function mapRuntimeEventGroup(event: RunEvent): RuntimeEventGroup {
@@ -19,6 +19,7 @@ export function mapRuntimeEventGroup(event: RunEvent): RuntimeEventGroup {
   if (event.group) return event.group
   if (event.type.startsWith('model.') || event.type.startsWith('assistant.')) return 'model-stream'
   if (event.type.startsWith('worker.') || event.type.startsWith('job.') || event.type.startsWith('pipeline.')) return 'worker-job'
+  if (event.type.startsWith('worker_') || event.type.startsWith('job_') || event.type === 'lease_renewed' || event.type.includes('worker')) return 'worker-job'
   return 'run-lifecycle'
 }
 
@@ -28,7 +29,6 @@ export function groupRuntimeEvents(events: RunEvent[], locale: Locale = 'en'): R
     id: group,
     title: copy[group],
     events: events
-      .filter((event) => mapRuntimeEventGroup(event) === group)
-      .sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0)),
+      .filter((event) => mapRuntimeEventGroup(event) === group),
   }))
 }

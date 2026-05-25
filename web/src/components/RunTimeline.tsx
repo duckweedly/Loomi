@@ -19,6 +19,7 @@ type Props = {
   capabilityStatus?: BackendCapabilityStatus
   locale: Locale
   onSelectRuntimeScript?: (scriptId: RuntimeScriptId) => void
+  selectedThreadId?: string
 }
 
 export function RunTimeline({
@@ -34,12 +35,15 @@ export function RunTimeline({
   capabilityStatus,
   locale,
   onSelectRuntimeScript,
+  selectedThreadId,
 }: Props) {
+  const selectedThreadRun = !selectedThreadId || run?.threadId === selectedThreadId ? run : null
+
   return (
     <>
       <RunRail run={run} open={runDetailsOpen} onOpenArtifact={onOpenArtifact} onStopRun={onStopRun} selectedRuntimeScript={selectedRuntimeScript} capabilityStatus={capabilityStatus} locale={locale} onSelectRuntimeScript={onSelectRuntimeScript} />
       <RightPanelMenu open={rightPanelMenuOpen} selectedPanelId={selectedPanelId} onSelectPanel={onSelectPanel} />
-      <RightToolDrawer open={rightToolsOpen} selectedPanelId={selectedPanelId} />
+      <RightToolDrawer open={rightToolsOpen} selectedPanelId={selectedPanelId} run={selectedThreadRun} locale={locale} />
     </>
   )
 }

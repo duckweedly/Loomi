@@ -125,6 +125,7 @@ function ProviderCheckConsole({ providerCapabilities, providerCheckResults, onCh
               <div className="provider-console-meta">
                 <span>{provider.family}</span>
                 <span>{provider.model}</span>
+                {provider.baseUrl && <span>{provider.baseUrl}</span>}
               </div>
               {resultText && <p className={`provider-check-result ${result?.status ?? 'idle'}`}>{resultText}</p>}
             </div>

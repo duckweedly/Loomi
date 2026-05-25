@@ -36,21 +36,32 @@ describe('runtime event groups', () => {
     expect(mapRuntimeEventGroup(event({ type: 'provider.timeout', severity: 'error', group: 'model-stream' }))).toBe('error')
   })
 
-  test('returns stable groups with chronological events and usage detail', () => {
+  test('returns stable groups preserving incoming stream order and usage detail', () => {
     const grouped = groupRuntimeEvents([
       event({ id: 'evt-model', sequence: 2, type: 'model.usage', usage: { inputTokens: 7, outputTokens: 11 } }),
       event({ id: 'evt-run', sequence: 1, type: 'run.created' }),
       event({ id: 'evt-worker', sequence: 3, type: 'job.queued' }),
       event({ id: 'evt-tool', sequence: 4, type: 'tool.call.requested', group: 'tool-call' }),
       event({ id: 'evt-error', sequence: 5, type: 'stream.error', status: 'failed' }),
+      event({ id: 'evt-worker-recovering', sequence: 0, type: 'job.recovering', detail: 'recovering' }),
     ])
 
     expect(grouped.map((group) => group.id)).toEqual(['run-lifecycle', 'model-stream', 'worker-job', 'tool-call', 'error'])
     expect(grouped[0].events.map((item) => item.id)).toEqual(['evt-run'])
     expect(grouped[1].events[0].usage).toEqual({ inputTokens: 7, outputTokens: 11 })
-    expect(grouped[2].events.map((item) => item.id)).toEqual(['evt-worker'])
+    expect(grouped[2].events.map((item) => item.id)).toEqual(['evt-worker', 'evt-worker-recovering'])
     expect(grouped[3].events.map((item) => item.id)).toEqual(['evt-tool'])
     expect(grouped[4].events.map((item) => item.id)).toEqual(['evt-error'])
+  })
+
+  test('maps productized M6 worker job event names and unknown worker events', () => {
+    expect(mapRuntimeEventGroup(event({ type: 'job_claimed' }))).toBe('worker-job')
+    expect(mapRuntimeEventGroup(event({ type: 'lease_renewed' }))).toBe('worker-job')
+    expect(mapRuntimeEventGroup(event({ type: 'job_recovering' }))).toBe('worker-job')
+    expect(mapRuntimeEventGroup(event({ type: 'job_retry_scheduled' }))).toBe('worker-job')
+    expect(mapRuntimeEventGroup(event({ type: 'job_attempt_failed' }))).toBe('error')
+    expect(mapRuntimeEventGroup(event({ type: 'job_retry_exhausted' }))).toBe('error')
+    expect(mapRuntimeEventGroup(event({ type: 'future_worker_event' }))).toBe('worker-job')
   })
 })
 

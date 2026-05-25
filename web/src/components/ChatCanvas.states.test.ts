@@ -201,7 +201,7 @@ describe('ChatCanvas provider unavailable warning', () => {
     expect(html).not.toContain('Model provider is not configured or unavailable')
   })
 
-  test('shows guidance when real API has no available provider', () => {
+  test('shows guidance when real API has no available provider and disables Composer submit', () => {
     const html = renderToStaticMarkup(createElement(ChatCanvas, {
       sidebarCollapsed: false,
       thread,
@@ -221,6 +221,11 @@ describe('ChatCanvas provider unavailable warning', () => {
     expect(html).toContain('Model provider is not configured or unavailable')
     expect(html).toContain('Open Settings')
     expect(html).toContain('Provider unavailable')
+    expect(html).not.toContain('Generating')
+    expect(html).toContain('<textarea')
+    expect(html).toContain('<textarea class="composer-input" disabled=""')
+    expect(html).not.toContain('Retry</button>')
+    expect(html).not.toContain('Regenerate</button>')
   })
 
   test('shows guidance when real API providers are configured but unavailable', () => {

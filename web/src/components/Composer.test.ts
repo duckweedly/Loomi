@@ -59,7 +59,7 @@ describe('Composer interactions', () => {
   test('derives action guards from current textarea value and blocks disabled submit paths', () => {
     const source = readFileSync(resolve(import.meta.dir, 'Composer.tsx'), 'utf8')
 
-    expect(source).toContain("deriveComposerActions({ threadSelected, text: value, run, messages })")
-    expect(source).toContain('if (disabled || !canSubmit || !content) return')
+    expect(source).toContain('deriveComposerActions({ threadSelected, text: value, run, messages, providerUnavailable })')
+    expect(source).toContain('if (composerDisabled || !canSubmit || !content) return')
   })
 })

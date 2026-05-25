@@ -65,7 +65,22 @@ describe('runtime state orchestration helpers', () => {
     const next = applyRunStreamEventToRun(runningRun, { id: 'evt-1', runId: run.id, threadId: run.threadId, sequence: 1, type: 'model.delta', label: 'Model', detail: 'earlier', time: 'Earlier', status: 'running', assistantDelta: 'earlier' })
 
     expect(next.assistantDraft?.content).toBe('later')
-    expect(next.events.map((event) => event.id)).toEqual(['evt-1', 'evt-2'])
+    expect(next.events.map((event) => event.id)).toEqual(['evt-2', 'evt-1'])
+  })
+
+  test('keeps stale-delta guard based on highest known sequence after lower sequence arrivals', () => {
+    const runningRun: Run = {
+      ...run,
+      status: 'running',
+      events: [{ id: 'evt-3', runId: run.id, threadId: run.threadId, sequence: 3, type: 'model.delta', label: 'Model', detail: 'latest', time: 'Now', status: 'running', assistantDelta: 'latest' }],
+      assistantDraft: { content: 'latest', status: 'streaming', lastEventId: 'evt-3' },
+    }
+
+    const withLateEvent = applyRunStreamEventToRun(runningRun, { id: 'evt-1', runId: run.id, threadId: run.threadId, sequence: 1, type: 'model.delta', label: 'Model', detail: 'earlier', time: 'Earlier', status: 'running', assistantDelta: 'earlier' })
+    const next = applyRunStreamEventToRun(withLateEvent, { id: 'evt-2', runId: run.id, threadId: run.threadId, sequence: 2, type: 'model.delta', label: 'Model', detail: 'middle', time: 'Middle', status: 'running', assistantDelta: 'middle' })
+
+    expect(next.assistantDraft?.content).toBe('latest')
+    expect(next.events.map((event) => event.id)).toEqual(['evt-3', 'evt-1', 'evt-2'])
   })
 
   test('preserves normalized event identity when applying model gateway events', () => {

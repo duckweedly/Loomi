@@ -62,6 +62,32 @@ describe('RunTimeline runtime linkage', () => {
     expect(html).not.toContain('token')
   })
 
+  test('does not show a previous thread run in Background tasks after thread selection changes', () => {
+    const html = renderToStaticMarkup(createElement(RunTimeline, {
+      runDetailsOpen: false,
+      rightPanelMenuOpen: false,
+      rightToolsOpen: true,
+      selectedPanelId: 'background-tasks',
+      selectedThreadId: 'thread-b',
+      onSelectPanel: () => {},
+      onOpenArtifact: () => {},
+      run: {
+        id: 'run-a',
+        threadId: 'thread-a',
+        status: 'recovering',
+        model: 'Local simulated',
+        context: 'local_simulated',
+        events: [
+          { id: 'evt-worker', runId: 'run-a', threadId: 'thread-a', sequence: 1, type: 'job_recovering', label: 'Worker', detail: 'previous thread job', time: 'Now', status: 'recovering' },
+        ],
+      },
+    }))
+
+    expect(html).toContain('No background task is running')
+    expect(html).not.toContain('Current run job')
+    expect(html).not.toContain('background-task-event')
+  })
+
   test('renders mixed lifecycle model worker and error groups through RunTimeline', () => {
     const html = renderToStaticMarkup(createElement(RunTimeline, {
       runDetailsOpen: true,

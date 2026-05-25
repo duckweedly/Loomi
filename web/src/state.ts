@@ -59,11 +59,23 @@ export function shouldApplyRunStreamEvent({ eventThreadId, eventRunId, selectedT
 }
 
 export function mergeRunEvents(existing: RunEvent[], incoming: RunEvent[]) {
-  const byKey = new Map<string, RunEvent>()
+  const indexesByKey = new Map<string, number>()
+  const merged: RunEvent[] = []
   for (const event of [...existing, ...incoming]) {
-    byKey.set(event.id || String(event.sequence), event)
+    const key = event.id || String(event.sequence)
+    const existingIndex = indexesByKey.get(key)
+    if (existingIndex === undefined) {
+      indexesByKey.set(key, merged.length)
+      merged.push(event)
+    } else {
+      merged[existingIndex] = { ...merged[existingIndex], ...event }
+    }
   }
-  return [...byKey.values()].sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0))
+  return merged
+}
+
+function getMaxRunEventSequence(events: RunEvent[], fallback: number) {
+  return events.reduce((max, event) => (event.sequence === undefined ? max : Math.max(max, event.sequence)), fallback)
 }
 
 export function createThreadRuntimeState(input: Partial<ThreadRuntimeState> = {}): ThreadRuntimeState {
@@ -141,8 +153,8 @@ export function applyRunStreamEventToRun(run: Run, event: RunEvent): Run {
   if (isRuntimeTerminal(run.status)) return run
   if (run.events.some((existing) => existing.id === event.id)) return run
 
-  const lastSequence = run.events.at(-1)?.sequence ?? -1
-  const shouldApplyAssistantDelta = !event.assistantDelta || event.sequence === undefined || lastSequence <= event.sequence
+  const maxSequence = getMaxRunEventSequence(run.events, -1)
+  const shouldApplyAssistantDelta = !event.assistantDelta || event.sequence === undefined || maxSequence <= event.sequence
   let nextRun: Run = event.type.startsWith('tool.call.') ? applyRealRunEvent(run, { ...event, runId: event.runId ?? run.id, threadId: event.threadId ?? run.threadId }) : { ...run, events: mergeRunEvents(run.events, [event]) }
   if (event.assistantDelta && shouldApplyAssistantDelta) nextRun = applyAssistantDeltaToRun(nextRun, event.assistantDelta, event.id)
 
@@ -298,7 +310,7 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
       return
     }
     setStreamState((current) => (current === 'connecting' ? current : 'connecting'))
-    const afterSequence = run.events.at(-1)?.sequence ?? 0
+    const afterSequence = getMaxRunEventSequence(run.events, 0)
     const unsubscribe = apiClient.subscribeRunEvents(
       run.id,
       afterSequence,
