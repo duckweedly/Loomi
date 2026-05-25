@@ -48,11 +48,24 @@ export default function App() {
     providerSaveResult,
     memoryEntries,
     memoryQuery,
+    memoryFilters,
     memoryLoading,
     memoryError,
+    memoryDetail,
+    memoryDetailLoading,
+    memoryDetailError,
+    memoryAuditItems,
+    memoryAuditLoading,
+    memoryAuditError,
+    pendingDeleteMemoryEntry,
     checkProvider,
     saveProvider,
     setMemorySearchQuery,
+    updateMemoryFilters,
+    openMemoryDetail,
+    closeMemoryDetail,
+    requestDeleteMemoryEntry,
+    cancelDeleteMemoryEntry,
     deleteMemoryEntry,
   } = useWorkspaceState(shell.defaultWorkspaceMode)
 
@@ -196,8 +209,16 @@ export default function App() {
                   providerCapabilities={providerCapabilities}
                   memoryEntries={memoryEntries}
                   memoryQuery={memoryQuery}
+                  memoryFilters={memoryFilters}
                   memoryLoading={memoryLoading}
                   memoryError={memoryError}
+                  memoryDetail={memoryDetail}
+                  memoryDetailLoading={memoryDetailLoading}
+                  memoryDetailError={memoryDetailError}
+                  memoryAuditItems={memoryAuditItems}
+                  memoryAuditLoading={memoryAuditLoading}
+                  memoryAuditError={memoryAuditError}
+                  pendingDeleteMemoryEntry={pendingDeleteMemoryEntry}
                   providerCheckResults={providerCheckResults}
                   providerSaveResult={providerSaveResult}
                   providerDraftSettings={shell.providerDraftSettings}
@@ -212,7 +233,12 @@ export default function App() {
                   }}
                   onCheckProvider={(providerId) => void checkProvider(providerId)}
                   onMemoryQueryChange={setMemorySearchQuery}
-                  onDeleteMemoryEntry={(entryId) => void deleteMemoryEntry(entryId)}
+                  onMemoryFiltersChange={updateMemoryFilters}
+                  onOpenMemoryDetail={(entry) => void openMemoryDetail(entry)}
+                  onCloseMemoryDetail={closeMemoryDetail}
+                  onRequestDeleteMemoryEntry={requestDeleteMemoryEntry}
+                  onCancelDeleteMemoryEntry={cancelDeleteMemoryEntry}
+                  onConfirmDeleteMemoryEntry={(entry) => void deleteMemoryEntry(entry)}
                   onBack={shell.closeSettings}
                 />
               ) : (

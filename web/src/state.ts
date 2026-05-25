@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { apiClient, executionAdapter } from './apiClient'
 import { setMockRuntimeScript } from './mockApiClient'
-import type { BackendCapabilityState, MemoryEntry, Message, Persona, ProviderCapability, Run, RunEvent, RuntimeEvent, RuntimeScriptId, StaleEventGuard, StreamState, Thread, ThreadRuntimeState, ToolCall } from './domain'
+import type { BackendCapabilityState, MemoryAuditItem, MemoryEntry, MemoryFilters, Message, Persona, ProviderCapability, Run, RunEvent, RuntimeEvent, RuntimeScriptId, StaleEventGuard, StreamState, Thread, ThreadRuntimeState, ToolCall } from './domain'
 import { isRuntimeActive, isRuntimeTerminal } from './runtime/executionAdapter'
 import { deriveCapabilitySignalFromEvent } from './runtime/backendCapabilityStatus'
 import { applyRealRunEvent, mapRealRuntimeCapabilitySignal } from './runtime/realExecutionAdapter'
@@ -235,6 +235,20 @@ export function createWorkspaceSettingsState(input: Partial<{ defaultWorkspaceMo
   }
 }
 
+function memoryContextForEntry(entry: MemoryEntry): MemoryFilters {
+  const context = {
+    scopeType: entry.scopeType,
+    scopeId: entry.scopeId,
+    sourceThreadId: entry.sourceThreadId,
+    sourceRunId: entry.sourceRunId,
+    sourceType: entry.sourceType,
+  }
+  if (entry.scopeType === 'thread' && !context.scopeId && !context.sourceThreadId && !context.sourceRunId) {
+    throw new Error('Memory action needs thread or source context')
+  }
+  return context
+}
+
 export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat') {
   const [threads, setThreads] = useState<Thread[]>([])
   const [selectedThreadId, setSelectedThreadId] = useState('thread-brief')
@@ -253,8 +267,16 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
   const [providerSaveResult, setProviderSaveResult] = useState<ProviderSaveResult>({ status: 'idle' })
   const [memoryEntries, setMemoryEntries] = useState<MemoryEntry[]>([])
   const [memoryQuery, setMemoryQuery] = useState('')
+  const [memoryFilters, setMemoryFilters] = useState<MemoryFilters>({ limit: 20 })
   const [memoryLoading, setMemoryLoading] = useState(false)
   const [memoryError, setMemoryError] = useState<string | null>(null)
+  const [memoryDetail, setMemoryDetail] = useState<MemoryEntry | null>(null)
+  const [memoryDetailLoading, setMemoryDetailLoading] = useState(false)
+  const [memoryDetailError, setMemoryDetailError] = useState<string | null>(null)
+  const [memoryAuditItems, setMemoryAuditItems] = useState<MemoryAuditItem[]>([])
+  const [memoryAuditLoading, setMemoryAuditLoading] = useState(false)
+  const [memoryAuditError, setMemoryAuditError] = useState<string | null>(null)
+  const [pendingDeleteMemoryEntry, setPendingDeleteMemoryEntry] = useState<MemoryEntry | null>(null)
   const selectedThreadIdRef = useRef(selectedThreadId)
   const runRef = useRef<Run | null>(run)
 
@@ -339,7 +361,7 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
     }
   }, [])
 
-  const loadMemoryEntries = useCallback(async (query = '') => {
+  const loadMemoryEntries = useCallback(async (query = '', filters = memoryFilters) => {
     if (!apiClient.listMemoryEntries || !apiClient.searchMemory) {
       setMemoryEntries([])
       return
@@ -348,8 +370,8 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
     setMemoryError(null)
     try {
       const entries = query.trim()
-        ? await apiClient.searchMemory(query)
-        : await apiClient.listMemoryEntries()
+        ? await apiClient.searchMemory(query, filters)
+        : await apiClient.listMemoryEntries(filters)
       setMemoryEntries(entries)
     } catch (err) {
       setMemoryEntries([])
@@ -357,23 +379,86 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
     } finally {
       setMemoryLoading(false)
     }
-  }, [])
+  }, [memoryFilters])
 
   const setMemorySearchQuery = useCallback((query: string) => {
     setMemoryQuery(query)
-    void loadMemoryEntries(query)
-  }, [loadMemoryEntries])
+    void loadMemoryEntries(query, memoryFilters)
+  }, [loadMemoryEntries, memoryFilters])
 
-  const deleteMemoryEntry = useCallback(async (entryId: string) => {
+  const loadMemoryAudit = useCallback(async (filters = memoryFilters) => {
+    if (!apiClient.listMemoryAudit) {
+      setMemoryAuditItems([])
+      setMemoryAuditError('Memory history endpoint unavailable')
+      return
+    }
+    setMemoryAuditLoading(true)
+    setMemoryAuditError(null)
+    try {
+      setMemoryAuditItems(await apiClient.listMemoryAudit(filters))
+    } catch (err) {
+      setMemoryAuditItems([])
+      setMemoryAuditError(err instanceof Error ? err.message : 'Memory history failed to load')
+    } finally {
+      setMemoryAuditLoading(false)
+    }
+  }, [memoryFilters])
+
+  const updateMemoryFilters = useCallback((filters: MemoryFilters) => {
+    setMemoryFilters(filters)
+    void loadMemoryEntries(memoryQuery, filters)
+    void loadMemoryAudit(filters)
+  }, [loadMemoryAudit, loadMemoryEntries, memoryQuery])
+
+  const openMemoryDetail = useCallback(async (entry: MemoryEntry) => {
+    if (!apiClient.getMemoryEntry) {
+      setMemoryDetail(entry)
+      return
+    }
+    setMemoryDetail(entry)
+    setMemoryDetailLoading(true)
+    setMemoryDetailError(null)
+    try {
+      const detail = await apiClient.getMemoryEntry(entry.id, memoryContextForEntry(entry))
+      setMemoryDetail(detail)
+    } catch (err) {
+      setMemoryDetail(null)
+      setMemoryDetailError(err instanceof Error ? err.message : 'Memory detail could not be loaded')
+    } finally {
+      setMemoryDetailLoading(false)
+    }
+  }, [])
+
+  const requestDeleteMemoryEntry = useCallback((entry: MemoryEntry) => {
+    setPendingDeleteMemoryEntry(entry)
+  }, [])
+
+  const cancelDeleteMemoryEntry = useCallback(() => {
+    setPendingDeleteMemoryEntry(null)
+  }, [])
+
+  const deleteMemoryEntry = useCallback(async (entry: MemoryEntry) => {
     if (!apiClient.deleteMemoryEntry) return
-    const entry = memoryEntries.find((item) => item.id === entryId)
-    await apiClient.deleteMemoryEntry(entryId, entry ? { scopeType: entry.scopeType, scopeId: entry.scopeId, sourceThreadId: entry.sourceThreadId, sourceRunId: entry.sourceRunId } : undefined)
-    await loadMemoryEntries(memoryQuery)
-  }, [loadMemoryEntries, memoryEntries, memoryQuery])
+    setMemoryError(null)
+    try {
+      await apiClient.deleteMemoryEntry(entry.id, memoryContextForEntry(entry))
+      setPendingDeleteMemoryEntry(null)
+      setMemoryDetail((current) => (current?.id === entry.id ? null : current))
+      await loadMemoryEntries(memoryQuery, memoryFilters)
+      await loadMemoryAudit(memoryFilters)
+    } catch (err) {
+      setMemoryEntries([])
+      setMemoryError(err instanceof Error ? err.message : 'Memory delete failed')
+    }
+  }, [loadMemoryAudit, loadMemoryEntries, memoryFilters, memoryQuery])
 
   useEffect(() => {
-    void loadMemoryEntries('')
+    void loadMemoryEntries('', memoryFilters)
   }, [loadMemoryEntries])
+
+  useEffect(() => {
+    void loadMemoryAudit(memoryFilters)
+  }, [loadMemoryAudit])
 
   useEffect(() => {
     if (!run || !shouldBlockRuntimeSubmit(run) || !apiClient.subscribeRunEvents) {
@@ -606,13 +691,26 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
     providerSaveResult,
     memoryEntries,
     memoryQuery,
+    memoryFilters,
     memoryLoading,
     memoryError,
+    memoryDetail,
+    memoryDetailLoading,
+    memoryDetailError,
+    memoryAuditItems,
+    memoryAuditLoading,
+    memoryAuditError,
+    pendingDeleteMemoryEntry,
     selectRuntimeScript,
     setSelectedPersonaId,
     checkProvider,
     saveProvider,
     setMemorySearchQuery,
+    updateMemoryFilters,
+    openMemoryDetail,
+    closeMemoryDetail: () => setMemoryDetail(null),
+    requestDeleteMemoryEntry,
+    cancelDeleteMemoryEntry,
     deleteMemoryEntry,
     refresh,
     selectThread,

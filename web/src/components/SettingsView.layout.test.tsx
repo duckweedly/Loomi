@@ -30,4 +30,24 @@ describe('SettingsView layout contract', () => {
     expect(text).not.toContain('不会保存')
     expect(text).not.toContain('not saved')
   })
+
+  test('memory settings wires grounded filters detail and confirmed delete actions', async () => {
+    const text = await source
+
+    expect(text).toContain('memoryFilters')
+    expect(text).toContain('onMemoryFiltersChange')
+    expect(text).toContain('memoryDetail')
+    expect(text).toContain('onOpenMemoryDetail')
+    expect(text).toContain('onConfirmDeleteMemoryEntry')
+    expect(text).not.toContain('onDeleteMemoryEntry={(entryId) => void deleteMemoryEntry(entryId)}')
+  })
+
+  test('memory settings wires real audit history state', async () => {
+    const text = await source
+
+    expect(text).toContain('memoryAuditItems')
+    expect(text).toContain('memoryAuditError')
+    expect(text).toContain('memoryAuditLoading')
+    expect(text).toContain('auditItems={memoryAuditItems}')
+  })
 })

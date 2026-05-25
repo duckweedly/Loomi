@@ -1,6 +1,6 @@
 import { ArrowLeft, ChevronRight } from 'lucide-react'
 import type { ReactNode } from 'react'
-import type { BackendCapabilityState, MemoryEntry, ProviderCapability, RunStatus, RuntimeScriptId, StreamState, Thread } from '../domain'
+import type { BackendCapabilityState, MemoryAuditItem, MemoryEntry, MemoryFilters, ProviderCapability, RunStatus, RuntimeScriptId, StreamState, Thread } from '../domain'
 import type { ProviderCheckResult, ProviderSaveResult } from '../state'
 import type { ProviderDraftSettings } from '../useWorkspaceShellState'
 import type { Locale } from '../i18n'
@@ -21,8 +21,16 @@ type Props = {
   providerCapabilities: ProviderCapability[]
   memoryEntries: MemoryEntry[]
   memoryQuery: string
+  memoryFilters: MemoryFilters
   memoryLoading: boolean
   memoryError?: string | null
+  memoryDetail?: MemoryEntry | null
+  memoryDetailLoading?: boolean
+  memoryDetailError?: string | null
+  memoryAuditItems: MemoryAuditItem[]
+  memoryAuditLoading: boolean
+  memoryAuditError?: string | null
+  pendingDeleteMemoryEntry?: MemoryEntry | null
   providerCheckResults: Record<string, ProviderCheckResult>
   providerSaveResult: ProviderSaveResult
   providerDraftSettings: ProviderDraftSettings
@@ -34,7 +42,12 @@ type Props = {
   onSaveProvider: (settings: ProviderDraftSettings) => void
   onCheckProvider: (providerId: string) => void
   onMemoryQueryChange: (query: string) => void
-  onDeleteMemoryEntry: (entryId: string) => void
+  onMemoryFiltersChange: (filters: MemoryFilters) => void
+  onOpenMemoryDetail: (entry: MemoryEntry) => void
+  onCloseMemoryDetail: () => void
+  onRequestDeleteMemoryEntry: (entry: MemoryEntry) => void
+  onCancelDeleteMemoryEntry: () => void
+  onConfirmDeleteMemoryEntry: (entry: MemoryEntry) => void
   onBack: () => void
 }
 
@@ -195,8 +208,16 @@ export function SettingsView({
   providerCapabilities,
   memoryEntries,
   memoryQuery,
+  memoryFilters,
   memoryLoading,
   memoryError,
+  memoryDetail,
+  memoryDetailLoading,
+  memoryDetailError,
+  memoryAuditItems,
+  memoryAuditLoading,
+  memoryAuditError,
+  pendingDeleteMemoryEntry,
   providerCheckResults,
   providerSaveResult,
   providerDraftSettings,
@@ -208,7 +229,12 @@ export function SettingsView({
   onSaveProvider,
   onCheckProvider,
   onMemoryQueryChange,
-  onDeleteMemoryEntry,
+  onMemoryFiltersChange,
+  onOpenMemoryDetail,
+  onCloseMemoryDetail,
+  onRequestDeleteMemoryEntry,
+  onCancelDeleteMemoryEntry,
+  onConfirmDeleteMemoryEntry,
   onBack,
 }: Props) {
   const dictionary = getDictionary(locale)
@@ -394,7 +420,27 @@ export function SettingsView({
                 <h2>Memory</h2>
                 <p>{selectedCategory.description}</p>
               </div>
-              <MemoryPanel entries={memoryEntries} query={memoryQuery} loading={memoryLoading} error={memoryError} onQueryChange={onMemoryQueryChange} onDelete={onDeleteMemoryEntry} />
+              <MemoryPanel
+                entries={memoryEntries}
+                query={memoryQuery}
+                filters={memoryFilters}
+                loading={memoryLoading}
+                error={memoryError}
+                detailEntry={memoryDetail}
+                detailLoading={memoryDetailLoading}
+                detailError={memoryDetailError}
+                auditItems={memoryAuditItems}
+                auditLoading={memoryAuditLoading}
+                auditError={memoryAuditError}
+                pendingDeleteEntry={pendingDeleteMemoryEntry}
+                onQueryChange={onMemoryQueryChange}
+                onFiltersChange={onMemoryFiltersChange}
+                onOpenDetail={onOpenMemoryDetail}
+                onCloseDetail={onCloseMemoryDetail}
+                onRequestDelete={onRequestDeleteMemoryEntry}
+                onCancelDelete={onCancelDeleteMemoryEntry}
+                onConfirmDelete={onConfirmDeleteMemoryEntry}
+              />
             </section>
           </div>
         )}

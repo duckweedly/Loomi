@@ -399,6 +399,7 @@ function memoryQueryString(filters: MemoryFilters = {}, query = '') {
   if (filters.sourceRunId?.trim()) params.set('source_run_id', filters.sourceRunId.trim())
   if (filters.sourceType && filters.sourceType !== 'any') params.set('source_type', filters.sourceType)
   if (filters.includeTombstoned) params.set('include_tombstoned', 'true')
+  if (filters.limit) params.set('limit', String(filters.limit))
   const encoded = params.toString()
   return encoded ? `?${encoded}` : ''
 }
@@ -411,15 +412,21 @@ function memoryFilterRequestFields(filters: MemoryFilters = {}) {
     source_run_id: filters.sourceRunId?.trim() || undefined,
     source_type: filters.sourceType && filters.sourceType !== 'any' ? filters.sourceType : undefined,
     include_tombstoned: filters.includeTombstoned || undefined,
+    limit: filters.limit || undefined,
   }
 }
 
 function memorySearchRequestBody(query: string, filters: MemoryFilters = {}) {
-  return { query, limit: 20, ...memoryFilterRequestFields(filters) }
+  return { query, ...memoryFilterRequestFields({ limit: 20, ...filters }) }
 }
 
 function memoryDeleteRequestBody(filters: MemoryFilters = {}) {
-  return memoryFilterRequestFields(filters)
+  return {
+    scope_type: filters.scopeType || undefined,
+    scope_id: filters.scopeId?.trim() || undefined,
+    source_thread_id: filters.sourceThreadId?.trim() || undefined,
+    source_run_id: filters.sourceRunId?.trim() || undefined,
+  }
 }
 
 export function mapApiRunEvent(event: ApiRunEvent): RunEvent {

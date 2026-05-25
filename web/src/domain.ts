@@ -54,6 +54,7 @@ export type MemoryFilters = {
   sourceRunId?: string
   sourceType?: 'any' | 'manual' | 'thread' | 'run'
   includeTombstoned?: boolean
+  limit?: number
 }
 
 export type MemoryAuditItem = {

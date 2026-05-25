@@ -52,7 +52,7 @@ LOOMI_TEST_DATABASE_URL="$DATABASE_URL" go test ./internal/productdata -run Test
 
 ## Settings > Memory 浏览器 smoke
 
-M14 full done gate uses a seeded memory entry and real API mode. It must cover list/search/filter, detail drawer or modal, delete confirmation, error/empty/loading/tombstoned states, and real audit history. Do not mock audit history in the UI.
+M14 full done gate uses seeded memory entries and real API mode. It must cover list/search/filter, detail drawer or modal, delete confirmation, error/empty/loading/tombstoned states, and real audit history. Do not mock audit history in the UI.
 
 启动 API：
 
@@ -74,6 +74,14 @@ VITE_LOOMI_API_BASE_URL=http://127.0.0.1:8080 bun run --cwd web dev --host 127.0
 - 验证 list/search/delete 状态连接真实 API，删除后条目消失。
 - M14 full smoke additionally verifies detail, filters, delete confirmation, and audit history from `/v1/memory/audit`.
 - DevTools console 无红色错误。
+
+2026-05-25 M14 candidate smoke evidence:
+
+- API ran on `127.0.0.1:18080` because `8080` was already occupied.
+- Web ran on `127.0.0.1:5173` with `VITE_LOOMI_API_BASE_URL=http://127.0.0.1:18080`.
+- Seed used thread `thr_1779701971994970000_b2ab6b56d4c5`, run `run_1779701972024596000_bad6f6217636`, search `m14-smoke-173931`, kept memory `mem_1779701972093540000_89e109af7e29`, and deleted memory `mem_1779702112854813000_f094a9187f91`.
+- Browser verified scoped list/search/filter, detail, delete confirmation, post-delete list refresh, and real audit history showing `memory_deleted`, `memory_write_proposed`, `memory_write_approved`, `memory_write_denied`, and `memory_snapshot_loaded`.
+- Console errors: none after the frontend delete request body stopped sending UI-only `limit`.
 
 如果本地端口被占用导致无法启动其中一个服务，记录端口/进程原因，并用 real PG/httpapi smoke、`bun test --cwd web`、`bun run --cwd web build` 作为等价后端与前端边界证据。
 

@@ -78,12 +78,44 @@ describe('M14 memory management mapping', () => {
     expect(JSON.stringify(item)).not.toContain('/Users/')
   })
 
+  test('maps terminal-run memory audit events for UI history', () => {
+    const item = mapApiMemoryAuditItem({
+      id: 'evt_terminal',
+      event_type: 'memory_snapshot_loaded',
+      summary: 'Snapshot loaded after terminal run',
+      thread_id: 'thread_1',
+      run_id: 'run_completed',
+      status: 'loaded',
+      scope_type: 'thread',
+      source_type: 'run',
+      redaction_applied: true,
+      occurred_at: '2026-05-25T00:00:00Z',
+    })
+
+    expect(item).toMatchObject({
+      eventType: 'memory_snapshot_loaded',
+      runId: 'run_completed',
+      status: 'loaded',
+      redactionApplied: true,
+    })
+  })
+
   test('uses grounded snake_case memory scope filters', async () => {
     const source = await Bun.file(new URL('./realApiClient.ts', import.meta.url)).text()
 
     expect(source).toContain("params.set('source_thread_id'")
     expect(source).toContain('source_thread_id:')
     expect(source).not.toContain('workspace_id')
+  })
+
+  test('delete request body omits UI-only search fields', async () => {
+    const source = await Bun.file(new URL('./realApiClient.ts', import.meta.url)).text()
+    const deleteBody = source.slice(source.indexOf('function memoryDeleteRequestBody'), source.indexOf('export function mapApiRunEvent'))
+
+    expect(deleteBody).toContain('scope_type')
+    expect(deleteBody).toContain('source_run_id')
+    expect(deleteBody).not.toContain('limit')
+    expect(deleteBody).not.toContain('include_tombstoned')
   })
 })
 

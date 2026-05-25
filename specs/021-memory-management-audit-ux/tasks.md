@@ -4,7 +4,7 @@
 
 **Prerequisites**: plan.md, spec.md, research.md, data-model.md, contracts/
 
-**Tests**: Required by the user. This task set separates completed prep/blocker foundation from the pending full Settings > Memory UX implementation.
+**Tests**: Required by the user. This task set records completed prep/blocker foundation, US1 management UX, US2 audit history UX, and seeded browser smoke.
 
 **Organization**: Tasks are grouped by independently testable user stories.
 
@@ -51,29 +51,29 @@
 
 ---
 
-## Phase 4: User Story 1 - Manage approved memories (Priority: P1, Pending Full UX)
+## Phase 4: User Story 1 - Manage approved memories (Priority: P1, Complete)
 
 **Goal**: Settings > Memory supports real list/search/filter/detail/delete-confirm flows.
 
 **Independent Test**: Browser seeded entry smoke plus web tests can list, search/filter, inspect detail, and confirm delete for memory entries.
 
-- [ ] T021 [US1] Add Settings > Memory search/filter/detail/delete-confirm tests in `web/src/components/SettingsView.layout.test.tsx`
-- [ ] T022 [US1] Update `web/src/components/SettingsView.tsx` for grounded search/filter controls
-- [ ] T023 [US1] Add memory detail drawer/modal in `web/src/components/SettingsView.tsx`
-- [ ] T024 [US1] Add delete confirmation flow in `web/src/components/SettingsView.tsx`
-- [ ] T025 [US1] Cover loading/null/empty/error/tombstoned states in Settings > Memory tests
+- [x] T021 [US1] Add Settings > Memory search/filter/detail/delete-confirm tests in `web/src/components/SettingsView.layout.test.tsx`
+- [x] T022 [US1] Update `web/src/components/SettingsView.tsx` for grounded search/filter controls
+- [x] T023 [US1] Add memory detail drawer/modal in `web/src/components/SettingsView.tsx`
+- [x] T024 [US1] Add delete confirmation flow in `web/src/components/SettingsView.tsx`
+- [x] T025 [US1] Cover loading/null/empty/error/tombstoned states in Settings > Memory tests
 
 ---
 
-## Phase 5: User Story 2 - Review safe memory history (Priority: P2, Pending Full UX)
+## Phase 5: User Story 2 - Review safe memory history (Priority: P2, Complete)
 
 **Goal**: Users can see real safe memory history for proposal/approval/denial/delete/snapshot events.
 
 **Independent Test**: Backend/client/UI tests show real audit history and prove unsafe metadata is redacted.
 
-- [ ] T026 [P] [US2] Add Settings > Memory history tests in `web/src/components/SettingsView.layout.test.tsx`
-- [ ] T027 [US2] Render memory audit/history in `web/src/components/SettingsView.tsx` using `GET /v1/memory/audit`
-- [ ] T028 [US2] Verify UI never fabricates audit items when backend endpoint is unavailable
+- [x] T026 [P] [US2] Add Settings > Memory history tests in `web/src/components/SettingsView.layout.test.tsx`
+- [x] T027 [US2] Render memory audit/history in `web/src/components/SettingsView.tsx` using `GET /v1/memory/audit`
+- [x] T028 [US2] Verify UI never fabricates audit items when backend endpoint is unavailable
 
 ---
 
@@ -99,7 +99,7 @@
 - [x] T037 Run `bun run --cwd web build`
 - [x] T038 Run `bun run --cwd docs-site build`
 - [x] T039 Run `git diff --check`
-- [ ] T040 Browser seeded entry smoke is the full M14 implementation done gate, not required to claim this prep slice complete unless UI implementation tasks are finished
+- [x] T040 Browser seeded entry smoke for full M14 list, search/filter, detail, delete confirmation, and audit history flows
 
 ## Dependencies & Execution Order
 
@@ -115,5 +115,5 @@
 1. Point Spec Kit at M14.
 2. Fix prep blockers and API/client contract shape with tests.
 3. Document the complete M14 UX/API contract.
-4. Implement full Settings > Memory management/history UI in a follow-up pass.
-5. Run required validation plus seeded browser smoke before claiming full M14 done.
+4. Implement full Settings > Memory management/history UI.
+5. Run required validation plus seeded browser smoke before claiming full UX complete candidate.

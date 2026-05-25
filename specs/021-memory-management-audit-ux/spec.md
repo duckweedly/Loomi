@@ -4,7 +4,7 @@
 
 **Created**: 2026-05-25
 
-**Status**: Prep/blocker foundation complete; full Settings > Memory UX pending
+**Status**: Full UX complete candidate
 
 **Input**: User description: "Create and complete M14 / 021-memory-management-audit-ux. Build on M13 Memory Foundation by improving Settings > Memory as a usable management surface and adding user-readable audit/history. Do not implement automatic memory distillation, embeddings/RAG, OpenViking, activity recorder ingestion, MCP/worker/sandbox/multi-agent rewrites."
 

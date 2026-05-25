@@ -36,7 +36,7 @@ Claude Code 项目内命令使用横线格式：
 
 `/speckit-implement` 按任务实现，并在必要时回到 spec 或 plan 修正前提。
 
-## 当前进行中：M14 Memory Management Audit UX
+## 当前候选完成：M14 Memory Management Audit UX
 
 当前 Spec Kit 功能目录：
 
@@ -54,7 +54,7 @@ specs/021-memory-management-audit-ux/
 - `quickstart.md`：记录 M14 prep blockers、验证命令和 full UI seeded browser smoke 标准。
 - `tasks.md`：把 prep blockers 与后续完整 UX 实现任务分开。
 
-状态：Spec Kit + UX/API contract prep 已建立，blocker foundation 已补齐；这不是完整 M14 UX 完成状态。已完成 thread-scoped read/delete authorization、thread list/search missing `scope_id` invalid request、terminal-run durable memory audit、redaction hardening、search/list filter shape 收口和对应 tests/docs。后续完整 M14 done 需要真实 Settings > Memory browser seeded entry smoke 覆盖 list/search/filter/detail/delete confirmation/audit history。
+状态：full UX complete candidate。已完成 thread-scoped read/delete authorization、thread list/search missing `scope_id` invalid request、terminal-run durable memory audit、redaction hardening、search/list filter shape 收口、Settings > Memory list/search/filter/detail/delete confirmation、真实 `/v1/memory/audit` history、backend unavailable/error/empty 不造假，以及 seeded browser smoke。M14 仍不包含 distill、OpenViking、vector/embedding/RAG、activity recorder、MCP、worker queue、sandbox 或多 agent 重写。
 
 ## 当前已完成：M13 Memory Foundation + M13.5 Closeout
 
