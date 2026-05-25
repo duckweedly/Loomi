@@ -5,13 +5,15 @@ description: Spec Kit and API/UX contract prep for Settings > Memory management 
 
 M14 is scoped as a Memory management and audit UX slice on top of M13. It is not a distillation, embedding/RAG, OpenViking, activity recorder, MCP, worker queue, sandbox, or multi-agent rewrite milestone.
 
+This entry records the M14 Spec Kit, UX/API contract, and blocker foundation. It is not the full M14 Settings > Memory UX completion record.
+
 ## Completed In This Prep
 
 - Created `specs/021-memory-management-audit-ux/` with spec, plan, research, data model, API contract, quickstart, tasks, and requirements checklist.
 - Defined Settings > Memory done standard: list/search/filter, detail drawer/modal, delete confirmation, loading/empty/error/tombstoned states, scoped audit/history, safe metadata only, and seeded browser smoke.
 - Captured blocker fixes as part of the M14 contract: thread-scoped memory read/delete authorization, terminal-run audit retention, expanded local/provider-output redaction, and unified list/search filter shape.
 - Added low-risk MemoryPanel error rendering so failed memory loads do not silently masquerade as successful stale data.
-- Implemented the blocker foundation: `memory_audit_events` migration, generic not found for out-of-scope thread memory detail/delete, terminal-run durable audit, `source_thread_id` filter shape, and redaction for `/home`, Windows paths, stdout/stderr, tool output, provider traces, and key/env markers.
+- Implemented the blocker foundation: `memory_audit_events` migration, generic not found for out-of-scope thread memory detail/delete, explicit invalid request for thread list/search without `scope_id`, terminal-run durable audit, `source_thread_id` filter shape, and redaction for `/home`, Windows paths, stdout/stderr, tool output, provider traces, and key/env markers.
 
 ## Contract Notes
 

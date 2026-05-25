@@ -54,7 +54,7 @@ specs/021-memory-management-audit-ux/
 - `quickstart.md`：记录 M14 prep blockers、验证命令和 full UI seeded browser smoke 标准。
 - `tasks.md`：把 prep blockers 与后续完整 UX 实现任务分开。
 
-状态：Spec Kit + UX/API contract prep 已建立，blocker foundation 已补齐。已完成 thread-scoped read/delete authorization、terminal-run durable memory audit、redaction hardening、search/list filter shape 收口和对应 tests/docs。后续完整 M14 done 需要真实 Settings > Memory browser seeded entry smoke 覆盖 list/search/filter/detail/delete confirmation/audit history。
+状态：Spec Kit + UX/API contract prep 已建立，blocker foundation 已补齐；这不是完整 M14 UX 完成状态。已完成 thread-scoped read/delete authorization、thread list/search missing `scope_id` invalid request、terminal-run durable memory audit、redaction hardening、search/list filter shape 收口和对应 tests/docs。后续完整 M14 done 需要真实 Settings > Memory browser seeded entry smoke 覆盖 list/search/filter/detail/delete confirmation/audit history。
 
 ## 当前已完成：M13 Memory Foundation + M13.5 Closeout
 

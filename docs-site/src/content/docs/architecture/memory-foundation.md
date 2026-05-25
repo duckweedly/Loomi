@@ -13,9 +13,9 @@ M14 is the next UX/API contract slice. Its goal is not distillation or RAG; it m
 
 ## Boundary
 
-`productdata` owns memory durability and safety filtering. Runtime code sees memory through a `MemoryProvider` interface and receives only safe summaries in `RunContext.MemorySnapshot`.
+The current implemented boundary is `productdata`: the service and repository own memory durability, search, safety filtering, audit persistence, and the safe summaries loaded into `RunContext.MemorySnapshot`.
 
-The first provider is the existing product data service and PostgreSQL repository. OpenViking, embeddings, vector search, automatic distillation, marketplace/plugin memory providers, browser/activity recorder ingestion, and multi-agent long-term automation are outside this slice.
+`MemoryProvider` remains the future extraction point described by the M13 design contract, but runtime code has not been moved behind an independent provider abstraction yet. OpenViking, embeddings, vector search, automatic distillation, marketplace/plugin memory providers, browser/activity recorder ingestion, and multi-agent long-term automation are outside this slice.
 
 ## Data Model
 

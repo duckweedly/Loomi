@@ -55,6 +55,8 @@ Search/list item:
 
 Empty list/search responses return `items: []`, not `null`, so the Settings > Memory surface can render empty state without special casing.
 
+List/search requests with `scope_type=thread` require a non-empty `scope_id`. Missing `scope_id` returns `invalid_request` so callers do not confuse a malformed thread-scoped request with a genuine empty memory list.
+
 Detail and delete for thread-scoped entries require a matching scope boundary. A request may use `scope_type=thread&scope_id={thread_id}`, `source_thread_id`, or `source_run_id`. User-scoped entries remain visible to the current user. Out-of-scope detail/delete returns generic `memory_not_found` and never echoes the target entry id.
 
 Detail responses use the same safe projection and must not include raw `content`, `content_hash`, provider trace, tool output, local path, `.env`, `Authorization`, credential, token, or secret-like fields.

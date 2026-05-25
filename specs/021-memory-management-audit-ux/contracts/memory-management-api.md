@@ -25,6 +25,7 @@ Response:
 Security:
 
 - Responses include only current-user scoped safe summaries and metadata.
+- `scope_type=thread` requires a non-empty `scope_id`; missing `scope_id` is an invalid request, not an empty-list success.
 - Out-of-scope filters return empty or unauthorized responses without existence leaks.
 
 ## Memory Detail

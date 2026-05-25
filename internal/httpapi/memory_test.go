@@ -90,6 +90,21 @@ func TestMemoryHandlersRequireScopeForThreadEntryReadDelete(t *testing.T) {
 	}
 }
 
+func TestMemoryHandlersRejectThreadSearchWithoutScopeID(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	srv := NewServerWithProduct(config.Config{AppEnv: "local"}, fakeChecker{}, svc)
+
+	list := requestJSON(t, srv, http.MethodGet, "/v1/memory?scope_type=thread&q=management", "")
+	if list.Code != http.StatusBadRequest || !strings.Contains(list.Body.String(), `"code":"invalid_request"`) {
+		t.Fatalf("list status=%d body=%s", list.Code, list.Body.String())
+	}
+
+	search := requestJSON(t, srv, http.MethodPost, "/v1/memory/search", `{"scope_type":"thread","query":"management"}`)
+	if search.Code != http.StatusBadRequest || !strings.Contains(search.Body.String(), `"code":"invalid_request"`) {
+		t.Fatalf("search status=%d body=%s", search.Code, search.Body.String())
+	}
+}
+
 func TestMemoryHandlersManagementFiltersDetailAndAudit(t *testing.T) {
 	svc := productdata.NewMemoryService()
 	srv := NewServerWithProduct(config.Config{AppEnv: "local"}, fakeChecker{}, svc)

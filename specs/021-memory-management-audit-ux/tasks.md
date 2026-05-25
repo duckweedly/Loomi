@@ -4,7 +4,7 @@
 
 **Prerequisites**: plan.md, spec.md, research.md, data-model.md, contracts/
 
-**Tests**: Required by the user. This task set separates prep/blocker fixes from the later full UX implementation.
+**Tests**: Required by the user. This task set separates completed prep/blocker foundation from the pending full Settings > Memory UX implementation.
 
 **Organization**: Tasks are grouped by independently testable user stories.
 
@@ -51,7 +51,7 @@
 
 ---
 
-## Phase 4: User Story 1 - Manage approved memories (Priority: P1)
+## Phase 4: User Story 1 - Manage approved memories (Priority: P1, Pending Full UX)
 
 **Goal**: Settings > Memory supports real list/search/filter/detail/delete-confirm flows.
 
@@ -65,7 +65,7 @@
 
 ---
 
-## Phase 5: User Story 2 - Review safe memory history (Priority: P2)
+## Phase 5: User Story 2 - Review safe memory history (Priority: P2, Pending Full UX)
 
 **Goal**: Users can see real safe memory history for proposal/approval/denial/delete/snapshot events.
 

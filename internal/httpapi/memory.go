@@ -79,6 +79,10 @@ func (s *Server) handleMemory(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		input := memorySearchInputFromQuery(r)
+		if err := validateMemorySearchInput(input); err != nil {
+			writeAPIError(w, err)
+			return
+		}
 		output, err := s.product.ListMemoryEntries(r.Context(), identity.LocalDevIdentity(), input)
 		if err != nil {
 			writeAPIError(w, err)
@@ -93,6 +97,10 @@ func (s *Server) handleMemory(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		input := productdata.MemorySearchInput{Query: req.Query, ScopeType: req.ScopeType, ScopeID: req.ScopeID, SourceThreadID: req.SourceThreadID, SourceRunID: req.SourceRunID, SourceType: req.SourceType, IncludeTombstoned: req.IncludeTombstoned, Limit: req.Limit}
+		if err := validateMemorySearchInput(input); err != nil {
+			writeAPIError(w, err)
+			return
+		}
 		output, err := s.product.SearchMemory(r.Context(), identity.LocalDevIdentity(), input)
 		if err != nil {
 			writeAPIError(w, err)
@@ -104,6 +112,13 @@ func (s *Server) handleMemory(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Allow", "GET, POST")
 		writeAPIError(w, productdata.NewError(productdata.CodeMethodNotAllowed, "Method not allowed."))
 	}
+}
+
+func validateMemorySearchInput(input productdata.MemorySearchInput) error {
+	if input.ScopeType == productdata.MemoryScopeThread && strings.TrimSpace(input.ScopeID) == "" {
+		return productdata.NewError(productdata.CodeInvalidRequest, "Thread memory scope id is required.")
+	}
+	return nil
 }
 
 func memorySearchInputFromQuery(r *http.Request) productdata.MemorySearchInput {
