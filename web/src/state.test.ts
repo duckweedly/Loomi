@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { Message, Run, Thread } from './domain'
-import { createWorkspaceSettingsState, mergeRunEvents, redactProviderCheckMessage, shouldApplyRunStreamEvent, getWorkspaceRefreshThreadId, shouldApplySendMessageResult, shouldApplyWorkspaceRefresh, shouldSelectWorkspaceRefreshThread } from './state'
+import { createWorkspaceSettingsState, mergeRunEvents, redactProviderCheckMessage, shouldApplyLatestRequest, shouldApplyRunStreamEvent, getWorkspaceRefreshThreadId, shouldApplySendMessageResult, shouldApplyWorkspaceRefresh, shouldSelectWorkspaceRefreshThread } from './state'
 
 const threadA: Thread = {
   id: 'thread-a',
@@ -145,5 +145,23 @@ describe('run stream state helpers', () => {
 
     expect(merged.map((event) => event.id)).toEqual(['evt-10', 'evt-2'])
     expect(merged.at(-1)?.status).toBe('running')
+  })
+})
+
+describe('memory request freshness', () => {
+  test('rejects older memory list audit and detail responses after a newer request starts', () => {
+    expect(shouldApplyLatestRequest(1, 2)).toBe(false)
+    expect(shouldApplyLatestRequest(2, 2)).toBe(true)
+  })
+
+  test('state hook guards memory list audit and detail async results', async () => {
+    const source = await Bun.file(new URL('./state.ts', import.meta.url)).text()
+
+    expect(source).toContain('memoryEntriesRequestRef')
+    expect(source).toContain('memoryAuditRequestRef')
+    expect(source).toContain('memoryDetailRequestRef')
+    expect(source).toContain('shouldApplyLatestRequest(requestID, memoryEntriesRequestRef.current)')
+    expect(source).toContain('shouldApplyLatestRequest(requestID, memoryAuditRequestRef.current)')
+    expect(source).toContain('shouldApplyLatestRequest(requestID, memoryDetailRequestRef.current)')
   })
 })

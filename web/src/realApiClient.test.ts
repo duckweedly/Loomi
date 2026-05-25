@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { createClientMessageID, mapApiMemoryAuditItem, mapApiMemoryEntry, mapApiProviderCapability, mapApiRun, mapApiRunEvent, mapApiToolCall, mapApiWorkerQueueDiagnostics } from './realApiClient'
+import { createClientMessageID, mapApiMemoryAuditItem, mapApiMemoryEntry, mapApiProviderCapability, mapApiRun, mapApiRunEvent, mapApiToolCall, mapApiWorkerQueueDiagnostics, realApiClient } from './realApiClient'
 
 describe('createClientMessageID', () => {
   test('does not rely on Date.now alone', () => {
@@ -116,6 +116,30 @@ describe('M14 memory management mapping', () => {
     expect(deleteBody).toContain('source_run_id')
     expect(deleteBody).not.toContain('limit')
     expect(deleteBody).not.toContain('include_tombstoned')
+  })
+
+  test('audit request uses the unified memory filter query contract', async () => {
+    const originalFetch = globalThis.fetch
+    const requested: string[] = []
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      requested.push(String(input))
+      return new Response(JSON.stringify({ items: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    }) as typeof fetch
+    try {
+      await realApiClient.listMemoryAudit?.({ scopeType: 'thread', scopeId: 'thread_1', sourceThreadId: 'thread_1', sourceRunId: 'run_1', sourceType: 'run', includeTombstoned: true, limit: 9 })
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+
+    const url = new URL(requested[0], 'http://loomi.local')
+    expect(url.pathname).toBe('/v1/memory/audit')
+    expect(url.searchParams.get('scope_type')).toBe('thread')
+    expect(url.searchParams.get('scope_id')).toBe('thread_1')
+    expect(url.searchParams.get('source_thread_id')).toBe('thread_1')
+    expect(url.searchParams.get('source_run_id')).toBe('run_1')
+    expect(url.searchParams.get('source_type')).toBe('run')
+    expect(url.searchParams.get('limit')).toBe('9')
+    expect(url.searchParams.has('thread_id')).toBe(false)
   })
 })
 

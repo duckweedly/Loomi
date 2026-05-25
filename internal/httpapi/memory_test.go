@@ -181,6 +181,44 @@ func TestMemoryHandlersManagementFiltersDetailAndAudit(t *testing.T) {
 	}
 }
 
+func TestMemoryAuditAcceptsUnifiedThreadFilterShape(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	srv := NewServerWithProduct(config.Config{AppEnv: "local"}, fakeChecker{}, svc)
+	ident := identity.LocalDevIdentity()
+	ctx := context.Background()
+	threadA, err := svc.CreateThread(ctx, ident, productdata.CreateThreadInput{Title: "Thread A", Mode: productdata.ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	threadB, err := svc.CreateThread(ctx, ident, productdata.CreateThreadInput{Title: "Thread B", Mode: productdata.ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runA, err := svc.StartRun(ctx, ident, threadA.ID, productdata.StartRunInput{ScriptName: "audit_a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runB, err := svc.StartRun(ctx, ident, threadB.ID, productdata.StartRunInput{ScriptName: "audit_b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.AppendRunEvent(ctx, ident, runA.ID, productdata.AppendRunEventInput{Category: productdata.RunEventCategoryProgress, Type: productdata.EventMemorySnapshotLoaded, Summary: "Thread A snapshot", Metadata: map[string]any{"status": "loaded"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.AppendRunEvent(ctx, ident, runB.ID, productdata.AppendRunEventInput{Category: productdata.RunEventCategoryProgress, Type: productdata.EventMemorySnapshotLoaded, Summary: "Thread B snapshot", Metadata: map[string]any{"status": "loaded"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	byScope := requestJSON(t, srv, http.MethodGet, "/v1/memory/audit?scope_type=thread&scope_id="+threadA.ID, "")
+	if byScope.Code != http.StatusOK || !strings.Contains(byScope.Body.String(), runA.ID) || strings.Contains(byScope.Body.String(), runB.ID) {
+		t.Fatalf("scope audit status=%d body=%s", byScope.Code, byScope.Body.String())
+	}
+	bySourceThread := requestJSON(t, srv, http.MethodGet, "/v1/memory/audit?source_thread_id="+threadA.ID, "")
+	if bySourceThread.Code != http.StatusOK || !strings.Contains(bySourceThread.Body.String(), runA.ID) || strings.Contains(bySourceThread.Body.String(), runB.ID) {
+		t.Fatalf("source thread audit status=%d body=%s", bySourceThread.Code, bySourceThread.Body.String())
+	}
+}
+
 func TestMemoryHandlersAuditAfterTerminalRunAndRedaction(t *testing.T) {
 	svc := productdata.NewMemoryService()
 	srv := NewServerWithProduct(config.Config{AppEnv: "local"}, fakeChecker{}, svc)

@@ -194,6 +194,8 @@ export function MemoryPanel({
           <div>
             <strong>Confirm deletion</strong>
             <p>{pendingDeleteEntry.title}</p>
+            <small>{pendingDeleteEntry.scopeType} · {metadataValue(pendingDeleteEntry.scopeId)}</small>
+            <small>{metadataValue(pendingDeleteEntry.sourceType)} · {metadataValue(pendingDeleteEntry.sourceThreadId)} · {metadataValue(pendingDeleteEntry.sourceRunId)}</small>
           </div>
           <button onClick={onCancelDelete}>Cancel</button>
           <button className="danger" onClick={() => onConfirmDelete?.(pendingDeleteEntry)}>Delete memory</button>

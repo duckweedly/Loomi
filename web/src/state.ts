@@ -104,6 +104,10 @@ export function shouldApplyRuntimeEvent(guard: StaleEventGuard) {
   return guard.requestedThreadId === guard.currentSelectedThreadId && guard.runId === guard.activeRunId
 }
 
+export function shouldApplyLatestRequest(requestID: number, latestRequestID: number) {
+  return requestID === latestRequestID
+}
+
 export function createRuntimeStateForThread(backendCapability: BackendCapabilityState = 'available', selectedScriptId: RuntimeScriptId = 'success') {
   return createThreadRuntimeState({ backendCapability, selectedScriptId })
 }
@@ -279,6 +283,9 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
   const [pendingDeleteMemoryEntry, setPendingDeleteMemoryEntry] = useState<MemoryEntry | null>(null)
   const selectedThreadIdRef = useRef(selectedThreadId)
   const runRef = useRef<Run | null>(run)
+  const memoryEntriesRequestRef = useRef(0)
+  const memoryAuditRequestRef = useRef(0)
+  const memoryDetailRequestRef = useRef(0)
 
   selectedThreadIdRef.current = selectedThreadId
   runRef.current = run
@@ -362,6 +369,8 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
   }, [])
 
   const loadMemoryEntries = useCallback(async (query = '', filters = memoryFilters) => {
+    const requestID = memoryEntriesRequestRef.current + 1
+    memoryEntriesRequestRef.current = requestID
     if (!apiClient.listMemoryEntries || !apiClient.searchMemory) {
       setMemoryEntries([])
       return
@@ -372,12 +381,14 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
       const entries = query.trim()
         ? await apiClient.searchMemory(query, filters)
         : await apiClient.listMemoryEntries(filters)
+      if (!shouldApplyLatestRequest(requestID, memoryEntriesRequestRef.current)) return
       setMemoryEntries(entries)
     } catch (err) {
+      if (!shouldApplyLatestRequest(requestID, memoryEntriesRequestRef.current)) return
       setMemoryEntries([])
       setMemoryError(err instanceof Error ? err.message : 'Memory failed to load')
     } finally {
-      setMemoryLoading(false)
+      if (shouldApplyLatestRequest(requestID, memoryEntriesRequestRef.current)) setMemoryLoading(false)
     }
   }, [memoryFilters])
 
@@ -387,6 +398,8 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
   }, [loadMemoryEntries, memoryFilters])
 
   const loadMemoryAudit = useCallback(async (filters = memoryFilters) => {
+    const requestID = memoryAuditRequestRef.current + 1
+    memoryAuditRequestRef.current = requestID
     if (!apiClient.listMemoryAudit) {
       setMemoryAuditItems([])
       setMemoryAuditError('Memory history endpoint unavailable')
@@ -395,12 +408,15 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
     setMemoryAuditLoading(true)
     setMemoryAuditError(null)
     try {
-      setMemoryAuditItems(await apiClient.listMemoryAudit(filters))
+      const auditItems = await apiClient.listMemoryAudit(filters)
+      if (!shouldApplyLatestRequest(requestID, memoryAuditRequestRef.current)) return
+      setMemoryAuditItems(auditItems)
     } catch (err) {
+      if (!shouldApplyLatestRequest(requestID, memoryAuditRequestRef.current)) return
       setMemoryAuditItems([])
       setMemoryAuditError(err instanceof Error ? err.message : 'Memory history failed to load')
     } finally {
-      setMemoryAuditLoading(false)
+      if (shouldApplyLatestRequest(requestID, memoryAuditRequestRef.current)) setMemoryAuditLoading(false)
     }
   }, [memoryFilters])
 
@@ -411,6 +427,8 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
   }, [loadMemoryAudit, loadMemoryEntries, memoryQuery])
 
   const openMemoryDetail = useCallback(async (entry: MemoryEntry) => {
+    const requestID = memoryDetailRequestRef.current + 1
+    memoryDetailRequestRef.current = requestID
     if (!apiClient.getMemoryEntry) {
       setMemoryDetail(entry)
       return
@@ -420,12 +438,14 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
     setMemoryDetailError(null)
     try {
       const detail = await apiClient.getMemoryEntry(entry.id, memoryContextForEntry(entry))
+      if (!shouldApplyLatestRequest(requestID, memoryDetailRequestRef.current)) return
       setMemoryDetail(detail)
     } catch (err) {
+      if (!shouldApplyLatestRequest(requestID, memoryDetailRequestRef.current)) return
       setMemoryDetail(null)
       setMemoryDetailError(err instanceof Error ? err.message : 'Memory detail could not be loaded')
     } finally {
-      setMemoryDetailLoading(false)
+      if (shouldApplyLatestRequest(requestID, memoryDetailRequestRef.current)) setMemoryDetailLoading(false)
     }
   }, [])
 
@@ -447,7 +467,7 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
       await loadMemoryEntries(memoryQuery, memoryFilters)
       await loadMemoryAudit(memoryFilters)
     } catch (err) {
-      setMemoryEntries([])
+      setPendingDeleteMemoryEntry(null)
       setMemoryError(err instanceof Error ? err.message : 'Memory delete failed')
     }
   }, [loadMemoryAudit, loadMemoryEntries, memoryFilters, memoryQuery])

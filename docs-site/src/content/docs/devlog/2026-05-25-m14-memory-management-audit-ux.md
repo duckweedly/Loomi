@@ -79,3 +79,13 @@ Result:
 - Browser console errors: none after the delete request body fix.
 
 M14 full UX done gate is satisfied for this candidate.
+
+## M14.1 Review Fix
+
+This review fix keeps M14 scoped to memory management/audit polish and does not start M15.
+
+- `/v1/memory/audit` now accepts the same thread/source filter shape as list/search for Settings > Memory: `scope_type=thread&scope_id`, `source_thread_id`, `source_run_id`, and `limit`. Thread filters return only matching thread history.
+- Settings memory list, audit history, and detail loading use latest-request guards so older responses from quick filter/search/detail changes cannot overwrite newer UI state.
+- Delete confirmation now shows the selected title plus scope/source metadata. Delete failure closes the confirmation and keeps the existing list instead of replacing it with an empty-looking error state.
+
+Validation for this fix should include `go test ./...`, `bun test --cwd web`, `bun run --cwd web build`, `bun run --cwd docs-site build`, and `git diff --check`.

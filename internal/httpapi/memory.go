@@ -245,8 +245,15 @@ func memorySourceType(sourceThreadID string, sourceRunID string) string {
 func (s *Server) handleMemoryAudit(w http.ResponseWriter, r *http.Request) {
 	values := r.URL.Query()
 	limit, _ := strconv.Atoi(values.Get("limit"))
+	threadID := strings.TrimSpace(values.Get("thread_id"))
+	if threadID == "" && productdata.MemoryScopeType(values.Get("scope_type")) == productdata.MemoryScopeThread {
+		threadID = strings.TrimSpace(values.Get("scope_id"))
+	}
+	if threadID == "" {
+		threadID = strings.TrimSpace(values.Get("source_thread_id"))
+	}
 	output, err := s.product.ListMemoryAudit(r.Context(), identity.LocalDevIdentity(), productdata.MemoryAuditInput{
-		ThreadID:    values.Get("thread_id"),
+		ThreadID:    threadID,
 		SourceRunID: values.Get("source_run_id"),
 		EventType:   values.Get("event_type"),
 		Limit:       limit,
