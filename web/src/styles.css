@@ -1004,6 +1004,16 @@ button, textarea, input, .sidebar, .chat-shell, .run-dock, .right-panel-menu, .r
   margin: 6px 0;
 }
 
+.work-artifact-redaction {
+  display: inline-flex;
+  width: fit-content;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  padding: 2px 8px;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
 .work-progress-list {
   display: flex;
   flex-direction: column;

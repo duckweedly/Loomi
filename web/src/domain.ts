@@ -124,6 +124,7 @@ export type WorkArtifactReference = {
   summary: string
   createdAt?: string
   updatedAt?: string
+  redactionApplied?: boolean
 }
 
 export type WorkProgressEvent = {

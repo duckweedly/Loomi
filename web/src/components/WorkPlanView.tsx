@@ -80,7 +80,8 @@ export function WorkPlanView({ projection, loading, error }: Props) {
                   <span>{artifact.type}</span>
                 </div>
                 <p>{artifact.summary}</p>
-                <small>{[artifact.sourceThreadId, artifact.sourceRunId, artifact.updatedAt ?? artifact.createdAt].filter(Boolean).join(' · ')}</small>
+                <small>{[artifact.id, artifact.sourceThreadId, artifact.sourceRunId, artifact.updatedAt ?? artifact.createdAt].filter(Boolean).join(' · ')}</small>
+                {artifact.redactionApplied && <span className="work-artifact-redaction">Redacted unsafe metadata</span>}
               </article>
             )) : <p>No artifact references yet.</p>}
           </section>

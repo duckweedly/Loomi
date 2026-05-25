@@ -36,7 +36,27 @@ Claude Code 项目内命令使用横线格式：
 
 `/speckit-implement` 按任务实现，并在必要时回到 spec 或 plan 修正前提。
 
-## 当前候选完成：M16 Work Mode Foundation
+## 当前候选完成：M17 Work Artifact Evidence Closeout
+
+当前 Spec Kit 功能目录：
+
+```text
+specs/024-work-artifact-evidence-closeout/
+```
+
+关键产物：
+
+- `spec.md`：定义 Work artifact evidence closeout，覆盖 local evidence seed、safe artifact metadata、redaction marker、browser smoke 和 Chat/Work isolation。
+- `plan.md`：确定复用现有 thread/message/run/event/ChatCanvas/RunRail 边界，通过 local-dev/test seed 而不是生产事件写 API 产出 evidence。
+- `research.md`：记录 `loomi-seed` local evidence path、metadata-only artifact evidence 和 projection redaction marker 决策。
+- `data-model.md`：定义 Work Evidence Seed、Work Event Metadata、Artifact Evidence Reference 和 browser smoke evidence。
+- `contracts/`：定义 local seed contract、event metadata shape 和 safe display contract。
+- `quickstart.md`：记录验证命令、seed 命令和 browser smoke 步骤。
+- `tasks.md`：按 setup、seed evidence、projection、safe artifact、mode isolation、docs/validation 拆分。
+
+状态：M17 complete candidate。`LOOMI_SEED_SCENARIO=m17-work-artifact go run ./cmd/loomi-seed` 可创建或复用 `thr_m17_work_artifact`，写入 message/current run/`work.plan.updated` event metadata；Work Plan View 通过 real API replay 显示 goal、steps、status、artifact references、redaction marker 和 recent progress；Chat mode 不显示 Work Plan View。M17 不包含 artifact execution/runtime、sandbox、shell/filesystem/browser automation、activity recorder、multi-agent、plugin marketplace、新 task system、worker queue rewrite 或生产 event-write API。
+
+## 近期已完成：M16 Work Mode Foundation
 
 当前 Spec Kit 功能目录：
 
@@ -55,6 +75,23 @@ specs/023-work-mode-foundation/
 - `tasks.md`：按 setup、projection、US1 Work view、US2 safe artifacts、US3 mode isolation、docs/validation 拆分。
 
 状态：M16 complete candidate。Work mode thread 复用 `Thread.mode = work`，在主区域显示 Work Plan View；progress 来自 messages/current run/run events；artifact 第一版仅 metadata/markdown-like preview；Chat mode 不显示 Work Plan View。M16 不包含 sandbox、shell/filesystem/browser automation、activity recorder、multi-agent、plugin marketplace、real artifact execution/runtime 或 worker queue rewrite。
+
+## 后续路线纠偏：M18+ Tool Runtime 优先
+
+M17 已进入 Work Artifact Evidence Closeout 时，后续不再继续优先扩 Work 外壳。M18 开始应优先补工具 runtime，因为 Work mode 没有工具时只能展示计划和元数据，无法真正完成工作。
+
+后续 Spec Kit 应按以下方向拆分：
+
+- `024` 保持当前 M17 Work artifact/evidence closeout，不临时扩大范围。
+- `025` 建议用于 M18 Tool Runtime + Tool Catalog：Tool catalog/registry、source、risk level、approval policy、schema hash、enabled state、统一 Tool broker/executor、`runtime.get_current_time` 与本地 stdio MCP executor 接入同一 runtime。
+- `026` 建议用于 M19 Workspace Read Tools：只读 `workspace.glob`、`workspace.grep`、`workspace.read`，绑定 workspace/project scope，禁止文件写入和 host shell。
+- `027` 建议用于 M20 Artifact Tools：DB/object-store backed artifact create/read/list，把 Work artifact references 接真实 artifact。
+- `028` 建议用于 M21 Sandbox Code/Shell Tools：隔离 sandbox provider、`exec_command`、`python_execute`、continuation/terminate、stdout/stderr streaming、timeout/resource limits。
+- `029` 建议用于 M22 Web Search/Fetch Tools：`web.search`、`web.fetch`、citation、URL policy 和 SSRF/private-network guard。
+- `030` 建议用于 M23 Browser Automation Tools：sandbox browser navigate/snapshot/screenshot/click/type/console/network。
+- `031` 建议用于 M24 Tool Settings + MCP Management：Settings > Tools、MCP server list、本地 stdio config UI、provider health、enable/disable 和 approval policy override。
+
+Desktop Runtime、Channels、Heartbeat、Plugin、Activity Recorder、marketplace 和复杂多 agent 编排应排在上述工具 runtime、安全边界和 sandbox 能力之后。
 
 ## 近期已完成：M15 Chat Real Integrated Smoke Closeout
 

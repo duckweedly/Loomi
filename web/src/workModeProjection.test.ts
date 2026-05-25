@@ -37,6 +37,7 @@ describe('deriveWorkPlanProjection', () => {
     expect(projection?.goal).toBe('Deliver Work Plan View')
     expect(projection?.steps.map((step) => `${step.title}:${step.status}`)).toEqual(['Project plan:completed', 'Render view:running'])
     expect(projection?.artifacts[0]).toMatchObject({ title: 'M16 plan', type: 'markdown', sourceRunId: 'run-work', summary: 'Safe preview' })
+    expect(projection?.artifacts[0].redactionApplied).toBe(false)
     expect(projection?.recentEvents[0].detail).toBe('Plan updated')
   })
 
@@ -104,6 +105,54 @@ describe('deriveWorkPlanProjection', () => {
     expect(projection?.artifacts[0].summary).toBe('[redacted]')
     expect(projection?.artifacts[0].createdAt).toBe('[redacted]')
     expect(projection?.artifacts[0].updatedAt).toBe('2026-05-25')
+    expect(projection?.artifacts[0].redactionApplied).toBe(true)
     expect(safeWorkMetadataPreview({ token: 'sk-super-secret-token', title: 'Safe note', source: 'https://example.test/private', command: 'run this' })).toBe('token: [redacted] · title: Safe note · source: [redacted]')
+  })
+
+  test('projects M17 local seed metadata with redaction marker and recent progress', () => {
+    const run: Run = {
+      id: 'run-m17',
+      threadId: workThread.id,
+      status: 'running',
+      model: 'Local simulated',
+      context: 'local_simulated',
+      events: [{
+        id: 'evt-m17',
+        runId: 'run-m17',
+        threadId: workThread.id,
+        sequence: 3,
+        type: 'work.plan.updated',
+        label: 'progress',
+        detail: 'M17 Work artifact evidence linked',
+        time: '2026-05-25T00:00:00Z',
+        status: 'running',
+        metadata: {
+          work_goal: 'Close out M17 Work artifact evidence with repeatable real event replay',
+          work_steps: [{ id: 'm17-step-seed', title: 'Create local evidence seed', status: 'completed' }],
+          work_artifacts: [{
+            id: 'm17-artifact-evidence',
+            title: 'M17 Work artifact evidence',
+            type: 'markdown',
+            source_thread_id: workThread.id,
+            source_run_id: 'run-m17',
+            summary: 'Safe metadata-only artifact evidence from local seed.',
+            created_at: '2026-05-25T00:00:00Z',
+            updated_at: '2026-05-25T00:00:00Z',
+            redaction_applied: true,
+            command: '[redacted]',
+            private_path: '[redacted]',
+          }],
+        },
+      }],
+    }
+
+    const projection = deriveWorkPlanProjection(workThread, messages, run)
+
+    expect(projection?.goal).toContain('M17 Work artifact evidence')
+    expect(projection?.steps[0]).toMatchObject({ id: 'm17-step-seed', title: 'Create local evidence seed', status: 'completed' })
+    expect(projection?.artifacts[0]).toMatchObject({ id: 'm17-artifact-evidence', sourceThreadId: workThread.id, sourceRunId: 'run-m17', redactionApplied: true })
+    expect(JSON.stringify(projection)).not.toContain('command')
+    expect(JSON.stringify(projection)).not.toContain('private_path')
+    expect(projection?.recentEvents[0].detail).toBe('M17 Work artifact evidence linked')
   })
 })

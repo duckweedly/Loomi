@@ -11,7 +11,7 @@ const projection: WorkPlanProjection = {
   status: 'running',
   statusDetail: 'Rendering work progress',
   steps: [{ id: 'step-1', title: 'Build projection', status: 'completed' }, { id: 'step-2', title: 'Render view', status: 'running' }],
-  artifacts: [{ id: 'artifact-1', title: 'Work mode plan', type: 'markdown', sourceThreadId: 'thread-work', sourceRunId: 'run-work', summary: 'Safe metadata preview', createdAt: '2026-05-25' }],
+  artifacts: [{ id: 'artifact-1', title: 'Work mode plan', type: 'markdown', sourceThreadId: 'thread-work', sourceRunId: 'run-work', summary: 'Safe metadata preview', createdAt: '2026-05-25', redactionApplied: true }],
   recentEvents: [{ id: 'evt-1', type: 'work.plan.updated', detail: 'Rendering work progress', time: 'Now', status: 'running' }],
 }
 
@@ -24,8 +24,14 @@ describe('WorkPlanView', () => {
     expect(html).toContain('Render view')
     expect(html).toContain('running')
     expect(html).toContain('Work mode plan')
+    expect(html).toContain('artifact-1')
     expect(html).toContain('Safe metadata preview')
+    expect(html).toContain('Redacted unsafe metadata')
     expect(html).toContain('work.plan.updated')
+    expect(html).not.toContain('<button')
+    expect(html).not.toContain('Open artifact')
+    expect(html).not.toContain('Execute')
+    expect(html).not.toContain('Download')
   })
 
   test('renders loading and error states clearly', () => {

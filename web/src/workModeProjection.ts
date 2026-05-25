@@ -15,6 +15,22 @@ function safeString(value: unknown, fallback = '') {
   return SECRET_PATTERN.test(text) || EXECUTION_VALUE_PATTERN.test(text) ? '[redacted]' : text
 }
 
+function redactionFlag(value: unknown): boolean {
+  if (typeof value === 'boolean') return value
+  if (typeof value === 'string') return value.trim().toLowerCase() === 'true'
+  return false
+}
+
+function valueWouldRedact(value: unknown): boolean {
+  if (typeof value === 'string' || typeof value === 'number') {
+    const text = String(value).trim()
+    return !!text && (SECRET_PATTERN.test(text) || EXECUTION_VALUE_PATTERN.test(text))
+  }
+  if (Array.isArray(value)) return value.some(valueWouldRedact)
+  if (isRecord(value)) return Object.entries(value).some(([key, item]) => EXECUTION_KEY_PATTERN.test(key) || valueWouldRedact(item))
+  return false
+}
+
 function safeStatus(value: unknown, fallback: WorkStepStatus): WorkStepStatus {
   return value === 'pending' || value === 'running' || value === 'completed' || value === 'blocked' || value === 'failed' ? value : fallback
 }
@@ -68,7 +84,7 @@ function deriveSteps(messages: Message[], metadata: Record<string, unknown>[], r
   return []
 }
 
-function artifactFromMetadata(item: Record<string, unknown>, index: number, thread: Thread, run: Run | null): WorkArtifactReference {
+function artifactFromMetadata(item: Record<string, unknown>, index: number, thread: Thread, run: Run | null, redactionApplied: boolean): WorkArtifactReference {
   return {
     id: safeString(item.id, `artifact-${index + 1}`),
     title: safeString(item.title, `Artifact ${index + 1}`),
@@ -78,6 +94,7 @@ function artifactFromMetadata(item: Record<string, unknown>, index: number, thre
     summary: safeString(item.summary, 'Safe metadata preview only.'),
     createdAt: safeString(item.created_at ?? item.createdAt) || undefined,
     updatedAt: safeString(item.updated_at ?? item.updatedAt) || undefined,
+    redactionApplied,
   }
 }
 
@@ -85,7 +102,9 @@ function deriveArtifacts(thread: Thread, run: Run | null, metadata: Record<strin
   const metadataArtifacts = metadata.flatMap((item) => metadataList(item.work_artifacts ?? item.artifacts))
   return metadataArtifacts.map((item, index) => {
     const safeItem = Object.fromEntries(Object.entries(item).filter(([key]) => !EXECUTION_KEY_PATTERN.test(key)))
-    return artifactFromMetadata(safeItem, index, thread, run)
+    const removedExecutableFields = Object.keys(safeItem).length !== Object.keys(item).length
+    const redactionApplied = removedExecutableFields || redactionFlag(item.redaction_applied ?? item.redactionApplied) || valueWouldRedact(item)
+    return artifactFromMetadata(safeItem, index, thread, run, redactionApplied)
   })
 }
 
