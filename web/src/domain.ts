@@ -106,6 +106,44 @@ export type Thread = {
   runStatus: RunStatus
 }
 
+export type WorkStepStatus = 'pending' | 'running' | 'completed' | 'blocked' | 'failed'
+
+export type WorkStep = {
+  id: string
+  title: string
+  status: WorkStepStatus
+  summary?: string
+}
+
+export type WorkArtifactReference = {
+  id: string
+  title: string
+  type: string
+  sourceThreadId?: string
+  sourceRunId?: string
+  summary: string
+  createdAt?: string
+  updatedAt?: string
+}
+
+export type WorkProgressEvent = {
+  id: string
+  type: string
+  detail: string
+  time: string
+  status: RunStatus
+}
+
+export type WorkPlanProjection = {
+  goal: string
+  steps: WorkStep[]
+  status: RunStatus | 'empty'
+  statusDetail: string
+  artifacts: WorkArtifactReference[]
+  recentEvents: WorkProgressEvent[]
+  emptyReason?: string
+}
+
 export type ToolCallApprovalStatus = 'not_required' | 'required' | 'approved' | 'denied' | 'cancelled'
 
 export type ToolCallExecutionStatus = 'not_started' | 'blocked' | 'executing' | 'succeeded' | 'failed' | 'cancelled'

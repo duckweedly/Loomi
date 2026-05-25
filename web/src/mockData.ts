@@ -93,7 +93,34 @@ export const runs: Run[] = [
     model: 'Claude Sonnet',
     context: '42k / 128k',
     events: [
-      { id: 'evt-1', type: 'run.started', label: 'Started', detail: 'Work mode run', time: '10:25', status: 'completed' },
+      {
+        id: 'evt-1',
+        type: 'work.plan.updated',
+        label: 'Work',
+        detail: 'Work plan projected from existing run events',
+        time: '10:25',
+        status: 'running',
+        metadata: {
+          work_goal: 'Ship the M16 Work mode foundation thin slice',
+          work_steps: [
+            { id: 'm16-step-1', title: 'Reuse Thread.mode = work', status: 'completed', summary: 'Keep Work mode on existing thread and run surfaces.' },
+            { id: 'm16-step-2', title: 'Project progress from events', status: 'running', summary: 'Use run events and messages as the source of truth.' },
+            { id: 'm16-step-3', title: 'Render safe artifact references', status: 'pending', summary: 'Metadata preview only; no file execution.' },
+          ],
+          work_artifacts: [
+            {
+              id: 'm16-artifact-plan',
+              title: 'M16 Work Plan',
+              type: 'markdown',
+              source_thread_id: 'thread-brief',
+              source_run_id: 'run-1',
+              summary: 'Safe markdown-like preview for the current Work mode plan.',
+              created_at: '2026-05-25 10:25',
+              updated_at: 'Now',
+            },
+          ],
+        },
+      },
       { id: 'evt-2', type: 'context.loaded', label: 'Context', detail: 'Docs and reference map', time: '10:25', status: 'completed' },
       { id: 'evt-3', type: 'tool.completed', label: 'Tool', detail: 'Reference scan complete', time: '10:26', status: 'completed' },
       { id: 'evt-4', type: 'message.drafting', label: 'Drafting', detail: 'Preparing UI shell', time: 'Now', status: 'running' },

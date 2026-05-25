@@ -36,7 +36,27 @@ Claude Code 项目内命令使用横线格式：
 
 `/speckit-implement` 按任务实现，并在必要时回到 spec 或 plan 修正前提。
 
-## 当前候选完成：M15 Chat Real Integrated Smoke Closeout
+## 当前候选完成：M16 Work Mode Foundation
+
+当前 Spec Kit 功能目录：
+
+```text
+specs/023-work-mode-foundation/
+```
+
+关键产物：
+
+- `spec.md`：定义 Work mode 最小可用薄片，覆盖 goal、steps、status/progress、artifact references、recent events、Chat/Work isolation、安全 metadata 和明确非目标。
+- `plan.md`：确定复用现有 thread/message/run/event/ChatCanvas/Timeline 边界，不新增 backend API、task system、worker queue 或 sandbox。
+- `research.md`：记录 frontend projection、safe artifact metadata、主区域 Work Plan View 和 no-new-API 决策。
+- `data-model.md`：定义 Work Thread、Work Plan Projection、Work Step、Artifact Reference 和 Recent Progress Event。
+- `contracts/`：定义现有 run event metadata 上的 optional safe payload shape 和 redaction contract。
+- `quickstart.md`：记录 web/docs validation 和 browser smoke。
+- `tasks.md`：按 setup、projection、US1 Work view、US2 safe artifacts、US3 mode isolation、docs/validation 拆分。
+
+状态：M16 complete candidate。Work mode thread 复用 `Thread.mode = work`，在主区域显示 Work Plan View；progress 来自 messages/current run/run events；artifact 第一版仅 metadata/markdown-like preview；Chat mode 不显示 Work Plan View。M16 不包含 sandbox、shell/filesystem/browser automation、activity recorder、multi-agent、plugin marketplace、real artifact execution/runtime 或 worker queue rewrite。
+
+## 近期已完成：M15 Chat Real Integrated Smoke Closeout
 
 当前 Spec Kit 功能目录：
 

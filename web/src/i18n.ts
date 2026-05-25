@@ -105,6 +105,7 @@ type Dictionary = {
     regenerate: string
     attach: string
     messageLoomi: string
+    workReadOnlyComposer: string
     providerUnavailableWarning: string
     openProviderSettings: string
     stoppedDraft: string
@@ -312,6 +313,7 @@ export const dictionaries: Record<Locale, Dictionary> = {
       regenerate: '重新生成',
       attach: '附件',
       messageLoomi: '给 Loomi 发消息',
+      workReadOnlyComposer: 'M16 Work mode 只读展示计划和进度',
       providerUnavailableWarning: '模型 Provider 未配置或不可用',
       openProviderSettings: '打开设置',
       stoppedDraft: '已停止生成，保留已生成内容',
@@ -517,6 +519,7 @@ export const dictionaries: Record<Locale, Dictionary> = {
       regenerate: 'Regenerate',
       attach: 'Attach',
       messageLoomi: 'Message Loomi',
+      workReadOnlyComposer: 'M16 Work mode is read-only for plan and progress',
       providerUnavailableWarning: 'Model provider is not configured or unavailable',
       openProviderSettings: 'Open Settings',
       stoppedDraft: 'Generation stopped; generated content was preserved',

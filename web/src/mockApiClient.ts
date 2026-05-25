@@ -5,7 +5,7 @@ import { isRuntimeTerminal } from './runtime/executionAdapter'
 import { mockExecutionAdapter } from './runtime/mockExecutionAdapter'
 import { createRuntimeEvent, getRuntimeScript, getRuntimeScriptSteps } from './runtime/runtimeScripts'
 
-let mockId = 0
+let mockId = 1000
 let threadStore = [...threads]
 let messageStore = [...messages]
 let runStore = runs.map((run) => ({ ...run, events: [...run.events] }))

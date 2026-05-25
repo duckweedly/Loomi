@@ -3,8 +3,10 @@ import type { Locale } from '../i18n'
 import { getDictionary } from '../i18n'
 import { deriveBackendCapabilityStatus, getBackendCapabilityCopy, shouldShowProviderUnavailableWarning } from '../runtime/backendCapabilityStatus'
 import { deriveChatCanvasState } from '../runtime/chatCanvasState'
+import { deriveWorkPlanProjection } from '../workModeProjection'
 import { Composer } from './Composer'
 import { ToolCallCard } from './ToolCallCard'
+import { WorkPlanView } from './WorkPlanView'
 
 type Props = {
   sidebarCollapsed: boolean
@@ -143,10 +145,11 @@ export function ChatCanvas({ sidebarCollapsed, thread, messages, run, loading, e
     run,
   })
   const copy = getDictionary(locale).chatCanvas
+  const isWorkModeReadOnly = thread?.mode === 'work'
   const stateCopy = createStateCopy(locale)
-  const composerDisabled = state === 'loading' || state === 'error' || state === 'no-thread' || state === 'backend-unavailable' || state === 'waiting-run' || state === 'running' || state === 'recovering' || state === 'stopping'
-  const composerPlaceholder = composerDisabled ? stateCopy[state].title : copy.messageLoomi
-  const providerUnavailableBeforeSend = shouldShowProviderUnavailableWarning(dataSourceMode, providerCapabilities)
+  const composerDisabled = isWorkModeReadOnly || state === 'loading' || state === 'error' || state === 'no-thread' || state === 'backend-unavailable' || state === 'waiting-run' || state === 'running' || state === 'recovering' || state === 'stopping'
+  const composerPlaceholder = isWorkModeReadOnly ? copy.workReadOnlyComposer : state === 'history' || !composerDisabled ? copy.messageLoomi : stateCopy[state].title
+  const providerUnavailableBeforeSend = !isWorkModeReadOnly && shouldShowProviderUnavailableWarning(dataSourceMode, providerCapabilities)
   const capabilityStatus = deriveBackendCapabilityStatus({
     dataSourceMode,
     runtimeSource: run?.context === 'model_gateway' ? 'model_gateway' : 'local_simulated',
@@ -167,6 +170,7 @@ export function ChatCanvas({ sidebarCollapsed, thread, messages, run, loading, e
   ))
   const shouldShowAssistantDraft = Boolean(run && !hasPersistedCompletedDraftMessage)
   const shouldShowHistory = state === 'history' || state === 'waiting-run' || state === 'running' || state === 'completed' || state === 'failed' || state === 'stopped' || state === 'recovering' || state === 'stopping'
+  const workPlanProjection = deriveWorkPlanProjection(thread, messages, run)
 
   return (
     <section className="chat-shell glass-panel" data-chat-state={state}>
@@ -179,7 +183,7 @@ export function ChatCanvas({ sidebarCollapsed, thread, messages, run, loading, e
         <span className={`capability-chip ${capabilityStatus}`}>{capabilityCopy.title}</span>
         <span className="capability-detail">{capabilityCopy.detail}</span>
         <span>{streamState}</span>
-        {(run?.status === 'queued' || run?.status === 'running' || run?.status === 'retrying' || run?.status === 'recovering') && <button className="titlebar-button" onClick={onStopRun}>{copy.stop}</button>}
+        {!isWorkModeReadOnly && (run?.status === 'queued' || run?.status === 'running' || run?.status === 'retrying' || run?.status === 'recovering') && <button className="titlebar-button" onClick={onStopRun}>{copy.stop}</button>}
       </div>
 
       {error && <div className="api-error">{error}</div>}
@@ -192,6 +196,7 @@ export function ChatCanvas({ sidebarCollapsed, thread, messages, run, loading, e
       )}
 
       <div className="message-list">
+        {workPlanProjection && <WorkPlanView projection={workPlanProjection} loading={loading} error={error} />}
         {state === 'history' ? (
           <>
             <MessageHistory messages={messages} locale={locale} />
@@ -223,7 +228,7 @@ export function ChatCanvas({ sidebarCollapsed, thread, messages, run, loading, e
         retryLabel={copy.retry}
         regenerateLabel={copy.regenerate}
         onSubmit={onSendMessage}
-        onStop={onStopRun}
+        onStop={isWorkModeReadOnly ? undefined : onStopRun}
         onRetry={onRetryRun}
         onRegenerate={onRegenerateRun}
       />
