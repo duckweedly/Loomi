@@ -191,6 +191,7 @@ export function ChatCanvas({ sidebarCollapsed, thread, messages, run, loading, e
 
       <Composer
         disabled={composerDisabled}
+        providerUnavailable={providerUnavailableBeforeSend}
         placeholder={composerPlaceholder}
         threadSelected={Boolean(thread)}
         run={run}

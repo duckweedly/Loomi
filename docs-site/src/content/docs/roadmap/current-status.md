@@ -19,10 +19,11 @@ Spec Kit 已接入仓库，并写入 Loomi constitution。文档站已作为 `do
 - M5：后端 LLM gateway、provider capability、provider-normalized run events、streaming assistant draft、redacted failure states 和 non-executed tool boundary。
 - M5.5：Settings Placeholder、General session-local controls、read-only runtime/provider status，以及安全的 mock/preview future settings categories。
 - M6：queued run acknowledgement、durable background job、local in-process worker、pipeline events、frontend queued/worker timeline replay、lease recovery、cancellation 和 worker diagnostics。
+- M6.5：Provider Test Console、real mode provider unavailable guidance、read-only Background tasks observer、M6 worker/job Timeline labels、Composer 状态收口和本地真实测试 runbook。
 
 ## 建议下一步
 
-下一步适合在 M5.5/M6 基础上补真实 provider smoke、settings real API visibility smoke 和后续工具调用规格。工具调用、desktop runtime、多 Agent、RAG/memory、持久化 settings 和 provider 管理仍应通过后续 Spec Kit 功能单独推进。
+下一步适合在 M6.5 基础上继续推进 M7 tool call 规格，但工具调用、approval、tool execution protocol、desktop runtime、多 Agent、RAG/memory、持久化 settings 和 provider secret storage 仍应通过后续 Spec Kit 功能单独推进。
 
 ## 开发要求
 

@@ -227,6 +227,7 @@ export default function App() {
               capabilityStatus={capabilityStatus}
               locale={shell.locale}
               onSelectRuntimeScript={dataSourceMode === 'mock' ? selectRuntimeScript : undefined}
+              selectedThreadId={selectedThreadId}
             />
           </main>
         </div>

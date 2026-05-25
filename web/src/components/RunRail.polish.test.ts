@@ -60,6 +60,54 @@ describe('RunRail restrained runtime polish', () => {
     expect(html).toContain('runtime-event-group error')
   })
 
+  test('renders productized M6 worker event labels and unknown fallback', () => {
+    const html = renderToStaticMarkup(createElement(RunRail, {
+      open: true,
+      onOpenArtifact: () => {},
+      run: {
+        id: 'run-a',
+        threadId: 'thread-a',
+        status: 'recovering',
+        model: 'Local simulated',
+        context: 'local_simulated',
+        events: [
+          { id: 'evt-claim', runId: 'run-a', threadId: 'thread-a', sequence: 1, type: 'job_claimed', label: 'Job', detail: 'raw claim', time: 'Now', status: 'running' },
+          { id: 'evt-lease', runId: 'run-a', threadId: 'thread-a', sequence: 2, type: 'lease_renewed', label: 'Lease', detail: 'raw lease', time: 'Now', status: 'running' },
+          { id: 'evt-recovering', runId: 'run-a', threadId: 'thread-a', sequence: 3, type: 'job_recovering', label: 'Job', detail: 'raw recovery', time: 'Now', status: 'recovering' },
+          { id: 'evt-unknown', runId: 'run-a', threadId: 'thread-a', sequence: 4, type: 'future_worker_event', label: 'Future', detail: 'raw future', time: 'Now', status: 'running' },
+        ],
+      },
+    }))
+
+    expect(html).toContain('Job claimed by worker')
+    expect(html).toContain('Lease renewed')
+    expect(html).toContain('Job recovering')
+    expect(html).toContain('Unknown worker event')
+    expect(html).toContain('future_worker_event')
+  })
+
+  test('renders productized worker event labels from Chinese i18n copy', () => {
+    const html = renderToStaticMarkup(createElement(RunRail, {
+      open: true,
+      locale: 'zh',
+      onOpenArtifact: () => {},
+      run: {
+        id: 'run-a',
+        threadId: 'thread-a',
+        status: 'recovering',
+        model: 'Local simulated',
+        context: 'local_simulated',
+        events: [
+          { id: 'evt-claim', runId: 'run-a', threadId: 'thread-a', sequence: 1, type: 'job_claimed', label: 'Job', detail: 'raw claim', time: 'Now', status: 'running' },
+          { id: 'evt-unknown', runId: 'run-a', threadId: 'thread-a', sequence: 2, type: 'future_worker_event', label: 'Future', detail: 'raw future', time: 'Now', status: 'running' },
+        ],
+      },
+    }))
+
+    expect(html).toContain('Worker 已领取任务')
+    expect(html).toContain('未知 Worker 事件')
+  })
+
   test('renders provider errors and cancelled events with distinct row classes', () => {
     const html = renderToStaticMarkup(createElement(RunRail, {
       open: true,

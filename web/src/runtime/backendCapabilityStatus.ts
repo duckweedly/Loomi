@@ -13,7 +13,7 @@ export type BackendCapabilityStatus =
   | 'run-recovering'
 
 export type BackendCapabilityInput = {
-  dataSourceMode: 'mock' | 'real_api'
+  dataSourceMode: 'mock' | 'real_api' | 'model_gateway'
   runtimeSource?: 'local_simulated' | 'model_gateway'
   backendUnavailable?: boolean
   modelSetupMissing?: boolean
@@ -23,8 +23,8 @@ export type BackendCapabilityInput = {
   runRecovering?: boolean
 }
 
-export function shouldShowProviderUnavailableWarning(dataSourceMode: 'mock' | 'real_api', providerCapabilities: ProviderCapability[]) {
-  return dataSourceMode === 'real_api' && !providerCapabilities.some((provider) => provider.status === 'available')
+export function shouldShowProviderUnavailableWarning(dataSourceMode: 'mock' | 'real_api' | 'model_gateway', providerCapabilities: ProviderCapability[]) {
+  return dataSourceMode !== 'mock' && !providerCapabilities.some((provider) => provider.status === 'available')
 }
 
 export function deriveBackendCapabilityStatus(input: BackendCapabilityInput): BackendCapabilityStatus {

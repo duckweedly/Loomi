@@ -77,11 +77,14 @@ VITE_LOOMI_API_BASE_URL=http://127.0.0.1:8080 bun run --cwd web dev
 
 In the browser:
 
-1. select or create a thread
-2. send a message
-3. confirm the Chat Canvas enters a waiting/queued state
-4. confirm RunRail shows worker/job and pipeline events
-5. confirm completion returns the canvas to a completed/history state
+1. open Settings > Providers and confirm Provider Test Console shows configured providers or env guidance
+2. use Test connection and confirm checking/success/failed states do not expose provider secrets
+3. select or create a thread
+4. send a message
+5. confirm the Chat Canvas enters a waiting/queued state
+6. confirm RunRail shows worker/job and pipeline events
+7. open Background tasks and confirm it is a read-only observer, not a job control surface
+8. confirm completion returns the canvas to a completed/history state
 
 Do not mark UI validation complete unless the browser was actually exercised.
 

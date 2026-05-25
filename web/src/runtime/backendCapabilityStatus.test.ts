@@ -59,6 +59,8 @@ describe('provider availability warning', () => {
     expect(shouldShowProviderUnavailableWarning('real_api', [])).toBe(true)
     expect(shouldShowProviderUnavailableWarning('real_api', [unavailableProvider, misconfiguredProvider])).toBe(true)
     expect(shouldShowProviderUnavailableWarning('real_api', [unavailableProvider, availableProvider])).toBe(false)
+    expect(shouldShowProviderUnavailableWarning('model_gateway', [])).toBe(true)
+    expect(shouldShowProviderUnavailableWarning('model_gateway', [availableProvider])).toBe(false)
     expect(shouldShowProviderUnavailableWarning('mock', [])).toBe(false)
   })
 })

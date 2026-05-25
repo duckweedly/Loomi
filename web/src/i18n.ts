@@ -42,6 +42,30 @@ type Dictionary = {
       exhausted: string
       cancelled: string
       failed: string
+      jobClaimed: string
+      leaseRenewed: string
+      jobRecovering: string
+      retryScheduled: string
+      attemptFailed: string
+      retryExhausted: string
+      cancellationRequested: string
+      diagnostics: string
+      unknownWorkerEvent: string
+      currentRunJob: string
+      noTaskRunning: string
+      runRealMessage: string
+      readOnlyObserver: string
+      readOnlyNoControls: string
+      latestEvents: string
+      noEventsYet: string
+      statusQueued: string
+      statusLeased: string
+      statusRetrying: string
+      statusRecovering: string
+      statusCompleted: string
+      statusFailed: string
+      statusCancelled: string
+      statusDead: string
     }
   }
   backendCapability: Record<BackendCapabilityStatus, { title: string; detail: string }>
@@ -210,6 +234,30 @@ export const dictionaries: Record<Locale, Dictionary> = {
         exhausted: '已耗尽',
         cancelled: '已取消',
         failed: '失败',
+        jobClaimed: 'Worker 已领取任务',
+        leaseRenewed: 'Lease 已续期',
+        jobRecovering: '任务恢复中',
+        retryScheduled: '已安排重试',
+        attemptFailed: '本次尝试失败',
+        retryExhausted: '重试已耗尽',
+        cancellationRequested: '已请求取消',
+        diagnostics: 'Worker 诊断',
+        unknownWorkerEvent: '未知 Worker 事件',
+        currentRunJob: '当前 Run Job',
+        noTaskRunning: '当前没有后台任务',
+        runRealMessage: '发送一条真实模型消息来观察排队任务和 Worker 事件。',
+        readOnlyObserver: '只读观察面板',
+        readOnlyNoControls: '只读 · 不提供重试、恢复或取消控件',
+        latestEvents: '最新 Worker/Job 事件',
+        noEventsYet: '暂无 Worker/Job 事件',
+        statusQueued: '排队中',
+        statusLeased: 'Worker 已领取',
+        statusRetrying: '重试中',
+        statusRecovering: '恢复中',
+        statusCompleted: '已完成',
+        statusFailed: '失败',
+        statusCancelled: '已取消',
+        statusDead: '已终止',
       },
     },
     backendCapability: {
@@ -307,7 +355,7 @@ export const dictionaries: Record<Locale, Dictionary> = {
       selectedRunStatusHelper: '显示当前运行状态，不修改运行。',
       providerCapability: 'Provider 能力',
       providerCapabilityHelper: '可用时只显示已脱敏的 provider id、family、model 和 status。',
-      providerConsoleTitle: 'Configured providers',
+      providerConsoleTitle: 'Provider Test Console',
       providerConsoleDescription: '读取后端已配置的 provider，并可安全触发一次连接测试。',
       providerConfiguredProviders: '已配置 Provider',
       providerConfiguredProvidersHelper: '这些 provider 来自后端环境变量；页面只显示脱敏能力，不显示密钥。',
@@ -385,6 +433,30 @@ export const dictionaries: Record<Locale, Dictionary> = {
         exhausted: 'Exhausted',
         cancelled: 'Cancelled',
         failed: 'Failed',
+        jobClaimed: 'Job claimed by worker',
+        leaseRenewed: 'Lease renewed',
+        jobRecovering: 'Job recovering',
+        retryScheduled: 'Retry scheduled',
+        attemptFailed: 'Job attempt failed',
+        retryExhausted: 'Retries exhausted',
+        cancellationRequested: 'Cancellation requested',
+        diagnostics: 'Worker diagnostics',
+        unknownWorkerEvent: 'Unknown worker event',
+        currentRunJob: 'Current run job',
+        noTaskRunning: 'No background task is running',
+        runRealMessage: 'Run a real model message to observe queued jobs and worker events.',
+        readOnlyObserver: 'Read-only observer',
+        readOnlyNoControls: 'Read-only · no retry, recover, or cancel controls',
+        latestEvents: 'Latest worker/job events',
+        noEventsYet: 'No worker/job events yet',
+        statusQueued: 'Queued',
+        statusLeased: 'Leased by worker',
+        statusRetrying: 'Retrying',
+        statusRecovering: 'Recovering',
+        statusCompleted: 'Completed',
+        statusFailed: 'Failed',
+        statusCancelled: 'Cancelled',
+        statusDead: 'Dead',
       },
     },
     backendCapability: {
@@ -482,7 +554,7 @@ export const dictionaries: Record<Locale, Dictionary> = {
       selectedRunStatusHelper: 'Shows the current run state without changing the run.',
       providerCapability: 'Provider capability',
       providerCapabilityHelper: 'Shows redacted provider id, family, model, and status when available.',
-      providerConsoleTitle: 'Configured providers',
+      providerConsoleTitle: 'Provider Test Console',
       providerConsoleDescription: 'Reads backend-configured providers and safely triggers a connection test.',
       providerConfiguredProviders: 'Configured providers',
       providerConfiguredProvidersHelper: 'These providers come from backend environment variables; Settings only shows redacted capability and never shows keys.',

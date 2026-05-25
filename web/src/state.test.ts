@@ -135,15 +135,15 @@ describe('run stream state helpers', () => {
     ])
   })
 
-  test('dedupes streamed events by id and sequence', () => {
+  test('dedupes streamed events by id and sequence without reordering arrivals', () => {
     const merged = mergeRunEvents([
-      { id: 'evt-1', type: 'lifecycle.run_created', label: 'lifecycle', detail: 'Run created', time: '1', status: 'running', sequence: 1 },
+      { id: 'evt-10', type: 'job_attempt_failed', label: 'Job', detail: 'Attempt failed', time: '1', status: 'failed', sequence: 10 },
     ], [
-      { id: 'evt-1', type: 'lifecycle.run_created', label: 'lifecycle', detail: 'Run created', time: '1', status: 'running', sequence: 1 },
-      { id: 'evt-2', type: 'final.run_completed', label: 'final', detail: 'Run completed', time: '2', status: 'completed', sequence: 2 },
+      { id: 'evt-10', type: 'job_attempt_failed', label: 'Job', detail: 'Attempt failed', time: '1', status: 'failed', sequence: 10 },
+      { id: 'evt-2', type: 'job_claimed', label: 'Job', detail: 'Claimed after late delivery', time: '2', status: 'running', sequence: 2 },
     ])
 
-    expect(merged.map((event) => event.id)).toEqual(['evt-1', 'evt-2'])
-    expect(merged.at(-1)?.status).toBe('completed')
+    expect(merged.map((event) => event.id)).toEqual(['evt-10', 'evt-2'])
+    expect(merged.at(-1)?.status).toBe('running')
   })
 })

@@ -34,6 +34,7 @@ describe('SettingsView runtime rows', () => {
 describe('SettingsView provider test console', () => {
   test('renders configured providers, test action, and check states', async () => {
     const source = await Bun.file(new URL('./SettingsView.tsx', import.meta.url)).text()
+    const copy = await Bun.file(new URL('../i18n.ts', import.meta.url)).text()
 
     expect(source).toContain('ProviderCheckConsole')
     expect(source).toContain('t.providerConfiguredProviders')
@@ -42,6 +43,8 @@ describe('SettingsView provider test console', () => {
     expect(source).toContain('providerCheckResults[provider.id]')
     expect(source).toContain('disabled={checking}')
     expect(source).toContain('onCheckProvider(provider.id)')
+    expect(source).toContain('provider.baseUrl')
+    expect(copy).toContain("providerConsoleTitle: 'Provider Test Console'")
   })
 
   test('labels provider draft as local and separate from real provider calls', async () => {
