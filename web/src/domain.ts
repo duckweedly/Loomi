@@ -142,7 +142,7 @@ export type RunEvent = Omit<RuntimeEvent, 'runId' | 'threadId'> & {
 
 export type AssistantDraft = {
   content: string
-  status: 'empty' | 'drafting' | 'pending' | 'queued' | 'streaming' | 'completed' | 'failed' | 'stopped' | 'recovering' | 'stopping'
+  status: 'empty' | 'drafting' | 'pending' | 'queued' | 'streaming' | 'paused_for_tool' | 'completed' | 'failed' | 'stopped' | 'recovering' | 'stopping'
   messageId?: string
   lastEventId?: string
 }
