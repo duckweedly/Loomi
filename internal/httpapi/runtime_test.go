@@ -53,7 +53,7 @@ func TestModelProviderPreflightAllowsBrowserReads(t *testing.T) {
 		if res.Header().Get("Access-Control-Allow-Origin") != origin {
 			t.Fatalf("origin %s allow origin = %q", origin, res.Header().Get("Access-Control-Allow-Origin"))
 		}
-		if res.Header().Get("Access-Control-Allow-Methods") != "GET, POST, PATCH, OPTIONS" {
+		if res.Header().Get("Access-Control-Allow-Methods") != "GET, POST, PATCH, DELETE, OPTIONS" {
 			t.Fatalf("allow methods = %q", res.Header().Get("Access-Control-Allow-Methods"))
 		}
 	}

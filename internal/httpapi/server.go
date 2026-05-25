@@ -53,6 +53,8 @@ func NewServerWithRuntimes(cfg config.Config, checker db.Checker, product produc
 	s.mux.HandleFunc("/v1/personas", s.handlePersonas)
 	s.mux.HandleFunc("/v1/model-providers", s.handleModelProviders)
 	s.mux.HandleFunc("POST /v1/model-providers/check", s.handleModelProviderCheck)
+	s.mux.HandleFunc("/v1/memory", s.handleMemory)
+	s.mux.HandleFunc("/v1/memory/", s.handleMemoryByID)
 	s.mux.HandleFunc("/v1/threads", s.handleThreads)
 	s.mux.HandleFunc("/v1/threads/", s.handleThreadByID)
 	s.mux.HandleFunc("/v1/runs/", s.handleRunByID)
@@ -77,7 +79,7 @@ func (s *Server) setCORSHeaders(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Access-Control-Allow-Origin", origin)
 	w.Header().Set("Vary", "Origin")
-	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 }
 

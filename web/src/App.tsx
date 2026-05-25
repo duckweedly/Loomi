@@ -46,8 +46,13 @@ export default function App() {
     providerCapabilities,
     providerCheckResults,
     providerSaveResult,
+    memoryEntries,
+    memoryQuery,
+    memoryLoading,
     checkProvider,
     saveProvider,
+    setMemorySearchQuery,
+    deleteMemoryEntry,
   } = useWorkspaceState(shell.defaultWorkspaceMode)
 
   const dictionary = getDictionary(shell.locale)
@@ -188,6 +193,9 @@ export default function App() {
                   selectedThreadTitle={selectedThread?.title}
                   selectedRunStatus={run?.status}
                   providerCapabilities={providerCapabilities}
+                  memoryEntries={memoryEntries}
+                  memoryQuery={memoryQuery}
+                  memoryLoading={memoryLoading}
                   providerCheckResults={providerCheckResults}
                   providerSaveResult={providerSaveResult}
                   providerDraftSettings={shell.providerDraftSettings}
@@ -201,6 +209,8 @@ export default function App() {
                     shell.setProviderDraftSettings({ ...settings, apiKey: '', apiKeySet: true })
                   }}
                   onCheckProvider={(providerId) => void checkProvider(providerId)}
+                  onMemoryQueryChange={setMemorySearchQuery}
+                  onDeleteMemoryEntry={(entryId) => void deleteMemoryEntry(entryId)}
                   onBack={shell.closeSettings}
                 />
               ) : (

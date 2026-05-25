@@ -41,6 +41,14 @@ type PersonaResolvedFrom string
 
 type Code string
 
+type MemoryScopeType string
+
+type MemoryEntryStatus string
+
+type MemorySafetyState string
+
+type MemoryWriteStatus string
+
 const (
 	ThreadModeChat ThreadMode = "chat"
 	ThreadModeWork ThreadMode = "work"
@@ -140,6 +148,11 @@ const (
 	EventRunCompleted             = "run_completed"
 	EventRunFailed                = "run_failed"
 	EventRunStopped               = "run_stopped"
+	EventMemorySnapshotLoaded     = "memory_snapshot_loaded"
+	EventMemoryWriteProposed      = "memory_write_proposed"
+	EventMemoryWriteApproved      = "memory_write_approved"
+	EventMemoryWriteDenied        = "memory_write_denied"
+	EventMemoryEntryDeleted       = "memory_entry_deleted"
 
 	CodeInvalidRequest        Code = "invalid_request"
 	CodeThreadNotFound        Code = "thread_not_found"
@@ -148,15 +161,27 @@ const (
 	CodeProviderUnavailable   Code = "provider_unavailable"
 	CodeProviderMisconfigured Code = "provider_misconfigured"
 	CodeMethodNotAllowed      Code = "method_not_allowed"
+	CodeMemoryNotFound        Code = "memory_not_found"
 	CodeInternalError         Code = "internal_error"
 )
 
 const (
-	MaxThreadTitleLength     = 120
-	MaxClientMessageIDLength = 120
-	ToolNameCurrentTime      = "runtime.get_current_time"
-	ToolSourceInternal       = "internal"
-	ToolSourceMCP            = "mcp"
+	MaxThreadTitleLength                       = 120
+	MaxClientMessageIDLength                   = 120
+	ToolNameCurrentTime                        = "runtime.get_current_time"
+	ToolSourceInternal                         = "internal"
+	ToolSourceMCP                              = "mcp"
+	MemoryScopeUser          MemoryScopeType   = "user"
+	MemoryScopeThread        MemoryScopeType   = "thread"
+	MemoryEntryApproved      MemoryEntryStatus = "approved"
+	MemoryEntryTombstoned    MemoryEntryStatus = "tombstoned"
+	MemoryEntryDisabled      MemoryEntryStatus = "disabled"
+	MemorySafetySafe         MemorySafetyState = "safe"
+	MemorySafetyRedacted     MemorySafetyState = "redacted"
+	MemorySafetyBlocked      MemorySafetyState = "blocked"
+	MemoryWritePending       MemoryWriteStatus = "pending"
+	MemoryWriteApproved      MemoryWriteStatus = "approved"
+	MemoryWriteDenied        MemoryWriteStatus = "denied"
 )
 
 type ProductError struct {
@@ -369,6 +394,7 @@ type RunContext struct {
 	MCPAvailability        MCPToolAvailabilitySummary
 	ContinuationProjection ContinuationProjection
 	Persona                PersonaSnapshot
+	MemorySnapshot         MemorySnapshot
 }
 
 type ProviderRoute struct {
@@ -412,6 +438,97 @@ type ContinuationProjection struct {
 	Available  bool
 }
 
+type MemoryEntry struct {
+	ID             string            `json:"id"`
+	UserID         string            `json:"-"`
+	ScopeType      MemoryScopeType   `json:"scope_type"`
+	ScopeID        string            `json:"scope_id"`
+	Title          string            `json:"title"`
+	Summary        string            `json:"summary"`
+	Content        string            `json:"content,omitempty"`
+	Status         MemoryEntryStatus `json:"status"`
+	SafetyState    MemorySafetyState `json:"safety_state"`
+	SourceThreadID string            `json:"source_thread_id,omitempty"`
+	SourceRunID    string            `json:"source_run_id,omitempty"`
+	SourceEventID  string            `json:"source_event_id,omitempty"`
+	ContentHash    string            `json:"content_hash"`
+	CreatedAt      time.Time         `json:"created_at"`
+	UpdatedAt      time.Time         `json:"updated_at"`
+	DeletedAt      *time.Time        `json:"deleted_at,omitempty"`
+	DeletedBy      string            `json:"-"`
+	DeleteReason   string            `json:"delete_reason,omitempty"`
+}
+
+type MemorySearchResult struct {
+	ID               string          `json:"id"`
+	Title            string          `json:"title"`
+	Summary          string          `json:"summary"`
+	Content          string          `json:"content,omitempty"`
+	ScopeType        MemoryScopeType `json:"scope_type"`
+	SourceThreadID   string          `json:"source_thread_id,omitempty"`
+	SourceRunID      string          `json:"source_run_id,omitempty"`
+	CreatedAt        time.Time       `json:"created_at"`
+	UpdatedAt        time.Time       `json:"updated_at"`
+	RankReason       string          `json:"rank_reason,omitempty"`
+	RedactionApplied bool            `json:"redaction_applied"`
+}
+
+type MemorySearchInput struct {
+	Query     string
+	ScopeType MemoryScopeType
+	ScopeID   string
+	Limit     int
+	Purpose   string
+}
+
+type MemorySearchOutput struct {
+	Items         []MemorySearchResult `json:"items"`
+	ExcludedCount int                  `json:"excluded_count"`
+}
+
+type MemoryWriteProposal struct {
+	ID             string            `json:"id"`
+	UserID         string            `json:"-"`
+	ScopeType      MemoryScopeType   `json:"scope_type"`
+	ScopeID        string            `json:"scope_id"`
+	Title          string            `json:"title"`
+	Summary        string            `json:"summary"`
+	Content        string            `json:"content,omitempty"`
+	Status         MemoryWriteStatus `json:"status"`
+	SafetyState    MemorySafetyState `json:"safety_state"`
+	SourceThreadID string            `json:"source_thread_id,omitempty"`
+	SourceRunID    string            `json:"source_run_id,omitempty"`
+	SourceEventID  string            `json:"source_event_id,omitempty"`
+	IdempotencyKey string            `json:"-"`
+	CreatedEntryID string            `json:"created_entry_id,omitempty"`
+	CreatedAt      time.Time         `json:"created_at"`
+	DecidedAt      *time.Time        `json:"decided_at,omitempty"`
+	DecidedBy      string            `json:"-"`
+	DecisionReason string            `json:"decision_reason,omitempty"`
+}
+
+type MemoryWriteDecision struct {
+	Proposal MemoryWriteProposal `json:"proposal"`
+	Entry    MemoryEntry         `json:"entry,omitempty"`
+}
+
+type MemoryTombstone struct {
+	EntryID      string    `json:"entry_id"`
+	Status       string    `json:"status"`
+	DeletedAt    time.Time `json:"deleted_at"`
+	AuditEventID string    `json:"audit_event_id,omitempty"`
+}
+
+type MemorySnapshot struct {
+	RunID            string               `json:"run_id"`
+	ThreadID         string               `json:"thread_id"`
+	Entries          []MemorySearchResult `json:"entries"`
+	Limit            int                  `json:"limit"`
+	TotalCandidates  int                  `json:"total_candidates"`
+	LoadStatus       string               `json:"load_status"`
+	RedactionApplied bool                 `json:"redaction_applied"`
+}
+
 func (c RunContext) SafeSummary() map[string]any {
 	summary := map[string]any{
 		"message_count":               len(c.Messages),
@@ -424,6 +541,11 @@ func (c RunContext) SafeSummary() map[string]any {
 	}
 	if c.ProviderRoute.Model != "" {
 		summary["model"] = c.ProviderRoute.Model
+	}
+	if c.MemorySnapshot.LoadStatus != "" {
+		summary["memory_status"] = c.MemorySnapshot.LoadStatus
+		summary["memory_entry_count"] = len(c.MemorySnapshot.Entries)
+		summary["memory_redaction_applied"] = c.MemorySnapshot.RedactionApplied
 	}
 	for key, value := range c.Persona.SafeSummary() {
 		summary[key] = value
@@ -538,6 +660,36 @@ type AppendRunEventInput struct {
 	ErrorMessage string
 }
 
+type CreateMemoryEntryInput struct {
+	ScopeType      MemoryScopeType
+	ScopeID        string
+	Title          string
+	Content        string
+	SourceThreadID string
+	SourceRunID    string
+	SourceEventID  string
+}
+
+type ProposeMemoryWriteInput struct {
+	ScopeType      MemoryScopeType `json:"scope_type"`
+	ScopeID        string          `json:"scope_id"`
+	Title          string          `json:"title"`
+	Content        string          `json:"content"`
+	SourceThreadID string          `json:"source_thread_id"`
+	SourceRunID    string          `json:"source_run_id"`
+	SourceEventID  string          `json:"source_event_id"`
+	IdempotencyKey string          `json:"idempotency_key"`
+}
+
+type MemoryWriteDecisionInput struct {
+	IdempotencyKey string `json:"idempotency_key"`
+	Reason         string `json:"reason"`
+}
+
+type DeleteMemoryEntryInput struct {
+	Reason string `json:"reason"`
+}
+
 type StopRunResult string
 
 const (
@@ -613,13 +765,15 @@ type SeedMessageInput struct {
 	ClientMessageID string
 }
 
-func NewThreadID() string        { return prefixedID("thr") }
-func NewMessageID() string       { return prefixedID("msg") }
-func NewRunID() string           { return prefixedID("run") }
-func NewRunEventID() string      { return prefixedID("evt") }
-func NewBackgroundJobID() string { return prefixedID("job") }
-func NewToolCallID() string      { return prefixedID("tool") }
-func NewPersonaID() string       { return prefixedID("persona") }
+func NewThreadID() string         { return prefixedID("thr") }
+func NewMessageID() string        { return prefixedID("msg") }
+func NewRunID() string            { return prefixedID("run") }
+func NewRunEventID() string       { return prefixedID("evt") }
+func NewBackgroundJobID() string  { return prefixedID("job") }
+func NewToolCallID() string       { return prefixedID("tool") }
+func NewPersonaID() string        { return prefixedID("persona") }
+func NewMemoryEntryID() string    { return prefixedID("mem") }
+func NewMemoryProposalID() string { return prefixedID("memprop") }
 
 func prefixedID(prefix string) string {
 	buf := make([]byte, 6)

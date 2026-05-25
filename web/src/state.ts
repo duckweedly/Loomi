@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { apiClient, executionAdapter } from './apiClient'
 import { setMockRuntimeScript } from './mockApiClient'
-import type { BackendCapabilityState, Message, Persona, ProviderCapability, Run, RunEvent, RuntimeEvent, RuntimeScriptId, StaleEventGuard, StreamState, Thread, ThreadRuntimeState, ToolCall } from './domain'
+import type { BackendCapabilityState, MemoryEntry, Message, Persona, ProviderCapability, Run, RunEvent, RuntimeEvent, RuntimeScriptId, StaleEventGuard, StreamState, Thread, ThreadRuntimeState, ToolCall } from './domain'
 import { isRuntimeActive, isRuntimeTerminal } from './runtime/executionAdapter'
 import { deriveCapabilitySignalFromEvent } from './runtime/backendCapabilityStatus'
 import { applyRealRunEvent, mapRealRuntimeCapabilitySignal } from './runtime/realExecutionAdapter'
@@ -251,6 +251,9 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
   const [selectedPersonaId, setSelectedPersonaId] = useState('')
   const [providerCheckResults, setProviderCheckResults] = useState<Record<string, ProviderCheckResult>>({})
   const [providerSaveResult, setProviderSaveResult] = useState<ProviderSaveResult>({ status: 'idle' })
+  const [memoryEntries, setMemoryEntries] = useState<MemoryEntry[]>([])
+  const [memoryQuery, setMemoryQuery] = useState('')
+  const [memoryLoading, setMemoryLoading] = useState(false)
   const selectedThreadIdRef = useRef(selectedThreadId)
   const runRef = useRef<Run | null>(run)
 
@@ -334,6 +337,37 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
       cancelled = true
     }
   }, [])
+
+  const loadMemoryEntries = useCallback(async (query = '') => {
+    if (!apiClient.listMemoryEntries || !apiClient.searchMemory) {
+      setMemoryEntries([])
+      return
+    }
+    setMemoryLoading(true)
+    try {
+      const entries = query.trim()
+        ? await apiClient.searchMemory(query)
+        : await apiClient.listMemoryEntries()
+      setMemoryEntries(entries)
+    } finally {
+      setMemoryLoading(false)
+    }
+  }, [])
+
+  const setMemorySearchQuery = useCallback((query: string) => {
+    setMemoryQuery(query)
+    void loadMemoryEntries(query)
+  }, [loadMemoryEntries])
+
+  const deleteMemoryEntry = useCallback(async (entryId: string) => {
+    if (!apiClient.deleteMemoryEntry) return
+    await apiClient.deleteMemoryEntry(entryId)
+    await loadMemoryEntries(memoryQuery)
+  }, [loadMemoryEntries, memoryQuery])
+
+  useEffect(() => {
+    void loadMemoryEntries('')
+  }, [loadMemoryEntries])
 
   useEffect(() => {
     if (!run || !shouldBlockRuntimeSubmit(run) || !apiClient.subscribeRunEvents) {
@@ -564,10 +598,15 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
     selectedPersonaId,
     providerCheckResults,
     providerSaveResult,
+    memoryEntries,
+    memoryQuery,
+    memoryLoading,
     selectRuntimeScript,
     setSelectedPersonaId,
     checkProvider,
     saveProvider,
+    setMemorySearchQuery,
+    deleteMemoryEntry,
     refresh,
     selectThread,
     createThread,

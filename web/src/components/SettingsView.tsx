@@ -1,10 +1,11 @@
 import { ArrowLeft, ChevronRight } from 'lucide-react'
 import type { ReactNode } from 'react'
-import type { BackendCapabilityState, ProviderCapability, RunStatus, RuntimeScriptId, StreamState, Thread } from '../domain'
+import type { BackendCapabilityState, MemoryEntry, ProviderCapability, RunStatus, RuntimeScriptId, StreamState, Thread } from '../domain'
 import type { ProviderCheckResult, ProviderSaveResult } from '../state'
 import type { ProviderDraftSettings } from '../useWorkspaceShellState'
 import type { Locale } from '../i18n'
 import { getDictionary } from '../i18n'
+import { MemoryPanel } from './MemoryPanel'
 import { getSettingsCategoriesByGroup, getSettingsCategory, placeholderSettingRows, settingsCategoryGroups, type SettingsCategory, type SettingsCategoryGroup, type SettingsCategoryId, type SettingRowStatus } from './settingsCatalog'
 
 type Props = {
@@ -18,6 +19,9 @@ type Props = {
   selectedThreadTitle?: string
   selectedRunStatus?: RunStatus
   providerCapabilities: ProviderCapability[]
+  memoryEntries: MemoryEntry[]
+  memoryQuery: string
+  memoryLoading: boolean
   providerCheckResults: Record<string, ProviderCheckResult>
   providerSaveResult: ProviderSaveResult
   providerDraftSettings: ProviderDraftSettings
@@ -28,6 +32,8 @@ type Props = {
   onProviderDraftSettingsChange: (settings: ProviderDraftSettings) => void
   onSaveProvider: (settings: ProviderDraftSettings) => void
   onCheckProvider: (providerId: string) => void
+  onMemoryQueryChange: (query: string) => void
+  onDeleteMemoryEntry: (entryId: string) => void
   onBack: () => void
 }
 
@@ -186,6 +192,9 @@ export function SettingsView({
   selectedThreadTitle,
   selectedRunStatus,
   providerCapabilities,
+  memoryEntries,
+  memoryQuery,
+  memoryLoading,
   providerCheckResults,
   providerSaveResult,
   providerDraftSettings,
@@ -196,6 +205,8 @@ export function SettingsView({
   onProviderDraftSettingsChange,
   onSaveProvider,
   onCheckProvider,
+  onMemoryQueryChange,
+  onDeleteMemoryEntry,
   onBack,
 }: Props) {
   const dictionary = getDictionary(locale)
@@ -203,6 +214,7 @@ export function SettingsView({
   const selectedCategory = getSettingsCategory(selectedCategoryId, locale)
   const isGeneral = selectedCategory.id === 'general'
   const isProviders = selectedCategory.id === 'providers'
+  const isMemory = selectedCategory.id === 'memory'
   const isAbout = selectedCategory.id === 'about'
 
   return (
@@ -373,6 +385,18 @@ export function SettingsView({
           </div>
         )}
 
+        {isMemory && (
+          <div className="settings-card-stack">
+            <section className="settings-card">
+              <div className="settings-card-head">
+                <h2>Memory</h2>
+                <p>{selectedCategory.description}</p>
+              </div>
+              <MemoryPanel entries={memoryEntries} query={memoryQuery} loading={memoryLoading} onQueryChange={onMemoryQueryChange} onDelete={onDeleteMemoryEntry} />
+            </section>
+          </div>
+        )}
+
         {isAbout && (
           <div className="settings-card-stack">
             <section className="settings-card">
@@ -387,7 +411,7 @@ export function SettingsView({
           </div>
         )}
 
-        {!isGeneral && !isProviders && !isAbout && <PlaceholderPanel selectedCategory={selectedCategory} t={t} />}
+        {!isGeneral && !isProviders && !isMemory && !isAbout && <PlaceholderPanel selectedCategory={selectedCategory} t={t} />}
       </section>
     </div>
   )

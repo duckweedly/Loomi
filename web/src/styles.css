@@ -2204,6 +2204,86 @@ button, textarea, input, .sidebar, .chat-shell, .run-dock, .right-panel-menu, .r
   line-height: 1.45;
 }
 
+.memory-panel {
+  padding: 16px 20px 20px;
+}
+
+.memory-panel-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.memory-panel-toolbar input {
+  width: min(420px, 100%);
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  padding: 9px 11px;
+  background: color-mix(in srgb, var(--material-floating) 44%, transparent);
+  color: var(--text-primary);
+  outline: none;
+}
+
+.memory-panel-toolbar input::placeholder,
+.memory-panel-toolbar span,
+.memory-empty {
+  color: var(--text-muted);
+}
+
+.memory-panel-toolbar input:focus {
+  border-color: var(--border-strong);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.memory-entry-list {
+  display: grid;
+  gap: 10px;
+}
+
+.memory-entry {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: start;
+  border: 1px solid var(--border-subtle);
+  border-radius: 14px;
+  padding: 12px;
+  background: color-mix(in srgb, var(--material-floating) 46%, transparent);
+}
+
+.memory-entry strong {
+  color: var(--text-primary);
+}
+
+.memory-entry p {
+  margin: 5px 0 7px;
+  color: var(--text-secondary);
+  line-height: 1.45;
+}
+
+.memory-entry small {
+  color: var(--text-muted);
+}
+
+.memory-entry button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  background: var(--segment-bg);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.memory-entry button:hover {
+  border-color: color-mix(in srgb, var(--orange) 36%, var(--border-subtle));
+  color: var(--orange);
+}
+
 .placeholder-panel {
   max-width: 760px;
 }

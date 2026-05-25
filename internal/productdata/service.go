@@ -2,6 +2,8 @@ package productdata
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"sort"
 	"strings"
 	"sync"
@@ -42,6 +44,14 @@ type Service interface {
 	CompleteBackgroundJob(context.Context, identity.LocalIdentity, CompleteBackgroundJobInput) (BackgroundJob, bool, error)
 	FailBackgroundJob(context.Context, identity.LocalIdentity, FailBackgroundJobInput) (BackgroundJob, bool, error)
 	WorkerQueueDiagnostics(context.Context, identity.LocalIdentity) (WorkerQueueDiagnostics, error)
+	CreateMemoryEntry(context.Context, identity.LocalIdentity, CreateMemoryEntryInput) (MemoryEntry, error)
+	ListMemoryEntries(context.Context, identity.LocalIdentity, MemorySearchInput) (MemorySearchOutput, error)
+	SearchMemory(context.Context, identity.LocalIdentity, MemorySearchInput) (MemorySearchOutput, error)
+	GetMemoryEntry(context.Context, identity.LocalIdentity, string) (MemoryEntry, error)
+	DeleteMemoryEntry(context.Context, identity.LocalIdentity, string, DeleteMemoryEntryInput) (MemoryTombstone, error)
+	ProposeMemoryWrite(context.Context, identity.LocalIdentity, ProposeMemoryWriteInput) (MemoryWriteProposal, error)
+	ApproveMemoryWrite(context.Context, identity.LocalIdentity, string, MemoryWriteDecisionInput) (MemoryWriteDecision, error)
+	DenyMemoryWrite(context.Context, identity.LocalIdentity, string, MemoryWriteDecisionInput) (MemoryWriteDecision, error)
 }
 
 type SeedService interface {
@@ -55,33 +65,41 @@ type Repository interface {
 }
 
 type MemoryService struct {
-	mu               sync.Mutex
-	now              func() time.Time
-	users            map[string]User
-	threads          map[string]Thread
-	messages         map[string][]Message
-	runs             map[string]Run
-	runEvents        map[string][]RunEvent
-	backgroundJobs   map[string]BackgroundJob
-	toolCalls        map[string]ToolCall
-	personas         map[string]Persona
-	personaVersions  map[string]PersonaVersion
-	personaSnapshots map[string]PersonaSnapshot
+	mu                 sync.Mutex
+	now                func() time.Time
+	users              map[string]User
+	threads            map[string]Thread
+	messages           map[string][]Message
+	runs               map[string]Run
+	runEvents          map[string][]RunEvent
+	backgroundJobs     map[string]BackgroundJob
+	toolCalls          map[string]ToolCall
+	personas           map[string]Persona
+	personaVersions    map[string]PersonaVersion
+	personaSnapshots   map[string]PersonaSnapshot
+	memoryEntries      map[string]MemoryEntry
+	memoryProposals    map[string]MemoryWriteProposal
+	memoryProposalKeys map[string]string
+	memoryDecisionKeys map[string]MemoryWriteDecision
 }
 
 func NewMemoryService() *MemoryService {
 	return &MemoryService{
-		now:              time.Now,
-		users:            map[string]User{},
-		threads:          map[string]Thread{},
-		messages:         map[string][]Message{},
-		runs:             map[string]Run{},
-		runEvents:        map[string][]RunEvent{},
-		backgroundJobs:   map[string]BackgroundJob{},
-		toolCalls:        map[string]ToolCall{},
-		personas:         map[string]Persona{},
-		personaVersions:  map[string]PersonaVersion{},
-		personaSnapshots: map[string]PersonaSnapshot{},
+		now:                time.Now,
+		users:              map[string]User{},
+		threads:            map[string]Thread{},
+		messages:           map[string][]Message{},
+		runs:               map[string]Run{},
+		runEvents:          map[string][]RunEvent{},
+		backgroundJobs:     map[string]BackgroundJob{},
+		toolCalls:          map[string]ToolCall{},
+		personas:           map[string]Persona{},
+		personaVersions:    map[string]PersonaVersion{},
+		personaSnapshots:   map[string]PersonaSnapshot{},
+		memoryEntries:      map[string]MemoryEntry{},
+		memoryProposals:    map[string]MemoryWriteProposal{},
+		memoryProposalKeys: map[string]string{},
+		memoryDecisionKeys: map[string]MemoryWriteDecision{},
 	}
 }
 
@@ -435,7 +453,190 @@ func (s *MemoryService) PrepareRunContext(ctx context.Context, ident identity.Lo
 	context.Persona = s.personaSnapshots[run.ID]
 	s.mu.Unlock()
 	applyPersonaToRunContext(&context, events)
+	snapshot := s.buildMemorySnapshot(ctx, ident, run, thread)
+	context.MemorySnapshot = snapshot
+	_, _ = s.AppendRunEvent(ctx, ident, run.ID, AppendRunEventInput{Category: RunEventCategoryProgress, Type: EventMemorySnapshotLoaded, Summary: "Memory snapshot loaded", Metadata: memorySnapshotEventMetadata(snapshot)})
 	return context, nil
+}
+
+func (s *MemoryService) CreateMemoryEntry(_ context.Context, ident identity.LocalIdentity, input CreateMemoryEntryInput) (MemoryEntry, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user := s.ensureUserLocked(ident)
+	entry, err := s.newMemoryEntryLocked(user.ID, input)
+	if err != nil {
+		return MemoryEntry{}, err
+	}
+	s.memoryEntries[entry.ID] = entry
+	return entry, nil
+}
+
+func (s *MemoryService) ListMemoryEntries(ctx context.Context, ident identity.LocalIdentity, input MemorySearchInput) (MemorySearchOutput, error) {
+	input.Query = ""
+	return s.SearchMemory(ctx, ident, input)
+}
+
+func (s *MemoryService) SearchMemory(_ context.Context, ident identity.LocalIdentity, input MemorySearchInput) (MemorySearchOutput, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user := s.ensureUserLocked(ident)
+	limit := memoryLimit(input.Limit)
+	queryTerms := strings.Fields(strings.ToLower(strings.TrimSpace(input.Query)))
+	items := make([]MemorySearchResult, 0, limit)
+	excluded := 0
+	for _, entry := range s.memoryEntries {
+		if !memoryEntryVisibleTo(entry, user.ID, input) {
+			excluded++
+			continue
+		}
+		if len(queryTerms) > 0 && !memoryEntryMatches(entry, queryTerms) {
+			continue
+		}
+		items = append(items, memorySearchResult(entry))
+	}
+	sort.SliceStable(items, func(i, j int) bool {
+		return items[i].UpdatedAt.After(items[j].UpdatedAt)
+	})
+	if len(items) > limit {
+		items = items[:limit]
+	}
+	return MemorySearchOutput{Items: items, ExcludedCount: excluded}, nil
+}
+
+func (s *MemoryService) GetMemoryEntry(_ context.Context, ident identity.LocalIdentity, entryID string) (MemoryEntry, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user := s.ensureUserLocked(ident)
+	entry, ok := s.memoryEntries[strings.TrimSpace(entryID)]
+	if !ok || !memoryEntryVisibleTo(entry, user.ID, MemorySearchInput{}) {
+		return MemoryEntry{}, NewError(CodeMemoryNotFound, "Memory not found.")
+	}
+	entry.Content = ""
+	return entry, nil
+}
+
+func (s *MemoryService) DeleteMemoryEntry(_ context.Context, ident identity.LocalIdentity, entryID string, input DeleteMemoryEntryInput) (MemoryTombstone, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user := s.ensureUserLocked(ident)
+	entry, ok := s.memoryEntries[strings.TrimSpace(entryID)]
+	if !ok || entry.UserID != user.ID {
+		return MemoryTombstone{}, NewError(CodeMemoryNotFound, "Memory not found.")
+	}
+	if entry.Status == MemoryEntryTombstoned && entry.DeletedAt != nil {
+		return MemoryTombstone{EntryID: entry.ID, Status: string(MemoryEntryTombstoned), DeletedAt: *entry.DeletedAt}, nil
+	}
+	now := s.now()
+	entry.Status = MemoryEntryTombstoned
+	entry.Content = ""
+	entry.Summary = "[deleted]"
+	entry.DeletedAt = &now
+	entry.DeletedBy = user.ID
+	entry.DeleteReason = RedactEventText(strings.TrimSpace(input.Reason))
+	entry.UpdatedAt = now
+	s.memoryEntries[entry.ID] = entry
+	s.appendMemoryAuditEventLocked(entry.SourceRunID, EventMemoryEntryDeleted, "Memory entry deleted", memoryEntryAuditMetadata(entry, ""))
+	return MemoryTombstone{EntryID: entry.ID, Status: string(MemoryEntryTombstoned), DeletedAt: now}, nil
+}
+
+func (s *MemoryService) ProposeMemoryWrite(_ context.Context, ident identity.LocalIdentity, input ProposeMemoryWriteInput) (MemoryWriteProposal, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user := s.ensureUserLocked(ident)
+	key := strings.TrimSpace(input.IdempotencyKey)
+	if key != "" {
+		if proposalID, ok := s.memoryProposalKeys[user.ID+":"+key]; ok {
+			return s.memoryProposals[proposalID], nil
+		}
+	}
+	scopeType, scopeID, err := normalizeMemoryScope(user.ID, input.ScopeType, input.ScopeID)
+	if err != nil {
+		return MemoryWriteProposal{}, err
+	}
+	title, summary, content, safety, err := normalizeMemoryContent(input.Title, input.Content)
+	if err != nil {
+		return MemoryWriteProposal{}, err
+	}
+	now := s.now()
+	proposal := MemoryWriteProposal{ID: NewMemoryProposalID(), UserID: user.ID, ScopeType: scopeType, ScopeID: scopeID, Title: title, Summary: summary, Content: content, Status: MemoryWritePending, SafetyState: safety, SourceThreadID: strings.TrimSpace(input.SourceThreadID), SourceRunID: strings.TrimSpace(input.SourceRunID), SourceEventID: strings.TrimSpace(input.SourceEventID), IdempotencyKey: key, CreatedAt: now}
+	if safety == MemorySafetyBlocked {
+		proposal.Status = MemoryWriteDenied
+	}
+	s.memoryProposals[proposal.ID] = proposal
+	if key != "" {
+		s.memoryProposalKeys[user.ID+":"+key] = proposal.ID
+	}
+	s.appendMemoryAuditEventLocked(proposal.SourceRunID, EventMemoryWriteProposed, "Memory write proposed", memoryProposalAuditMetadata(proposal, ""))
+	return proposal, nil
+}
+
+func (s *MemoryService) ApproveMemoryWrite(_ context.Context, ident identity.LocalIdentity, proposalID string, input MemoryWriteDecisionInput) (MemoryWriteDecision, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user := s.ensureUserLocked(ident)
+	if decision, ok := s.memoryDecisionKeys[user.ID+":approve:"+strings.TrimSpace(input.IdempotencyKey)]; ok && input.IdempotencyKey != "" {
+		return decision, nil
+	}
+	proposal, ok := s.memoryProposals[strings.TrimSpace(proposalID)]
+	if !ok || proposal.UserID != user.ID {
+		return MemoryWriteDecision{}, NewError(CodeMemoryNotFound, "Memory proposal not found.")
+	}
+	if proposal.Status == MemoryWriteApproved && proposal.CreatedEntryID != "" {
+		entry := s.memoryEntries[proposal.CreatedEntryID]
+		return MemoryWriteDecision{Proposal: proposal, Entry: safeMemoryEntry(entry)}, nil
+	}
+	if proposal.Status != MemoryWritePending || proposal.SafetyState == MemorySafetyBlocked {
+		return MemoryWriteDecision{}, NewError(CodeInvalidRequest, "Memory write cannot be approved.")
+	}
+	entry, err := s.newMemoryEntryLocked(user.ID, CreateMemoryEntryInput{ScopeType: proposal.ScopeType, ScopeID: proposal.ScopeID, Title: proposal.Title, Content: proposal.Content, SourceThreadID: proposal.SourceThreadID, SourceRunID: proposal.SourceRunID, SourceEventID: proposal.SourceEventID})
+	if err != nil {
+		return MemoryWriteDecision{}, err
+	}
+	now := s.now()
+	proposal.Status = MemoryWriteApproved
+	proposal.DecidedAt = &now
+	proposal.DecidedBy = user.ID
+	proposal.DecisionReason = RedactEventText(strings.TrimSpace(input.Reason))
+	proposal.CreatedEntryID = entry.ID
+	s.memoryEntries[entry.ID] = entry
+	s.memoryProposals[proposal.ID] = proposal
+	decision := MemoryWriteDecision{Proposal: proposal, Entry: safeMemoryEntry(entry)}
+	if input.IdempotencyKey != "" {
+		s.memoryDecisionKeys[user.ID+":approve:"+strings.TrimSpace(input.IdempotencyKey)] = decision
+	}
+	s.appendMemoryAuditEventLocked(proposal.SourceRunID, EventMemoryWriteApproved, "Memory write approved", memoryProposalAuditMetadata(proposal, entry.ID))
+	return decision, nil
+}
+
+func (s *MemoryService) DenyMemoryWrite(_ context.Context, ident identity.LocalIdentity, proposalID string, input MemoryWriteDecisionInput) (MemoryWriteDecision, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user := s.ensureUserLocked(ident)
+	if decision, ok := s.memoryDecisionKeys[user.ID+":deny:"+strings.TrimSpace(input.IdempotencyKey)]; ok && input.IdempotencyKey != "" {
+		return decision, nil
+	}
+	proposal, ok := s.memoryProposals[strings.TrimSpace(proposalID)]
+	if !ok || proposal.UserID != user.ID {
+		return MemoryWriteDecision{}, NewError(CodeMemoryNotFound, "Memory proposal not found.")
+	}
+	if proposal.Status == MemoryWriteDenied {
+		return MemoryWriteDecision{Proposal: proposal}, nil
+	}
+	if proposal.Status == MemoryWriteApproved {
+		return MemoryWriteDecision{}, NewError(CodeInvalidRequest, "Approved memory write cannot be denied.")
+	}
+	now := s.now()
+	proposal.Status = MemoryWriteDenied
+	proposal.DecidedAt = &now
+	proposal.DecidedBy = user.ID
+	proposal.DecisionReason = RedactEventText(strings.TrimSpace(input.Reason))
+	s.memoryProposals[proposal.ID] = proposal
+	decision := MemoryWriteDecision{Proposal: proposal}
+	if input.IdempotencyKey != "" {
+		s.memoryDecisionKeys[user.ID+":deny:"+strings.TrimSpace(input.IdempotencyKey)] = decision
+	}
+	s.appendMemoryAuditEventLocked(proposal.SourceRunID, EventMemoryWriteDenied, "Memory write denied", memoryProposalAuditMetadata(proposal, ""))
+	return decision, nil
 }
 
 func (s *MemoryService) SyncBuiltInPersonas(_ context.Context, ident identity.LocalIdentity, configs []BuiltInPersonaConfig) (PersonaSyncResult, error) {
@@ -566,6 +767,172 @@ func buildRunContext(run Run, thread Thread, messages []Message, job BackgroundJ
 		context.ContinuationProjection = ContinuationProjection{ToolCallID: toolCallID, Available: hasToolResult(events, toolCallID)}
 	}
 	return context, nil
+}
+
+func (s *MemoryService) buildMemorySnapshot(ctx context.Context, ident identity.LocalIdentity, run Run, thread Thread) MemorySnapshot {
+	output, err := s.SearchMemory(ctx, ident, MemorySearchInput{ScopeType: MemoryScopeThread, ScopeID: thread.ID, Limit: 5, Purpose: "run_context"})
+	if err != nil {
+		return MemorySnapshot{RunID: run.ID, ThreadID: thread.ID, Limit: 5, LoadStatus: "unavailable"}
+	}
+	status := "loaded"
+	if len(output.Items) == 0 {
+		status = "empty"
+	}
+	return MemorySnapshot{RunID: run.ID, ThreadID: thread.ID, Entries: output.Items, Limit: 5, TotalCandidates: len(output.Items), LoadStatus: status, RedactionApplied: true}
+}
+
+func (s *MemoryService) newMemoryEntryLocked(userID string, input CreateMemoryEntryInput) (MemoryEntry, error) {
+	scopeType, scopeID, err := normalizeMemoryScope(userID, input.ScopeType, input.ScopeID)
+	if err != nil {
+		return MemoryEntry{}, err
+	}
+	title, summary, content, safety, err := normalizeMemoryContent(input.Title, input.Content)
+	if err != nil {
+		return MemoryEntry{}, err
+	}
+	status := MemoryEntryApproved
+	if safety == MemorySafetyBlocked {
+		status = MemoryEntryDisabled
+	}
+	now := s.now()
+	return MemoryEntry{ID: NewMemoryEntryID(), UserID: userID, ScopeType: scopeType, ScopeID: scopeID, Title: title, Summary: summary, Content: content, Status: status, SafetyState: safety, SourceThreadID: strings.TrimSpace(input.SourceThreadID), SourceRunID: strings.TrimSpace(input.SourceRunID), SourceEventID: strings.TrimSpace(input.SourceEventID), ContentHash: memoryContentHash(scopeType, scopeID, content), CreatedAt: now, UpdatedAt: now}, nil
+}
+
+func normalizeMemoryScope(userID string, scopeType MemoryScopeType, scopeID string) (MemoryScopeType, string, error) {
+	if scopeType == "" {
+		scopeType = MemoryScopeUser
+	}
+	scopeID = strings.TrimSpace(scopeID)
+	switch scopeType {
+	case MemoryScopeUser:
+		if scopeID == "" {
+			scopeID = userID
+		}
+	case MemoryScopeThread:
+		if scopeID == "" {
+			return "", "", NewError(CodeInvalidRequest, "Thread memory scope id is required.")
+		}
+	default:
+		return "", "", NewError(CodeInvalidRequest, "Memory scope is invalid.")
+	}
+	return scopeType, scopeID, nil
+}
+
+func normalizeMemoryContent(title string, content string) (string, string, string, MemorySafetyState, error) {
+	title = strings.TrimSpace(RedactEventText(title))
+	content = strings.TrimSpace(content)
+	if title == "" {
+		return "", "", "", "", NewError(CodeInvalidRequest, "Memory title is required.")
+	}
+	if content == "" {
+		return "", "", "", "", NewError(CodeInvalidRequest, "Memory content is required.")
+	}
+	redacted := RedactEventText(content)
+	safety := MemorySafetySafe
+	if redacted != content {
+		safety = MemorySafetyBlocked
+	} else if len([]rune(content)) > 480 {
+		redacted = string([]rune(content)[:480])
+		safety = MemorySafetyRedacted
+	}
+	summary := redacted
+	if len([]rune(summary)) > 160 {
+		summary = string([]rune(summary)[:160])
+		safety = MemorySafetyRedacted
+	}
+	return title, summary, redacted, safety, nil
+}
+
+func memoryContentHash(scopeType MemoryScopeType, scopeID string, content string) string {
+	sum := sha256.Sum256([]byte(string(scopeType) + ":" + scopeID + ":" + strings.ToLower(strings.TrimSpace(content))))
+	return hex.EncodeToString(sum[:])
+}
+
+func memoryLimit(limit int) int {
+	if limit <= 0 {
+		return 20
+	}
+	if limit > 50 {
+		return 50
+	}
+	return limit
+}
+
+func memoryEntryVisibleTo(entry MemoryEntry, userID string, input MemorySearchInput) bool {
+	if entry.UserID != userID || entry.Status != MemoryEntryApproved || entry.SafetyState == MemorySafetyBlocked {
+		return false
+	}
+	switch input.ScopeType {
+	case MemoryScopeThread:
+		return (entry.ScopeType == MemoryScopeUser && entry.ScopeID == userID) || (entry.ScopeType == MemoryScopeThread && entry.ScopeID == strings.TrimSpace(input.ScopeID))
+	case MemoryScopeUser, "":
+		return entry.ScopeType == MemoryScopeUser && entry.ScopeID == userID
+	default:
+		return false
+	}
+}
+
+func memoryEntryMatches(entry MemoryEntry, terms []string) bool {
+	haystack := strings.ToLower(entry.Title + " " + entry.Summary + " " + entry.Content)
+	for _, term := range terms {
+		if strings.Contains(haystack, term) {
+			return true
+		}
+	}
+	return false
+}
+
+func memorySearchResult(entry MemoryEntry) MemorySearchResult {
+	return MemorySearchResult{ID: entry.ID, Title: entry.Title, Summary: entry.Summary, ScopeType: entry.ScopeType, SourceThreadID: entry.SourceThreadID, SourceRunID: entry.SourceRunID, CreatedAt: entry.CreatedAt, UpdatedAt: entry.UpdatedAt, RankReason: "text_match", RedactionApplied: entry.SafetyState != MemorySafetySafe || entry.Content != entry.Summary}
+}
+
+func safeMemoryEntry(entry MemoryEntry) MemoryEntry {
+	entry.Content = ""
+	return entry
+}
+
+func memorySnapshotEventMetadata(snapshot MemorySnapshot) map[string]any {
+	return map[string]any{"status": snapshot.LoadStatus, "entry_count": len(snapshot.Entries), "limit": snapshot.Limit, "redaction_applied": snapshot.RedactionApplied}
+}
+
+func memoryProposalAuditMetadata(proposal MemoryWriteProposal, entryID string) map[string]any {
+	metadata := map[string]any{
+		"memory_proposal_id": proposal.ID,
+		"memory_status":      proposal.Status,
+		"memory_scope_type":  proposal.ScopeType,
+		"memory_safety":      proposal.SafetyState,
+	}
+	if entryID != "" {
+		metadata["memory_entry_id"] = entryID
+	}
+	if proposal.SourceEventID != "" {
+		metadata["source_event_id"] = proposal.SourceEventID
+	}
+	return metadata
+}
+
+func memoryEntryAuditMetadata(entry MemoryEntry, action string) map[string]any {
+	metadata := map[string]any{
+		"memory_entry_id":   entry.ID,
+		"memory_status":     entry.Status,
+		"memory_scope_type": entry.ScopeType,
+		"memory_safety":     entry.SafetyState,
+	}
+	if action != "" {
+		metadata["memory_action"] = action
+	}
+	return metadata
+}
+
+func (s *MemoryService) appendMemoryAuditEventLocked(runID string, eventType string, summary string, metadata map[string]any) {
+	if runID == "" {
+		return
+	}
+	run, ok := s.runs[runID]
+	if !ok || IsRunTerminal(run.Status) {
+		return
+	}
+	s.appendRunEventLocked(run, RunEventCategoryProgress, eventType, summary, nil, metadata, s.now())
 }
 
 func applyPersonaToRunContext(context *RunContext, events []RunEvent) {

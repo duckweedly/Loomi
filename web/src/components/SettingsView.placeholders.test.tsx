@@ -10,7 +10,6 @@ describe('SettingsView placeholder categories', () => {
       'skill',
       'mcp',
       'notebook',
-      'memory',
       'activity-recorder',
       'context',
       'safety',

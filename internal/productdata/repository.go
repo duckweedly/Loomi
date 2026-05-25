@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -454,7 +455,243 @@ func (r *PostgresRepository) PrepareRunContext(ctx context.Context, ident identi
 		context.Persona = snapshot
 		applyPersonaToRunContext(&context, events)
 	}
+	memories, err := r.SearchMemory(ctx, ident, MemorySearchInput{ScopeType: MemoryScopeThread, ScopeID: thread.ID, Limit: 5, Purpose: "run_context"})
+	if err != nil {
+		context.MemorySnapshot = MemorySnapshot{RunID: run.ID, ThreadID: thread.ID, Limit: 5, LoadStatus: "unavailable"}
+		return context, nil
+	}
+	status := "loaded"
+	if len(memories.Items) == 0 {
+		status = "empty"
+	}
+	context.MemorySnapshot = MemorySnapshot{RunID: run.ID, ThreadID: thread.ID, Entries: memories.Items, Limit: 5, TotalCandidates: len(memories.Items), LoadStatus: status, RedactionApplied: true}
+	_, _ = r.AppendRunEvent(ctx, ident, run.ID, AppendRunEventInput{Category: RunEventCategoryProgress, Type: EventMemorySnapshotLoaded, Summary: "Memory snapshot loaded", Metadata: memorySnapshotEventMetadata(context.MemorySnapshot)})
 	return context, nil
+}
+
+func (r *PostgresRepository) CreateMemoryEntry(ctx context.Context, ident identity.LocalIdentity, input CreateMemoryEntryInput) (MemoryEntry, error) {
+	user, err := r.ensureUser(ctx, ident)
+	if err != nil {
+		return MemoryEntry{}, err
+	}
+	scopeType, scopeID, err := normalizeMemoryScope(user.ID, input.ScopeType, input.ScopeID)
+	if err != nil {
+		return MemoryEntry{}, err
+	}
+	title, summary, content, safety, err := normalizeMemoryContent(input.Title, input.Content)
+	if err != nil {
+		return MemoryEntry{}, err
+	}
+	status := MemoryEntryApproved
+	if safety == MemorySafetyBlocked {
+		status = MemoryEntryDisabled
+	}
+	row := r.Pool.QueryRow(ctx, `insert into memory_entries (id, user_id, scope_type, scope_id, title, summary, content, status, safety_state, source_thread_id, source_run_id, source_event_id, content_hash) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,nullif($10,''),nullif($11,''),nullif($12,''),$13) returning id, user_id, scope_type, scope_id, title, summary, content, status, safety_state, coalesce(source_thread_id,''), coalesce(source_run_id,''), coalesce(source_event_id,''), content_hash, created_at, updated_at, deleted_at, coalesce(deleted_by_user_id,''), coalesce(delete_reason,'')`,
+		NewMemoryEntryID(), user.ID, scopeType, scopeID, title, summary, content, status, safety, strings.TrimSpace(input.SourceThreadID), strings.TrimSpace(input.SourceRunID), strings.TrimSpace(input.SourceEventID), memoryContentHash(scopeType, scopeID, content))
+	return scanMemoryEntry(row)
+}
+
+func (r *PostgresRepository) ListMemoryEntries(ctx context.Context, ident identity.LocalIdentity, input MemorySearchInput) (MemorySearchOutput, error) {
+	input.Query = ""
+	return r.SearchMemory(ctx, ident, input)
+}
+
+func (r *PostgresRepository) SearchMemory(ctx context.Context, ident identity.LocalIdentity, input MemorySearchInput) (MemorySearchOutput, error) {
+	user, err := r.ensureUser(ctx, ident)
+	if err != nil {
+		return MemorySearchOutput{}, err
+	}
+	limit := memoryLimit(input.Limit)
+	scopeType := input.ScopeType
+	scopeID := strings.TrimSpace(input.ScopeID)
+	if scopeType == "" {
+		scopeType = MemoryScopeUser
+	}
+	query := strings.ToLower(strings.TrimSpace(input.Query))
+	sql := `select id, user_id, scope_type, scope_id, title, summary, content, status, safety_state, coalesce(source_thread_id,''), coalesce(source_run_id,''), coalesce(source_event_id,''), content_hash, created_at, updated_at, deleted_at, coalesce(deleted_by_user_id,''), coalesce(delete_reason,'') from memory_entries where user_id=$1 and status='approved' and safety_state <> 'blocked'`
+	args := []any{user.ID}
+	if scopeType == MemoryScopeThread {
+		args = append(args, scopeID)
+		sql += ` and ((scope_type='user' and scope_id=$1) or (scope_type='thread' and scope_id=$2))`
+	} else {
+		sql += ` and scope_type='user' and scope_id=$1`
+	}
+	if query != "" {
+		args = append(args, "%"+query+"%")
+		sql += ` and (lower(title) like $` + intPlaceholder(len(args)) + ` or lower(summary) like $` + intPlaceholder(len(args)) + ` or lower(content) like $` + intPlaceholder(len(args)) + `)`
+	}
+	args = append(args, limit)
+	sql += ` order by updated_at desc, id desc limit $` + intPlaceholder(len(args))
+	rows, err := r.Pool.Query(ctx, sql, args...)
+	if err != nil {
+		return MemorySearchOutput{}, err
+	}
+	defer rows.Close()
+	var items []MemorySearchResult
+	for rows.Next() {
+		entry, err := scanMemoryEntry(rows)
+		if err != nil {
+			return MemorySearchOutput{}, err
+		}
+		items = append(items, memorySearchResult(entry))
+	}
+	return MemorySearchOutput{Items: items}, rows.Err()
+}
+
+func (r *PostgresRepository) GetMemoryEntry(ctx context.Context, ident identity.LocalIdentity, entryID string) (MemoryEntry, error) {
+	user, err := r.ensureUser(ctx, ident)
+	if err != nil {
+		return MemoryEntry{}, err
+	}
+	entry, err := scanMemoryEntry(r.Pool.QueryRow(ctx, `select id, user_id, scope_type, scope_id, title, summary, content, status, safety_state, coalesce(source_thread_id,''), coalesce(source_run_id,''), coalesce(source_event_id,''), content_hash, created_at, updated_at, deleted_at, coalesce(deleted_by_user_id,''), coalesce(delete_reason,'') from memory_entries where id=$1 and user_id=$2 and status='approved' and safety_state <> 'blocked'`, strings.TrimSpace(entryID), user.ID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return MemoryEntry{}, NewError(CodeMemoryNotFound, "Memory not found.")
+	}
+	entry.Content = ""
+	return entry, err
+}
+
+func (r *PostgresRepository) DeleteMemoryEntry(ctx context.Context, ident identity.LocalIdentity, entryID string, input DeleteMemoryEntryInput) (MemoryTombstone, error) {
+	user, err := r.ensureUser(ctx, ident)
+	if err != nil {
+		return MemoryTombstone{}, err
+	}
+	entry, err := scanMemoryEntry(r.Pool.QueryRow(ctx, `select id, user_id, scope_type, scope_id, title, summary, content, status, safety_state, coalesce(source_thread_id,''), coalesce(source_run_id,''), coalesce(source_event_id,''), content_hash, created_at, updated_at, deleted_at, coalesce(deleted_by_user_id,''), coalesce(delete_reason,'') from memory_entries where id=$1 and user_id=$2`, strings.TrimSpace(entryID), user.ID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return MemoryTombstone{}, NewError(CodeMemoryNotFound, "Memory not found.")
+	}
+	if err != nil {
+		return MemoryTombstone{}, err
+	}
+	if entry.Status == MemoryEntryTombstoned && entry.DeletedAt != nil {
+		return MemoryTombstone{EntryID: entry.ID, Status: string(MemoryEntryTombstoned), DeletedAt: *entry.DeletedAt}, nil
+	}
+	entry, err = scanMemoryEntry(r.Pool.QueryRow(ctx, `update memory_entries set status='tombstoned', content='', summary='[deleted]', deleted_at=now(), deleted_by_user_id=$3, delete_reason=$4, updated_at=now() where id=$1 and user_id=$2 and status <> 'tombstoned' returning id, user_id, scope_type, scope_id, title, summary, content, status, safety_state, coalesce(source_thread_id,''), coalesce(source_run_id,''), coalesce(source_event_id,''), content_hash, created_at, updated_at, deleted_at, coalesce(deleted_by_user_id,''), coalesce(delete_reason,'')`, entry.ID, user.ID, user.ID, RedactEventText(strings.TrimSpace(input.Reason))))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return MemoryTombstone{}, NewError(CodeMemoryNotFound, "Memory not found.")
+	}
+	if err != nil {
+		return MemoryTombstone{}, err
+	}
+	r.appendMemoryAuditEvent(ctx, ident, entry.SourceRunID, EventMemoryEntryDeleted, "Memory entry deleted", memoryEntryAuditMetadata(entry, ""))
+	return MemoryTombstone{EntryID: strings.TrimSpace(entryID), Status: string(MemoryEntryTombstoned), DeletedAt: *entry.DeletedAt}, nil
+}
+
+func (r *PostgresRepository) ProposeMemoryWrite(ctx context.Context, ident identity.LocalIdentity, input ProposeMemoryWriteInput) (MemoryWriteProposal, error) {
+	user, err := r.ensureUser(ctx, ident)
+	if err != nil {
+		return MemoryWriteProposal{}, err
+	}
+	if key := strings.TrimSpace(input.IdempotencyKey); key != "" {
+		proposal, err := scanMemoryProposal(r.Pool.QueryRow(ctx, `select id, user_id, scope_type, scope_id, title, summary, content, status, safety_state, coalesce(source_thread_id,''), coalesce(source_run_id,''), coalesce(source_event_id,''), idempotency_key, coalesce(created_entry_id,''), created_at, decided_at, coalesce(decided_by_user_id,''), coalesce(decision_reason,'') from memory_write_proposals where user_id=$1 and idempotency_key=$2`, user.ID, key))
+		if err == nil {
+			return proposal, nil
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return MemoryWriteProposal{}, err
+		}
+	}
+	scopeType, scopeID, err := normalizeMemoryScope(user.ID, input.ScopeType, input.ScopeID)
+	if err != nil {
+		return MemoryWriteProposal{}, err
+	}
+	title, summary, content, safety, err := normalizeMemoryContent(input.Title, input.Content)
+	if err != nil {
+		return MemoryWriteProposal{}, err
+	}
+	status := MemoryWritePending
+	if safety == MemorySafetyBlocked {
+		status = MemoryWriteDenied
+	}
+	row := r.Pool.QueryRow(ctx, `insert into memory_write_proposals (id, user_id, scope_type, scope_id, title, summary, content, status, safety_state, source_thread_id, source_run_id, source_event_id, idempotency_key) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,nullif($10,''),nullif($11,''),nullif($12,''),$13) returning id, user_id, scope_type, scope_id, title, summary, content, status, safety_state, coalesce(source_thread_id,''), coalesce(source_run_id,''), coalesce(source_event_id,''), idempotency_key, coalesce(created_entry_id,''), created_at, decided_at, coalesce(decided_by_user_id,''), coalesce(decision_reason,'')`,
+		NewMemoryProposalID(), user.ID, scopeType, scopeID, title, summary, content, status, safety, strings.TrimSpace(input.SourceThreadID), strings.TrimSpace(input.SourceRunID), strings.TrimSpace(input.SourceEventID), strings.TrimSpace(input.IdempotencyKey))
+	proposal, err := scanMemoryProposal(row)
+	if err != nil {
+		return MemoryWriteProposal{}, err
+	}
+	r.appendMemoryAuditEvent(ctx, ident, proposal.SourceRunID, EventMemoryWriteProposed, "Memory write proposed", memoryProposalAuditMetadata(proposal, ""))
+	return proposal, nil
+}
+
+func (r *PostgresRepository) ApproveMemoryWrite(ctx context.Context, ident identity.LocalIdentity, proposalID string, input MemoryWriteDecisionInput) (MemoryWriteDecision, error) {
+	user, err := r.ensureUser(ctx, ident)
+	if err != nil {
+		return MemoryWriteDecision{}, err
+	}
+	tx, err := r.Pool.Begin(ctx)
+	if err != nil {
+		return MemoryWriteDecision{}, err
+	}
+	defer tx.Rollback(ctx)
+	proposal, err := scanMemoryProposal(tx.QueryRow(ctx, `select id, user_id, scope_type, scope_id, title, summary, content, status, safety_state, coalesce(source_thread_id,''), coalesce(source_run_id,''), coalesce(source_event_id,''), idempotency_key, coalesce(created_entry_id,''), created_at, decided_at, coalesce(decided_by_user_id,''), coalesce(decision_reason,'') from memory_write_proposals where id=$1 and user_id=$2 for update`, strings.TrimSpace(proposalID), user.ID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return MemoryWriteDecision{}, NewError(CodeMemoryNotFound, "Memory proposal not found.")
+	}
+	if err != nil {
+		return MemoryWriteDecision{}, err
+	}
+	if proposal.Status == MemoryWriteApproved && proposal.CreatedEntryID != "" {
+		entry, err := scanMemoryEntry(tx.QueryRow(ctx, `select id, user_id, scope_type, scope_id, title, summary, content, status, safety_state, coalesce(source_thread_id,''), coalesce(source_run_id,''), coalesce(source_event_id,''), content_hash, created_at, updated_at, deleted_at, coalesce(deleted_by_user_id,''), coalesce(delete_reason,'') from memory_entries where id=$1`, proposal.CreatedEntryID))
+		if err != nil {
+			return MemoryWriteDecision{}, err
+		}
+		entry.Content = ""
+		if err := tx.Commit(ctx); err != nil {
+			return MemoryWriteDecision{}, err
+		}
+		return MemoryWriteDecision{Proposal: proposal, Entry: entry}, nil
+	}
+	if proposal.Status != MemoryWritePending || proposal.SafetyState == MemorySafetyBlocked {
+		return MemoryWriteDecision{}, NewError(CodeInvalidRequest, "Memory write cannot be approved.")
+	}
+	entry, err := scanMemoryEntry(tx.QueryRow(ctx, `insert into memory_entries (id, user_id, scope_type, scope_id, title, summary, content, status, safety_state, source_thread_id, source_run_id, source_event_id, content_hash) values ($1,$2,$3,$4,$5,$6,$7,'approved',$8,nullif($9,''),nullif($10,''),nullif($11,''),$12) returning id, user_id, scope_type, scope_id, title, summary, content, status, safety_state, coalesce(source_thread_id,''), coalesce(source_run_id,''), coalesce(source_event_id,''), content_hash, created_at, updated_at, deleted_at, coalesce(deleted_by_user_id,''), coalesce(delete_reason,'')`,
+		NewMemoryEntryID(), user.ID, proposal.ScopeType, proposal.ScopeID, proposal.Title, proposal.Summary, proposal.Content, proposal.SafetyState, proposal.SourceThreadID, proposal.SourceRunID, proposal.SourceEventID, memoryContentHash(proposal.ScopeType, proposal.ScopeID, proposal.Content)))
+	if err != nil {
+		return MemoryWriteDecision{}, err
+	}
+	proposal, err = scanMemoryProposal(tx.QueryRow(ctx, `update memory_write_proposals set status='approved', created_entry_id=$1, decided_at=now(), decided_by_user_id=$2, decision_reason=$3 where id=$4 returning id, user_id, scope_type, scope_id, title, summary, content, status, safety_state, coalesce(source_thread_id,''), coalesce(source_run_id,''), coalesce(source_event_id,''), idempotency_key, coalesce(created_entry_id,''), created_at, decided_at, coalesce(decided_by_user_id,''), coalesce(decision_reason,'')`, entry.ID, user.ID, RedactEventText(strings.TrimSpace(input.Reason)), proposal.ID))
+	if err != nil {
+		return MemoryWriteDecision{}, err
+	}
+	entry.Content = ""
+	if err := tx.Commit(ctx); err != nil {
+		return MemoryWriteDecision{}, err
+	}
+	r.appendMemoryAuditEvent(ctx, ident, proposal.SourceRunID, EventMemoryWriteApproved, "Memory write approved", memoryProposalAuditMetadata(proposal, entry.ID))
+	return MemoryWriteDecision{Proposal: proposal, Entry: entry}, nil
+}
+
+func (r *PostgresRepository) DenyMemoryWrite(ctx context.Context, ident identity.LocalIdentity, proposalID string, input MemoryWriteDecisionInput) (MemoryWriteDecision, error) {
+	user, err := r.ensureUser(ctx, ident)
+	if err != nil {
+		return MemoryWriteDecision{}, err
+	}
+	proposal, err := scanMemoryProposal(r.Pool.QueryRow(ctx, `select id, user_id, scope_type, scope_id, title, summary, content, status, safety_state, coalesce(source_thread_id,''), coalesce(source_run_id,''), coalesce(source_event_id,''), idempotency_key, coalesce(created_entry_id,''), created_at, decided_at, coalesce(decided_by_user_id,''), coalesce(decision_reason,'') from memory_write_proposals where id=$1 and user_id=$2`, strings.TrimSpace(proposalID), user.ID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return MemoryWriteDecision{}, NewError(CodeMemoryNotFound, "Memory proposal not found.")
+	}
+	if err != nil {
+		return MemoryWriteDecision{}, err
+	}
+	if proposal.Status == MemoryWriteDenied {
+		return MemoryWriteDecision{Proposal: proposal}, nil
+	}
+	if proposal.Status == MemoryWriteApproved {
+		return MemoryWriteDecision{}, NewError(CodeInvalidRequest, "Approved memory write cannot be denied.")
+	}
+	proposal, err = scanMemoryProposal(r.Pool.QueryRow(ctx, `update memory_write_proposals set status='denied', decided_at=now(), decided_by_user_id=$3, decision_reason=$4 where id=$1 and user_id=$2 and status='pending' returning id, user_id, scope_type, scope_id, title, summary, content, status, safety_state, coalesce(source_thread_id,''), coalesce(source_run_id,''), coalesce(source_event_id,''), idempotency_key, coalesce(created_entry_id,''), created_at, decided_at, coalesce(decided_by_user_id,''), coalesce(decision_reason,'')`, proposal.ID, user.ID, user.ID, RedactEventText(strings.TrimSpace(input.Reason))))
+	if err != nil {
+		return MemoryWriteDecision{}, err
+	}
+	r.appendMemoryAuditEvent(ctx, ident, proposal.SourceRunID, EventMemoryWriteDenied, "Memory write denied", memoryProposalAuditMetadata(proposal, ""))
+	return MemoryWriteDecision{Proposal: proposal}, nil
+}
+
+func (r *PostgresRepository) appendMemoryAuditEvent(ctx context.Context, ident identity.LocalIdentity, runID string, eventType string, summary string, metadata map[string]any) {
+	if strings.TrimSpace(runID) == "" {
+		return
+	}
+	_, _ = r.AppendRunEvent(ctx, ident, runID, AppendRunEventInput{Category: RunEventCategoryProgress, Type: eventType, Summary: summary, Metadata: metadata})
 }
 
 func (r *PostgresRepository) AppendRunEvent(ctx context.Context, ident identity.LocalIdentity, runID string, input AppendRunEventInput) (RunEvent, error) {
@@ -1277,6 +1514,26 @@ func scanToolCall(row scanner) (ToolCall, error) {
 		call.ArgumentsSummary = map[string]any{}
 	}
 	return call, nil
+}
+
+func scanMemoryEntry(row scanner) (MemoryEntry, error) {
+	var entry MemoryEntry
+	if err := row.Scan(&entry.ID, &entry.UserID, &entry.ScopeType, &entry.ScopeID, &entry.Title, &entry.Summary, &entry.Content, &entry.Status, &entry.SafetyState, &entry.SourceThreadID, &entry.SourceRunID, &entry.SourceEventID, &entry.ContentHash, &entry.CreatedAt, &entry.UpdatedAt, &entry.DeletedAt, &entry.DeletedBy, &entry.DeleteReason); err != nil {
+		return MemoryEntry{}, err
+	}
+	return entry, nil
+}
+
+func scanMemoryProposal(row scanner) (MemoryWriteProposal, error) {
+	var proposal MemoryWriteProposal
+	if err := row.Scan(&proposal.ID, &proposal.UserID, &proposal.ScopeType, &proposal.ScopeID, &proposal.Title, &proposal.Summary, &proposal.Content, &proposal.Status, &proposal.SafetyState, &proposal.SourceThreadID, &proposal.SourceRunID, &proposal.SourceEventID, &proposal.IdempotencyKey, &proposal.CreatedEntryID, &proposal.CreatedAt, &proposal.DecidedAt, &proposal.DecidedBy, &proposal.DecisionReason); err != nil {
+		return MemoryWriteProposal{}, err
+	}
+	return proposal, nil
+}
+
+func intPlaceholder(index int) string {
+	return fmt.Sprintf("%d", index)
 }
 
 func scanRunEvent(row scanner) (RunEvent, error) {

@@ -36,7 +36,7 @@ Claude Code 项目内命令使用横线格式：
 
 `/speckit-implement` 按任务实现，并在必要时回到 spec 或 plan 修正前提。
 
-## 当前规划中：M13 Memory Foundation
+## 当前已完成：M13 Memory Foundation
 
 当前 Spec Kit 功能目录：
 
@@ -51,10 +51,10 @@ specs/019-memory-foundation/
 - `research.md`：记录 PG-first、approval-gated writes、tombstone deletion、redact-before-exposure、MemoryProvider PG-only 和 distill deferred 决策。
 - `data-model.md`：定义 Memory Entry、Memory Search、Memory Write Proposal、Approval Decision、Snapshot、Tombstone、Audit Event 和 MemoryProvider。
 - `contracts/`：定义 memory API、memory events/audit、MemoryProvider PG v1 契约。
-- `quickstart.md`：记录 design validation 和后续 implementation smoke expectations。
+- `quickstart.md`：记录 backend/web/docs validation 和 smoke expectations。
 - `tasks.md`：按 setup、foundation、US1 safe snapshot、US2 approval-gated writes、US3 user control、US4 planned-only provider/distill、docs/validation 拆分实现任务。
 
-状态：设计完成，尚未实现。
+状态：第一实现薄片完成。已实现 PG-backed memory entries/search/write proposal、RunContext safe memory snapshot、approval-gated writes、用户 list/search/delete、redaction/tombstone/audit 边界；未实现向量库/embedding/RAG、OpenViking、自动 distill、marketplace/plugin、sandbox/browser/activity recorder、多 agent 长期自动化、worker/job queue rewrite 或 MCP rewrite。
 
 ## 近期已完成：M12.5 Real MCP Smoke Closeout
 

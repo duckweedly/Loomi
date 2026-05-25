@@ -1,5 +1,5 @@
 import type { ApiClient } from './apiClient'
-import type { Message, Persona, ProviderCapability, ProviderFamily, Run, RunEvent, RunSource, RunStatus, Thread, ToolCall, WorkerQueueDiagnostics, WorkerQueueStatus, WorkerStatus } from './domain'
+import type { MemoryEntry, Message, Persona, ProviderCapability, ProviderFamily, Run, RunEvent, RunSource, RunStatus, Thread, ToolCall, WorkerQueueDiagnostics, WorkerQueueStatus, WorkerStatus } from './domain'
 import { isRuntimeTerminal } from './runtime/executionAdapter'
 import { applyRealRunEvent } from './runtime/realExecutionAdapter'
 
@@ -86,6 +86,18 @@ export type ApiToolCall = {
   result_summary?: Record<string, unknown> | null
   error_code?: string | null
   error_message?: string | null
+}
+
+export type ApiMemoryEntry = {
+  id: string
+  title: string
+  summary: string
+  scope_type: 'user' | 'thread'
+  source_thread_id?: string | null
+  source_run_id?: string | null
+  created_at: string
+  updated_at: string
+  redaction_applied?: boolean
 }
 
 type ApiRunEvent = {
@@ -320,6 +332,20 @@ export function mapApiToolCall(call: ApiToolCall): ToolCall {
   }
 }
 
+export function mapApiMemoryEntry(entry: ApiMemoryEntry): MemoryEntry {
+  return {
+    id: entry.id,
+    title: entry.title,
+    summary: entry.summary,
+    scopeType: entry.scope_type,
+    sourceThreadId: entry.source_thread_id ?? undefined,
+    sourceRunId: entry.source_run_id ?? undefined,
+    createdAt: entry.created_at,
+    updatedAt: entry.updated_at,
+    redactionApplied: Boolean(entry.redaction_applied),
+  }
+}
+
 export function mapApiRunEvent(event: ApiRunEvent): RunEvent {
   const type = canonicalRunEventType(event)
   const metadataDetail = metadataString(event.metadata)
@@ -464,6 +490,23 @@ export const realApiClient: ApiClient = {
   async denyToolCall(threadId: string, runId: string, toolCallId: string) {
     const body = await requestJSON<{ tool_call: ApiToolCall }>(`/v1/threads/${threadId}/runs/${runId}/tool-calls/${toolCallId}/deny`, { method: 'POST' })
     return mapApiToolCall(body.tool_call)
+  },
+
+  async listMemoryEntries() {
+    const body = await requestJSON<{ items: ApiMemoryEntry[] }>('/v1/memory')
+    return body.items.map(mapApiMemoryEntry)
+  },
+
+  async searchMemory(query: string) {
+    const body = await requestJSON<{ items: ApiMemoryEntry[] }>('/v1/memory/search', {
+      method: 'POST',
+      body: JSON.stringify({ query, limit: 20 }),
+    })
+    return body.items.map(mapApiMemoryEntry)
+  },
+
+  async deleteMemoryEntry(entryId: string) {
+    await requestJSON<{ status: string }>(`/v1/memory/${entryId}`, { method: 'DELETE' })
   },
 
   async startRun(threadId: string, input: { messageId?: string; source?: RunSource; providerId?: string; model?: string; personaId?: string } = {}) {

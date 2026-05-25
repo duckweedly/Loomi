@@ -29,6 +29,18 @@ export type ProviderCapability = {
   message?: string | null
 }
 
+export type MemoryEntry = {
+  id: string
+  title: string
+  summary: string
+  scopeType: 'user' | 'thread'
+  sourceThreadId?: string
+  sourceRunId?: string
+  createdAt: string
+  updatedAt: string
+  redactionApplied: boolean
+}
+
 export type Persona = {
   id: string
   slug: string
