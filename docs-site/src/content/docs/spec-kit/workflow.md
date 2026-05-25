@@ -36,7 +36,27 @@ Claude Code 项目内命令使用横线格式：
 
 `/speckit-implement` 按任务实现，并在必要时回到 spec 或 plan 修正前提。
 
-## 当前候选完成：M14 Memory Management Audit UX
+## 当前候选完成：M15 Chat Real Integrated Smoke Closeout
+
+当前 Spec Kit 功能目录：
+
+```text
+specs/022-chat-real-integrated-smoke-closeout/
+```
+
+关键产物：
+
+- `spec.md`：定义 M15 closeout/evidence slice，覆盖 real API path、deterministic provider、approved memory snapshot、MCP approval/execution、continuation、final assistant message、history replay 和 redaction。
+- `plan.md`：确定复用现有 Go API/service/worker/runtime/productdata 边界，不引入新平台能力。
+- `research.md`：记录 gated Go smoke、deterministic provider、复用 M7/M9/M11/M12/M13、敏感 canary redaction 断言等决策。
+- `data-model.md`：定义 M15 Smoke Scenario、Approved Memory Snapshot、MCP Candidate Fixture、Tool Approval Projection 和 Replay Evidence Set。
+- `contracts/`：定义 smoke command、evidence milestone 和 redaction contract。
+- `quickstart.md`：记录 gated smoke 与完整验证命令。
+- `tasks.md`：按 setup、foundation、US1 approval boundary、US2 execution/continuation、US3 replay/redaction、docs/validation 拆分。
+
+状态：M15 complete candidate。`TestM15ChatRealIntegratedSmoke` 通过真实 HTTP handler 创建 thread/message/run，worker 准备 RunContext 并加载 approved memory，provider fixture 请求 discovered + persona-allowed MCP tool，run 进入 approval required，HTTP approve 后 worker 执行一次 local stdio MCP `tools/call`，记录 redacted result，provider continuation 写入 final assistant message，replay API 验证完整事件链。M15 不包含 sandbox、filesystem/shell/browser automation tools、activity recorder、OpenViking/vector/RAG/distill、marketplace/plugin install、multi-agent 或 worker queue rewrite。
+
+## 近期已完成：M14 Memory Management Audit UX
 
 当前 Spec Kit 功能目录：
 
@@ -54,7 +74,7 @@ specs/021-memory-management-audit-ux/
 - `quickstart.md`：记录 M14 prep blockers、验证命令和 full UI seeded browser smoke 标准。
 - `tasks.md`：把 prep blockers 与后续完整 UX 实现任务分开。
 
-状态：full UX complete candidate。已完成 thread-scoped read/delete authorization、thread list/search missing `scope_id` invalid request、terminal-run durable memory audit、redaction hardening、search/list filter shape 收口、Settings > Memory list/search/filter/detail/delete confirmation、真实 `/v1/memory/audit` history、backend unavailable/error/empty 不造假，以及 seeded browser smoke。M14 仍不包含 distill、OpenViking、vector/embedding/RAG、activity recorder、MCP、worker queue、sandbox 或多 agent 重写。
+状态：full UX complete candidate。已完成 thread-scoped read/delete authorization、thread list/search missing `scope_id` invalid request、terminal-run durable memory audit、redaction hardening、search/list/audit filter shape 收口、Settings > Memory list/search/filter/detail/delete confirmation、真实 `/v1/memory/audit` history、backend unavailable/error/empty 不造假，以及 seeded browser smoke。M14.1 已修复 audit filter shape 与 latest-request guard，避免 M15 evidence 混入其它 thread history 或被旧响应覆盖。M14 仍不包含 distill、OpenViking、vector/embedding/RAG、activity recorder、MCP、worker queue、sandbox 或多 agent 重写。
 
 ## 当前已完成：M13 Memory Foundation + M13.5 Closeout
 
