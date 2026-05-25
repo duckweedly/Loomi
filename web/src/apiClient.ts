@@ -13,6 +13,7 @@ export type ApiClient = {
   getRunEvents(runId: string): Promise<Run['events']>
   listModelProviders?(): Promise<ProviderCapability[]>
   checkModelProvider?(providerId: string): Promise<ProviderCapability>
+  saveModelProvider?(input: { baseUrl: string; model: string; apiKey: string }): Promise<ProviderCapability>
   getWorkerQueueDiagnostics?(): Promise<WorkerQueueDiagnostics>
   getToolCall?(threadId: string, runId: string, toolCallId: string): Promise<ToolCall>
   startRun?(threadId: string, input?: { messageId?: string; source?: Run['source']; providerId?: string; model?: string }): Promise<Run>

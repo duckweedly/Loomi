@@ -22,6 +22,13 @@ export type ProviderCheckResult = {
   message?: string
 }
 
+export type ProviderSaveStatus = 'idle' | 'saving' | 'success' | 'failed'
+
+export type ProviderSaveResult = {
+  status: ProviderSaveStatus
+  message?: string
+}
+
 export function redactProviderCheckMessage(message: string) {
   const trimmed = message.trim()
   if (!trimmed) return 'Provider check failed'
@@ -241,6 +248,7 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
   const [selectedRuntimeScript, setSelectedRuntimeScript] = useState<RuntimeScriptId>('success')
   const [providerCapabilities, setProviderCapabilities] = useState<ProviderCapability[]>([])
   const [providerCheckResults, setProviderCheckResults] = useState<Record<string, ProviderCheckResult>>({})
+  const [providerSaveResult, setProviderSaveResult] = useState<ProviderSaveResult>({ status: 'idle' })
   const selectedThreadIdRef = useRef(selectedThreadId)
   const runRef = useRef<Run | null>(run)
 
@@ -470,6 +478,22 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
     }
   }, [])
 
+  const saveProvider = useCallback(async (input: { baseUrl: string; model: string; apiKey: string }) => {
+    if (!apiClient.saveModelProvider) return
+    setProviderSaveResult({ status: 'saving' })
+    try {
+      const provider = redactProviderCapabilityMessage(await apiClient.saveModelProvider(input))
+      setProviderCapabilities((current) => {
+        const exists = current.some((candidate) => candidate.id === provider.id)
+        return exists ? current.map((candidate) => (candidate.id === provider.id ? provider : candidate)) : [...current, provider]
+      })
+      setProviderCheckResults((current) => ({ ...current, [provider.id]: { status: provider.status === 'available' ? 'success' : 'failed', message: provider.message ?? provider.status } }))
+      setProviderSaveResult({ status: provider.status === 'available' ? 'success' : 'failed', message: provider.message ?? provider.status })
+    } catch (err) {
+      setProviderSaveResult({ status: 'failed', message: redactProviderCheckMessage(err instanceof Error ? err.message : 'Provider save failed') })
+    }
+  }, [])
+
   return {
     threads,
     selectedThread,
@@ -486,8 +510,10 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
     selectedRuntimeScript,
     providerCapabilities,
     providerCheckResults,
+    providerSaveResult,
     selectRuntimeScript,
     checkProvider,
+    saveProvider,
     refresh,
     selectThread,
     createThread,

@@ -30,6 +30,17 @@ type checkModelProviderRequest struct {
 	ProviderID string `json:"provider_id"`
 }
 
+type saveModelProviderRequest struct {
+	BaseURL string `json:"base_url"`
+	Model   string `json:"model"`
+	APIKey  string `json:"api_key"`
+}
+
+type modelProviderSaveResponse struct {
+	Provider  productruntime.ProviderCapability `json:"provider"`
+	RequestID string                            `json:"request_id"`
+}
+
 type modelProviderCheckResponse struct {
 	Provider  productruntime.ProviderCapability `json:"provider"`
 	RequestID string                            `json:"request_id"`
@@ -57,11 +68,44 @@ type stopRunResponse struct {
 }
 
 func (s *Server) handleModelProviders(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeMethodNotAllowed(w, "GET")
+	switch r.Method {
+	case http.MethodGet:
+		writeJSON(w, http.StatusOK, modelProviderListResponse{Providers: productruntime.ProviderCapabilities(s.providers), RequestID: diagnostics.NewRequestID()})
+	case http.MethodPost:
+		s.handleModelProviderSave(w, r)
+	default:
+		writeMethodNotAllowed(w, "GET, POST")
+	}
+}
+
+func (s *Server) handleModelProviderSave(w http.ResponseWriter, r *http.Request) {
+	var req saveModelProviderRequest
+	if err := decodeJSONRequest(r, &req); err != nil {
+		writeAPIError(w, productdata.NewError(productdata.CodeInvalidRequest, "Invalid JSON request."))
 		return
 	}
-	writeJSON(w, http.StatusOK, modelProviderListResponse{Providers: productruntime.ProviderCapabilities(s.providers), RequestID: diagnostics.NewRequestID()})
+	provider := productruntime.ProviderConfig{ID: "custom", Family: productruntime.ProviderFamilyOpenAICompatible, BaseURL: strings.TrimSpace(req.BaseURL), APIKey: strings.TrimSpace(req.APIKey), Model: strings.TrimSpace(req.Model), Enabled: true}
+	capability := provider.Capability()
+	if capability.Status == productruntime.ProviderStatusMisconfigured {
+		writeAPIError(w, productdata.NewError(productdata.CodeProviderMisconfigured, capability.Message))
+		return
+	}
+	provider = s.saveProviderConfig(provider)
+	writeJSON(w, http.StatusOK, modelProviderSaveResponse{Provider: provider.Capability(), RequestID: diagnostics.NewRequestID()})
+}
+
+func (s *Server) saveProviderConfig(provider productruntime.ProviderConfig) productruntime.ProviderConfig {
+	if s.gatewayRunner != nil {
+		provider = s.gatewayRunner.SaveProviderConfig(provider)
+	}
+	for index, candidate := range s.providers {
+		if candidate.ID == provider.ID {
+			s.providers[index] = provider
+			return provider
+		}
+	}
+	s.providers = append(s.providers, provider)
+	return provider
 }
 
 func (s *Server) handleModelProviderCheck(w http.ResponseWriter, r *http.Request) {

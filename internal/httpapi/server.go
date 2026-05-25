@@ -17,6 +17,7 @@ type RuntimeRunner interface {
 
 type GatewayRunner interface {
 	RunAsync(context.Context, productdata.Run, productruntime.GatewayRunInput)
+	SaveProviderConfig(productruntime.ProviderConfig) productruntime.ProviderConfig
 }
 
 type Server struct {
@@ -83,5 +84,5 @@ func (s *Server) isLocalWebDevOrigin(origin string) bool {
 	if s.cfg.AppEnv != "local" && s.cfg.AppEnv != "development" {
 		return false
 	}
-	return origin == "http://127.0.0.1:5173" || origin == "http://localhost:5173"
+	return origin == "http://127.0.0.1:5173" || origin == "http://localhost:5173" || origin == "http://127.0.0.1:5180" || origin == "http://localhost:5180"
 }

@@ -385,6 +385,14 @@ export const realApiClient: ApiClient = {
     return mapApiProviderCapability(body.provider)
   },
 
+  async saveModelProvider(input: { baseUrl: string; model: string; apiKey: string }) {
+    const body = await requestJSON<{ provider: ApiProviderCapability }>('/v1/model-providers', {
+      method: 'POST',
+      body: JSON.stringify({ base_url: input.baseUrl, model: input.model, api_key: input.apiKey }),
+    })
+    return mapApiProviderCapability(body.provider)
+  },
+
   async getWorkerQueueDiagnostics() {
     const body = await requestJSON<{ diagnostics: ApiWorkerQueueDiagnostics }>('/v1/diagnostics/worker-queue')
     return mapApiWorkerQueueDiagnostics(body.diagnostics)

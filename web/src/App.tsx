@@ -40,7 +40,9 @@ export default function App() {
     regenerateRun,
     providerCapabilities,
     providerCheckResults,
+    providerSaveResult,
     checkProvider,
+    saveProvider,
   } = useWorkspaceState(shell.defaultWorkspaceMode)
 
   const dictionary = getDictionary(shell.locale)
@@ -182,12 +184,17 @@ export default function App() {
                   selectedRunStatus={run?.status}
                   providerCapabilities={providerCapabilities}
                   providerCheckResults={providerCheckResults}
+                  providerSaveResult={providerSaveResult}
                   providerDraftSettings={shell.providerDraftSettings}
                   onSelectLocale={shell.setLocale}
                   onSelectCategory={shell.setSettingsCategory}
                   onSelectDefaultWorkspaceMode={shell.setDefaultWorkspaceMode}
                   onSelectRuntimeScript={selectRuntimeScript}
                   onProviderDraftSettingsChange={shell.setProviderDraftSettings}
+                  onSaveProvider={(settings) => {
+                    void saveProvider({ baseUrl: settings.baseUrl, model: settings.model, apiKey: settings.apiKey })
+                    shell.setProviderDraftSettings({ ...settings, apiKey: '', apiKeySet: true })
+                  }}
                   onCheckProvider={(providerId) => void checkProvider(providerId)}
                   onBack={shell.closeSettings}
                 />

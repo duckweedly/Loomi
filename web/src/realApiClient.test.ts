@@ -289,6 +289,12 @@ describe('M4 run mapping', () => {
     return expect(source).resolves.toContain("source: 'model_gateway'")
   })
 
+  test('exposes saveModelProvider for local desktop provider settings', () => {
+    const source = Bun.file(new URL('./realApiClient.ts', import.meta.url)).text()
+
+    return expect(source).resolves.toContain('saveModelProvider')
+  })
+
   test('preserves token usage and provider metadata as event details', () => {
     const usage = mapApiRunEvent({ id: 'evt-usage', run_id: 'run-1', thread_id: 'thread-1', sequence: 6, category: 'message', type: 'model.usage', summary: 'Usage', content: null, metadata: { input_tokens: 5, output_tokens: 8, total_tokens: 13 }, created_at: '2026-05-23T00:00:03Z' })
     const providerError = mapApiRunEvent({ id: 'evt-provider', run_id: 'run-1', thread_id: 'thread-1', sequence: 7, category: 'error', type: 'provider.error', summary: 'Provider unavailable', content: null, metadata: { provider: 'anthropic', code: 'overloaded' }, created_at: '2026-05-23T00:00:04Z' })

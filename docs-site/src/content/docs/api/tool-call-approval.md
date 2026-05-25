@@ -5,6 +5,37 @@ description: Tool-call projection, event payloads, diagnostics fields, and Phase
 
 M7 Phase 2 adds the backend and frontend contracts needed for approval-gated internal tool calls. The US1 observable request slice now records provider-requested `runtime.get_current_time` calls, replays approval-required events, and exposes scoped current-state reads. HTTP approve/deny endpoints are specified for M7 but not implemented yet.
 
+Local desktop Settings can also save one OpenAI-compatible `custom` model provider into the running local API process. That endpoint only returns redacted capability data and never echoes the API key.
+
+## Local provider settings
+
+`POST /v1/model-providers` saves the local OpenAI-compatible provider used by model gateway runs:
+
+```json
+{
+  "base_url": "https://gateway.example.test/v1",
+  "model": "gpt-5.5",
+  "api_key": "sk-..."
+}
+```
+
+Successful responses return only a redacted provider capability:
+
+```json
+{
+  "provider": {
+    "id": "custom",
+    "family": "openai_compatible",
+    "base_url": "https://gateway.example.test/v1",
+    "model": "gpt-5.5",
+    "status": "available"
+  },
+  "request_id": "req_..."
+}
+```
+
+The saved provider updates both `GET /v1/model-providers` and the in-process model gateway provider list. The current slice does not write this provider to disk; restart the API to reset it unless environment variables also configure the provider.
+
 ## Tool-call projection
 
 `tool_calls` stores the current redacted state for one model-requested tool call:

@@ -30,6 +30,8 @@ Implemented slice:
 - scoped tool-call read handler and real API client mapping
 - ToolCallCard approval-required placeholder with disabled controls
 - AgentStateMotion confirm state for `blocked_on_tool_approval`
+- local desktop Settings save path for the OpenAI-compatible `custom` provider, with redacted capability responses and in-process gateway refresh
+- provider Settings UI copy and card styling aligned with the desktop shell instead of draft-only placeholder language
 
 ## Safety notes
 

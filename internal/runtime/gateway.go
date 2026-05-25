@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"net/http"
 	"strings"
 
 	"github.com/sheridiany/loomi/internal/identity"
@@ -26,6 +27,17 @@ type GatewayRunInput struct {
 
 func NewGateway(service productdata.Service, broadcaster *Broadcaster, providers []Provider) *Gateway {
 	return &Gateway{Service: service, Broadcaster: broadcaster, Providers: providers}
+}
+
+func (g *Gateway) SaveProviderConfig(provider ProviderConfig) ProviderConfig {
+	if g == nil {
+		return provider
+	}
+	provider.ID = "custom"
+	provider.Family = ProviderFamilyOpenAICompatible
+	provider.Enabled = true
+	g.Providers = replaceProvider(g.Providers, NewHTTPProvider(provider, http.DefaultClient))
+	return provider
 }
 
 func (g *Gateway) RunAsync(_ context.Context, run productdata.Run, input GatewayRunInput) {
@@ -125,6 +137,18 @@ func (g *Gateway) selectProvider(providerID string) (Provider, error) {
 		}
 	}
 	return nil, errors.New("provider not found")
+}
+
+func replaceProvider(providers []Provider, provider Provider) []Provider {
+	config := provider.Config()
+	for index, candidate := range providers {
+		if candidate.Config().ID == config.ID {
+			next := append([]Provider{}, providers...)
+			next[index] = provider
+			return next
+		}
+	}
+	return append(providers, provider)
 }
 
 func (g *Gateway) loadRequestMessages(ctx context.Context, threadID string, triggerMessageID string) ([]ProviderMessage, error) {

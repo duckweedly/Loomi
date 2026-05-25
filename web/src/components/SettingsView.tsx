@@ -1,7 +1,7 @@
 import { ArrowLeft, ChevronRight } from 'lucide-react'
 import type { ReactNode } from 'react'
 import type { BackendCapabilityState, ProviderCapability, RunStatus, RuntimeScriptId, StreamState, Thread } from '../domain'
-import type { ProviderCheckResult } from '../state'
+import type { ProviderCheckResult, ProviderSaveResult } from '../state'
 import type { ProviderDraftSettings } from '../useWorkspaceShellState'
 import type { Locale } from '../i18n'
 import { getDictionary } from '../i18n'
@@ -19,12 +19,14 @@ type Props = {
   selectedRunStatus?: RunStatus
   providerCapabilities: ProviderCapability[]
   providerCheckResults: Record<string, ProviderCheckResult>
+  providerSaveResult: ProviderSaveResult
   providerDraftSettings: ProviderDraftSettings
   onSelectLocale: (locale: Locale) => void
   onSelectCategory: (categoryId: SettingsCategoryId) => void
   onSelectDefaultWorkspaceMode: (mode: Thread['mode']) => void
   onSelectRuntimeScript: (scriptId: RuntimeScriptId) => void
   onProviderDraftSettingsChange: (settings: ProviderDraftSettings) => void
+  onSaveProvider: (settings: ProviderDraftSettings) => void
   onCheckProvider: (providerId: string) => void
   onBack: () => void
 }
@@ -185,12 +187,14 @@ export function SettingsView({
   selectedRunStatus,
   providerCapabilities,
   providerCheckResults,
+  providerSaveResult,
   providerDraftSettings,
   onSelectLocale,
   onSelectCategory,
   onSelectDefaultWorkspaceMode,
   onSelectRuntimeScript,
   onProviderDraftSettingsChange,
+  onSaveProvider,
   onCheckProvider,
   onBack,
 }: Props) {
@@ -347,15 +351,24 @@ export function SettingsView({
                 control={(
                   <div className="settings-secret-control">
                     <ProviderTextInput
-                      value=""
+                      value={providerDraftSettings.apiKey}
                       type="password"
                       placeholder={providerDraftSettings.apiKeySet ? t.providerConfigured : t.providerNotConfigured}
-                      onChange={(apiKey) => onProviderDraftSettingsChange({ ...providerDraftSettings, apiKeySet: apiKey.length > 0 })}
+                      onChange={(apiKey) => onProviderDraftSettingsChange({ ...providerDraftSettings, apiKey, apiKeySet: apiKey.length > 0 })}
                     />
                     <StatusValue>{providerDraftSettings.apiKeySet ? t.providerConfigured : t.providerNotConfigured}</StatusValue>
                   </div>
                 )}
               />
+              <div className="provider-save-row">
+                <div>
+                  <strong>{t.providerSaveTitle}</strong>
+                  <p>{providerSaveResult.message ? t.providerSaveResult(providerSaveResult.status, providerSaveResult.message) : t.providerSaveDescription}</p>
+                </div>
+                <button className="provider-save-button" disabled={providerSaveResult.status === 'saving'} onClick={() => onSaveProvider(providerDraftSettings)}>
+                  {providerSaveResult.status === 'saving' ? t.providerSaving : t.providerSave}
+                </button>
+              </div>
             </section>
           </div>
         )}
