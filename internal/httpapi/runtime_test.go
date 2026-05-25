@@ -39,21 +39,23 @@ func TestStartRunHandlerCreatesLocalSimulatedRun(t *testing.T) {
 
 func TestModelProviderPreflightAllowsBrowserReads(t *testing.T) {
 	srv := NewServerWithProduct(config.Config{AppEnv: "local"}, fakeChecker{}, productdata.NewMemoryService())
-	req := httptest.NewRequest(http.MethodOptions, "/v1/model-providers", nil)
-	req.Header.Set("Origin", "http://127.0.0.1:5173")
-	req.Header.Set("Access-Control-Request-Method", http.MethodGet)
-	res := httptest.NewRecorder()
+	for _, origin := range []string{"http://127.0.0.1:5173", "http://127.0.0.1:5180"} {
+		req := httptest.NewRequest(http.MethodOptions, "/v1/model-providers", nil)
+		req.Header.Set("Origin", origin)
+		req.Header.Set("Access-Control-Request-Method", http.MethodGet)
+		res := httptest.NewRecorder()
 
-	srv.ServeHTTP(res, req)
+		srv.ServeHTTP(res, req)
 
-	if res.Code != http.StatusNoContent {
-		t.Fatalf("status = %d body=%s", res.Code, res.Body.String())
-	}
-	if res.Header().Get("Access-Control-Allow-Origin") != "http://127.0.0.1:5173" {
-		t.Fatalf("allow origin = %q", res.Header().Get("Access-Control-Allow-Origin"))
-	}
-	if res.Header().Get("Access-Control-Allow-Methods") != "GET, POST, PATCH, OPTIONS" {
-		t.Fatalf("allow methods = %q", res.Header().Get("Access-Control-Allow-Methods"))
+		if res.Code != http.StatusNoContent {
+			t.Fatalf("status = %d body=%s", res.Code, res.Body.String())
+		}
+		if res.Header().Get("Access-Control-Allow-Origin") != origin {
+			t.Fatalf("origin %s allow origin = %q", origin, res.Header().Get("Access-Control-Allow-Origin"))
+		}
+		if res.Header().Get("Access-Control-Allow-Methods") != "GET, POST, PATCH, OPTIONS" {
+			t.Fatalf("allow methods = %q", res.Header().Get("Access-Control-Allow-Methods"))
+		}
 	}
 }
 
@@ -79,6 +81,24 @@ func TestModelProviderHandlersExposeRedactedCapability(t *testing.T) {
 	check := requestJSON(t, srv, http.MethodPost, "/v1/model-providers/check", `{"provider_id":"custom"}`)
 	if check.Code != http.StatusOK {
 		t.Fatalf("check status = %d body=%s", check.Code, check.Body.String())
+	}
+}
+
+func TestModelProviderHandlerSavesLocalCustomProvider(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	srv := NewServerWithProduct(config.Config{AppEnv: "local"}, fakeChecker{}, svc)
+
+	res := requestJSON(t, srv, http.MethodPost, "/v1/model-providers", `{"base_url":"https://gateway.example.test/v1","model":"gpt-5.5","api_key":"secret-key"}`)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", res.Code, res.Body.String())
+	}
+	if strings.Contains(res.Body.String(), "secret-key") || !strings.Contains(res.Body.String(), `"id":"custom"`) || !strings.Contains(res.Body.String(), `"status":"available"`) {
+		t.Fatalf("body = %s", res.Body.String())
+	}
+	listed := requestJSON(t, srv, http.MethodGet, "/v1/model-providers", "")
+	if !strings.Contains(listed.Body.String(), "gpt-5.5") || strings.Contains(listed.Body.String(), "secret-key") {
+		t.Fatalf("listed body = %s", listed.Body.String())
 	}
 }
 

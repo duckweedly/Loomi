@@ -16,6 +16,18 @@ APP_ENV=local HTTP_ADDR=127.0.0.1:8080 DATABASE_URL="$DATABASE_URL" go run ./cmd
 
 `/readyz` should report ready after schema version `6` is applied.
 
+## Configure a local model provider
+
+In the desktop Settings provider panel, save a local OpenAI-compatible provider with Base URL, model ID, and API key. The API accepts the same shape directly:
+
+```bash
+curl -sS http://127.0.0.1:8080/v1/model-providers \
+  -H 'Content-Type: application/json' \
+  -d '{"base_url":"https://gateway.example.test/v1","model":"gpt-5.5","api_key":"sk-..."}'
+```
+
+The response and later provider list only expose redacted capability fields. The current implementation stores this provider in the running API process and updates the model gateway immediately; restart the API to clear it.
+
 ## Foundation smoke expectations
 
 Until approve/deny endpoints land, validate the foundation and observable request slice with automated tests:

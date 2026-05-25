@@ -21,4 +21,13 @@ describe('SettingsView layout contract', () => {
     expect(text).toContain('t.working')
     expect(text).toContain('t.previewOnly')
   })
+
+  test('providers settings expose a saved local provider action without draft-only copy', async () => {
+    const text = await source
+
+    expect(text).toContain('provider-save-button')
+    expect(text).toContain('onSaveProvider')
+    expect(text).not.toContain('不会保存')
+    expect(text).not.toContain('not saved')
+  })
 })

@@ -57,7 +57,7 @@ export const settingsCategoryGroups: Record<SettingsCategoryGroup, Record<Locale
 const categoryCopy: Record<SettingsCategoryId, Record<Locale, Pick<SettingsCategory, 'label' | 'description'>>> = {
   general: { zh: { label: '通用', description: '当前会话的工作区默认值和运行状态可见性。' }, en: { label: 'General', description: 'Current-session workspace defaults and runtime visibility.' } },
   appearance: { zh: { label: '外观', description: '后续里程碑的主题和显示预览。' }, en: { label: 'Appearance', description: 'Theme and display previews for a later milestone.' } },
-  providers: { zh: { label: 'Providers', description: '显示已脱敏模型 provider 能力，provider 管理暂缓。' }, en: { label: 'Providers', description: 'Redacted model-provider capability with provider management deferred.' } },
+  providers: { zh: { label: 'Providers', description: '保存本地 provider，并显示已脱敏模型能力。' }, en: { label: 'Providers', description: 'Save a local provider and view redacted model capability.' } },
   connectors: { zh: { label: '连接器', description: '未来外部连接设置的预览区域。' }, en: { label: 'Connectors', description: 'Preview area for future external connection settings.' } },
   plugins: { zh: { label: '插件', description: '未来插件控制的预览区域。' }, en: { label: 'Plugins', description: 'Preview area for future plugin controls.' } },
   skill: { zh: { label: '技能', description: '未来技能控制的预览区域。' }, en: { label: 'Skill', description: 'Preview area for future skill controls.' } },

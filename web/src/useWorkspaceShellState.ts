@@ -7,6 +7,7 @@ import type { RightPanelItemId } from './rightPanelItems'
 export type ProviderDraftSettings = {
   baseUrl: string
   model: string
+  apiKey: string
   apiKeySet: boolean
 }
 
@@ -28,7 +29,7 @@ type WorkspaceShellSnapshot = {
 const initialShellState: WorkspaceShellSnapshot = {
   defaultWorkspaceMode: 'chat',
   locale: 'zh',
-  providerDraftSettings: { baseUrl: '', model: '', apiKeySet: false },
+  providerDraftSettings: { baseUrl: '', model: '', apiKey: '', apiKeySet: false },
   runDetailsOpen: false,
   rightPanelMenuOpen: false,
   rightPanelOpen: false,
