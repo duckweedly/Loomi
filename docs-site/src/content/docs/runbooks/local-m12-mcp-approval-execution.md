@@ -38,6 +38,7 @@ Do not paste real tokens or private paths into validation logs or docs examples.
 ## Commands
 
 ```bash
+go test ./internal/httpapi -run TestM12RealLocalMCPApprovalSmoke
 go test ./internal/productdata ./internal/runtime ./internal/httpapi
 bun test --cwd web src/runtime/realExecutionAdapter.test.ts src/runtime/runtimeEventGroups.test.ts
 go test ./...
@@ -48,6 +49,23 @@ git diff --check
 ```
 
 ## Smoke Expectations
+
+### M12.5 Real Local Smoke
+
+`TestM12RealLocalMCPApprovalSmoke` is the closeout evidence test. It uses a real local stdio fixture process and MCP `Content-Length` frames for both discovery and execution:
+
+1. The fixture responds to discovery `tools/list`.
+2. `mcp_discovery_succeeded` records the namespaced candidate and `candidate_schema_hashes`.
+3. The default persona snapshot allows the discovered MCP tool.
+4. The provider requests `mcp.local-smoke.echo`.
+5. Loomi records `tool_call_approval_required` and no `tools/call` has run yet.
+6. The scoped HTTP approve endpoint records `tool_call_approved`.
+7. The worker uses `StdioMCPToolExecutor` loaded from `LOOMI_MCP_SERVERS_JSON`.
+8. The fixture receives exactly one `tools/call`.
+9. Loomi records `tool_call_executing`, redacted `tool_call_succeeded`, continuation delta, final completion, and one assistant message.
+10. The smoke fails if fixture secrets or private paths appear in persisted events or continuation content.
+
+### General Expectations
 
 1. A model request for `mcp.local-search.search` creates `tool_call_approval_required`.
 2. The event metadata includes `tool_source: "mcp"`, `server_slug: "local-search"`, and `candidate_schema_hash`.
@@ -76,3 +94,7 @@ Stop and fix redaction if any of these appear in events, UI replay, provider con
 ## Out of Scope
 
 M12 does not validate remote MCP, MCP HTTP/SSE/OAuth, marketplace/plugin install, DB-managed MCP server admin, shell/filesystem/browser automation, automatic execution, complex sandboxing, admin UI, or multi-step tool loops.
+
+## Browser Smoke Status
+
+M12.5 backend/httpapi/runtime smoke covers the same state sequence required for UI verification. Browser smoke should be run only when a live local API, database, deterministic provider fixture, and web dev server are available together. In this closeout session, no long-running browser stack was started; the evidence is the in-process HTTP approve plus real worker/stdin/stdout smoke above.

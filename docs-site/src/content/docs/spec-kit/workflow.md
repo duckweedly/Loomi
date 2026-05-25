@@ -36,7 +36,45 @@ Claude Code 项目内命令使用横线格式：
 
 `/speckit-implement` 按任务实现，并在必要时回到 spec 或 plan 修正前提。
 
-## 当前功能：M12 MCP Approval-Gated Execution
+## 当前规划中：M13 Memory Foundation
+
+当前 Spec Kit 功能目录：
+
+```text
+specs/019-memory-foundation/
+```
+
+关键产物：
+
+- `spec.md`：定义 PG v1 memory、RunContext safe memory snapshot、approval-gated memory write、用户查看/删除、隐私/安全/删除/审计/redaction 边界。
+- `plan.md`：确定 v1 只实现 PG provider，复用 RunContext/Pipeline、productdata、HTTP API、frontend shell/docs-site 边界，不引入向量库/embedding/RAG/OpenViking。
+- `research.md`：记录 PG-first、approval-gated writes、tombstone deletion、redact-before-exposure、MemoryProvider PG-only 和 distill deferred 决策。
+- `data-model.md`：定义 Memory Entry、Memory Search、Memory Write Proposal、Approval Decision、Snapshot、Tombstone、Audit Event 和 MemoryProvider。
+- `contracts/`：定义 memory API、memory events/audit、MemoryProvider PG v1 契约。
+- `quickstart.md`：记录 design validation 和后续 implementation smoke expectations。
+- `tasks.md`：按 setup、foundation、US1 safe snapshot、US2 approval-gated writes、US3 user control、US4 planned-only provider/distill、docs/validation 拆分实现任务。
+
+状态：设计完成，尚未实现。
+
+## 近期已完成：M12.5 Real MCP Smoke Closeout
+
+当前 Spec Kit 功能目录：
+
+```text
+specs/018-m12-real-mcp-smoke-closeout/
+```
+
+关键产物：
+
+- `spec.md`：定义 M12.5 只补真实本地 smoke/evidence closeout，不扩展 remote MCP、marketplace、plugin install、sandbox、automation 或多工具循环。
+- `plan.md`：确定用现有 M12 本地 stdio MCP、M7 approval、M6 worker、M10 persona、M11 discovery 和 provider continuation 边界补证据。
+- `research.md`：记录 Go test subprocess fixture、HTTP approve、worker real executor、browser smoke limitation 和 closeout-only scope 决策。
+- `data-model.md`：定义 M12.5 Smoke Run、Local MCP Fixture 和 Closeout Evidence。
+- `contracts/`：定义从 discovery 到 approval、execution、redacted result、continuation 和 final 的证据链。
+- `quickstart.md`：记录 targeted smoke、完整验证命令和 browser smoke 条件。
+- `tasks.md`：按 setup、fixture、US1 smoke、US2 docs 和 validation 拆分任务。
+
+## 近期已完成：M12 MCP Approval-Gated Execution
 
 当前 Spec Kit 功能目录：
 
