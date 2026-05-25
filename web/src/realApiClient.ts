@@ -1,5 +1,5 @@
 import type { ApiClient } from './apiClient'
-import type { MemoryEntry, Message, Persona, ProviderCapability, ProviderFamily, Run, RunEvent, RunSource, RunStatus, Thread, ToolCall, WorkerQueueDiagnostics, WorkerQueueStatus, WorkerStatus } from './domain'
+import type { MemoryAuditItem, MemoryEntry, MemoryFilters, Message, Persona, ProviderCapability, ProviderFamily, Run, RunEvent, RunSource, RunStatus, Thread, ToolCall, WorkerQueueDiagnostics, WorkerQueueStatus, WorkerStatus } from './domain'
 import { isRuntimeTerminal } from './runtime/executionAdapter'
 import { applyRealRunEvent } from './runtime/realExecutionAdapter'
 
@@ -93,11 +93,32 @@ export type ApiMemoryEntry = {
   title: string
   summary: string
   scope_type: 'user' | 'thread'
+  scope_id?: string | null
+  status?: 'approved' | 'tombstoned' | 'disabled'
+  safety_state?: 'safe' | 'redacted' | 'blocked'
   source_thread_id?: string | null
   source_run_id?: string | null
+  source_event_id?: string | null
+  source_type?: 'manual' | 'thread' | 'run' | null
   created_at: string
   updated_at: string
+  deleted_at?: string | null
   redaction_applied?: boolean
+}
+
+export type ApiMemoryAuditItem = {
+  id: string
+  event_type: MemoryAuditItem['eventType']
+  summary: string
+  thread_id?: string | null
+  run_id?: string | null
+  memory_entry_id?: string | null
+  memory_proposal_id?: string | null
+  status?: string | null
+  scope_type?: string | null
+  source_type?: string | null
+  redaction_applied?: boolean
+  occurred_at: string
 }
 
 type ApiRunEvent = {
@@ -338,12 +359,67 @@ export function mapApiMemoryEntry(entry: ApiMemoryEntry): MemoryEntry {
     title: entry.title,
     summary: entry.summary,
     scopeType: entry.scope_type,
+    scopeId: entry.scope_id ?? undefined,
+    status: entry.status ?? 'approved',
+    safetyState: entry.safety_state ?? undefined,
     sourceThreadId: entry.source_thread_id ?? undefined,
     sourceRunId: entry.source_run_id ?? undefined,
+    sourceEventId: entry.source_event_id ?? undefined,
+    sourceType: entry.source_type ?? undefined,
     createdAt: entry.created_at,
     updatedAt: entry.updated_at,
+    deletedAt: entry.deleted_at ?? undefined,
     redactionApplied: Boolean(entry.redaction_applied),
   }
+}
+
+export function mapApiMemoryAuditItem(item: ApiMemoryAuditItem): MemoryAuditItem {
+  return {
+    id: item.id,
+    eventType: item.event_type,
+    summary: item.summary,
+    threadId: item.thread_id ?? undefined,
+    runId: item.run_id ?? undefined,
+    memoryEntryId: item.memory_entry_id ?? undefined,
+    memoryProposalId: item.memory_proposal_id ?? undefined,
+    status: item.status ?? undefined,
+    scopeType: item.scope_type ?? undefined,
+    sourceType: item.source_type ?? undefined,
+    redactionApplied: Boolean(item.redaction_applied),
+    occurredAt: item.occurred_at,
+  }
+}
+
+function memoryQueryString(filters: MemoryFilters = {}, query = '') {
+  const params = new URLSearchParams()
+  if (query.trim()) params.set('q', query.trim())
+  if (filters.scopeType) params.set('scope_type', filters.scopeType)
+  if (filters.scopeId?.trim()) params.set('scope_id', filters.scopeId.trim())
+  if (filters.sourceThreadId?.trim()) params.set('source_thread_id', filters.sourceThreadId.trim())
+  if (filters.sourceRunId?.trim()) params.set('source_run_id', filters.sourceRunId.trim())
+  if (filters.sourceType && filters.sourceType !== 'any') params.set('source_type', filters.sourceType)
+  if (filters.includeTombstoned) params.set('include_tombstoned', 'true')
+  const encoded = params.toString()
+  return encoded ? `?${encoded}` : ''
+}
+
+function memoryFilterRequestFields(filters: MemoryFilters = {}) {
+  return {
+    scope_type: filters.scopeType || undefined,
+    scope_id: filters.scopeId?.trim() || undefined,
+    source_thread_id: filters.sourceThreadId?.trim() || undefined,
+    source_run_id: filters.sourceRunId?.trim() || undefined,
+    source_type: filters.sourceType && filters.sourceType !== 'any' ? filters.sourceType : undefined,
+    include_tombstoned: filters.includeTombstoned || undefined,
+  }
+}
+
+function memorySearchRequestBody(query: string, filters: MemoryFilters = {}) {
+  return { query, limit: 20, ...memoryFilterRequestFields(filters) }
+}
+
+function memoryDeleteRequestBody(filters: MemoryFilters = {}) {
+  return memoryFilterRequestFields(filters)
 }
 
 export function mapApiRunEvent(event: ApiRunEvent): RunEvent {
@@ -492,21 +568,31 @@ export const realApiClient: ApiClient = {
     return mapApiToolCall(body.tool_call)
   },
 
-  async listMemoryEntries() {
-    const body = await requestJSON<{ items: ApiMemoryEntry[] }>('/v1/memory')
+  async listMemoryEntries(filters = {}) {
+    const body = await requestJSON<{ items: ApiMemoryEntry[] }>(`/v1/memory${memoryQueryString(filters)}`)
     return body.items.map(mapApiMemoryEntry)
   },
 
-  async searchMemory(query: string) {
+  async searchMemory(query: string, filters = {}) {
     const body = await requestJSON<{ items: ApiMemoryEntry[] }>('/v1/memory/search', {
       method: 'POST',
-      body: JSON.stringify({ query, limit: 20 }),
+      body: JSON.stringify(memorySearchRequestBody(query, filters)),
     })
     return body.items.map(mapApiMemoryEntry)
   },
 
-  async deleteMemoryEntry(entryId: string) {
-    await requestJSON<{ status: string }>(`/v1/memory/${entryId}`, { method: 'DELETE' })
+  async getMemoryEntry(entryId: string, filters = {}) {
+    const body = await requestJSON<{ entry: ApiMemoryEntry }>(`/v1/memory/entries/${entryId}${memoryQueryString(filters)}`)
+    return mapApiMemoryEntry(body.entry)
+  },
+
+  async deleteMemoryEntry(entryId: string, filters = {}) {
+    await requestJSON<{ status: string }>(`/v1/memory/entries/${entryId}`, { method: 'DELETE', body: JSON.stringify(memoryDeleteRequestBody(filters)) })
+  },
+
+  async listMemoryAudit(filters = {}) {
+    const body = await requestJSON<{ items: ApiMemoryAuditItem[] }>(`/v1/memory/audit${memoryQueryString(filters)}`)
+    return body.items.map(mapApiMemoryAuditItem)
   },
 
   async startRun(threadId: string, input: { messageId?: string; source?: RunSource; providerId?: string; model?: string; personaId?: string } = {}) {

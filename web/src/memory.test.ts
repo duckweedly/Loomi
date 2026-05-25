@@ -20,6 +20,7 @@ describe('M13 memory API mapping', () => {
       title: 'Preference',
       summary: 'Prefers short slices',
       scopeType: 'user',
+      status: 'approved',
       sourceThreadId: 'thr_1',
       sourceRunId: 'run_1',
       createdAt: '2026-05-25T00:00:00Z',

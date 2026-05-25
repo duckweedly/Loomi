@@ -47,8 +47,9 @@ type Service interface {
 	CreateMemoryEntry(context.Context, identity.LocalIdentity, CreateMemoryEntryInput) (MemoryEntry, error)
 	ListMemoryEntries(context.Context, identity.LocalIdentity, MemorySearchInput) (MemorySearchOutput, error)
 	SearchMemory(context.Context, identity.LocalIdentity, MemorySearchInput) (MemorySearchOutput, error)
-	GetMemoryEntry(context.Context, identity.LocalIdentity, string) (MemoryEntry, error)
+	GetMemoryEntry(context.Context, identity.LocalIdentity, string, MemoryEntryAccessInput) (MemoryEntry, error)
 	DeleteMemoryEntry(context.Context, identity.LocalIdentity, string, DeleteMemoryEntryInput) (MemoryTombstone, error)
+	ListMemoryAudit(context.Context, identity.LocalIdentity, MemoryAuditInput) (MemoryAuditOutput, error)
 	ProposeMemoryWrite(context.Context, identity.LocalIdentity, ProposeMemoryWriteInput) (MemoryWriteProposal, error)
 	ApproveMemoryWrite(context.Context, identity.LocalIdentity, string, MemoryWriteDecisionInput) (MemoryWriteDecision, error)
 	DenyMemoryWrite(context.Context, identity.LocalIdentity, string, MemoryWriteDecisionInput) (MemoryWriteDecision, error)
@@ -72,6 +73,7 @@ type MemoryService struct {
 	messages           map[string][]Message
 	runs               map[string]Run
 	runEvents          map[string][]RunEvent
+	memoryAuditEvents  []RunEvent
 	backgroundJobs     map[string]BackgroundJob
 	toolCalls          map[string]ToolCall
 	personas           map[string]Persona
@@ -91,6 +93,7 @@ func NewMemoryService() *MemoryService {
 		messages:           map[string][]Message{},
 		runs:               map[string]Run{},
 		runEvents:          map[string][]RunEvent{},
+		memoryAuditEvents:  []RunEvent{},
 		backgroundJobs:     map[string]BackgroundJob{},
 		toolCalls:          map[string]ToolCall{},
 		personas:           map[string]Persona{},
@@ -410,6 +413,11 @@ func (s *MemoryService) AppendRunEvent(_ context.Context, ident identity.LocalId
 	now := s.now()
 	event := RunEvent{ID: NewRunEventID(), RunID: run.ID, ThreadID: run.ThreadID, UserID: user.ID, Sequence: len(s.runEvents[run.ID]) + 1, Category: input.Category, Type: input.Type, Summary: input.Summary, Content: input.Content, Metadata: input.Metadata, CreatedAt: now}
 	s.runEvents[run.ID] = append(s.runEvents[run.ID], event)
+	if isMemoryAuditEvent(event.Type) {
+		auditEvent := event
+		auditEvent.Sequence = len(s.memoryAuditEvents) + 1
+		s.memoryAuditEvents = append(s.memoryAuditEvents, auditEvent)
+	}
 	run.UpdatedAt = now
 	if input.Category == RunEventCategoryFinal {
 		run.Status = statusFromFinalType(input.Type)
@@ -472,7 +480,6 @@ func (s *MemoryService) CreateMemoryEntry(_ context.Context, ident identity.Loca
 }
 
 func (s *MemoryService) ListMemoryEntries(ctx context.Context, ident identity.LocalIdentity, input MemorySearchInput) (MemorySearchOutput, error) {
-	input.Query = ""
 	return s.SearchMemory(ctx, ident, input)
 }
 
@@ -503,12 +510,12 @@ func (s *MemoryService) SearchMemory(_ context.Context, ident identity.LocalIden
 	return MemorySearchOutput{Items: items, ExcludedCount: excluded}, nil
 }
 
-func (s *MemoryService) GetMemoryEntry(_ context.Context, ident identity.LocalIdentity, entryID string) (MemoryEntry, error) {
+func (s *MemoryService) GetMemoryEntry(_ context.Context, ident identity.LocalIdentity, entryID string, input MemoryEntryAccessInput) (MemoryEntry, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	user := s.ensureUserLocked(ident)
 	entry, ok := s.memoryEntries[strings.TrimSpace(entryID)]
-	if !ok || !memoryEntryVisibleTo(entry, user.ID, MemorySearchInput{}) {
+	if !ok || !memoryEntryReadableTo(entry, user.ID, input) {
 		return MemoryEntry{}, NewError(CodeMemoryNotFound, "Memory not found.")
 	}
 	entry.Content = ""
@@ -520,7 +527,7 @@ func (s *MemoryService) DeleteMemoryEntry(_ context.Context, ident identity.Loca
 	defer s.mu.Unlock()
 	user := s.ensureUserLocked(ident)
 	entry, ok := s.memoryEntries[strings.TrimSpace(entryID)]
-	if !ok || entry.UserID != user.ID {
+	if !ok || !memoryEntryReadableTo(entry, user.ID, MemoryEntryAccessInput{ScopeType: input.ScopeType, ScopeID: input.ScopeID, SourceThreadID: input.SourceThreadID, SourceRunID: input.SourceRunID}) {
 		return MemoryTombstone{}, NewError(CodeMemoryNotFound, "Memory not found.")
 	}
 	if entry.Status == MemoryEntryTombstoned && entry.DeletedAt != nil {
@@ -535,8 +542,36 @@ func (s *MemoryService) DeleteMemoryEntry(_ context.Context, ident identity.Loca
 	entry.DeleteReason = RedactEventText(strings.TrimSpace(input.Reason))
 	entry.UpdatedAt = now
 	s.memoryEntries[entry.ID] = entry
-	s.appendMemoryAuditEventLocked(entry.SourceRunID, EventMemoryEntryDeleted, "Memory entry deleted", memoryEntryAuditMetadata(entry, ""))
+	s.appendMemoryAuditEventLocked(user.ID, entry.SourceRunID, EventMemoryEntryDeleted, "Memory entry deleted", memoryEntryAuditMetadata(entry, ""))
 	return MemoryTombstone{EntryID: entry.ID, Status: string(MemoryEntryTombstoned), DeletedAt: now}, nil
+}
+
+func (s *MemoryService) ListMemoryAudit(_ context.Context, ident identity.LocalIdentity, input MemoryAuditInput) (MemoryAuditOutput, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user := s.ensureUserLocked(ident)
+	limit := memoryLimit(input.Limit)
+	items := make([]MemoryAuditItem, 0, limit)
+	for _, event := range s.memoryAuditEvents {
+		if event.UserID != user.ID || !isMemoryAuditEvent(event.Type) {
+			continue
+		}
+		if input.ThreadID != "" && event.ThreadID != strings.TrimSpace(input.ThreadID) {
+			continue
+		}
+		if input.SourceRunID != "" && event.RunID != strings.TrimSpace(input.SourceRunID) {
+			continue
+		}
+		if input.EventType != "" && memoryAuditEventType(event.Type) != strings.TrimSpace(input.EventType) {
+			continue
+		}
+		items = append(items, memoryAuditItem(event))
+	}
+	sort.SliceStable(items, func(i, j int) bool { return items[i].OccurredAt.After(items[j].OccurredAt) })
+	if len(items) > limit {
+		items = items[:limit]
+	}
+	return MemoryAuditOutput{Items: items}, nil
 }
 
 func (s *MemoryService) ProposeMemoryWrite(_ context.Context, ident identity.LocalIdentity, input ProposeMemoryWriteInput) (MemoryWriteProposal, error) {
@@ -566,7 +601,7 @@ func (s *MemoryService) ProposeMemoryWrite(_ context.Context, ident identity.Loc
 	if key != "" {
 		s.memoryProposalKeys[user.ID+":"+key] = proposal.ID
 	}
-	s.appendMemoryAuditEventLocked(proposal.SourceRunID, EventMemoryWriteProposed, "Memory write proposed", memoryProposalAuditMetadata(proposal, ""))
+	s.appendMemoryAuditEventLocked(user.ID, proposal.SourceRunID, EventMemoryWriteProposed, "Memory write proposed", memoryProposalAuditMetadata(proposal, ""))
 	return proposal, nil
 }
 
@@ -604,7 +639,7 @@ func (s *MemoryService) ApproveMemoryWrite(_ context.Context, ident identity.Loc
 	if input.IdempotencyKey != "" {
 		s.memoryDecisionKeys[user.ID+":approve:"+strings.TrimSpace(input.IdempotencyKey)] = decision
 	}
-	s.appendMemoryAuditEventLocked(proposal.SourceRunID, EventMemoryWriteApproved, "Memory write approved", memoryProposalAuditMetadata(proposal, entry.ID))
+	s.appendMemoryAuditEventLocked(user.ID, proposal.SourceRunID, EventMemoryWriteApproved, "Memory write approved", memoryProposalAuditMetadata(proposal, entry.ID))
 	return decision, nil
 }
 
@@ -635,7 +670,7 @@ func (s *MemoryService) DenyMemoryWrite(_ context.Context, ident identity.LocalI
 	if input.IdempotencyKey != "" {
 		s.memoryDecisionKeys[user.ID+":deny:"+strings.TrimSpace(input.IdempotencyKey)] = decision
 	}
-	s.appendMemoryAuditEventLocked(proposal.SourceRunID, EventMemoryWriteDenied, "Memory write denied", memoryProposalAuditMetadata(proposal, ""))
+	s.appendMemoryAuditEventLocked(user.ID, proposal.SourceRunID, EventMemoryWriteDenied, "Memory write denied", memoryProposalAuditMetadata(proposal, ""))
 	return decision, nil
 }
 
@@ -859,17 +894,61 @@ func memoryLimit(limit int) int {
 }
 
 func memoryEntryVisibleTo(entry MemoryEntry, userID string, input MemorySearchInput) bool {
-	if entry.UserID != userID || entry.Status != MemoryEntryApproved || entry.SafetyState == MemorySafetyBlocked {
+	if entry.UserID != userID || entry.SafetyState == MemorySafetyBlocked {
+		return false
+	}
+	if entry.Status != MemoryEntryApproved && !(input.IncludeTombstoned && entry.Status == MemoryEntryTombstoned) {
 		return false
 	}
 	switch input.ScopeType {
 	case MemoryScopeThread:
-		return (entry.ScopeType == MemoryScopeUser && entry.ScopeID == userID) || (entry.ScopeType == MemoryScopeThread && entry.ScopeID == strings.TrimSpace(input.ScopeID))
+		if !((entry.ScopeType == MemoryScopeUser && entry.ScopeID == userID) || (entry.ScopeType == MemoryScopeThread && entry.ScopeID == strings.TrimSpace(input.ScopeID))) {
+			return false
+		}
 	case MemoryScopeUser, "":
-		return entry.ScopeType == MemoryScopeUser && entry.ScopeID == userID
+		if !(entry.ScopeType == MemoryScopeUser && entry.ScopeID == userID) {
+			return false
+		}
 	default:
 		return false
 	}
+	if input.SourceRunID != "" && entry.SourceRunID != strings.TrimSpace(input.SourceRunID) {
+		return false
+	}
+	if input.SourceThreadID != "" && entry.SourceThreadID != strings.TrimSpace(input.SourceThreadID) {
+		return false
+	}
+	switch strings.TrimSpace(input.SourceType) {
+	case "", "any":
+		return true
+	case "run":
+		return entry.SourceRunID != ""
+	case "thread":
+		return entry.SourceThreadID != ""
+	case "manual":
+		return entry.SourceRunID == "" && entry.SourceThreadID == ""
+	default:
+		return false
+	}
+}
+
+func memoryEntryReadableTo(entry MemoryEntry, userID string, input MemoryEntryAccessInput) bool {
+	if entry.UserID != userID || entry.SafetyState == MemorySafetyBlocked || (entry.Status != MemoryEntryApproved && entry.Status != MemoryEntryTombstoned) {
+		return false
+	}
+	if entry.ScopeType == MemoryScopeUser && entry.ScopeID == userID {
+		return true
+	}
+	if entry.ScopeType != MemoryScopeThread {
+		return false
+	}
+	scopeType := input.ScopeType
+	scopeID := strings.TrimSpace(input.ScopeID)
+	sourceThreadID := strings.TrimSpace(input.SourceThreadID)
+	sourceRunID := strings.TrimSpace(input.SourceRunID)
+	return (scopeType == MemoryScopeThread && scopeID != "" && scopeID == entry.ScopeID) ||
+		(sourceThreadID != "" && sourceThreadID == entry.SourceThreadID) ||
+		(sourceRunID != "" && sourceRunID == entry.SourceRunID)
 }
 
 func memoryEntryMatches(entry MemoryEntry, terms []string) bool {
@@ -883,7 +962,7 @@ func memoryEntryMatches(entry MemoryEntry, terms []string) bool {
 }
 
 func memorySearchResult(entry MemoryEntry) MemorySearchResult {
-	return MemorySearchResult{ID: entry.ID, Title: entry.Title, Summary: entry.Summary, ScopeType: entry.ScopeType, SourceThreadID: entry.SourceThreadID, SourceRunID: entry.SourceRunID, CreatedAt: entry.CreatedAt, UpdatedAt: entry.UpdatedAt, RankReason: "text_match", RedactionApplied: entry.SafetyState != MemorySafetySafe || entry.Content != entry.Summary}
+	return MemorySearchResult{ID: entry.ID, Title: entry.Title, Summary: entry.Summary, ScopeType: entry.ScopeType, ScopeID: entry.ScopeID, Status: string(entry.Status), SafetyState: string(entry.SafetyState), SourceThreadID: entry.SourceThreadID, SourceRunID: entry.SourceRunID, SourceEventID: entry.SourceEventID, SourceType: memorySourceType(entry.SourceThreadID, entry.SourceRunID), CreatedAt: entry.CreatedAt, UpdatedAt: entry.UpdatedAt, DeletedAt: entry.DeletedAt, RankReason: "text_match", RedactionApplied: entry.SafetyState != MemorySafetySafe || entry.Content != entry.Summary}
 }
 
 func safeMemoryEntry(entry MemoryEntry) MemoryEntry {
@@ -893,6 +972,49 @@ func safeMemoryEntry(entry MemoryEntry) MemoryEntry {
 
 func memorySnapshotEventMetadata(snapshot MemorySnapshot) map[string]any {
 	return map[string]any{"status": snapshot.LoadStatus, "entry_count": len(snapshot.Entries), "limit": snapshot.Limit, "redaction_applied": snapshot.RedactionApplied}
+}
+
+func isMemoryAuditEvent(eventType string) bool {
+	switch eventType {
+	case EventMemorySnapshotLoaded, EventMemoryWriteProposed, EventMemoryWriteApproved, EventMemoryWriteDenied, EventMemoryEntryDeleted:
+		return true
+	default:
+		return false
+	}
+}
+
+func memoryAuditEventType(eventType string) string {
+	if eventType == EventMemoryEntryDeleted {
+		return "memory_deleted"
+	}
+	return eventType
+}
+
+func memoryAuditItem(event RunEvent) MemoryAuditItem {
+	return MemoryAuditItem{
+		ID:               event.ID,
+		EventType:        memoryAuditEventType(event.Type),
+		Summary:          RedactEventText(event.Summary),
+		ThreadID:         event.ThreadID,
+		RunID:            event.RunID,
+		MemoryEntryID:    metadataStringValue(event.Metadata, "memory_entry_id"),
+		MemoryProposalID: metadataStringValue(event.Metadata, "memory_proposal_id"),
+		Status:           firstNonEmpty(metadataStringValue(event.Metadata, "memory_status"), metadataStringValue(event.Metadata, "status")),
+		ScopeType:        metadataStringValue(event.Metadata, "memory_scope_type"),
+		SourceType:       "run",
+		RedactionApplied: true,
+		OccurredAt:       event.CreatedAt,
+	}
+}
+
+func memorySourceType(sourceThreadID string, sourceRunID string) string {
+	if strings.TrimSpace(sourceRunID) != "" {
+		return "run"
+	}
+	if strings.TrimSpace(sourceThreadID) != "" {
+		return "thread"
+	}
+	return "manual"
 }
 
 func memoryProposalAuditMetadata(proposal MemoryWriteProposal, entryID string) map[string]any {
@@ -924,15 +1046,19 @@ func memoryEntryAuditMetadata(entry MemoryEntry, action string) map[string]any {
 	return metadata
 }
 
-func (s *MemoryService) appendMemoryAuditEventLocked(runID string, eventType string, summary string, metadata map[string]any) {
-	if runID == "" {
-		return
+func (s *MemoryService) appendMemoryAuditEventLocked(userID string, runID string, eventType string, summary string, metadata map[string]any) {
+	var run Run
+	if strings.TrimSpace(runID) != "" {
+		run = s.runs[strings.TrimSpace(runID)]
 	}
-	run, ok := s.runs[runID]
-	if !ok || IsRunTerminal(run.Status) {
-		return
+	createdAt := s.now()
+	event := RunEvent{ID: NewRunEventID(), RunID: strings.TrimSpace(runID), ThreadID: run.ThreadID, UserID: firstNonEmpty(run.UserID, strings.TrimSpace(userID)), Sequence: len(s.memoryAuditEvents) + 1, Category: RunEventCategoryProgress, Type: eventType, Summary: RedactEventText(summary), Metadata: RedactEventMetadata(metadata), CreatedAt: createdAt}
+	if event.UserID != "" {
+		s.memoryAuditEvents = append(s.memoryAuditEvents, event)
 	}
-	s.appendRunEventLocked(run, RunEventCategoryProgress, eventType, summary, nil, metadata, s.now())
+	if run.ID != "" && !IsRunTerminal(run.Status) {
+		s.appendRunEventLocked(run, RunEventCategoryProgress, eventType, summary, nil, metadata, createdAt)
+	}
 }
 
 func applyPersonaToRunContext(context *RunContext, events []RunEvent) {

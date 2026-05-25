@@ -1,10 +1,10 @@
 # Contract: Memory Provider
 
-Status: planned/design-only for `019-memory-foundation`.
+Status: current implemented contract for `019-memory-foundation`.
 
 ## Scope
 
-The MemoryProvider boundary lets RunContext, API, and runtime code depend on safe memory operations without depending on PG query details. V1 implements only a PG provider. OpenViking and other providers are deferred.
+The MemoryProvider boundary lets RunContext, API, and runtime code depend on safe memory operations without depending on PG query details. V1 currently implements only the product data/Postgres provider. OpenViking and other providers remain deferred.
 
 ## Interface expectations
 
@@ -30,7 +30,7 @@ DeleteMemory(entry_id, actor) -> MemoryTombstone
 PG provider owns:
 
 - `memory_entries` persistence.
-- Write proposal persistence if implemented as a table or status family alongside entries.
+- `memory_write_proposals` persistence.
 - Scope/status/text/metadata filtering.
 - Tombstone update.
 - Safe audit event persistence hooks.

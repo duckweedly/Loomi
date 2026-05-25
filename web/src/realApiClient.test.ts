@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { createClientMessageID, mapApiProviderCapability, mapApiRun, mapApiRunEvent, mapApiToolCall, mapApiWorkerQueueDiagnostics } from './realApiClient'
+import { createClientMessageID, mapApiMemoryAuditItem, mapApiMemoryEntry, mapApiProviderCapability, mapApiRun, mapApiRunEvent, mapApiToolCall, mapApiWorkerQueueDiagnostics } from './realApiClient'
 
 describe('createClientMessageID', () => {
   test('does not rely on Date.now alone', () => {
@@ -15,6 +15,75 @@ describe('createClientMessageID', () => {
     } finally {
       Date.now = originalNow
     }
+  })
+})
+
+describe('M14 memory management mapping', () => {
+  test('maps safe memory management fields without raw content', () => {
+    const entry = mapApiMemoryEntry({
+      id: 'mem_1',
+      title: 'Preference',
+      summary: 'Prefers short replies',
+      scope_type: 'thread',
+      scope_id: 'thr_1',
+      status: 'tombstoned',
+      safety_state: 'redacted',
+      source_thread_id: 'thr_1',
+      source_run_id: 'run_1',
+      source_event_id: 'evt_1',
+      source_type: 'run',
+      created_at: '2026-05-25T00:00:00Z',
+      updated_at: '2026-05-25T00:01:00Z',
+      deleted_at: '2026-05-25T00:02:00Z',
+      redaction_applied: true,
+    })
+
+    expect(entry).toMatchObject({
+      id: 'mem_1',
+      scopeType: 'thread',
+      scopeId: 'thr_1',
+      status: 'tombstoned',
+      safetyState: 'redacted',
+      sourceRunId: 'run_1',
+      sourceType: 'run',
+      deletedAt: '2026-05-25T00:02:00Z',
+      redactionApplied: true,
+    })
+    expect(JSON.stringify(entry)).not.toContain('content')
+  })
+
+  test('maps safe audit events without provider or tool payloads', () => {
+    const item = mapApiMemoryAuditItem({
+      id: 'evt_1',
+      event_type: 'memory_write_approved',
+      summary: 'Memory write approved',
+      thread_id: 'thr_1',
+      run_id: 'run_1',
+      memory_entry_id: 'mem_1',
+      memory_proposal_id: 'memprop_1',
+      status: 'approved',
+      scope_type: 'thread',
+      source_type: 'run',
+      redaction_applied: true,
+      occurred_at: '2026-05-25T00:00:00Z',
+    })
+
+    expect(item).toMatchObject({
+      eventType: 'memory_write_approved',
+      memoryEntryId: 'mem_1',
+      memoryProposalId: 'memprop_1',
+      redactionApplied: true,
+    })
+    expect(JSON.stringify(item)).not.toContain('provider')
+    expect(JSON.stringify(item)).not.toContain('/Users/')
+  })
+
+  test('uses grounded snake_case memory scope filters', async () => {
+    const source = await Bun.file(new URL('./realApiClient.ts', import.meta.url)).text()
+
+    expect(source).toContain("params.set('source_thread_id'")
+    expect(source).toContain('source_thread_id:')
+    expect(source).not.toContain('workspace_id')
   })
 })
 

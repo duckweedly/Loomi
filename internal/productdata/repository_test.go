@@ -551,6 +551,85 @@ func TestPostgresRunEventsUseUniqueSequenceOrdering(t *testing.T) {
 	}
 }
 
+func TestPostgresMemoryEntryScopeAndTerminalAudit(t *testing.T) {
+	databaseURL := os.Getenv("LOOMI_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("LOOMI_TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	repo := NewPostgresRepository(pool)
+	ident := postgresTestIdentity()
+	threadA, err := repo.CreateThread(ctx, ident, CreateThreadInput{Title: "PG Memory A", Mode: ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	threadB, err := repo.CreateThread(ctx, ident, CreateThreadInput{Title: "PG Memory B", Mode: ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := repo.StartRun(ctx, ident, threadA.ID, StartRunInput{ScriptName: "pg_terminal_memory_audit"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.AppendRunEvent(ctx, ident, run.ID, AppendRunEventInput{Category: RunEventCategoryFinal, Type: EventRunCompleted, Summary: "Run completed"}); err != nil {
+		t.Fatal(err)
+	}
+
+	proposal, err := repo.ProposeMemoryWrite(ctx, ident, ProposeMemoryWriteInput{ScopeType: MemoryScopeThread, ScopeID: threadA.ID, Title: "PG terminal", Content: "Keep terminal audit in PG", SourceThreadID: threadA.ID, SourceRunID: run.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision, err := repo.ApproveMemoryWrite(ctx, ident, proposal.ID, MemoryWriteDecisionInput{Reason: "approve"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.GetMemoryEntry(ctx, ident, decision.Entry.ID, MemoryEntryAccessInput{ScopeType: MemoryScopeThread, ScopeID: threadB.ID}); err == nil || ErrorCode(err) != CodeMemoryNotFound {
+		t.Fatalf("thread B read err = %v", err)
+	}
+	if _, err := repo.DeleteMemoryEntry(ctx, ident, decision.Entry.ID, DeleteMemoryEntryInput{Reason: "wrong thread", ScopeType: MemoryScopeThread, ScopeID: threadB.ID}); err == nil || ErrorCode(err) != CodeMemoryNotFound {
+		t.Fatalf("thread B delete err = %v", err)
+	}
+	if _, err := repo.GetMemoryEntry(ctx, ident, decision.Entry.ID, MemoryEntryAccessInput{ScopeType: MemoryScopeThread, ScopeID: threadA.ID}); err != nil {
+		t.Fatal(err)
+	}
+
+	denied, err := repo.ProposeMemoryWrite(ctx, ident, ProposeMemoryWriteInput{ScopeType: MemoryScopeThread, ScopeID: threadA.ID, Title: "PG deny", Content: "Deny once", SourceThreadID: threadA.ID, SourceRunID: run.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.DenyMemoryWrite(ctx, ident, denied.ID, MemoryWriteDecisionInput{Reason: "deny"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.DenyMemoryWrite(ctx, ident, denied.ID, MemoryWriteDecisionInput{Reason: "retry deny"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.DeleteMemoryEntry(ctx, ident, decision.Entry.ID, DeleteMemoryEntryInput{Reason: "delete", ScopeType: MemoryScopeThread, ScopeID: threadA.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.DeleteMemoryEntry(ctx, ident, decision.Entry.ID, DeleteMemoryEntryInput{Reason: "retry delete", ScopeType: MemoryScopeThread, ScopeID: threadA.ID}); err != nil {
+		t.Fatal(err)
+	}
+
+	audit, err := repo.ListMemoryAudit(ctx, ident, MemoryAuditInput{SourceRunID: run.ID, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	counts := map[string]int{}
+	for _, item := range audit.Items {
+		counts[item.EventType]++
+	}
+	if counts[EventMemoryWriteProposed] != 2 || counts[EventMemoryWriteApproved] != 1 || counts[EventMemoryWriteDenied] != 1 || counts["memory_deleted"] != 1 {
+		t.Fatalf("audit counts = %+v items=%+v", counts, audit.Items)
+	}
+}
+
 func TestPostgresPreservesThreadPersonaOnMetadataUpdate(t *testing.T) {
 	databaseURL := os.Getenv("LOOMI_TEST_DATABASE_URL")
 	if databaseURL == "" {

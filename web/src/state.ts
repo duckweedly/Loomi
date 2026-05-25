@@ -254,6 +254,7 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
   const [memoryEntries, setMemoryEntries] = useState<MemoryEntry[]>([])
   const [memoryQuery, setMemoryQuery] = useState('')
   const [memoryLoading, setMemoryLoading] = useState(false)
+  const [memoryError, setMemoryError] = useState<string | null>(null)
   const selectedThreadIdRef = useRef(selectedThreadId)
   const runRef = useRef<Run | null>(run)
 
@@ -344,11 +345,15 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
       return
     }
     setMemoryLoading(true)
+    setMemoryError(null)
     try {
       const entries = query.trim()
         ? await apiClient.searchMemory(query)
         : await apiClient.listMemoryEntries()
       setMemoryEntries(entries)
+    } catch (err) {
+      setMemoryEntries([])
+      setMemoryError(err instanceof Error ? err.message : 'Memory failed to load')
     } finally {
       setMemoryLoading(false)
     }
@@ -361,9 +366,10 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
 
   const deleteMemoryEntry = useCallback(async (entryId: string) => {
     if (!apiClient.deleteMemoryEntry) return
-    await apiClient.deleteMemoryEntry(entryId)
+    const entry = memoryEntries.find((item) => item.id === entryId)
+    await apiClient.deleteMemoryEntry(entryId, entry ? { scopeType: entry.scopeType, scopeId: entry.scopeId, sourceThreadId: entry.sourceThreadId, sourceRunId: entry.sourceRunId } : undefined)
     await loadMemoryEntries(memoryQuery)
-  }, [loadMemoryEntries, memoryQuery])
+  }, [loadMemoryEntries, memoryEntries, memoryQuery])
 
   useEffect(() => {
     void loadMemoryEntries('')
@@ -601,6 +607,7 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
     memoryEntries,
     memoryQuery,
     memoryLoading,
+    memoryError,
     selectRuntimeScript,
     setSelectedPersonaId,
     checkProvider,

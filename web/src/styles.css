@@ -2231,6 +2231,12 @@ button, textarea, input, .sidebar, .chat-shell, .run-dock, .right-panel-menu, .r
   color: var(--text-muted);
 }
 
+.memory-error {
+  margin: 0 0 12px;
+  color: var(--orange);
+  font-size: 13px;
+}
+
 .memory-panel-toolbar input:focus {
   border-color: var(--border-strong);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent);

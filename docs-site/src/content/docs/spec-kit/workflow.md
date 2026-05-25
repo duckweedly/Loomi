@@ -36,12 +36,33 @@ Claude Code 项目内命令使用横线格式：
 
 `/speckit-implement` 按任务实现，并在必要时回到 spec 或 plan 修正前提。
 
-## 当前已完成：M13 Memory Foundation
+## 当前进行中：M14 Memory Management Audit UX
+
+当前 Spec Kit 功能目录：
+
+```text
+specs/021-memory-management-audit-ux/
+```
+
+关键产物：
+
+- `spec.md`：定义 Settings > Memory 管理面、safe audit/history、delete confirmation、状态覆盖、seeded browser smoke 和非目标。
+- `plan.md`：确定复用 M13 productdata memory、HTTP API、realApiClient、SettingsView 和 docs-site，不引入 distill/RAG/OpenViking/MCP/worker/sandbox。
+- `research.md`：记录复用 M13 audit/event、最小 scoped audit read、grounded filters、tombstone confirmation、safe projection 和 blocker findings 决策。
+- `data-model.md`：定义 Memory Management Item、Detail、Filter、Audit Item 和状态规则。
+- `contracts/`：定义 list/search/detail/delete/audit endpoint、payload、forbidden fields 和 no-existence-leak 行为。
+- `quickstart.md`：记录 M14 prep blockers、验证命令和 full UI seeded browser smoke 标准。
+- `tasks.md`：把 prep blockers 与后续完整 UX 实现任务分开。
+
+状态：Spec Kit + UX/API contract prep 已建立，blocker foundation 已补齐。已完成 thread-scoped read/delete authorization、terminal-run durable memory audit、redaction hardening、search/list filter shape 收口和对应 tests/docs。后续完整 M14 done 需要真实 Settings > Memory browser seeded entry smoke 覆盖 list/search/filter/detail/delete confirmation/audit history。
+
+## 当前已完成：M13 Memory Foundation + M13.5 Closeout
 
 当前 Spec Kit 功能目录：
 
 ```text
 specs/019-memory-foundation/
+specs/020-memory-real-pg-smoke-closeout/
 ```
 
 关键产物：
@@ -53,8 +74,9 @@ specs/019-memory-foundation/
 - `contracts/`：定义 memory API、memory events/audit、MemoryProvider PG v1 契约。
 - `quickstart.md`：记录 backend/web/docs validation 和 smoke expectations。
 - `tasks.md`：按 setup、foundation、US1 safe snapshot、US2 approval-gated writes、US3 user control、US4 planned-only provider/distill、docs/validation 拆分实现任务。
+- `020` closeout：记录真实 Postgres migration + HTTP API smoke evidence，不新增 memory platform 功能。
 
-状态：第一实现薄片完成。已实现 PG-backed memory entries/search/write proposal、RunContext safe memory snapshot、approval-gated writes、用户 list/search/delete、redaction/tombstone/audit 边界；未实现向量库/embedding/RAG、OpenViking、自动 distill、marketplace/plugin、sandbox/browser/activity recorder、多 agent 长期自动化、worker/job queue rewrite 或 MCP rewrite。
+状态：第一实现薄片和 M13.5 evidence closeout 完成。已实现 PG-backed memory entries/search/write proposal、RunContext safe memory snapshot、approval-gated writes、用户 list/search/delete、redaction/tombstone/audit 边界；`TestM13MemoryRealPGHTTPAPISmoke` 覆盖真实 Postgres/httpapi migrated path。未实现向量库/embedding/RAG、OpenViking、自动 distill、marketplace/plugin、sandbox/browser/activity recorder、多 agent 长期自动化、worker/job queue rewrite 或 MCP rewrite。
 
 ## 近期已完成：M12.5 Real MCP Smoke Closeout
 

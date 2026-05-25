@@ -11,7 +11,7 @@ description: Implementation notes and validation for the first PG-backed memory 
 - Added `RunContext.MemorySnapshot` and `memory_snapshot_loaded` run events.
 - Added approval-gated write proposals, approval, denial, idempotency keys, and tombstone delete.
 - Added safe memory audit events for source-run-linked proposal/approval/denial/delete operations.
-- Added `/v1/memory` list/create/search/read/delete and `/v1/memory/write-proposals` approve/deny APIs.
+- Added `/v1/memory` list/search/read/delete and `/v1/memory/write-proposals` propose/approve/deny APIs.
 - Added a runtime `MemoryProvider` abstraction with the current product data provider.
 - Added Settings > Memory list/search/delete UI in real API mode.
 
@@ -31,6 +31,8 @@ Browser smoke:
 
 - Opened local web app at `http://127.0.0.1:5181/`.
 - Opened Settings, selected Memory, verified the Memory category is available and the empty state renders.
+
+M13.5 closeout adds `TestM13MemoryRealPGHTTPAPISmoke` as real Postgres/httpapi evidence for the migration-backed memory lifecycle.
 
 ## Boundaries
 

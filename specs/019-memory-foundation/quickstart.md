@@ -1,6 +1,6 @@
 # Quickstart: M13 Memory Foundation
 
-Status: design-only. These commands and smokes are for the later implementation session.
+Status: implemented. These commands validate the current M13 memory slice and the M13.5 real PG closeout.
 
 ## Design validation for this session
 
@@ -17,7 +17,7 @@ Backend:
 go test ./internal/productdata ./internal/runtime ./internal/httpapi
 ```
 
-Frontend, if the memory UI/event replay slice is implemented:
+Frontend:
 
 ```bash
 bun test --cwd web

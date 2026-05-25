@@ -34,11 +34,41 @@ export type MemoryEntry = {
   title: string
   summary: string
   scopeType: 'user' | 'thread'
+  scopeId?: string
+  status: 'approved' | 'tombstoned' | 'disabled'
+  safetyState?: 'safe' | 'redacted' | 'blocked'
   sourceThreadId?: string
   sourceRunId?: string
+  sourceEventId?: string
+  sourceType?: 'manual' | 'thread' | 'run'
   createdAt: string
   updatedAt: string
+  deletedAt?: string
   redactionApplied: boolean
+}
+
+export type MemoryFilters = {
+  scopeType?: 'user' | 'thread' | ''
+  scopeId?: string
+  sourceThreadId?: string
+  sourceRunId?: string
+  sourceType?: 'any' | 'manual' | 'thread' | 'run'
+  includeTombstoned?: boolean
+}
+
+export type MemoryAuditItem = {
+  id: string
+  eventType: 'memory_snapshot_loaded' | 'memory_write_proposed' | 'memory_write_approved' | 'memory_write_denied' | 'memory_deleted'
+  summary: string
+  threadId?: string
+  runId?: string
+  memoryEntryId?: string
+  memoryProposalId?: string
+  status?: string
+  scopeType?: string
+  sourceType?: string
+  redactionApplied: boolean
+  occurredAt: string
 }
 
 export type Persona = {

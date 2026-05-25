@@ -1,6 +1,6 @@
 # Contract: Memory API
 
-Status: planned/design-only for `019-memory-foundation`.
+Status: current implemented contract for `019-memory-foundation`.
 
 ## Shared rules
 
@@ -14,7 +14,7 @@ Status: planned/design-only for `019-memory-foundation`.
 ## List memory
 
 ```text
-GET /v1/memory?scope_type={scope_type}&scope_id={scope_id}&cursor={cursor}&limit={limit}
+GET /v1/memory
 ```
 
 Returns approved, non-deleted memory entries visible to the caller.
@@ -30,7 +30,7 @@ Returns approved, non-deleted memory entries visible to the caller.
 - `items[].created_at`
 - `items[].updated_at`
 - `items[].redaction_applied`
-- `next_cursor`
+The current response also includes a `request_id`.
 
 ## Search memory
 
@@ -41,16 +41,13 @@ POST /v1/memory/search
 **Request fields**:
 
 - `query`: optional text query.
-- `scope_filters`: optional caller-visible scopes.
-- `tags`: optional labels.
 - `limit`: bounded count.
-- `purpose`: `user_search` or `run_context_debug`.
 
 **Response fields**:
 
 - `items[]`: Memory Search Result.
-- `safe_query_summary`: redacted/debug-safe query summary.
 - `excluded_count`: safe count of filtered entries.
+- `request_id`
 
 ## Read memory entry
 
@@ -58,7 +55,7 @@ POST /v1/memory/search
 GET /v1/memory/{entry_id}
 ```
 
-Returns safe entry metadata and redacted content for an approved, visible, non-deleted entry.
+Returns safe entry metadata for an approved, visible, non-deleted entry. The current API omits raw memory content from the response.
 
 ## Delete memory entry
 
@@ -73,7 +70,7 @@ Tombstones an approved visible entry.
 - `entry_id`
 - `status`: `tombstoned`
 - `deleted_at`
-- `audit_event_id`
+- `request_id`
 
 Repeated deletes return the existing tombstone state without exposing deleted content.
 
@@ -98,11 +95,14 @@ Agent/runtime-facing boundary for proposing memory. This may be internal-only in
 
 **Response fields**:
 
-- `proposal_id`
-- `status`: `pending`, `blocked`, or existing terminal state for duplicate idempotency key.
-- `safe_preview`
-- `redaction_applied`
-- `audit_event_id`
+- `proposal.id`
+- `proposal.status`: `pending`, `approved`, or `denied`
+- `proposal.title`
+- `proposal.summary`
+- `proposal.safety_state`
+- `proposal.source_thread_id`
+- `proposal.source_run_id`
+- `request_id`
 
 Pending proposals are not searchable and are not included in RunContext.
 
@@ -114,10 +114,9 @@ POST /v1/memory/write-proposals/{proposal_id}/approve
 
 **Response fields**:
 
-- `proposal_id`
-- `status`: `approved`
-- `entry_id`
-- `audit_event_id`
+- `proposal`
+- `entry`
+- `request_id`
 
 Approval creates or links exactly one approved Memory Entry.
 
@@ -129,8 +128,7 @@ POST /v1/memory/write-proposals/{proposal_id}/deny
 
 **Response fields**:
 
-- `proposal_id`
-- `status`: `denied`
-- `audit_event_id`
+- `proposal`
+- `request_id`
 
 Denied proposals never become searchable memory.

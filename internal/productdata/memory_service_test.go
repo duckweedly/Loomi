@@ -2,6 +2,8 @@ package productdata
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/sheridiany/loomi/internal/identity"
@@ -49,6 +51,38 @@ func TestMemorySearchExcludesPendingDeniedDeletedUnsafeAndOutOfScopeEntries(t *t
 	}
 }
 
+func TestMemoryEntryReadDeleteRequiresMatchingThreadScope(t *testing.T) {
+	svc := NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	threadA := "thr_scope_a"
+	threadB := "thr_scope_b"
+	entry, err := svc.CreateMemoryEntry(context.Background(), ident, CreateMemoryEntryInput{ScopeType: MemoryScopeThread, ScopeID: threadA, Title: "Thread scoped", Content: "Visible only in thread A", SourceThreadID: threadA})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := svc.GetMemoryEntry(context.Background(), ident, entry.ID, MemoryEntryAccessInput{ScopeType: MemoryScopeThread, ScopeID: threadB}); err == nil || ErrorCode(err) != CodeMemoryNotFound {
+		t.Fatalf("thread B read err = %v", err)
+	}
+	if _, err := svc.DeleteMemoryEntry(context.Background(), ident, entry.ID, DeleteMemoryEntryInput{Reason: "wrong thread", ScopeType: MemoryScopeThread, ScopeID: threadB}); err == nil || ErrorCode(err) != CodeMemoryNotFound {
+		t.Fatalf("thread B delete err = %v", err)
+	}
+	if _, err := svc.GetMemoryEntry(context.Background(), ident, entry.ID, MemoryEntryAccessInput{}); err == nil || ErrorCode(err) != CodeMemoryNotFound {
+		t.Fatalf("unscoped read err = %v", err)
+	}
+
+	got, err := svc.GetMemoryEntry(context.Background(), ident, entry.ID, MemoryEntryAccessInput{ScopeType: MemoryScopeThread, ScopeID: threadA})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ID != entry.ID || got.Content != "" {
+		t.Fatalf("got = %+v", got)
+	}
+	if _, err := svc.DeleteMemoryEntry(context.Background(), ident, entry.ID, DeleteMemoryEntryInput{Reason: "right thread", ScopeType: MemoryScopeThread, ScopeID: threadA}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestPrepareRunContextIncludesSafeMemorySnapshot(t *testing.T) {
 	svc := NewMemoryService()
 	ident := identity.LocalDevIdentity()
@@ -89,6 +123,111 @@ func TestPrepareRunContextIncludesSafeMemorySnapshot(t *testing.T) {
 	summary := ctxData.SafeSummary()
 	if summary["memory_entry_count"] != 1 || summary["memory_status"] != "loaded" {
 		t.Fatalf("summary = %+v", summary)
+	}
+}
+
+func TestMemoryAuditPersistsAfterTerminalRun(t *testing.T) {
+	svc := NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, CreateThreadInput{Title: "Terminal audit", Mode: ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, StartRunInput{ScriptName: "terminal_memory_audit"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.AppendRunEvent(context.Background(), ident, run.ID, AppendRunEventInput{Category: RunEventCategoryFinal, Type: EventRunCompleted, Summary: "Run completed"}); err != nil {
+		t.Fatal(err)
+	}
+
+	proposal, err := svc.ProposeMemoryWrite(context.Background(), ident, ProposeMemoryWriteInput{ScopeType: MemoryScopeThread, ScopeID: thread.ID, Title: "Terminal proposal", Content: "Keep safe terminal audit", SourceThreadID: thread.ID, SourceRunID: run.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision, err := svc.ApproveMemoryWrite(context.Background(), ident, proposal.ID, MemoryWriteDecisionInput{Reason: "approve after terminal"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	denied, err := svc.ProposeMemoryWrite(context.Background(), ident, ProposeMemoryWriteInput{ScopeType: MemoryScopeThread, ScopeID: thread.ID, Title: "Terminal deny", Content: "Deny after terminal", SourceThreadID: thread.ID, SourceRunID: run.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.DenyMemoryWrite(context.Background(), ident, denied.ID, MemoryWriteDecisionInput{Reason: "deny after terminal"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.DenyMemoryWrite(context.Background(), ident, denied.ID, MemoryWriteDecisionInput{Reason: "deny retry"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.DeleteMemoryEntry(context.Background(), ident, decision.Entry.ID, DeleteMemoryEntryInput{Reason: "delete after terminal", ScopeType: MemoryScopeThread, ScopeID: thread.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.DeleteMemoryEntry(context.Background(), ident, decision.Entry.ID, DeleteMemoryEntryInput{Reason: "delete retry", ScopeType: MemoryScopeThread, ScopeID: thread.ID}); err != nil {
+		t.Fatal(err)
+	}
+
+	audit, err := svc.ListMemoryAudit(context.Background(), ident, MemoryAuditInput{SourceRunID: run.ID, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	counts := map[string]int{}
+	for _, item := range audit.Items {
+		counts[item.EventType]++
+	}
+	if counts[EventMemoryWriteProposed] != 2 || counts[EventMemoryWriteApproved] != 1 || counts[EventMemoryWriteDenied] != 1 || counts["memory_deleted"] != 1 {
+		t.Fatalf("audit counts = %+v items=%+v", counts, audit.Items)
+	}
+}
+
+func TestMemoryRedactionCoversPathsAndRuntimePayloadMarkers(t *testing.T) {
+	cases := []string{
+		"/home/xuean/private/project/file.txt",
+		`C:\Users\xuean\secret\file.txt`,
+		"stdout: raw terminal payload",
+		"stderr: raw terminal payload",
+		"tool output: raw tool payload",
+		"provider trace: raw provider payload",
+		"LOOMI_TOKEN=secret",
+		"Authorization: Bearer sk-secret",
+	}
+	for _, value := range cases {
+		if got := RedactEventText(value); got != "[redacted]" {
+			t.Fatalf("RedactEventText(%q) = %q", value, got)
+		}
+	}
+
+	svc := NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, CreateThreadInput{Title: "Redaction", Mode: ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _, err := svc.CreateMessage(context.Background(), ident, thread.ID, CreateMessageInput{Content: "Check safe summary"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, StartRunInput{Source: RunSourceModelGateway, MessageID: message.ID, ProviderID: "/home/xuean/private/provider", Model: `C:\Users\xuean\model`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = run
+	job, _, ok, err := svc.ClaimBackgroundJob(context.Background(), ident, ClaimBackgroundJobInput{WorkerID: "worker_redaction", LeaseSeconds: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("claim ok = false")
+	}
+	ctxData, err := svc.PrepareRunContext(context.Background(), ident, job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	summary := ctxData.SafeSummary()
+	encoded := fmt.Sprint(summary)
+	for _, leaked := range []string{"/home/xuean", `C:\Users\xuean`, "provider trace", "tool output", "Authorization"} {
+		if strings.Contains(encoded, leaked) {
+			t.Fatalf("safe summary leaked %q: %+v", leaked, summary)
+		}
 	}
 }
 

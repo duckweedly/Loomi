@@ -49,6 +49,7 @@ export default function App() {
     memoryEntries,
     memoryQuery,
     memoryLoading,
+    memoryError,
     checkProvider,
     saveProvider,
     setMemorySearchQuery,
@@ -196,6 +197,7 @@ export default function App() {
                   memoryEntries={memoryEntries}
                   memoryQuery={memoryQuery}
                   memoryLoading={memoryLoading}
+                  memoryError={memoryError}
                   providerCheckResults={providerCheckResults}
                   providerSaveResult={providerSaveResult}
                   providerDraftSettings={shell.providerDraftSettings}

@@ -492,7 +492,6 @@ func (r *PostgresRepository) CreateMemoryEntry(ctx context.Context, ident identi
 }
 
 func (r *PostgresRepository) ListMemoryEntries(ctx context.Context, ident identity.LocalIdentity, input MemorySearchInput) (MemorySearchOutput, error) {
-	input.Query = ""
 	return r.SearchMemory(ctx, ident, input)
 }
 
@@ -508,8 +507,13 @@ func (r *PostgresRepository) SearchMemory(ctx context.Context, ident identity.Lo
 		scopeType = MemoryScopeUser
 	}
 	query := strings.ToLower(strings.TrimSpace(input.Query))
-	sql := `select id, user_id, scope_type, scope_id, title, summary, content, status, safety_state, coalesce(source_thread_id,''), coalesce(source_run_id,''), coalesce(source_event_id,''), content_hash, created_at, updated_at, deleted_at, coalesce(deleted_by_user_id,''), coalesce(delete_reason,'') from memory_entries where user_id=$1 and status='approved' and safety_state <> 'blocked'`
+	sql := `select id, user_id, scope_type, scope_id, title, summary, content, status, safety_state, coalesce(source_thread_id,''), coalesce(source_run_id,''), coalesce(source_event_id,''), content_hash, created_at, updated_at, deleted_at, coalesce(deleted_by_user_id,''), coalesce(delete_reason,'') from memory_entries where user_id=$1 and safety_state <> 'blocked'`
 	args := []any{user.ID}
+	if input.IncludeTombstoned {
+		sql += ` and status in ('approved','tombstoned')`
+	} else {
+		sql += ` and status='approved'`
+	}
 	if scopeType == MemoryScopeThread {
 		args = append(args, scopeID)
 		sql += ` and ((scope_type='user' and scope_id=$1) or (scope_type='thread' and scope_id=$2))`
@@ -519,6 +523,25 @@ func (r *PostgresRepository) SearchMemory(ctx context.Context, ident identity.Lo
 	if query != "" {
 		args = append(args, "%"+query+"%")
 		sql += ` and (lower(title) like $` + intPlaceholder(len(args)) + ` or lower(summary) like $` + intPlaceholder(len(args)) + ` or lower(content) like $` + intPlaceholder(len(args)) + `)`
+	}
+	if sourceRunID := strings.TrimSpace(input.SourceRunID); sourceRunID != "" {
+		args = append(args, sourceRunID)
+		sql += ` and source_run_id=$` + intPlaceholder(len(args))
+	}
+	if sourceThreadID := strings.TrimSpace(input.SourceThreadID); sourceThreadID != "" {
+		args = append(args, sourceThreadID)
+		sql += ` and source_thread_id=$` + intPlaceholder(len(args))
+	}
+	switch strings.TrimSpace(input.SourceType) {
+	case "", "any":
+	case "run":
+		sql += ` and source_run_id is not null`
+	case "thread":
+		sql += ` and source_thread_id is not null`
+	case "manual":
+		sql += ` and source_run_id is null and source_thread_id is null`
+	default:
+		return MemorySearchOutput{}, NewError(CodeInvalidRequest, "Memory source type is invalid.")
 	}
 	args = append(args, limit)
 	sql += ` order by updated_at desc, id desc limit $` + intPlaceholder(len(args))
@@ -538,17 +561,64 @@ func (r *PostgresRepository) SearchMemory(ctx context.Context, ident identity.Lo
 	return MemorySearchOutput{Items: items}, rows.Err()
 }
 
-func (r *PostgresRepository) GetMemoryEntry(ctx context.Context, ident identity.LocalIdentity, entryID string) (MemoryEntry, error) {
+func (r *PostgresRepository) GetMemoryEntry(ctx context.Context, ident identity.LocalIdentity, entryID string, input MemoryEntryAccessInput) (MemoryEntry, error) {
 	user, err := r.ensureUser(ctx, ident)
 	if err != nil {
 		return MemoryEntry{}, err
 	}
-	entry, err := scanMemoryEntry(r.Pool.QueryRow(ctx, `select id, user_id, scope_type, scope_id, title, summary, content, status, safety_state, coalesce(source_thread_id,''), coalesce(source_run_id,''), coalesce(source_event_id,''), content_hash, created_at, updated_at, deleted_at, coalesce(deleted_by_user_id,''), coalesce(delete_reason,'') from memory_entries where id=$1 and user_id=$2 and status='approved' and safety_state <> 'blocked'`, strings.TrimSpace(entryID), user.ID))
+	entry, err := scanMemoryEntry(r.Pool.QueryRow(ctx, `select id, user_id, scope_type, scope_id, title, summary, content, status, safety_state, coalesce(source_thread_id,''), coalesce(source_run_id,''), coalesce(source_event_id,''), content_hash, created_at, updated_at, deleted_at, coalesce(deleted_by_user_id,''), coalesce(delete_reason,'') from memory_entries where id=$1 and user_id=$2 and status in ('approved','tombstoned') and safety_state <> 'blocked'`, strings.TrimSpace(entryID), user.ID))
 	if errors.Is(err, pgx.ErrNoRows) {
+		return MemoryEntry{}, NewError(CodeMemoryNotFound, "Memory not found.")
+	}
+	if err != nil {
+		return MemoryEntry{}, err
+	}
+	if !memoryEntryReadableTo(entry, user.ID, input) {
 		return MemoryEntry{}, NewError(CodeMemoryNotFound, "Memory not found.")
 	}
 	entry.Content = ""
 	return entry, err
+}
+
+func (r *PostgresRepository) ListMemoryAudit(ctx context.Context, ident identity.LocalIdentity, input MemoryAuditInput) (MemoryAuditOutput, error) {
+	user, err := r.ensureUser(ctx, ident)
+	if err != nil {
+		return MemoryAuditOutput{}, err
+	}
+	limit := memoryLimit(input.Limit)
+	sql := `select id, run_id, thread_id, user_id, 0, 'progress', type, summary, null, metadata, created_at from memory_audit_events where user_id=$1 and type = any($2)`
+	args := []any{user.ID, []string{EventMemorySnapshotLoaded, EventMemoryWriteProposed, EventMemoryWriteApproved, EventMemoryWriteDenied, EventMemoryEntryDeleted}}
+	if threadID := strings.TrimSpace(input.ThreadID); threadID != "" {
+		args = append(args, threadID)
+		sql += ` and thread_id=$` + intPlaceholder(len(args))
+	}
+	if runID := strings.TrimSpace(input.SourceRunID); runID != "" {
+		args = append(args, runID)
+		sql += ` and run_id=$` + intPlaceholder(len(args))
+	}
+	if eventType := strings.TrimSpace(input.EventType); eventType != "" {
+		if eventType == "memory_deleted" {
+			eventType = EventMemoryEntryDeleted
+		}
+		args = append(args, eventType)
+		sql += ` and type=$` + intPlaceholder(len(args))
+	}
+	args = append(args, limit)
+	sql += ` order by created_at desc, id desc limit $` + intPlaceholder(len(args))
+	rows, err := r.Pool.Query(ctx, sql, args...)
+	if err != nil {
+		return MemoryAuditOutput{}, err
+	}
+	defer rows.Close()
+	var items []MemoryAuditItem
+	for rows.Next() {
+		event, err := scanRunEvent(rows)
+		if err != nil {
+			return MemoryAuditOutput{}, err
+		}
+		items = append(items, memoryAuditItem(event))
+	}
+	return MemoryAuditOutput{Items: items}, rows.Err()
 }
 
 func (r *PostgresRepository) DeleteMemoryEntry(ctx context.Context, ident identity.LocalIdentity, entryID string, input DeleteMemoryEntryInput) (MemoryTombstone, error) {
@@ -562,6 +632,9 @@ func (r *PostgresRepository) DeleteMemoryEntry(ctx context.Context, ident identi
 	}
 	if err != nil {
 		return MemoryTombstone{}, err
+	}
+	if !memoryEntryReadableTo(entry, user.ID, MemoryEntryAccessInput{ScopeType: input.ScopeType, ScopeID: input.ScopeID, SourceThreadID: input.SourceThreadID, SourceRunID: input.SourceRunID}) {
+		return MemoryTombstone{}, NewError(CodeMemoryNotFound, "Memory not found.")
 	}
 	if entry.Status == MemoryEntryTombstoned && entry.DeletedAt != nil {
 		return MemoryTombstone{EntryID: entry.ID, Status: string(MemoryEntryTombstoned), DeletedAt: *entry.DeletedAt}, nil
@@ -688,10 +761,23 @@ func (r *PostgresRepository) DenyMemoryWrite(ctx context.Context, ident identity
 }
 
 func (r *PostgresRepository) appendMemoryAuditEvent(ctx context.Context, ident identity.LocalIdentity, runID string, eventType string, summary string, metadata map[string]any) {
-	if strings.TrimSpace(runID) == "" {
+	user, err := r.ensureUser(ctx, ident)
+	if err != nil {
 		return
 	}
-	_, _ = r.AppendRunEvent(ctx, ident, runID, AppendRunEventInput{Category: RunEventCategoryProgress, Type: eventType, Summary: summary, Metadata: metadata})
+	runID = strings.TrimSpace(runID)
+	threadID := ""
+	var run Run
+	if runID != "" {
+		run, err = scanRun(r.Pool.QueryRow(ctx, `select id, thread_id, user_id, status, source, title, created_at, updated_at, completed_at, stop_requested_at, error_code, error_message from runs where id=$1 and user_id=$2`, runID, user.ID))
+		if err == nil {
+			threadID = run.ThreadID
+		}
+	}
+	_, _ = r.Pool.Exec(ctx, `insert into memory_audit_events (id, user_id, thread_id, run_id, type, summary, metadata) values ($1,$2,$3,$4,$5,$6,$7)`, NewRunEventID(), user.ID, threadID, runID, eventType, RedactEventText(summary), mustJSON(RedactEventMetadata(metadata)))
+	if run.ID != "" {
+		_, _ = insertRunEventIgnoringTerminal(ctx, r.Pool, run, RunEventCategoryProgress, eventType, summary, nil, metadata)
+	}
 }
 
 func (r *PostgresRepository) AppendRunEvent(ctx context.Context, ident identity.LocalIdentity, runID string, input AppendRunEventInput) (RunEvent, error) {
@@ -725,6 +811,11 @@ func (r *PostgresRepository) AppendRunEvent(ctx context.Context, ident identity.
 	event, err := scanRunEvent(tx.QueryRow(ctx, `insert into run_events (id, run_id, thread_id, user_id, sequence, category, type, summary, content, metadata) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) returning id, run_id, thread_id, user_id, sequence, category, type, summary, content, metadata, created_at`, NewRunEventID(), run.ID, run.ThreadID, user.ID, nextSequence, input.Category, input.Type, input.Summary, input.Content, mustJSON(input.Metadata)))
 	if err != nil {
 		return RunEvent{}, err
+	}
+	if isMemoryAuditEvent(event.Type) {
+		if _, err := tx.Exec(ctx, `insert into memory_audit_events (id, user_id, thread_id, run_id, type, summary, metadata, created_at) values ($1,$2,$3,$4,$5,$6,$7,$8)`, NewRunEventID(), user.ID, run.ThreadID, run.ID, event.Type, event.Summary, mustJSON(event.Metadata), event.CreatedAt); err != nil {
+			return RunEvent{}, err
+		}
 	}
 	status := run.Status
 	completedAtSQL := `completed_at`
@@ -1257,6 +1348,14 @@ func insertRunEvent(ctx context.Context, tx pgx.Tx, run Run, category RunEventCa
 		return RunEvent{}, err
 	}
 	return scanRunEvent(tx.QueryRow(ctx, `insert into run_events (id, run_id, thread_id, user_id, sequence, category, type, summary, content, metadata) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) returning id, run_id, thread_id, user_id, sequence, category, type, summary, content, metadata, created_at`, NewRunEventID(), run.ID, run.ThreadID, run.UserID, nextSequence, category, eventType, RedactEventText(summary), content, mustJSON(RedactEventMetadata(metadata))))
+}
+
+func insertRunEventIgnoringTerminal(ctx context.Context, pool *pgxpool.Pool, run Run, category RunEventCategory, eventType string, summary string, content *string, metadata map[string]any) (RunEvent, error) {
+	var nextSequence int
+	if err := pool.QueryRow(ctx, `select coalesce(max(sequence), 0) + 1 from run_events where run_id=$1`, run.ID).Scan(&nextSequence); err != nil {
+		return RunEvent{}, err
+	}
+	return scanRunEvent(pool.QueryRow(ctx, `insert into run_events (id, run_id, thread_id, user_id, sequence, category, type, summary, content, metadata) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) returning id, run_id, thread_id, user_id, sequence, category, type, summary, content, metadata, created_at`, NewRunEventID(), run.ID, run.ThreadID, run.UserID, nextSequence, category, eventType, RedactEventText(summary), content, mustJSON(RedactEventMetadata(metadata))))
 }
 
 func scopedPostgresToolCall(ctx context.Context, tx pgx.Tx, userID string, threadID string, runID string, toolCallID string) (Run, ToolCall, error) {

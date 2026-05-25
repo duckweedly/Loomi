@@ -4,7 +4,7 @@
 
 **Created**: 2026-05-25
 
-**Status**: Draft
+**Status**: Implemented
 
 **Input**: User description: "M13 Memory Foundation / 019-memory-foundation. First version PG memory with memory_entries, memory_search, memory_write. RunContext can include a safe memory snapshot. Agent can retrieve historical memories, and writes must be approval-gated or stay inside explicit safety boundaries. User can view/delete memories through minimal API/UI boundaries. Memory distill is design-only for later, not part of the first implementation slice. MemoryProvider abstraction may be planned, but v1 prioritizes PG provider and does not implement OpenViking. Strictly define privacy, safety, deletion, audit, redaction, and user control. Non-goals: vector DB/embedding/RAG system, OpenViking provider, marketplace/plugin, sandbox/browser/activity recorder, multi-agent long-term memory automation, worker/job queue or MCP rewrite."
 

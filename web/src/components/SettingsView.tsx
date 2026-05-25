@@ -22,6 +22,7 @@ type Props = {
   memoryEntries: MemoryEntry[]
   memoryQuery: string
   memoryLoading: boolean
+  memoryError?: string | null
   providerCheckResults: Record<string, ProviderCheckResult>
   providerSaveResult: ProviderSaveResult
   providerDraftSettings: ProviderDraftSettings
@@ -195,6 +196,7 @@ export function SettingsView({
   memoryEntries,
   memoryQuery,
   memoryLoading,
+  memoryError,
   providerCheckResults,
   providerSaveResult,
   providerDraftSettings,
@@ -392,7 +394,7 @@ export function SettingsView({
                 <h2>Memory</h2>
                 <p>{selectedCategory.description}</p>
               </div>
-              <MemoryPanel entries={memoryEntries} query={memoryQuery} loading={memoryLoading} onQueryChange={onMemoryQueryChange} onDelete={onDeleteMemoryEntry} />
+              <MemoryPanel entries={memoryEntries} query={memoryQuery} loading={memoryLoading} error={memoryError} onQueryChange={onMemoryQueryChange} onDelete={onDeleteMemoryEntry} />
             </section>
           </div>
         )}

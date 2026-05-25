@@ -86,11 +86,11 @@ web/src/
 │   ├── realExecutionAdapter.ts  # memory event replay if surfaced in timeline/debug
 │   └── runtimeEventGroups.ts
 └── components/
-    └── MemoryPanel.tsx          # minimal planned UI boundary for list/search/delete
+    └── MemoryPanel.tsx          # minimal implemented UI boundary for list/search/delete
 
 docs-site/src/content/docs/
-├── architecture/memory-foundation.md        # planned/design-only until implemented
-├── api/memory-foundation.md                 # planned/design-only until implemented
+├── architecture/memory-foundation.md        # current implemented PG/API/RunContext behavior
+├── api/memory-foundation.md                 # current implemented memory API/event behavior
 ├── roadmap/current-status.md
 └── spec-kit/workflow.md
 ```

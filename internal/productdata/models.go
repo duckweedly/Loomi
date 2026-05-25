@@ -465,25 +465,68 @@ type MemorySearchResult struct {
 	Summary          string          `json:"summary"`
 	Content          string          `json:"content,omitempty"`
 	ScopeType        MemoryScopeType `json:"scope_type"`
+	ScopeID          string          `json:"scope_id"`
+	Status           string          `json:"status"`
+	SafetyState      string          `json:"safety_state"`
 	SourceThreadID   string          `json:"source_thread_id,omitempty"`
 	SourceRunID      string          `json:"source_run_id,omitempty"`
+	SourceEventID    string          `json:"source_event_id,omitempty"`
+	SourceType       string          `json:"source_type"`
 	CreatedAt        time.Time       `json:"created_at"`
 	UpdatedAt        time.Time       `json:"updated_at"`
+	DeletedAt        *time.Time      `json:"deleted_at,omitempty"`
 	RankReason       string          `json:"rank_reason,omitempty"`
 	RedactionApplied bool            `json:"redaction_applied"`
 }
 
 type MemorySearchInput struct {
-	Query     string
-	ScopeType MemoryScopeType
-	ScopeID   string
-	Limit     int
-	Purpose   string
+	Query             string
+	ScopeType         MemoryScopeType
+	ScopeID           string
+	SourceThreadID    string
+	SourceRunID       string
+	SourceType        string
+	IncludeTombstoned bool
+	Limit             int
+	Purpose           string
 }
 
 type MemorySearchOutput struct {
 	Items         []MemorySearchResult `json:"items"`
 	ExcludedCount int                  `json:"excluded_count"`
+}
+
+type MemoryAuditInput struct {
+	ThreadID    string
+	SourceRunID string
+	EventType   string
+	Limit       int
+}
+
+type MemoryEntryAccessInput struct {
+	ScopeType      MemoryScopeType `json:"scope_type"`
+	ScopeID        string          `json:"scope_id"`
+	SourceThreadID string          `json:"source_thread_id"`
+	SourceRunID    string          `json:"source_run_id"`
+}
+
+type MemoryAuditItem struct {
+	ID               string    `json:"id"`
+	EventType        string    `json:"event_type"`
+	Summary          string    `json:"summary"`
+	ThreadID         string    `json:"thread_id,omitempty"`
+	RunID            string    `json:"run_id,omitempty"`
+	MemoryEntryID    string    `json:"memory_entry_id,omitempty"`
+	MemoryProposalID string    `json:"memory_proposal_id,omitempty"`
+	Status           string    `json:"status,omitempty"`
+	ScopeType        string    `json:"scope_type,omitempty"`
+	SourceType       string    `json:"source_type,omitempty"`
+	RedactionApplied bool      `json:"redaction_applied"`
+	OccurredAt       time.Time `json:"occurred_at"`
+}
+
+type MemoryAuditOutput struct {
+	Items []MemoryAuditItem `json:"items"`
 }
 
 type MemoryWriteProposal struct {
@@ -537,10 +580,10 @@ func (c RunContext) SafeSummary() map[string]any {
 		"has_continuation_projection": c.ContinuationProjection.Available,
 	}
 	if c.ProviderRoute.ProviderID != "" {
-		summary["provider_id"] = c.ProviderRoute.ProviderID
+		summary["provider_id"] = RedactEventText(c.ProviderRoute.ProviderID)
 	}
 	if c.ProviderRoute.Model != "" {
-		summary["model"] = c.ProviderRoute.Model
+		summary["model"] = RedactEventText(c.ProviderRoute.Model)
 	}
 	if c.MemorySnapshot.LoadStatus != "" {
 		summary["memory_status"] = c.MemorySnapshot.LoadStatus
@@ -687,7 +730,11 @@ type MemoryWriteDecisionInput struct {
 }
 
 type DeleteMemoryEntryInput struct {
-	Reason string `json:"reason"`
+	Reason         string          `json:"reason"`
+	ScopeType      MemoryScopeType `json:"scope_type"`
+	ScopeID        string          `json:"scope_id"`
+	SourceThreadID string          `json:"source_thread_id"`
+	SourceRunID    string          `json:"source_run_id"`
 }
 
 type StopRunResult string
@@ -1044,12 +1091,12 @@ func redactMetadataValue(value any) any {
 
 func RedactEventText(value string) string {
 	lower := strings.ToLower(value)
-	for _, marker := range []string{"postgres://", "postgresql://", "password=", "api_key", "bearer ", "secret", "token", "credential", "authorization", "sk-", ".ssh", "id_ed25519", "id_rsa", ".env"} {
+	for _, marker := range []string{"postgres://", "postgresql://", "password=", "api_key", " key=", "_key=", "bearer ", "secret", "token", "credential", "authorization", "sk-", ".ssh", "id_ed25519", "id_rsa", ".env", "env=", "stdout", "stderr", "tool output", "tool_output", "provider trace", "provider_trace"} {
 		if strings.Contains(lower, marker) {
 			return "[redacted]"
 		}
 	}
-	if strings.Contains(value, "/Users/") || strings.Contains(value, "\\Users\\") {
+	if strings.Contains(value, "/Users/") || strings.Contains(value, "/home/") || strings.Contains(value, "\\Users\\") || strings.Contains(value, ":\\") {
 		return "[redacted]"
 	}
 	return value
