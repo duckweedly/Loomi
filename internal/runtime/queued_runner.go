@@ -53,8 +53,15 @@ func (r QueuedRunRouter) runApprovedTool(ctx context.Context, run productdata.Ru
 		_, _, _ = r.Gateway.Service.FailToolCallExecution(ctx, identity.LocalDevIdentity(), run.ThreadID, run.ID, toolCallID, "tool_execution_failed", err.Error())
 		return nil
 	}
-	_, _, err = r.Gateway.Service.CompleteToolCallSuccess(ctx, identity.LocalDevIdentity(), run.ThreadID, run.ID, toolCallID, result)
-	return err
+	if _, _, err = r.Gateway.Service.CompleteToolCallSuccess(ctx, identity.LocalDevIdentity(), run.ThreadID, run.ID, toolCallID, result); err != nil {
+		return err
+	}
+	input := r.gatewayContinuationInput(ctx, run, toolCallID)
+	if input.MessageID == "" || input.ProviderID == "" {
+		return productdata.NewError(productdata.CodeInvalidRequest, "Continuation context is missing.")
+	}
+	r.Gateway.ContinueAfterToolResult(ctx, run, input)
+	return r.gatewayResult(ctx, run.ID)
 }
 
 func (r QueuedRunRouter) gatewayResult(ctx context.Context, runID string) error {
@@ -75,6 +82,27 @@ func gatewayInputFromJob(run productdata.Run, job productdata.BackgroundJob) Gat
 		ProviderID: metadataString(job.Metadata, "provider_id"),
 		Model:      metadataString(job.Metadata, "model"),
 	}
+}
+
+func (r QueuedRunRouter) gatewayContinuationInput(ctx context.Context, run productdata.Run, toolCallID string) GatewayContinuationInput {
+	input := GatewayContinuationInput{ThreadID: run.ThreadID, ToolCallID: toolCallID}
+	if r.Gateway == nil || r.Gateway.Service == nil {
+		return input
+	}
+	events, err := r.Gateway.Service.ListRunEvents(ctx, identity.LocalDevIdentity(), run.ID, 0)
+	if err != nil {
+		return input
+	}
+	for _, event := range events {
+		if event.Type != "run_created" {
+			continue
+		}
+		input.MessageID = metadataString(event.Metadata, "message_id")
+		input.ProviderID = metadataString(event.Metadata, "provider_id")
+		input.Model = metadataString(event.Metadata, "model")
+		return input
+	}
+	return input
 }
 
 func metadataString(metadata map[string]any, key string) string {

@@ -45,6 +45,9 @@ Validate the foundation, execution closure, and continuation boundary with autom
 - `POST /approve` records one approved event and queues exactly one resume.
 - `POST /deny` records one denied event, stops the MVP run, and never writes executing.
 - approved `runtime.get_current_time` writes `tool_call_executing` then `tool_call_succeeded`.
+- after `tool_call_succeeded`, the worker starts one continuation provider request and records `model_phase = continuation` deltas before one final assistant message.
+- denied and `tool_call_failed` paths do not start continuation.
+- continuation provider failures are redacted, terminal, and do not create a duplicate final assistant message.
 - tool failures write `tool_call_failed` with redacted error fields.
 - ToolCallCard approve/deny buttons call the real API and show loading, disabled, and error states.
 - tool-result continuation can build a provider request from `tool_call_requested` and `tool_call_succeeded`.
@@ -56,7 +59,7 @@ Validate the foundation, execution closure, and continuation boundary with autom
 
 ```bash
 go test ./internal/productdata ./internal/runtime ./internal/db ./internal/httpapi ./cmd/...
-bun test ./web/src/realApiClient.test.ts ./web/src/runtime/realExecutionAdapter.test.ts ./web/src/runtime/executionAdapter.test.ts ./web/src/runtime/runtimeEventGroups.test.ts
+bun test ./web/src/realApiClient.test.ts ./web/src/runtime/realExecutionAdapter.test.ts ./web/src/runtime/executionAdapter.test.ts ./web/src/components/ToolCallCard.test.tsx ./web/src/components/RunRail.runtime.test.ts ./web/src/components/RunTimeline.runtime.test.ts
 bun run --cwd web build
 bun run --cwd docs-site build
 ```
@@ -64,8 +67,8 @@ bun run --cwd docs-site build
 For the continuation slice specifically:
 
 ```bash
-go test ./internal/runtime -run 'TestHTTPProviderSerializesOpenAIToolResultContinuation|TestGatewayBuildsContinuationContextFromToolResultEvents|TestGatewayContinuesAfterToolResultAndPersistsFinalAssistant|TestGatewayFailsWhenContinuationRequestsAnotherTool'
-bun test ./web/src/runtime/realExecutionAdapter.test.ts
+go test ./internal/runtime -run 'TestWorkerExecutesApprovedCurrentTimeToolAndContinuesModel|TestGatewayBuildsContinuationContextFromToolResultEvents|TestGatewayContinuesAfterToolResultAndPersistsFinalAssistant|TestGatewayFailsWhenContinuationRequestsAnotherTool|TestGatewayFailsContinuationProviderErrorWithoutFinalAssistant'
+bun test ./web/src/runtime/realExecutionAdapter.test.ts ./web/src/components/RunRail.runtime.test.ts ./web/src/components/RunTimeline.runtime.test.ts
 ```
 
 ## Browser smoke

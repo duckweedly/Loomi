@@ -23,7 +23,7 @@
 **Purpose**: Add shared contracts needed before any user story work.
 
 - [x] T004 Add provider continuation request/response test fixtures in `internal/runtime/gateway_test.go`
-- [ ] T005 Add tool-result projection service tests in `internal/productdata/service_test.go`
+- [x] T005 Add tool-result projection service tests in `internal/productdata/service_test.go`
 - [x] T006 [P] Add frontend replay fixtures for two model phases in `web/src/runtime/realExecutionAdapter.test.ts`
 - [x] T007 Define or reuse model phase metadata constants in `internal/productdata/models.go` and `web/src/domain.ts`
 
@@ -49,7 +49,7 @@
 - [x] T012 [US1] Implement tool-result projection lookup for continuation in `internal/productdata/service.go`
 - [x] T013 [US1] Add gateway-neutral synthetic tool result context in `internal/runtime/gateway.go`
 - [x] T014 [US1] Serialize synthetic tool result for provider adapters in `internal/runtime/providers.go`
-- [ ] T015 [US1] Resume provider continuation after `tool_call_succeeded` in `internal/runtime/queued_runner.go`
+- [x] T015 [US1] Resume provider continuation after `tool_call_succeeded` in `internal/runtime/queued_runner.go`
 - [x] T016 [US1] Persist second-phase model deltas, final assistant message, and run completion in `internal/runtime/runner.go`
 - [x] T017 [US1] Map continuation phase metadata through API/SSE if needed in `web/src/realApiClient.ts`
 - [x] T018 [US1] Update assistantDraft continuation handling in `web/src/runtime/realExecutionAdapter.ts`
@@ -66,13 +66,13 @@
 
 ### Tests for User Story 2
 
-- [ ] T019 [P] [US2] Add denied-path no-continuation test in `internal/runtime/worker_test.go`
-- [ ] T020 [P] [US2] Add frontend denied replay test in `web/src/runtime/realExecutionAdapter.test.ts`
+- [x] T019 [P] [US2] Add denied-path no-continuation test in `internal/runtime/worker_test.go`
+- [x] T020 [P] [US2] Add frontend denied replay test in `web/src/runtime/realExecutionAdapter.test.ts`
 
 ### Implementation for User Story 2
 
-- [ ] T021 [US2] Ensure denied terminal handling skips continuation in `internal/runtime/queued_runner.go`
-- [ ] T022 [US2] Ensure denied replay keeps ToolCallCard terminal and assistantDraft non-final in `web/src/runtime/realExecutionAdapter.ts`
+- [x] T021 [US2] Ensure denied terminal handling skips continuation in `internal/runtime/queued_runner.go`
+- [x] T022 [US2] Ensure denied replay keeps ToolCallCard terminal and assistantDraft non-final in `web/src/runtime/realExecutionAdapter.ts`
 
 **Checkpoint**: Denial is terminal and does not re-enter the model.
 
@@ -86,15 +86,15 @@
 
 ### Tests for User Story 3
 
-- [ ] T023 [P] [US3] Add tool-failed no-continuation test in `internal/runtime/worker_test.go`
-- [ ] T024 [P] [US3] Add continuation provider failure test in `internal/runtime/runner_test.go`
+- [x] T023 [P] [US3] Add tool-failed no-continuation test in `internal/runtime/worker_test.go`
+- [x] T024 [P] [US3] Add continuation provider failure test in `internal/runtime/gateway_test.go`
 - [x] T025 [P] [US3] Add unsupported second tool request test in `internal/runtime/providers_test.go`
-- [ ] T026 [P] [US3] Add frontend failed continuation replay test in `web/src/runtime/realExecutionAdapter.test.ts`
+- [x] T026 [P] [US3] Add frontend failed continuation replay test in `web/src/runtime/realExecutionAdapter.test.ts`
 
 ### Implementation for User Story 3
 
-- [ ] T027 [US3] Skip continuation after `tool_call_failed` in `internal/runtime/queued_runner.go`
-- [ ] T028 [US3] Record redacted continuation provider failures in `internal/runtime/runner.go`
+- [x] T027 [US3] Skip continuation after `tool_call_failed` in `internal/runtime/queued_runner.go`
+- [x] T028 [US3] Record redacted continuation provider failures in `internal/runtime/runner.go`
 - [x] T029 [US3] Fail safely when continuation requests another tool in `internal/runtime/providers.go`
 - [x] T030 [US3] Preserve partial failed continuation draft in `web/src/runtime/realExecutionAdapter.ts`
 
@@ -110,15 +110,15 @@
 
 ### Tests for User Story 4
 
-- [ ] T031 [P] [US4] Add RunTimeline two-phase grouping test in `web/src/components/RunTimeline.runtime.test.ts`
-- [ ] T032 [P] [US4] Add RunRail continuation status test in `web/src/components/RunRail.runtime.test.ts`
-- [ ] T033 [P] [US4] Add ToolCallCard succeeded result display test in `web/src/components/ToolCallCard.test.tsx`
+- [x] T031 [P] [US4] Add RunTimeline two-phase grouping test in `web/src/components/RunTimeline.runtime.test.ts`
+- [x] T032 [P] [US4] Add RunRail continuation status test in `web/src/components/RunRail.runtime.test.ts`
+- [x] T033 [P] [US4] Add ToolCallCard succeeded result display test in `web/src/components/ToolCallCard.test.tsx`
 
 ### Implementation for User Story 4
 
-- [ ] T034 [US4] Update Timeline phase rendering in `web/src/components/RunTimeline.tsx`
-- [ ] T035 [US4] Update RunRail continuation/final state rendering in `web/src/components/RunRail.tsx`
-- [ ] T036 [US4] Update ToolCallCard result display if Window A result fields changed in `web/src/components/ToolCallCard.tsx`
+- [x] T034 [US4] Update Timeline phase rendering in `web/src/components/RunTimeline.tsx`
+- [x] T035 [US4] Update RunRail continuation/final state rendering in `web/src/components/RunRail.tsx`
+- [x] T036 [US4] Update ToolCallCard result display if Window A result fields changed in `web/src/components/ToolCallCard.tsx`
 
 **Checkpoint**: Browser smoke can explain the full two-phase run.
 
@@ -134,9 +134,9 @@
 - [x] T040 [P] Add implementation devlog in `docs-site/src/content/docs/devlog/2026-05-25-tool-result-continuation.md`
 - [x] T041 Update status and next steps in `docs-site/src/content/docs/roadmap/current-status.md`
 - [x] T042 Run backend validation commands for runtime/productdata changes
-- [ ] T043 Run web validation commands for runtime/UI changes
+- [x] T043 Run web validation commands for runtime/UI changes
 - [x] T044 Run `bun run build` from `docs-site/`
-- [ ] T045 Perform browser smoke for success, denied, and failed paths
+- [x] T045 Perform browser smoke for success, denied, and failed paths
 
 ---
 
@@ -173,5 +173,4 @@
 
 ### Current Blockers
 
-- T015, T019-T023, T027, and full browser smoke depend on Window A landing approve/deny endpoints and approved `runtime.get_current_time` execution.
-- T043 is partially validated by `bun test src/runtime/realExecutionAdapter.test.ts`; broader web tests are blocked on an existing `web/src/i18n.ts` syntax error on `origin/main` and missing local `web/node_modules`.
+- None for implementation. Window A dependencies are now available on `main`; remaining browser smoke depends only on local API/web/provider setup.

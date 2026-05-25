@@ -3,7 +3,7 @@ title: Tool Result Continuation
 description: Minimal model continuation boundary after an approved tool result.
 ---
 
-Tool result continuation is the next M7 slice after approval-gated tool execution. It lets Loomi take a redacted `tool_call_succeeded` result, feed it back to the configured model provider, and persist one final assistant answer in the same run.
+Tool result continuation is the M7 slice after approval-gated tool execution. It lets Loomi take a redacted `tool_call_succeeded` result, feed it back to the configured model provider, and persist one final assistant answer in the same run.
 
 The current implementation adds the continuation boundary without adding new tool families. The only supported tool remains `runtime.get_current_time`, and continuation allows only one tool call and one follow-up model request per run.
 
@@ -62,4 +62,4 @@ Frontend replay treats a successful tool event as a pause point for an existing 
 
 Only redacted result metadata is eligible for provider continuation. Tool result context must not include raw provider payloads, raw executor internals, credentials, file contents, shell output, arbitrary network responses, or hidden local state.
 
-The current branch does not implement approve/deny endpoints or tool execution. It expects the previous M7 execution slice to provide `tool_call_succeeded` with a safe `result_summary` or `result_for_model_redacted` field.
+Approved `runtime.get_current_time` worker execution now calls continuation immediately after `tool_call_succeeded`. Denied and `tool_call_failed` runs are terminal and never re-enter the model. If the continuation provider fails, Loomi records one redacted failed terminal state and does not persist a final assistant message.

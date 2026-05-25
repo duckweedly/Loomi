@@ -372,9 +372,19 @@ func TestRunEventStreamReplaysToolApprovalExecutionAndResultEvents(t *testing.T)
 	if _, _, err := svc.CompleteToolCallSuccess(context.Background(), identity.LocalDevIdentity(), thread.ID, run.ID, "tc_1", map[string]any{"timezone": "UTC"}); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := svc.AppendRunEvent(context.Background(), identity.LocalDevIdentity(), run.ID, productdata.AppendRunEventInput{Category: productdata.RunEventCategoryFinal, Type: productdata.EventRunCompleted, Summary: "Run completed"}); err != nil {
+		t.Fatal(err)
+	}
 	srv := NewServerWithProduct(config.Config{AppEnv: "local"}, fakeChecker{}, svc)
 
-	res := requestJSON(t, srv, http.MethodGet, "/v1/runs/"+run.ID+"/events/stream", "")
+	ctx, cancel := context.WithCancel(context.Background())
+	req := httptest.NewRequest(http.MethodGet, "/v1/runs/"+run.ID+"/events/stream", nil).WithContext(ctx)
+	res := httptest.NewRecorder()
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		cancel()
+	}()
+	srv.ServeHTTP(res, req)
 
 	body := res.Body.String()
 	approved := strings.Index(body, productdata.EventToolCallApproved)

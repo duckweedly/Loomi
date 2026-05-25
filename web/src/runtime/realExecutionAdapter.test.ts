@@ -93,6 +93,21 @@ describe('applyRealRunEvent', () => {
     expect(deniedRun.toolCalls?.[0]).toMatchObject({ status: 'denied', approvalStatus: 'denied', executionStatus: 'cancelled' })
   })
 
+  test('does not build continuation draft after denied or failed tool terminals', () => {
+    const run = { id: 'run-a', threadId: 'thread-a', status: 'running', model: 'Model gateway', context: 'model_gateway', source: 'model_gateway', events: [], assistantDraft: { content: 'I will check.', status: 'streaming' } } as const
+    const denied: RuntimeEvent = { id: 'evt-denied', runId: 'run-a', threadId: 'thread-a', sequence: 1, type: 'tool.call.denied', label: 'tool', detail: 'Tool call denied', time: 'Now', status: 'stopped', group: 'tool-call', metadata: { tool_call_id: 'tc_1', tool_name: 'runtime.get_current_time', approval_status: 'denied', execution_status: 'cancelled' } }
+    const failed: RuntimeEvent = { id: 'evt-failed', runId: 'run-a', threadId: 'thread-a', sequence: 1, type: 'tool.call.failed', label: 'tool', detail: 'Tool call failed', time: 'Now', status: 'failed', group: 'tool-call', metadata: { tool_call_id: 'tc_1', tool_name: 'runtime.get_current_time', approval_status: 'approved', execution_status: 'failed', error_code: 'tool_execution_failed' } }
+    const continuation: RuntimeEvent = { id: 'evt-continuation', runId: 'run-a', threadId: 'thread-a', sequence: 2, type: 'message.model_output_delta', label: 'message', detail: 'Model output delta', content: 'It is now.', assistantDelta: 'It is now.', time: 'Later', status: 'running', metadata: { model_phase: 'continuation' } }
+
+    const afterDenied = applyRealRunEvent(applyRealRunEvent(run, denied), continuation)
+    const afterFailed = applyRealRunEvent(applyRealRunEvent(run, failed), continuation)
+
+    expect(afterDenied.assistantDraft).toMatchObject({ content: 'I will check.', status: 'stopped' })
+    expect(afterFailed.assistantDraft).toMatchObject({ content: 'I will check.', status: 'failed' })
+    expect(afterDenied.events.map((event) => event.id)).not.toContain('evt-continuation')
+    expect(afterFailed.events.map((event) => event.id)).not.toContain('evt-continuation')
+  })
+
   test('maps backend setup provider and stream failures to capability signals', () => {
     expect(mapRealRuntimeCapabilitySignal(new Error('Failed to fetch'))).toEqual({ backendUnavailable: true })
     expect(mapRealRuntimeCapabilitySignal(Object.assign(new Error('model setup missing'), { code: 'model_setup_missing' }))).toEqual({ modelSetupMissing: true })

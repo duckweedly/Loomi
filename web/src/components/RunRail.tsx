@@ -58,7 +58,14 @@ function getEventDetail(event: Run['events'][number], locale: Locale) {
     'run.cancelled': workerCopy.cancellationRequested,
     worker_diagnostics: workerCopy.diagnostics,
   }
-  const detail = event.type === 'error.provider_error' || event.type === 'error.provider_timeout' || event.type === 'error.provider_rate_limited'
+  const modelPhase = event.metadata?.model_phase === 'continuation'
+    ? 'Continuation model phase'
+    : event.metadata?.model_phase === 'initial'
+      ? 'Initial model phase'
+      : ''
+  const detail = modelPhase
+    ? `${modelPhase} · ${event.detail}`
+    : event.type === 'error.provider_error' || event.type === 'error.provider_timeout' || event.type === 'error.provider_rate_limited'
     ? `Provider failure · ${event.detail}`
     : event.type === 'progress.tool_call_blocked'
       ? `Tool request blocked · ${event.detail}`

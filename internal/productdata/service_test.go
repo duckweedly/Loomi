@@ -332,11 +332,18 @@ func TestToolCallExecutionEventsRedactResultAndErrors(t *testing.T) {
 	if call.ResultSummary["api_key"] == "sk-live-secret" {
 		t.Fatalf("result was not redacted: %+v", call.ResultSummary)
 	}
-	if len(events) != 2 || events[0].Type != EventToolCallSucceeded {
+	if len(events) != 1 || events[0].Type != EventToolCallSucceeded {
 		t.Fatalf("events = %+v", events)
 	}
 	if result, ok := events[0].Metadata["result_summary"].(map[string]any); ok && result["api_key"] == "sk-live-secret" {
 		t.Fatalf("event metadata was not redacted: %+v", events[0].Metadata)
+	}
+	got, err := svc.GetRun(context.Background(), ident, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != RunStatusRunning || got.CompletedAt != nil {
+		t.Fatalf("run = %+v", got)
 	}
 }
 
@@ -503,9 +510,13 @@ func TestRecoverBackgroundJobsReschedulesExpiredLeaseAndRejectsStaleOwner(t *tes
 	if recoveries[0].Events[0].Type != EventJobRecovering || recoveries[0].Events[1].Type != EventJobRetryScheduled {
 		t.Fatalf("events = %+v", recoveries[0].Events)
 	}
+	if !recoveries[0].Job.ScheduledAt.After(base) {
+		t.Fatalf("retry was not backed off: scheduled_at=%s base=%s", recoveries[0].Job.ScheduledAt, base)
+	}
 	if _, changed, err := svc.CompleteBackgroundJob(context.Background(), ident, CompleteBackgroundJobInput{JobID: job.ID, WorkerID: "worker_stale", OwnershipVersion: job.OwnershipVersion}); err != nil || changed {
 		t.Fatalf("stale completion changed=%v err=%v", changed, err)
 	}
+	base = recoveries[0].Job.ScheduledAt
 	claimed, _, ok, err := svc.ClaimBackgroundJob(context.Background(), ident, ClaimBackgroundJobInput{WorkerID: "worker_fresh", LeaseSeconds: 1})
 	if err != nil {
 		t.Fatal(err)
@@ -550,6 +561,9 @@ func TestRecoverBackgroundJobsExhaustsRetriesWithRedactedFailure(t *testing.T) {
 			if recoveries[0].Run.ErrorMessage == nil || *recoveries[0].Run.ErrorMessage != "[redacted]" || recoveries[0].Events[0].Summary != "[redacted]" {
 				t.Fatalf("final recovery did not redact = %+v", recoveries[0])
 			}
+		}
+		if attempt < 3 {
+			base = recoveries[0].Job.ScheduledAt
 		}
 	}
 	got, err := svc.GetRun(context.Background(), ident, run.ID)

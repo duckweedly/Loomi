@@ -120,4 +120,33 @@ describe('RunTimeline runtime linkage', () => {
     expect(html).toContain('invoke runtime')
     expect(html).toContain('stream failed')
   })
+
+  test('renders two model phases around tool result continuation', () => {
+    const html = renderToStaticMarkup(createElement(RunTimeline, {
+      runDetailsOpen: true,
+      rightPanelMenuOpen: false,
+      rightToolsOpen: false,
+      selectedPanelId: 'activity',
+      onSelectPanel: () => {},
+      onOpenArtifact: () => {},
+      run: {
+        id: 'run-a',
+        threadId: 'thread-a',
+        status: 'completed',
+        model: 'Model gateway',
+        context: 'model_gateway',
+        events: [
+          { id: 'evt-initial', runId: 'run-a', threadId: 'thread-a', sequence: 1, type: 'message.model_output_delta', label: 'message', detail: 'Model output delta', time: 'Now', status: 'running', group: 'model-stream', metadata: { model_phase: 'initial' } },
+          { id: 'evt-tool', runId: 'run-a', threadId: 'thread-a', sequence: 2, type: 'tool.call.succeeded', label: 'tool', detail: 'Tool call succeeded', time: 'Now', status: 'running', group: 'tool-call', metadata: { tool_call_id: 'tc_1', tool_name: 'runtime.get_current_time' } },
+          { id: 'evt-continuation', runId: 'run-a', threadId: 'thread-a', sequence: 3, type: 'message.model_output_delta', label: 'message', detail: 'Model output delta', time: 'Now', status: 'running', group: 'model-stream', metadata: { model_phase: 'continuation' } },
+          { id: 'evt-final', runId: 'run-a', threadId: 'thread-a', sequence: 4, type: 'run.completed', label: 'run', detail: 'Run completed', time: 'Now', status: 'completed', group: 'run-lifecycle' },
+        ],
+      },
+    }))
+
+    expect(html).toContain('Initial model phase')
+    expect(html).toContain('Tool call succeeded')
+    expect(html).toContain('Continuation model phase')
+    expect(html).toContain('Run completed')
+  })
 })

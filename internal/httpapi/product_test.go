@@ -59,6 +59,11 @@ func TestMessageHandlers(t *testing.T) {
 	create := requestJSON(t, srv, http.MethodPost, "/v1/threads", `{"title":"Thread","mode":"chat"}`)
 	threadID := decodeThreadID(t, create.Body.Bytes())
 
+	empty := requestJSON(t, srv, http.MethodGet, "/v1/threads/"+threadID+"/messages", "")
+	if empty.Code != http.StatusOK || !strings.Contains(empty.Body.String(), `"messages":[]`) {
+		t.Fatalf("empty list status=%d body=%s", empty.Code, empty.Body.String())
+	}
+
 	msg := requestJSON(t, srv, http.MethodPost, "/v1/threads/"+threadID+"/messages", `{"content":"Hello","client_message_id":"client-1"}`)
 	if msg.Code != http.StatusCreated || strings.Contains(msg.Body.String(), "assistant") {
 		t.Fatalf("message status=%d body=%s", msg.Code, msg.Body.String())

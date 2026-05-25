@@ -649,19 +649,15 @@ func (r *PostgresRepository) CompleteToolCallSuccess(ctx context.Context, ident 
 	if err != nil {
 		return ToolCall{}, nil, err
 	}
-	completed, err := scanRun(tx.QueryRow(ctx, `update runs set status='completed', completed_at=now(), updated_at=now() where id=$1 and user_id=$2 returning id, thread_id, user_id, status, source, title, created_at, updated_at, completed_at, stop_requested_at, error_code, error_message`, run.ID, user.ID))
+	running, err := scanRun(tx.QueryRow(ctx, `update runs set status='running', completed_at=null, updated_at=now() where id=$1 and user_id=$2 returning id, thread_id, user_id, status, source, title, created_at, updated_at, completed_at, stop_requested_at, error_code, error_message`, run.ID, user.ID))
 	if err != nil {
 		return ToolCall{}, nil, err
 	}
-	succeeded, err := insertRunEvent(ctx, tx, completed, RunEventCategoryProgress, EventToolCallSucceeded, "Tool call succeeded", nil, toolCallEventMetadata(call))
+	succeeded, err := insertRunEvent(ctx, tx, running, RunEventCategoryProgress, EventToolCallSucceeded, "Tool call succeeded", nil, toolCallEventMetadata(call))
 	if err != nil {
 		return ToolCall{}, nil, err
 	}
-	final, err := insertRunEvent(ctx, tx, completed, RunEventCategoryFinal, EventRunCompleted, "Run completed", nil, map[string]any{"tool_call_id": call.ToolCallID})
-	if err != nil {
-		return ToolCall{}, nil, err
-	}
-	return call, []RunEvent{succeeded, final}, tx.Commit(ctx)
+	return call, []RunEvent{succeeded}, tx.Commit(ctx)
 }
 
 func (r *PostgresRepository) FailToolCallExecution(ctx context.Context, ident identity.LocalIdentity, threadID string, runID string, toolCallID string, errorCode string, errorMessage string) (ToolCall, []RunEvent, error) {
@@ -852,7 +848,8 @@ func (r *PostgresRepository) RecoverBackgroundJobs(ctx context.Context, ident id
 			recoveries = append(recoveries, BackgroundJobRecovery{Job: dead, Run: failed, Events: []RunEvent{exhausted, final}, Exhausted: true})
 			continue
 		}
-		queued, err := scanBackgroundJob(tx.QueryRow(ctx, `update background_jobs set status='queued', leased_by=null, lease_expires_at=null, last_error_code=$1, last_error_message=$2, updated_at=now() where id=$3 returning id, run_id, thread_id, user_id, kind, status, priority, attempt_count, max_attempts, scheduled_at, leased_by, lease_expires_at, ownership_version, metadata, last_error_code, last_error_message, created_at, updated_at`, code, message, job.ID))
+		backoffSeconds := int(retryBackoffDuration(job.AttemptCount).Seconds())
+		queued, err := scanBackgroundJob(tx.QueryRow(ctx, `update background_jobs set status='queued', leased_by=null, lease_expires_at=null, scheduled_at=now() + ($1::int * interval '1 second'), last_error_code=$2, last_error_message=$3, updated_at=now() where id=$4 returning id, run_id, thread_id, user_id, kind, status, priority, attempt_count, max_attempts, scheduled_at, leased_by, lease_expires_at, ownership_version, metadata, last_error_code, last_error_message, created_at, updated_at`, backoffSeconds, code, message, job.ID))
 		if err != nil {
 			return nil, err
 		}
@@ -864,7 +861,7 @@ func (r *PostgresRepository) RecoverBackgroundJobs(ctx context.Context, ident id
 		if err != nil {
 			return nil, err
 		}
-		retry, err := insertRunEvent(ctx, tx, recoveringRun, RunEventCategoryProgress, EventJobRetryScheduled, "Job retry scheduled", nil, map[string]any{"job_id": queued.ID, "next_attempt": queued.AttemptCount + 1})
+		retry, err := insertRunEvent(ctx, tx, recoveringRun, RunEventCategoryProgress, EventJobRetryScheduled, "Job retry scheduled", nil, map[string]any{"job_id": queued.ID, "next_attempt": queued.AttemptCount + 1, "scheduled_at": queued.ScheduledAt})
 		if err != nil {
 			return nil, err
 		}

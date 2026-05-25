@@ -276,10 +276,14 @@ func TestRepositoryContractCoversM6RecoveryAndRetryExhaustion(t *testing.T) {
 	if len(recoveries) != 1 || recoveries[0].Exhausted || recoveries[0].Job.Status != BackgroundJobStatusQueued || recoveries[0].Run.Status != RunStatusRecovering {
 		t.Fatalf("recoveries = %+v", recoveries)
 	}
+	if !recoveries[0].Job.ScheduledAt.After(base) {
+		t.Fatalf("retry was not backed off: scheduled_at=%s base=%s", recoveries[0].Job.ScheduledAt, base)
+	}
 	if _, changed, err := contract.FailBackgroundJob(context.Background(), ident, FailBackgroundJobInput{JobID: job.ID, WorkerID: "worker_stale", OwnershipVersion: job.OwnershipVersion, ErrorCode: "stale", ErrorMessage: "stale"}); err != nil || changed {
 		t.Fatalf("stale fail changed=%v err=%v", changed, err)
 	}
 	for attempt := 2; attempt <= 3; attempt++ {
+		base = recoveries[0].Job.ScheduledAt
 		if _, _, ok, err := contract.ClaimBackgroundJob(context.Background(), ident, ClaimBackgroundJobInput{WorkerID: "worker_retry", LeaseSeconds: 1}); err != nil || !ok {
 			t.Fatalf("claim attempt %d ok=%v err=%v", attempt, ok, err)
 		}
@@ -351,6 +355,7 @@ func TestRepositoryContractCoversM6QueueDiagnosticsStates(t *testing.T) {
 			}
 			break
 		}
+		base = recoveries[0].Job.ScheduledAt
 		if _, _, ok, err := contract.ClaimBackgroundJob(context.Background(), ident, ClaimBackgroundJobInput{WorkerID: "worker_test", LeaseSeconds: 1}); err != nil || !ok {
 			t.Fatalf("retry claim %d ok=%v err=%v", attempt, ok, err)
 		}

@@ -92,7 +92,11 @@ export function applyRealRunEvent(run: Run, event: RuntimeEvent): Run {
   if (toolMapping) {
     const assistantDraft = event.type === 'tool.call.succeeded' && run.assistantDraft?.status === 'streaming'
       ? { ...run.assistantDraft, status: 'paused_for_tool' as const, lastEventId: event.id }
-      : run.assistantDraft
+      : event.type === 'tool.call.denied'
+        ? { ...run.assistantDraft, content: run.assistantDraft?.content ?? '', status: 'stopped' as const, lastEventId: event.id }
+        : event.type === 'tool.call.failed'
+          ? { ...run.assistantDraft, content: run.assistantDraft?.content ?? '', status: 'failed' as const, lastEventId: event.id }
+          : run.assistantDraft
     return { ...run, status: event.status, events, completedAt, assistantDraft, toolCalls: applyToolEvent(run.toolCalls, event, toolMapping) }
   }
   if (event.type === 'model.delta' || event.type === 'message.model_output_delta') {

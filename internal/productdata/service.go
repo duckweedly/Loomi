@@ -550,13 +550,12 @@ func (s *MemoryService) CompleteToolCallSuccess(_ context.Context, ident identit
 	call.ResultSummary = RedactEventMetadata(resultSummary)
 	call.UpdatedAt = now
 	s.toolCalls[key] = call
-	run.Status = RunStatusCompleted
-	run.CompletedAt = &now
+	run.Status = RunStatusRunning
+	run.CompletedAt = nil
 	run.UpdatedAt = now
 	s.runs[run.ID] = run
 	succeeded := s.appendRunEventLocked(run, RunEventCategoryProgress, EventToolCallSucceeded, "Tool call succeeded", nil, toolCallEventMetadata(call), now)
-	final := s.appendRunEventLocked(run, RunEventCategoryFinal, EventRunCompleted, "Run completed", nil, map[string]any{"tool_call_id": call.ToolCallID}, now)
-	return call, []RunEvent{succeeded, final}, nil
+	return call, []RunEvent{succeeded}, nil
 }
 
 func (s *MemoryService) FailToolCallExecution(_ context.Context, ident identity.LocalIdentity, threadID string, runID string, toolCallID string, errorCode string, errorMessage string) (ToolCall, []RunEvent, error) {
@@ -778,14 +777,23 @@ func (s *MemoryService) RecoverBackgroundJobs(_ context.Context, ident identity.
 		job.Status = BackgroundJobStatusQueued
 		job.LeasedBy = nil
 		job.LeaseExpiresAt = nil
+		job.ScheduledAt = now.Add(retryBackoffDuration(job.AttemptCount))
 		run.Status = RunStatusRecovering
 		recovering := s.appendRunEventLocked(run, RunEventCategoryProgress, EventJobRecovering, "Job recovering", nil, map[string]any{"job_id": job.ID, "previous_worker_id": previousWorkerID, "attempt": job.AttemptCount}, now)
-		retry := s.appendRunEventLocked(run, RunEventCategoryProgress, EventJobRetryScheduled, "Job retry scheduled", nil, map[string]any{"job_id": job.ID, "next_attempt": job.AttemptCount + 1, "scheduled_at": now}, now)
+		retry := s.appendRunEventLocked(run, RunEventCategoryProgress, EventJobRetryScheduled, "Job retry scheduled", nil, map[string]any{"job_id": job.ID, "next_attempt": job.AttemptCount + 1, "scheduled_at": job.ScheduledAt}, now)
 		s.runs[run.ID] = run
 		s.backgroundJobs[id] = job
 		recoveries = append(recoveries, BackgroundJobRecovery{Job: job, Run: run, Events: []RunEvent{recovering, retry}})
 	}
 	return recoveries, nil
+}
+
+func retryBackoffDuration(attemptCount int) time.Duration {
+	if attemptCount <= 1 {
+		return time.Second
+	}
+	seconds := 1 << min(attemptCount-1, 3)
+	return time.Duration(seconds) * time.Second
 }
 
 func (s *MemoryService) CompleteBackgroundJob(_ context.Context, ident identity.LocalIdentity, input CompleteBackgroundJobInput) (BackgroundJob, bool, error) {

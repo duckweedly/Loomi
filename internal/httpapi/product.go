@@ -171,6 +171,9 @@ func (s *Server) handleThreadMessages(w http.ResponseWriter, r *http.Request, th
 			writeAPIError(w, err)
 			return
 		}
+		if messages == nil {
+			messages = []productdata.Message{}
+		}
 		writeJSON(w, http.StatusOK, messageListResponse{Messages: messages, RequestID: diagnostics.NewRequestID()})
 	case http.MethodPost:
 		var req createMessageRequest

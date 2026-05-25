@@ -7,6 +7,8 @@ description: Loomi 当前已完成内容和建议下一步。
 
 当前仓库已经有 Web/Electron 前端壳、Go API/DB 基座、本地 identity/thread/message、M4 run/event/SSE、M3.5 前端 Agent runtime 骨架、M5 LLM Gateway 的 backend/provider/frontend 基础切片、M5.5 Settings Placeholder 的前端设置占位面、M6 Worker Job Pipeline 的 queued background execution MVP、M6.5 Real Testing Console and Background UX，以及 M7 Tool Call Approval Execution + Tool Result Continuation 的最小闭环。
 
+原路线 M8 Worker + Job Queue 已由 M6 Worker Job Pipeline 覆盖并通过 013 closeout：`background_jobs` 表、API 同事务 queued run + job、worker claim、lease renew、retry/backoff、failed terminal、lost-lock ownership guard、202 queued acknowledgement、worker crash recovery、旧 worker 失锁后不能写 terminal 均已有证据或已由 closeout 补齐。M8 closeout passed；下一步不要重做 worker/job queue。
+
 Spec Kit 已接入仓库，并写入 Loomi constitution。文档站已作为 `docs-site/` 独立子项目创建，用于长期记录技术细节。
 
 已完成的可运行薄片：
@@ -19,14 +21,15 @@ Spec Kit 已接入仓库，并写入 Loomi constitution。文档站已作为 `do
 - M5：后端 LLM gateway、provider capability、provider-normalized run events、streaming assistant draft、redacted failure states 和 non-executed tool boundary。
 - M5.5：Settings Placeholder、General session-local controls、read-only runtime/provider status，以及安全的 mock/preview future settings categories。
 - M6：queued run acknowledgement、durable background job、local in-process worker、pipeline events、frontend queued/worker timeline replay、lease recovery、cancellation 和 worker diagnostics。
+- M8 closeout：原 M8 Worker + Job Queue 已由 M6 覆盖；013 仅补齐 stale lease recovery 的 retry backoff scheduling，并记录审计证据。
 - M6.5：Provider Test Console、real mode provider unavailable guidance、read-only Background tasks observer、M6 worker/job Timeline labels、Composer 状态收口和本地真实测试 runbook。
 - M7 approval execution closure：approval-blocked tool-call projection、`runtime.get_current_time` allowlist/schema、tool lifecycle events、safe metadata redaction、worker diagnostics counters、frontend tool-event replay mapping、provider tool-call conversion、scoped tool-call read API、idempotent approve/deny API、enabled approval UI actions、approved current-time worker execution、result/error/denied SSE replay。
-- M7 tool-result continuation boundary：provider-neutral continuation context、OpenAI-compatible tool-result serialization、`model_phase = continuation` replay、one final assistant message，以及 continuation 再请求工具时的 `unsupported_tool_loop` 安全失败。
+- M7 tool-result continuation closure：approved `runtime.get_current_time` 执行成功后自动续调 provider、provider-neutral continuation context、OpenAI-compatible tool-result serialization、`model_phase = continuation` replay、one final assistant message、denied/tool-failed no-continuation、continuation provider failure redacted terminal，以及 continuation 再请求工具时的 `unsupported_tool_loop` 安全失败。
 
 ## 建议下一步
 
-下一步适合把 approved `runtime.get_current_time` worker execution 的 `tool_call_succeeded` 自动接到已实现的 continuation boundary，并继续收口本地 fake/provider/browser smoke。Desktop runtime、多 Agent、RAG/memory、持久化 settings、provider 管理、shell/filesystem/MCP/browser automation 等能力仍应通过后续 Spec Kit 功能单独推进。
+下一步适合进入 M9 RunContext/Pipeline 的单独 Spec Kit 设计，或继续做真实 provider/browser smoke 证据收集。M9 不应重新实现 worker/job queue；Desktop runtime、多 Agent、RAG/memory、持久化 settings、provider 管理、shell/filesystem/MCP/browser automation 等能力仍应通过后续 Spec Kit 功能单独推进。
 
 ## 开发要求
 
-后续非平凡开发必须同步更新 `docs-site/`。M5.5 已更新 Settings 架构页、runbook、开发日志和验证命令；M6 已新增 worker/job pipeline API、架构页、runbook、开发日志、Spec Kit 状态和验证命令；M6.5 已新增 Provider Test Console/Background tasks 架构页、本地 provider testing runbook、开发日志和验证命令；M7 已新增并更新 tool-call approval architecture/API/runbook/devlog，并新增 tool-result continuation architecture/devlog。后续真实 provider/browser smoke 结果应继续追加到相关 devlog。
+后续非平凡开发必须同步更新 `docs-site/`。M5.5 已更新 Settings 架构页、runbook、开发日志和验证命令；M6 已新增 worker/job pipeline API、架构页、runbook、开发日志、Spec Kit 状态和验证命令；013 已记录 M8 closeout passed 和 retry/backoff 补丁；M6.5 已新增 Provider Test Console/Background tasks 架构页、本地 provider testing runbook、开发日志和验证命令；M7 已新增并更新 tool-call approval architecture/API/runbook/devlog，并新增 tool-result continuation architecture/devlog。后续真实 provider/browser smoke 结果应继续追加到相关 devlog。

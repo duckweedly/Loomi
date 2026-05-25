@@ -291,14 +291,18 @@ func TestWorkerLeavesQueuedGatewayRunBlockedOnToolApproval(t *testing.T) {
 	}
 }
 
-func TestWorkerExecutesApprovedCurrentTimeToolOnce(t *testing.T) {
+func TestWorkerExecutesApprovedCurrentTimeToolAndContinuesModel(t *testing.T) {
 	svc := productdata.NewMemoryService()
 	ident := identity.LocalDevIdentity()
 	thread, err := svc.CreateThread(context.Background(), ident, productdata.CreateThreadInput{Title: "Approved tool", Mode: productdata.ThreadModeChat})
 	if err != nil {
 		t.Fatal(err)
 	}
-	run, err := svc.StartRun(context.Background(), ident, thread.ID, productdata.StartRunInput{Source: productdata.RunSourceModelGateway, MessageID: "msg_1", ProviderID: "custom", Model: "model"})
+	message, _, err := svc.CreateMessage(context.Background(), ident, thread.ID, productdata.CreateMessageInput{Content: "time?"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, productdata.StartRunInput{Source: productdata.RunSourceModelGateway, MessageID: message.ID, ProviderID: "custom", Model: "model"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -308,7 +312,8 @@ func TestWorkerExecutesApprovedCurrentTimeToolOnce(t *testing.T) {
 	if _, _, err := svc.ApproveToolCall(context.Background(), ident, thread.ID, run.ID, "tc_1"); err != nil {
 		t.Fatal(err)
 	}
-	worker := NewWorker(svc, nil, QueuedRunRouter{Gateway: NewGateway(svc, nil, nil)})
+	provider := &capturingProvider{config: ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: "https://example.test/v1", APIKey: "key", Model: "model", Enabled: true}, events: []ProviderEvent{{Type: ProviderEventTextDelta, Text: "It is "}, {Type: ProviderEventCompleted, Text: "It is runtime time."}}}
+	worker := NewWorker(svc, nil, QueuedRunRouter{Gateway: NewGateway(svc, nil, []Provider{provider})})
 	worker.WorkerID = "worker_tool"
 
 	ok, err := worker.ProcessOne(context.Background())
@@ -341,6 +346,23 @@ func TestWorkerExecutesApprovedCurrentTimeToolOnce(t *testing.T) {
 	if executing != 1 || succeeded != 1 {
 		t.Fatalf("events = %+v", events)
 	}
+	got, err := svc.GetRun(context.Background(), ident, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != productdata.RunStatusCompleted {
+		t.Fatalf("run = %+v", got)
+	}
+	messages, err := svc.ListMessages(context.Background(), ident, thread.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 2 || messages[1].Content != "It is runtime time." {
+		t.Fatalf("messages = %+v", messages)
+	}
+	if len(provider.request.Messages) != 3 || provider.request.Messages[1].Role != ProviderMessageRoleAssistantToolCall || provider.request.Messages[2].Role != ProviderMessageRoleToolResult {
+		t.Fatalf("continuation request = %+v", provider.request.Messages)
+	}
 
 	ok, err = worker.ProcessOne(context.Background())
 	if err != nil {
@@ -348,5 +370,92 @@ func TestWorkerExecutesApprovedCurrentTimeToolOnce(t *testing.T) {
 	}
 	if ok {
 		t.Fatal("second ProcessOne() ok = true, want no duplicate job")
+	}
+}
+
+func TestWorkerDoesNotContinueAfterDeniedToolCall(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, productdata.CreateThreadInput{Title: "Denied tool", Mode: productdata.ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _, err := svc.CreateMessage(context.Background(), ident, thread.ID, productdata.CreateMessageInput{Content: "time?"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, productdata.StartRunInput{Source: productdata.RunSourceModelGateway, MessageID: message.ID, ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.RecordToolCallRequest(context.Background(), ident, run.ID, productdata.RecordToolCallRequestInput{ToolCallID: "tc_1", ToolName: productdata.ToolNameCurrentTime, ArgumentsSummary: map[string]any{"timezone": "UTC"}, ArgumentsHash: "hash_1", ApprovalStatus: productdata.ToolCallApprovalRequired, ExecutionStatus: productdata.ToolCallExecutionBlocked}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.DenyToolCall(context.Background(), ident, thread.ID, run.ID, "tc_1"); err != nil {
+		t.Fatal(err)
+	}
+	provider := &capturingProvider{config: ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: "https://example.test/v1", APIKey: "key", Model: "model", Enabled: true}}
+	worker := NewWorker(svc, nil, QueuedRunRouter{Gateway: NewGateway(svc, nil, []Provider{provider})})
+	worker.WorkerID = "worker_denied"
+
+	ok, err := worker.ProcessOne(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok {
+		t.Fatal("ProcessOne() ok = true, want no queued continuation")
+	}
+	if provider.request.ThreadID != "" {
+		t.Fatalf("provider was called: %+v", provider.request)
+	}
+}
+
+func TestWorkerDoesNotContinueAfterToolExecutionFailure(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, productdata.CreateThreadInput{Title: "Failed tool", Mode: productdata.ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _, err := svc.CreateMessage(context.Background(), ident, thread.ID, productdata.CreateMessageInput{Content: "time?"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, productdata.StartRunInput{Source: productdata.RunSourceModelGateway, MessageID: message.ID, ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.RecordToolCallRequest(context.Background(), ident, run.ID, productdata.RecordToolCallRequestInput{ToolCallID: "tc_1", ToolName: productdata.ToolNameCurrentTime, ArgumentsSummary: map[string]any{"timezone": "UTC"}, ArgumentsHash: "hash_1", ApprovalStatus: productdata.ToolCallApprovalRequired, ExecutionStatus: productdata.ToolCallExecutionBlocked}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.ApproveToolCall(context.Background(), ident, thread.ID, run.ID, "tc_1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.StartToolCallExecution(context.Background(), ident, thread.ID, run.ID, "tc_1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.FailToolCallExecution(context.Background(), ident, thread.ID, run.ID, "tc_1", "tool_execution_failed", "Tool execution failed."); err != nil {
+		t.Fatal(err)
+	}
+	provider := &capturingProvider{config: ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: "https://example.test/v1", APIKey: "key", Model: "model", Enabled: true}}
+	worker := NewWorker(svc, nil, QueuedRunRouter{Gateway: NewGateway(svc, nil, []Provider{provider})})
+	worker.WorkerID = "worker_failed_tool"
+
+	ok, err := worker.ProcessOne(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok {
+		t.Fatal("ProcessOne() ok = true, want no queued continuation")
+	}
+	got, err := svc.GetRun(context.Background(), ident, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != productdata.RunStatusFailed {
+		t.Fatalf("run = %+v", got)
+	}
+	if provider.request.ThreadID != "" {
+		t.Fatalf("provider was called: %+v", provider.request)
 	}
 }
