@@ -269,6 +269,30 @@ describe('M4 run mapping', () => {
     expect(run.assistantDraft).toMatchObject({ content: 'Partial', status: 'stopped', lastEventId: 'evt-stopped' })
   })
 
+  test('keeps loaded event history for already terminal runs', () => {
+    const events = [
+      mapApiRunEvent({ id: 'evt-context', run_id: 'run-1', thread_id: 'thread-1', sequence: 1, category: 'progress', type: 'pipeline_step_completed', summary: 'Pipeline step completed', content: null, metadata: { step: 'prepare_context', persona_name: 'Default', persona_version: '2026-05-25.1' }, created_at: '2026-05-25T00:00:00Z' }),
+      mapApiRunEvent({ id: 'evt-completed', run_id: 'run-1', thread_id: 'thread-1', sequence: 2, category: 'final', type: 'run_completed', summary: 'Run completed', content: null, metadata: {}, created_at: '2026-05-25T00:00:01Z' }),
+    ]
+
+    const run = mapApiRun({
+      id: 'run-1',
+      thread_id: 'thread-1',
+      status: 'completed',
+      source: 'local_simulated',
+      title: 'Local simulated run',
+      created_at: '2026-05-25T00:00:00Z',
+      updated_at: '2026-05-25T00:00:01Z',
+      completed_at: '2026-05-25T00:00:01Z',
+      error_code: null,
+      error_message: null,
+    }, events)
+
+    expect(run.status).toBe('completed')
+    expect(run.events).toHaveLength(2)
+    expect(run.events[0].detail).toContain('persona_version: 2026-05-25.1')
+  })
+
   test('exposes subscribeRunEvents for EventSource-compatible streaming', () => {
     const source = Bun.file(new URL('./realApiClient.ts', import.meta.url)).text()
     return expect(source).resolves.toContain('subscribeRunEvents')
@@ -405,5 +429,39 @@ describe('M4 run mapping', () => {
     expect(pipelineFailed).toMatchObject({ type: 'pipeline.step.failed', status: 'failed', group: 'error' })
     expect(pipelineFailed.detail).toContain('prepare_context')
     expect(stopped).toMatchObject({ type: 'run.stopping', status: 'stopping' })
+  })
+
+  test('maps safe persona summary metadata without prompt leakage', () => {
+    const event = mapApiRunEvent({
+      id: 'evt-persona',
+      run_id: 'run-1',
+      thread_id: 'thread-1',
+      sequence: 1,
+      category: 'progress',
+      type: 'pipeline_step_completed',
+      summary: 'Pipeline step completed',
+      content: null,
+      metadata: {
+        step: 'prepare_context',
+        persona_name: 'Default',
+        persona_version: '2026-05-25.1',
+      },
+      created_at: '2026-05-25T00:00:00Z',
+    })
+
+    expect(event.detail).toContain('persona_name: Default')
+    expect(event.detail).toContain('persona_version: 2026-05-25.1')
+    expect(event.detail).not.toContain('system_prompt')
+    expect(event.detail).not.toContain('You are')
+  })
+
+  test('real client exposes persona list and sends persona_id when starting runs', () => {
+    const source = Bun.file(new URL('./realApiClient.ts', import.meta.url)).text()
+
+    return source.then((text) => {
+      expect(text).toContain("requestJSON<{ personas: ApiPersona[] }>('/v1/personas')")
+      expect(text).toContain('persona_id: input.personaId')
+      expect(text).toContain('personaId')
+    })
   })
 })

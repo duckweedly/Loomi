@@ -19,6 +19,7 @@ type startRunRequest struct {
 	Source     productdata.RunSource `json:"source"`
 	ProviderID string                `json:"provider_id"`
 	Model      string                `json:"model"`
+	PersonaID  string                `json:"persona_id"`
 }
 
 type modelProviderListResponse struct {
@@ -161,7 +162,7 @@ func (s *Server) handleThreadRuns(w http.ResponseWriter, r *http.Request, thread
 			return
 		}
 	}
-	run, err := s.product.StartRun(r.Context(), identity.LocalDevIdentity(), threadID, productdata.StartRunInput{ScriptName: req.ScriptName, Source: req.Source, MessageID: req.MessageID, ProviderID: req.ProviderID, Model: req.Model})
+	run, err := s.product.StartRun(r.Context(), identity.LocalDevIdentity(), threadID, productdata.StartRunInput{ScriptName: req.ScriptName, Source: req.Source, MessageID: req.MessageID, ProviderID: req.ProviderID, Model: req.Model, PersonaID: req.PersonaID})
 	if err != nil {
 		writeAPIError(w, err)
 		return

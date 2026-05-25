@@ -1,7 +1,7 @@
 import { FormEvent, useState } from 'react'
 import { Button } from '@lobehub/ui'
 import { ArrowUp, ChevronDown, Folder, Mic, Plus } from 'lucide-react'
-import type { Message, Run } from '../domain'
+import type { Message, Persona, Run } from '../domain'
 import { deriveComposerActions } from '../runtime/composerActions'
 
 type Props = {
@@ -11,7 +11,10 @@ type Props = {
   threadSelected: boolean
   run: Run | null
   messages: Message[]
+  personas?: Persona[]
+  selectedPersonaId?: string
   onSubmit: (content: string) => void
+  onSelectPersona?: (personaId: string) => void
   onStop?: () => void
   onRetry?: () => void
   onRegenerate?: () => void
@@ -21,7 +24,7 @@ type Props = {
   regenerateLabel?: string
 }
 
-export function Composer({ disabled, providerUnavailable = false, placeholder = 'Message Loomi', threadSelected, run, messages, onSubmit, onStop, onRetry, onRegenerate, attachLabel = 'Attach', stopLabel = 'Stop', retryLabel = 'Retry', regenerateLabel = 'Regenerate' }: Props) {
+export function Composer({ disabled, providerUnavailable = false, placeholder = 'Message Loomi', threadSelected, run, messages, personas = [], selectedPersonaId = '', onSubmit, onSelectPersona, onStop, onRetry, onRegenerate, attachLabel = 'Attach', stopLabel = 'Stop', retryLabel = 'Retry', regenerateLabel = 'Regenerate' }: Props) {
   const [value, setValue] = useState('')
   const actions = deriveComposerActions({ threadSelected, text: value, run, messages, providerUnavailable })
   const composerDisabled = Boolean(disabled || providerUnavailable)
@@ -64,6 +67,11 @@ export function Composer({ disabled, providerUnavailable = false, placeholder = 
           </div>
         </div>
         <div className="composer-toolbar-right">
+          {personas.length > 0 && (
+            <select className="composer-persona" aria-label="Persona" disabled={composerDisabled} value={selectedPersonaId} onChange={(event) => onSelectPersona?.(event.target.value)}>
+              {personas.map((persona) => <option key={persona.id} value={persona.id}>{persona.name} v{persona.activeVersion}</option>)}
+            </select>
+          )}
           <button className="composer-model" disabled type="button">
             <span>{run?.model ?? 'gpt-5.5'}</span>
             <ChevronDown size={16} />

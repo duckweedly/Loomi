@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/sheridiany/loomi/internal/config"
+	"github.com/sheridiany/loomi/internal/identity"
 	"github.com/sheridiany/loomi/internal/productdata"
 )
 
@@ -51,6 +52,39 @@ func TestThreadHandlers(t *testing.T) {
 	archive := requestJSON(t, srv, http.MethodPost, "/v1/threads/"+threadID+"/archive", "")
 	if archive.Code != http.StatusOK || !strings.Contains(archive.Body.String(), "archived") {
 		t.Fatalf("archive status=%d body=%s", archive.Code, archive.Body.String())
+	}
+}
+
+func TestPersonaHandlersListBuiltInPersonasAndThreadSelection(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	if _, err := svc.SyncBuiltInPersonas(context.Background(), ident, []productdata.BuiltInPersonaConfig{{
+		Slug:             "default",
+		Name:             "Default",
+		Description:      "Default persona",
+		SystemPrompt:     "secret prompt",
+		ModelRoute:       productdata.PersonaModelRoute{ProviderID: "custom", Model: "model"},
+		AllowedToolNames: []string{productdata.ToolNameCurrentTime},
+		ReasoningMode:    "balanced",
+		BudgetSummary:    "budget",
+		Version:          "1",
+		IsDefault:        true,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	personas, err := svc.ListPersonas(context.Background(), ident)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := NewServerWithProduct(config.Config{AppEnv: "local"}, fakeChecker{}, svc)
+
+	list := requestJSON(t, srv, http.MethodGet, "/v1/personas", "")
+	if list.Code != http.StatusOK || !strings.Contains(list.Body.String(), `"name":"Default"`) || strings.Contains(list.Body.String(), "secret prompt") {
+		t.Fatalf("list status=%d body=%s", list.Code, list.Body.String())
+	}
+	create := requestJSON(t, srv, http.MethodPost, "/v1/threads", `{"title":"Thread","mode":"chat","persona_id":"`+personas[0].ID+`"}`)
+	if create.Code != http.StatusCreated || !strings.Contains(create.Body.String(), `"persona_id":"`+personas[0].ID+`"`) {
+		t.Fatalf("create status=%d body=%s", create.Code, create.Body.String())
 	}
 }
 

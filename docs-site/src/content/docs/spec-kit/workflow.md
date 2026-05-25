@@ -36,9 +36,27 @@ Claude Code 项目内命令使用横线格式：
 
 `/speckit-implement` 按任务实现，并在必要时回到 spec 或 plan 修正前提。
 
-## 当前功能：M9 RunContext Pipeline Foundation
+## 当前功能：M10 Persona Skill Foundation
 
 当前 Spec Kit 功能目录：
+
+```text
+specs/015-persona-skill-foundation/
+```
+
+关键产物：
+
+- `spec.md`：定义 persona 数据模型、内置 persona 同步、thread/run 选择或继承、RunContext snapshot/version 和安全 Timeline/debug summary。
+- `plan.md`：确定复用 productdata、M9 RunContext pipeline、M7 MVP tool allowlist、现有 run/event/SSE 和 frontend Composer/RunRail 边界。
+- `research.md`：记录 built-in persona sync、immutable run snapshot、安全 summary、最小 selector 和非目标决策。
+- `data-model.md`：定义 Persona、Persona Version、Built-In Persona Config、Persona Selection、Persona Snapshot、Persona Safe Summary 和 Skill Stub。
+- `contracts/`：定义 persona sync、persona resolution、frontend safe summary 契约。
+- `quickstart.md`：记录 backend/web/docs validation 和 browser smoke。
+- `tasks.md`：按 setup、foundation、US1-US3 和 docs/validation 拆分实现任务。
+
+## 近期已完成：M9 RunContext Pipeline Foundation
+
+Spec Kit 功能目录：
 
 ```text
 specs/014-run-context-pipeline-foundation/

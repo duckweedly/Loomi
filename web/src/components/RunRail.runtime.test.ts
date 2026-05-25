@@ -53,4 +53,36 @@ describe('RunRail tool continuation runtime states', () => {
     expect(html).toContain('invoke_runtime')
     expect(html).toContain('finalize')
   })
+
+  test('shows safe persona summary without prompt text', () => {
+    const html = renderToStaticMarkup(createElement(RunRail, {
+      run: {
+        id: 'run-a',
+        threadId: 'thread-a',
+        status: 'completed',
+        model: 'Model gateway',
+        context: 'model_gateway',
+        events: [
+          {
+            id: 'evt-context',
+            sequence: 1,
+            type: 'pipeline.step.completed',
+            label: 'progress',
+            detail: 'Pipeline step completed · step: prepare_context · persona_name: Default · persona_version: 2026-05-25.1',
+            time: 'Now',
+            status: 'running',
+            group: 'worker-job',
+            metadata: { step: 'prepare_context', persona_name: 'Default', persona_version: '2026-05-25.1' },
+          },
+        ],
+      },
+      open: true,
+      onOpenArtifact: () => {},
+    }))
+
+    expect(html).toContain('persona_name: Default')
+    expect(html).toContain('persona_version: 2026-05-25.1')
+    expect(html).not.toContain('system_prompt')
+    expect(html).not.toContain('You are')
+  })
 })

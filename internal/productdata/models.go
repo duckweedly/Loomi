@@ -35,6 +35,10 @@ type WorkerStatus string
 
 type PipelineStepName string
 
+type PersonaSource string
+
+type PersonaResolvedFrom string
+
 type Code string
 
 const (
@@ -108,6 +112,12 @@ const (
 	PipelineStepRecover        PipelineStepName = "recover"
 	PipelineStepFail           PipelineStepName = "fail"
 
+	PersonaSourceBuiltIn PersonaSource = "built_in"
+
+	PersonaResolvedFromRun     PersonaResolvedFrom = "run"
+	PersonaResolvedFromThread  PersonaResolvedFrom = "thread"
+	PersonaResolvedFromDefault PersonaResolvedFrom = "default"
+
 	EventRunQueued                = "run_queued"
 	EventJobClaimed               = "job_claimed"
 	EventLeaseRenewed             = "lease_renewed"
@@ -178,6 +188,7 @@ type Thread struct {
 	UserID          string                `json:"-"`
 	Title           string                `json:"title"`
 	Mode            ThreadMode            `json:"mode"`
+	PersonaID       string                `json:"persona_id,omitempty"`
 	LifecycleStatus ThreadLifecycleStatus `json:"lifecycle_status"`
 	CreatedAt       time.Time             `json:"created_at"`
 	UpdatedAt       time.Time             `json:"updated_at"`
@@ -202,6 +213,7 @@ type Run struct {
 	Status          RunStatus  `json:"status"`
 	Source          RunSource  `json:"source"`
 	Title           string     `json:"title"`
+	PersonaID       string     `json:"persona_id,omitempty"`
 	CreatedAt       time.Time  `json:"created_at"`
 	UpdatedAt       time.Time  `json:"updated_at"`
 	CompletedAt     *time.Time `json:"completed_at,omitempty"`
@@ -260,6 +272,90 @@ type WorkerQueueDiagnostics struct {
 	UpdatedAt                time.Time         `json:"updated_at"`
 }
 
+type Persona struct {
+	ID            string        `json:"id"`
+	Slug          string        `json:"slug"`
+	Name          string        `json:"name"`
+	Description   string        `json:"description"`
+	Source        PersonaSource `json:"source"`
+	IsDefault     bool          `json:"is_default"`
+	IsActive      bool          `json:"is_active"`
+	ActiveVersion string        `json:"active_version"`
+	CreatedAt     time.Time     `json:"created_at"`
+	UpdatedAt     time.Time     `json:"updated_at"`
+}
+
+type PersonaModelRoute struct {
+	ProviderID string `json:"provider_id"`
+	Model      string `json:"model"`
+}
+
+type PersonaVersion struct {
+	PersonaID        string            `json:"persona_id"`
+	Version          string            `json:"version"`
+	SystemPrompt     string            `json:"-"`
+	ModelRoute       PersonaModelRoute `json:"model_route"`
+	AllowedToolNames []string          `json:"allowed_tool_names"`
+	ReasoningMode    string            `json:"reasoning_mode"`
+	BudgetSummary    string            `json:"budget_summary"`
+	CreatedAt        time.Time         `json:"created_at"`
+}
+
+type BuiltInPersonaConfig struct {
+	Slug             string
+	Name             string
+	Description      string
+	SystemPrompt     string
+	ModelRoute       PersonaModelRoute
+	AllowedToolNames []string
+	ReasoningMode    string
+	BudgetSummary    string
+	Version          string
+	IsDefault        bool
+}
+
+type PersonaSyncResult struct {
+	Synced             int    `json:"synced"`
+	CreatedPersonas    int    `json:"created_personas"`
+	CreatedVersions    int    `json:"created_versions"`
+	ActivatedVersions  int    `json:"activated_versions"`
+	DefaultPersonaSlug string `json:"default_persona_slug"`
+}
+
+type PersonaSnapshot struct {
+	ID               string              `json:"id"`
+	Slug             string              `json:"slug"`
+	Version          string              `json:"version"`
+	Name             string              `json:"name"`
+	Description      string              `json:"description"`
+	SystemPrompt     string              `json:"-"`
+	ModelRoute       PersonaModelRoute   `json:"model_route"`
+	AllowedToolNames []string            `json:"allowed_tool_names"`
+	ReasoningMode    string              `json:"reasoning_mode"`
+	BudgetSummary    string              `json:"budget_summary"`
+	ResolvedFrom     PersonaResolvedFrom `json:"resolved_from"`
+}
+
+func (p PersonaSnapshot) SafeSummary() map[string]any {
+	if p.ID == "" {
+		return map[string]any{}
+	}
+	return RedactEventMetadata(map[string]any{
+		"persona_id":                 p.ID,
+		"persona_slug":               p.Slug,
+		"persona_version":            p.Version,
+		"persona_name":               p.Name,
+		"persona_description":        p.Description,
+		"persona_model_provider_id":  p.ModelRoute.ProviderID,
+		"persona_model":              p.ModelRoute.Model,
+		"persona_allowed_tools":      append([]string(nil), p.AllowedToolNames...),
+		"persona_allowed_tool_count": len(p.AllowedToolNames),
+		"persona_reasoning_mode":     p.ReasoningMode,
+		"persona_budget_summary":     p.BudgetSummary,
+		"persona_resolved_from":      string(p.ResolvedFrom),
+	})
+}
+
 type RunContext struct {
 	Run                    Run
 	Thread                 Thread
@@ -268,6 +364,7 @@ type RunContext struct {
 	ProviderRoute          ProviderRoute
 	EnabledTools           []ToolResolution
 	ContinuationProjection ContinuationProjection
+	Persona                PersonaSnapshot
 }
 
 type ProviderRoute struct {
@@ -300,6 +397,9 @@ func (c RunContext) SafeSummary() map[string]any {
 	if c.ProviderRoute.Model != "" {
 		summary["model"] = c.ProviderRoute.Model
 	}
+	for key, value := range c.Persona.SafeSummary() {
+		summary[key] = value
+	}
 	return RedactEventMetadata(summary)
 }
 
@@ -330,13 +430,15 @@ type RunEvent struct {
 }
 
 type CreateThreadInput struct {
-	Title string
-	Mode  ThreadMode
+	Title     string
+	Mode      ThreadMode
+	PersonaID string
 }
 
 type UpdateThreadInput struct {
-	Title *string
-	Mode  *ThreadMode
+	Title     *string
+	Mode      *ThreadMode
+	PersonaID *string
 }
 
 type CreateMessageInput struct {
@@ -350,6 +452,7 @@ type StartRunInput struct {
 	MessageID  string
 	ProviderID string
 	Model      string
+	PersonaID  string
 }
 
 type AppendAssistantMessageInput struct {
@@ -447,6 +550,7 @@ func NewRunID() string           { return prefixedID("run") }
 func NewRunEventID() string      { return prefixedID("evt") }
 func NewBackgroundJobID() string { return prefixedID("job") }
 func NewToolCallID() string      { return prefixedID("tool") }
+func NewPersonaID() string       { return prefixedID("persona") }
 
 func prefixedID(prefix string) string {
 	buf := make([]byte, 6)

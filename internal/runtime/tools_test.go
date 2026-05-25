@@ -1,6 +1,10 @@
 package runtime
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/sheridiany/loomi/internal/productdata"
+)
 
 func TestCurrentTimeToolDefinitionValidatesTimezone(t *testing.T) {
 	tool := CurrentTimeToolDefinition()
@@ -35,5 +39,12 @@ func TestCurrentTimeToolExecutesSafeResult(t *testing.T) {
 	}
 	if result["timezone"] != "UTC" || result["source"] != "runtime" || result["iso_time"] == "" {
 		t.Fatalf("result = %+v", result)
+	}
+}
+
+func TestToolDefinitionsForPersonaIntersectAllowlist(t *testing.T) {
+	tools := ToolResolutionsForPersona([]string{productdata.ToolNameCurrentTime, "runtime.shell"})
+	if len(tools) != 1 || tools[0].Name != productdata.ToolNameCurrentTime {
+		t.Fatalf("tools = %+v", tools)
 	}
 }

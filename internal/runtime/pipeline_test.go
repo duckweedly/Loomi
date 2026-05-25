@@ -153,6 +153,62 @@ func TestPipelineShortCircuitsAndRecordsFailedStage(t *testing.T) {
 	}
 }
 
+func TestPipelinePrepareContextMetadataIncludesSafePersonaSummary(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	if _, err := svc.SyncBuiltInPersonas(context.Background(), ident, []productdata.BuiltInPersonaConfig{{
+		Slug:             "default",
+		Name:             "Default",
+		Description:      "Default persona",
+		SystemPrompt:     "secret prompt text",
+		ModelRoute:       productdata.PersonaModelRoute{ProviderID: "custom", Model: "model"},
+		AllowedToolNames: []string{productdata.ToolNameCurrentTime},
+		ReasoningMode:    "balanced",
+		BudgetSummary:    "budget",
+		Version:          "1",
+		IsDefault:        true,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	thread, err := svc.CreateThread(context.Background(), ident, productdata.CreateThreadInput{Title: "Persona", Mode: productdata.ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _, err := svc.CreateMessage(context.Background(), ident, thread.ID, productdata.CreateMessageInput{Content: "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.StartRun(context.Background(), ident, thread.ID, productdata.StartRunInput{Source: productdata.RunSourceModelGateway, MessageID: message.ID, ProviderID: "custom", Model: "model"}); err != nil {
+		t.Fatal(err)
+	}
+	job, _, ok, err := svc.ClaimBackgroundJob(context.Background(), ident, productdata.ClaimBackgroundJobInput{WorkerID: "worker_pipeline", LeaseSeconds: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("claim ok = false")
+	}
+	ctxData, err := svc.PrepareRunContext(context.Background(), ident, job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pipeline := Pipeline{Recorder: PipelineRecorder{Service: svc}}
+	if err := pipeline.Execute(context.Background(), &PipelineState{RunContext: ctxData}, []PipelineStage{{Name: productdata.PipelineStepPrepareContext}}); err != nil {
+		t.Fatal(err)
+	}
+	events, err := svc.ListRunEvents(context.Background(), ident, ctxData.Run.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := events[len(events)-1]
+	if last.Metadata["persona_name"] != "Default" || last.Metadata["persona_version"] != "1" {
+		t.Fatalf("persona metadata = %+v", last.Metadata)
+	}
+	if _, ok := last.Metadata["persona_system_prompt"]; ok {
+		t.Fatalf("prompt leaked in metadata = %+v", last.Metadata)
+	}
+}
+
 func TestPipelineRecorderReturnsFalseWithoutService(t *testing.T) {
 	recorder := PipelineRecorder{}
 

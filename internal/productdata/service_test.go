@@ -223,6 +223,167 @@ func TestRedactEventMetadataRedactsSensitiveKeys(t *testing.T) {
 	}
 }
 
+func TestSyncBuiltInPersonasCreatesDefaultVersionIdempotently(t *testing.T) {
+	svc := NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	configs := []BuiltInPersonaConfig{{
+		Slug:             "loomi-default",
+		Name:             "Loomi Default",
+		Description:      "General assistant",
+		SystemPrompt:     "never expose this prompt",
+		ModelRoute:       PersonaModelRoute{ProviderID: "custom", Model: "gpt-5.5"},
+		AllowedToolNames: []string{ToolNameCurrentTime},
+		ReasoningMode:    "balanced",
+		BudgetSummary:    "default budget",
+		Version:          "2026-05-25.1",
+		IsDefault:        true,
+	}}
+
+	first, err := svc.SyncBuiltInPersonas(context.Background(), ident, configs)
+	if err != nil {
+		t.Fatalf("SyncBuiltInPersonas() error = %v", err)
+	}
+	second, err := svc.SyncBuiltInPersonas(context.Background(), ident, configs)
+	if err != nil {
+		t.Fatalf("SyncBuiltInPersonas() second error = %v", err)
+	}
+	if first.CreatedPersonas != 1 || first.CreatedVersions != 1 || second.CreatedPersonas != 0 || second.CreatedVersions != 0 {
+		t.Fatalf("first=%+v second=%+v", first, second)
+	}
+	personas, err := svc.ListPersonas(context.Background(), ident)
+	if err != nil {
+		t.Fatalf("ListPersonas() error = %v", err)
+	}
+	if len(personas) != 1 || personas[0].ActiveVersion != "2026-05-25.1" || !personas[0].IsDefault {
+		t.Fatalf("personas = %+v", personas)
+	}
+}
+
+func TestSyncBuiltInPersonasPreservesOldVersionForRunSnapshots(t *testing.T) {
+	svc := NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	base := BuiltInPersonaConfig{
+		Slug:             "loomi-default",
+		Name:             "Loomi Default",
+		Description:      "General assistant",
+		SystemPrompt:     "old prompt",
+		ModelRoute:       PersonaModelRoute{ProviderID: "custom", Model: "old-model"},
+		AllowedToolNames: []string{ToolNameCurrentTime},
+		ReasoningMode:    "balanced",
+		BudgetSummary:    "old budget",
+		Version:          "2026-05-25.1",
+		IsDefault:        true,
+	}
+	if _, err := svc.SyncBuiltInPersonas(context.Background(), ident, []BuiltInPersonaConfig{base}); err != nil {
+		t.Fatal(err)
+	}
+	thread, err := svc.CreateThread(context.Background(), ident, CreateThreadInput{Title: "Persona", Mode: ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _, err := svc.CreateMessage(context.Background(), ident, thread.ID, CreateMessageInput{Content: "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.StartRun(context.Background(), ident, thread.ID, StartRunInput{Source: RunSourceModelGateway, MessageID: message.ID, ProviderID: "custom", Model: "fallback"}); err != nil {
+		t.Fatal(err)
+	}
+	updated := base
+	updated.Version = "2026-05-25.2"
+	updated.SystemPrompt = "new prompt"
+	updated.ModelRoute.Model = "new-model"
+	if _, err := svc.SyncBuiltInPersonas(context.Background(), ident, []BuiltInPersonaConfig{updated}); err != nil {
+		t.Fatal(err)
+	}
+	job, _, ok, err := svc.ClaimBackgroundJob(context.Background(), ident, ClaimBackgroundJobInput{WorkerID: "worker_persona", LeaseSeconds: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("claim ok = false")
+	}
+	context, err := svc.PrepareRunContext(context.Background(), ident, job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if context.Persona.Version != "2026-05-25.1" || context.Persona.ModelRoute.Model != "old-model" {
+		t.Fatalf("persona snapshot = %+v", context.Persona)
+	}
+}
+
+func TestPrepareRunContextResolvesRunThreadAndDefaultPersona(t *testing.T) {
+	svc := NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	configs := []BuiltInPersonaConfig{
+		{Slug: "default", Name: "Default", Description: "Default persona", SystemPrompt: "default prompt", ModelRoute: PersonaModelRoute{ProviderID: "custom", Model: "default-model"}, AllowedToolNames: []string{ToolNameCurrentTime}, ReasoningMode: "balanced", BudgetSummary: "default budget", Version: "1", IsDefault: true},
+		{Slug: "focused", Name: "Focused", Description: "Focused persona", SystemPrompt: "focused prompt", ModelRoute: PersonaModelRoute{ProviderID: "custom", Model: "focused-model"}, AllowedToolNames: []string{}, ReasoningMode: "low", BudgetSummary: "small budget", Version: "1"},
+	}
+	if _, err := svc.SyncBuiltInPersonas(context.Background(), ident, configs); err != nil {
+		t.Fatal(err)
+	}
+	personas, err := svc.ListPersonas(context.Background(), ident)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var focused Persona
+	for _, persona := range personas {
+		if persona.Slug == "focused" {
+			focused = persona
+		}
+	}
+	thread, err := svc.CreateThread(context.Background(), ident, CreateThreadInput{Title: "Persona", Mode: ThreadModeChat, PersonaID: focused.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _, err := svc.CreateMessage(context.Background(), ident, thread.ID, CreateMessageInput{Content: "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, StartRunInput{Source: RunSourceModelGateway, MessageID: message.ID, ProviderID: "custom", Model: "fallback"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, _, ok, err := svc.ClaimBackgroundJob(context.Background(), ident, ClaimBackgroundJobInput{WorkerID: "worker_persona", LeaseSeconds: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("claim ok = false")
+	}
+	context, err := svc.PrepareRunContext(context.Background(), ident, job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if context.Run.ID != run.ID || context.Persona.ID != focused.ID || context.Persona.ResolvedFrom != PersonaResolvedFromThread {
+		t.Fatalf("context persona = %+v", context.Persona)
+	}
+	if context.ProviderRoute.Model != "focused-model" || len(context.EnabledTools) != 0 {
+		t.Fatalf("route/tools = %+v %+v", context.ProviderRoute, context.EnabledTools)
+	}
+	if summary := context.SafeSummary(); summary["persona_system_prompt"] != nil || summary["persona_version"] != "1" || summary["persona_name"] != "Focused" {
+		t.Fatalf("summary = %+v", summary)
+	}
+}
+
+func TestSyncBuiltInPersonasRejectsUnsupportedTool(t *testing.T) {
+	svc := NewMemoryService()
+	_, err := svc.SyncBuiltInPersonas(context.Background(), identity.LocalDevIdentity(), []BuiltInPersonaConfig{{
+		Slug:             "bad",
+		Name:             "Bad",
+		Description:      "Bad persona",
+		SystemPrompt:     "prompt",
+		ModelRoute:       PersonaModelRoute{ProviderID: "custom", Model: "model"},
+		AllowedToolNames: []string{"runtime.shell"},
+		ReasoningMode:    "balanced",
+		BudgetSummary:    "budget",
+		Version:          "1",
+		IsDefault:        true,
+	}})
+	if err == nil || ErrorCode(err) != CodeInvalidRequest {
+		t.Fatalf("err = %v", err)
+	}
+}
+
 func TestRunValidation(t *testing.T) {
 	if err := ValidateRunStatus(RunStatusRunning); err != nil {
 		t.Fatalf("ValidateRunStatus(running) error = %v", err)

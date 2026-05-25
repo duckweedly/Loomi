@@ -62,4 +62,24 @@ describe('Composer interactions', () => {
     expect(source).toContain('deriveComposerActions({ threadSelected, text: value, run, messages, providerUnavailable })')
     expect(source).toContain('if (composerDisabled || !canSubmit || !content) return')
   })
+
+  test('renders persona selector with the active version label', () => {
+    const html = renderToStaticMarkup(createElement(Composer, {
+      threadSelected: true,
+      run: undefined,
+      messages: [],
+      personas: [
+        { id: 'persona-default', slug: 'loomi-default', name: 'Default', description: 'General Loomi persona', activeVersion: '2026-05-25.1', isDefault: true },
+      ],
+      selectedPersonaId: 'persona-default',
+      onSelectPersona: () => {},
+      onSubmit: () => {},
+      onStop: () => {},
+      onRetry: () => {},
+      onRegenerate: () => {},
+    }))
+
+    expect(html).toContain('aria-label="Persona"')
+    expect(html).toContain('Default v2026-05-25.1')
+  })
 })

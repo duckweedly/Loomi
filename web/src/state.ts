@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { apiClient, executionAdapter } from './apiClient'
 import { setMockRuntimeScript } from './mockApiClient'
-import type { BackendCapabilityState, Message, ProviderCapability, Run, RunEvent, RuntimeEvent, RuntimeScriptId, StaleEventGuard, StreamState, Thread, ThreadRuntimeState, ToolCall } from './domain'
+import type { BackendCapabilityState, Message, Persona, ProviderCapability, Run, RunEvent, RuntimeEvent, RuntimeScriptId, StaleEventGuard, StreamState, Thread, ThreadRuntimeState, ToolCall } from './domain'
 import { isRuntimeActive, isRuntimeTerminal } from './runtime/executionAdapter'
 import { deriveCapabilitySignalFromEvent } from './runtime/backendCapabilityStatus'
 import { applyRealRunEvent, mapRealRuntimeCapabilitySignal } from './runtime/realExecutionAdapter'
@@ -247,6 +247,8 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
   const [capabilitySignals, setCapabilitySignals] = useState({ backendUnavailable: false, modelSetupMissing: false, providerUnavailable: false, streamDisconnected: false })
   const [selectedRuntimeScript, setSelectedRuntimeScript] = useState<RuntimeScriptId>('success')
   const [providerCapabilities, setProviderCapabilities] = useState<ProviderCapability[]>([])
+  const [personas, setPersonas] = useState<Persona[]>([])
+  const [selectedPersonaId, setSelectedPersonaId] = useState('')
   const [providerCheckResults, setProviderCheckResults] = useState<Record<string, ProviderCheckResult>>({})
   const [providerSaveResult, setProviderSaveResult] = useState<ProviderSaveResult>({ status: 'idle' })
   const selectedThreadIdRef = useRef(selectedThreadId)
@@ -310,6 +312,30 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
   }, [])
 
   useEffect(() => {
+    if (!apiClient.listPersonas) {
+      setPersonas([])
+      setSelectedPersonaId('')
+      return
+    }
+    let cancelled = false
+    apiClient.listPersonas()
+      .then((items) => {
+        if (cancelled) return
+        setPersonas(items)
+        setSelectedPersonaId((current) => current || items.find((persona) => persona.isDefault)?.id || items[0]?.id || '')
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setPersonas([])
+          setSelectedPersonaId('')
+        }
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
     if (!run || !shouldBlockRuntimeSubmit(run) || !apiClient.subscribeRunEvents) {
       setStreamState((current) => {
         const next = run && shouldBlockRuntimeSubmit(run) ? 'recoverable_error' : 'closed'
@@ -355,7 +381,7 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
     setBackendUnavailableAttempted(false)
     setCapabilitySignals({ backendUnavailable: false, modelSetupMissing: false, providerUnavailable: false, streamDisconnected: false })
     try {
-      const result = await apiClient.sendMessage(requestedThreadId, trimmed)
+      const result = await apiClient.sendMessage(requestedThreadId, trimmed, selectedPersonaId || undefined)
       const nextThreads = await apiClient.listThreads()
       if (!shouldApplySendMessageResult({ requestedThreadId, currentSelectedThreadId: selectedThreadIdRef.current })) return
       setMessages(result.messages)
@@ -367,7 +393,7 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
       setError(err instanceof Error ? err.message : 'API request failed')
       setCapabilitySignals((current) => ({ ...current, ...mapRealRuntimeCapabilitySignal(err) }))
     }
-  }, [selectedThreadId])
+  }, [selectedPersonaId, selectedThreadId])
 
   const createThread = useCallback(async () => {
     if (!apiClient.createThread) return
@@ -534,9 +560,12 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
     capabilitySignals,
     selectedRuntimeScript,
     providerCapabilities,
+    personas,
+    selectedPersonaId,
     providerCheckResults,
     providerSaveResult,
     selectRuntimeScript,
+    setSelectedPersonaId,
     checkProvider,
     saveProvider,
     refresh,

@@ -29,6 +29,15 @@ export type ProviderCapability = {
   message?: string | null
 }
 
+export type Persona = {
+  id: string
+  slug: string
+  name: string
+  description: string
+  activeVersion: string
+  isDefault: boolean
+}
+
 export type ChatCanvasState =
   | 'no-thread'
   | 'empty-thread'

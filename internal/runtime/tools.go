@@ -3,6 +3,8 @@ package runtime
 import (
 	"errors"
 	"time"
+
+	"github.com/sheridiany/loomi/internal/productdata"
 )
 
 type ToolApprovalPolicy string
@@ -28,6 +30,17 @@ type ToolDefinition struct {
 
 func CurrentTimeToolDefinition() ToolDefinition {
 	return ToolDefinition{Name: "runtime.get_current_time", ApprovalPolicy: ToolApprovalAlwaysRequired, SafetyClass: ToolSafetyNoSideEffectInternal}
+}
+
+func ToolResolutionsForPersona(allowedToolNames []string) []productdata.ToolResolution {
+	resolutions := make([]productdata.ToolResolution, 0, len(allowedToolNames))
+	for _, name := range allowedToolNames {
+		if name != productdata.ToolNameCurrentTime {
+			continue
+		}
+		resolutions = append(resolutions, productdata.ToolResolution{Name: productdata.ToolNameCurrentTime, ApprovalPolicy: string(ToolApprovalAlwaysRequired), ExecutionState: "allowlisted"})
+	}
+	return resolutions
 }
 
 func (d ToolDefinition) Execute(arguments ToolArguments) (map[string]any, error) {

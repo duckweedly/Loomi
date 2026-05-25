@@ -110,3 +110,5 @@ cd docs-site && bun run build
 ```
 
 每次变更命令、环境变量、端口、数据库或验证流程时，都应同步更新对应 runbook。
+
+M10 Persona/Skill foundation 的专项验收见 [Local M10 Persona Validation](/runbooks/local-m10-persona/)。

@@ -82,4 +82,5 @@ The following remain out of scope until later milestones:
 - Runs, run events, and SSE
 - Worker/job execution
 - LLM gateway and tool calls
+- Persona selection and safe persona summaries
 - Desktop runtime and local bridge

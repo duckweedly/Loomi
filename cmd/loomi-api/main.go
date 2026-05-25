@@ -12,6 +12,7 @@ import (
 	"github.com/sheridiany/loomi/internal/db"
 	"github.com/sheridiany/loomi/internal/diagnostics"
 	"github.com/sheridiany/loomi/internal/httpapi"
+	"github.com/sheridiany/loomi/internal/identity"
 	"github.com/sheridiany/loomi/internal/productdata"
 	productruntime "github.com/sheridiany/loomi/internal/runtime"
 )
@@ -45,6 +46,11 @@ func main() {
 	}
 
 	product := productServiceForPool(pool)
+	if product != nil {
+		if _, err := product.SyncBuiltInPersonas(ctx, identityLocalDev(), productdata.BuiltInPersonas()); err != nil {
+			logger.Warn("built-in persona sync failed", "operation_id", opID, "error", err.Error())
+		}
+	}
 	broadcaster := productruntime.NewBroadcaster()
 	providers := productruntime.NewHTTPProviders(productruntime.ProviderConfigsFromConfig(cfg), http.DefaultClient)
 	gateway := productruntime.NewGateway(product, broadcaster, providers)
@@ -69,4 +75,8 @@ func productServiceForPool(pool *pgxpool.Pool) productdata.Service {
 		return nil
 	}
 	return productdata.NewPostgresRepository(pool)
+}
+
+func identityLocalDev() identity.LocalIdentity {
+	return identity.LocalDevIdentity()
 }

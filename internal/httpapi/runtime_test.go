@@ -151,6 +151,64 @@ func TestStartRunHandlerCreatesModelGatewayRun(t *testing.T) {
 	}
 }
 
+func TestStartRunHandlerAcceptsPersonaOverride(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	if _, err := svc.SyncBuiltInPersonas(context.Background(), ident, []productdata.BuiltInPersonaConfig{{
+		Slug:             "default",
+		Name:             "Default",
+		Description:      "Default persona",
+		SystemPrompt:     "secret prompt",
+		ModelRoute:       productdata.PersonaModelRoute{ProviderID: "custom", Model: "persona-model"},
+		AllowedToolNames: []string{productdata.ToolNameCurrentTime},
+		ReasoningMode:    "balanced",
+		BudgetSummary:    "budget",
+		Version:          "1",
+		IsDefault:        true,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	personas, err := svc.ListPersonas(context.Background(), ident)
+	if err != nil {
+		t.Fatal(err)
+	}
+	thread := createRuntimeTestThread(t, svc)
+	message, _, err := svc.CreateMessage(context.Background(), ident, thread.ID, productdata.CreateMessageInput{Content: "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := NewServerWithProduct(config.Config{AppEnv: "local"}, fakeChecker{}, svc)
+
+	res := requestJSON(t, srv, http.MethodPost, "/v1/threads/"+thread.ID+"/runs", `{"message_id":"`+message.ID+`","source":"model_gateway","provider_id":"custom","model":"fallback","persona_id":"`+personas[0].ID+`"}`)
+
+	if res.Code != http.StatusAccepted {
+		t.Fatalf("status = %d body=%s", res.Code, res.Body.String())
+	}
+	var body struct {
+		Run productdata.Run `json:"run"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Run.PersonaID != personas[0].ID {
+		t.Fatalf("run = %+v", body.Run)
+	}
+	job, _, ok, err := svc.ClaimBackgroundJob(context.Background(), ident, productdata.ClaimBackgroundJobInput{WorkerID: "worker_persona", LeaseSeconds: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("claim ok = false")
+	}
+	context, err := svc.PrepareRunContext(context.Background(), ident, job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if context.Persona.ID != personas[0].ID || context.ProviderRoute.Model != "persona-model" {
+		t.Fatalf("context = %+v", context)
+	}
+}
+
 func TestStartRunHandlerQueuesModelGatewayRun(t *testing.T) {
 	svc := productdata.NewMemoryService()
 	thread := createRuntimeTestThread(t, svc)

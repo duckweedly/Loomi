@@ -26,6 +26,8 @@ type Service interface {
 	ListRunEvents(context.Context, identity.LocalIdentity, string, int) ([]RunEvent, error)
 	AppendRunEvent(context.Context, identity.LocalIdentity, string, AppendRunEventInput) (RunEvent, error)
 	PrepareRunContext(context.Context, identity.LocalIdentity, BackgroundJob) (RunContext, error)
+	SyncBuiltInPersonas(context.Context, identity.LocalIdentity, []BuiltInPersonaConfig) (PersonaSyncResult, error)
+	ListPersonas(context.Context, identity.LocalIdentity) ([]Persona, error)
 	StopRun(context.Context, identity.LocalIdentity, string) (StopRunOutput, error)
 	GetToolCall(context.Context, identity.LocalIdentity, string, string, string) (ToolCall, error)
 	RecordToolCallRequest(context.Context, identity.LocalIdentity, string, RecordToolCallRequestInput) (ToolCall, []RunEvent, error)
@@ -53,27 +55,33 @@ type Repository interface {
 }
 
 type MemoryService struct {
-	mu             sync.Mutex
-	now            func() time.Time
-	users          map[string]User
-	threads        map[string]Thread
-	messages       map[string][]Message
-	runs           map[string]Run
-	runEvents      map[string][]RunEvent
-	backgroundJobs map[string]BackgroundJob
-	toolCalls      map[string]ToolCall
+	mu               sync.Mutex
+	now              func() time.Time
+	users            map[string]User
+	threads          map[string]Thread
+	messages         map[string][]Message
+	runs             map[string]Run
+	runEvents        map[string][]RunEvent
+	backgroundJobs   map[string]BackgroundJob
+	toolCalls        map[string]ToolCall
+	personas         map[string]Persona
+	personaVersions  map[string]PersonaVersion
+	personaSnapshots map[string]PersonaSnapshot
 }
 
 func NewMemoryService() *MemoryService {
 	return &MemoryService{
-		now:            time.Now,
-		users:          map[string]User{},
-		threads:        map[string]Thread{},
-		messages:       map[string][]Message{},
-		runs:           map[string]Run{},
-		runEvents:      map[string][]RunEvent{},
-		backgroundJobs: map[string]BackgroundJob{},
-		toolCalls:      map[string]ToolCall{},
+		now:              time.Now,
+		users:            map[string]User{},
+		threads:          map[string]Thread{},
+		messages:         map[string][]Message{},
+		runs:             map[string]Run{},
+		runEvents:        map[string][]RunEvent{},
+		backgroundJobs:   map[string]BackgroundJob{},
+		toolCalls:        map[string]ToolCall{},
+		personas:         map[string]Persona{},
+		personaVersions:  map[string]PersonaVersion{},
+		personaSnapshots: map[string]PersonaSnapshot{},
 	}
 }
 
@@ -94,7 +102,12 @@ func (s *MemoryService) CreateThread(_ context.Context, ident identity.LocalIden
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	user := s.ensureUserLocked(ident)
-	return s.upsertThreadLocked(NewThreadID(), user.ID, title, input.Mode), nil
+	if input.PersonaID != "" {
+		if _, _, err := s.activePersonaVersionLocked(input.PersonaID); err != nil {
+			return Thread{}, err
+		}
+	}
+	return s.upsertThreadLocked(NewThreadID(), user.ID, title, input.Mode, input.PersonaID), nil
 }
 
 func (s *MemoryService) UpsertSeedThread(_ context.Context, ident identity.LocalIdentity, input SeedThreadInput) (Thread, error) {
@@ -108,7 +121,7 @@ func (s *MemoryService) UpsertSeedThread(_ context.Context, ident identity.Local
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	user := s.ensureUserLocked(ident)
-	return s.upsertThreadLocked(input.ID, user.ID, title, input.Mode), nil
+	return s.upsertThreadLocked(input.ID, user.ID, title, input.Mode, ""), nil
 }
 
 func (s *MemoryService) ListThreads(_ context.Context, ident identity.LocalIdentity, includeArchived bool) ([]Thread, error) {
@@ -160,6 +173,15 @@ func (s *MemoryService) UpdateThread(_ context.Context, ident identity.LocalIden
 			return Thread{}, err
 		}
 		thread.Mode = *input.Mode
+	}
+	if input.PersonaID != nil {
+		personaID := strings.TrimSpace(*input.PersonaID)
+		if personaID != "" {
+			if _, _, err := s.activePersonaVersionLocked(personaID); err != nil {
+				return Thread{}, err
+			}
+		}
+		thread.PersonaID = personaID
 	}
 	thread.UpdatedAt = s.now()
 	s.threads[thread.ID] = thread
@@ -269,6 +291,14 @@ func (s *MemoryService) StartRun(_ context.Context, ident identity.LocalIdentity
 	}
 	now := s.now()
 	run := Run{ID: NewRunID(), ThreadID: threadID, UserID: user.ID, Status: RunStatusQueued, Source: source, Title: TitleForRunSource(source), CreatedAt: now, UpdatedAt: now}
+	snapshot, err := s.resolvePersonaSnapshotLocked(thread, input.PersonaID)
+	if err != nil {
+		return Run{}, err
+	}
+	if snapshot.ID != "" {
+		run.PersonaID = snapshot.ID
+		s.personaSnapshots[run.ID] = snapshot
+	}
 	s.runs[run.ID] = run
 	jobID := NewBackgroundJobID()
 	metadata := map[string]any{"source": string(source), "job_id": jobID}
@@ -276,8 +306,14 @@ func (s *MemoryService) StartRun(_ context.Context, ident identity.LocalIdentity
 		metadata["script_name"] = NormalizeScriptName(input.ScriptName)
 	} else {
 		metadata["message_id"] = input.MessageID
-		metadata["provider_id"] = input.ProviderID
-		metadata["model"] = input.Model
+		metadata["provider_id"] = firstNonEmpty(snapshot.ModelRoute.ProviderID, input.ProviderID)
+		metadata["model"] = firstNonEmpty(snapshot.ModelRoute.Model, input.Model)
+	}
+	if snapshot.ID != "" {
+		metadata["persona_id"] = snapshot.ID
+		metadata["persona_version"] = snapshot.Version
+		metadata["persona_name"] = snapshot.Name
+		metadata["persona_resolved_from"] = string(snapshot.ResolvedFrom)
 	}
 	metadata = RedactEventMetadata(metadata)
 	job := BackgroundJob{ID: jobID, RunID: run.ID, ThreadID: threadID, UserID: user.ID, Kind: BackgroundJobKindRunExecution, Status: BackgroundJobStatusQueued, Priority: 100, MaxAttempts: 3, ScheduledAt: now, Metadata: metadata, CreatedAt: now, UpdatedAt: now}
@@ -391,7 +427,102 @@ func (s *MemoryService) PrepareRunContext(ctx context.Context, ident identity.Lo
 	if err != nil {
 		return RunContext{}, err
 	}
-	return buildRunContext(run, thread, messages, job, events)
+	context, err := buildRunContext(run, thread, messages, job, events)
+	if err != nil {
+		return RunContext{}, err
+	}
+	s.mu.Lock()
+	context.Persona = s.personaSnapshots[run.ID]
+	s.mu.Unlock()
+	applyPersonaToRunContext(&context)
+	return context, nil
+}
+
+func (s *MemoryService) SyncBuiltInPersonas(_ context.Context, ident identity.LocalIdentity, configs []BuiltInPersonaConfig) (PersonaSyncResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ensureUserLocked(ident)
+	if err := validateBuiltInPersonaConfigs(configs); err != nil {
+		return PersonaSyncResult{}, err
+	}
+	now := s.now()
+	result := PersonaSyncResult{Synced: len(configs)}
+	for _, config := range configs {
+		slug := strings.TrimSpace(config.Slug)
+		var persona Persona
+		var exists bool
+		for _, candidate := range s.personas {
+			if candidate.Slug == slug && candidate.Source == PersonaSourceBuiltIn {
+				persona = candidate
+				exists = true
+				break
+			}
+		}
+		if !exists {
+			persona = Persona{ID: NewPersonaID(), Slug: slug, Source: PersonaSourceBuiltIn, CreatedAt: now}
+			result.CreatedPersonas++
+		}
+		persona.Name = strings.TrimSpace(config.Name)
+		persona.Description = strings.TrimSpace(config.Description)
+		persona.IsDefault = config.IsDefault
+		persona.IsActive = true
+		persona.ActiveVersion = strings.TrimSpace(config.Version)
+		persona.UpdatedAt = now
+		if persona.IsDefault {
+			result.DefaultPersonaSlug = persona.Slug
+			for id, existing := range s.personas {
+				if existing.ID != persona.ID && existing.Source == PersonaSourceBuiltIn {
+					existing.IsDefault = false
+					existing.UpdatedAt = now
+					s.personas[id] = existing
+				}
+			}
+		}
+		s.personas[persona.ID] = persona
+		key := persona.ID + ":" + persona.ActiveVersion
+		if _, exists := s.personaVersions[key]; !exists {
+			result.CreatedVersions++
+			s.personaVersions[key] = PersonaVersion{
+				PersonaID:        persona.ID,
+				Version:          persona.ActiveVersion,
+				SystemPrompt:     strings.TrimSpace(config.SystemPrompt),
+				ModelRoute:       config.ModelRoute,
+				AllowedToolNames: append([]string(nil), config.AllowedToolNames...),
+				ReasoningMode:    strings.TrimSpace(config.ReasoningMode),
+				BudgetSummary:    strings.TrimSpace(config.BudgetSummary),
+				CreatedAt:        now,
+			}
+		}
+		result.ActivatedVersions++
+	}
+	if result.DefaultPersonaSlug == "" {
+		for _, persona := range s.personas {
+			if persona.IsDefault && persona.IsActive {
+				result.DefaultPersonaSlug = persona.Slug
+				break
+			}
+		}
+	}
+	return result, nil
+}
+
+func (s *MemoryService) ListPersonas(_ context.Context, ident identity.LocalIdentity) ([]Persona, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ensureUserLocked(ident)
+	personas := make([]Persona, 0, len(s.personas))
+	for _, persona := range s.personas {
+		if persona.IsActive {
+			personas = append(personas, persona)
+		}
+	}
+	sort.SliceStable(personas, func(i, j int) bool {
+		if personas[i].IsDefault != personas[j].IsDefault {
+			return personas[i].IsDefault
+		}
+		return personas[i].Name < personas[j].Name
+	})
+	return personas, nil
 }
 
 func buildRunContext(run Run, thread Thread, messages []Message, job BackgroundJob, events []RunEvent) (RunContext, error) {
@@ -435,6 +566,111 @@ func buildRunContext(run Run, thread Thread, messages []Message, job BackgroundJ
 		context.ContinuationProjection = ContinuationProjection{ToolCallID: toolCallID, Available: hasToolResult(events, toolCallID)}
 	}
 	return context, nil
+}
+
+func applyPersonaToRunContext(context *RunContext) {
+	if context == nil || context.Persona.ID == "" {
+		return
+	}
+	if context.Persona.ModelRoute.ProviderID != "" {
+		context.ProviderRoute.ProviderID = context.Persona.ModelRoute.ProviderID
+		context.ProviderRoute.Available = true
+	}
+	if context.Persona.ModelRoute.Model != "" {
+		context.ProviderRoute.Model = context.Persona.ModelRoute.Model
+	}
+	context.EnabledTools = toolResolutionsForNames(context.Persona.AllowedToolNames)
+}
+
+func validateBuiltInPersonaConfigs(configs []BuiltInPersonaConfig) error {
+	defaults := 0
+	for _, config := range configs {
+		if strings.TrimSpace(config.Slug) == "" || strings.TrimSpace(config.Name) == "" || strings.TrimSpace(config.SystemPrompt) == "" || strings.TrimSpace(config.Version) == "" {
+			return NewError(CodeInvalidRequest, "Built-in persona requires slug, name, prompt, and version.")
+		}
+		if strings.TrimSpace(config.ModelRoute.ProviderID) == "" || strings.TrimSpace(config.ModelRoute.Model) == "" {
+			return NewError(CodeInvalidRequest, "Built-in persona requires a model route.")
+		}
+		for _, name := range config.AllowedToolNames {
+			if strings.TrimSpace(name) != ToolNameCurrentTime {
+				return NewError(CodeInvalidRequest, "Built-in persona references an unsupported tool.")
+			}
+		}
+		if config.IsDefault {
+			defaults++
+		}
+	}
+	if len(configs) > 0 && defaults != 1 {
+		return NewError(CodeInvalidRequest, "Exactly one built-in persona must be default.")
+	}
+	return nil
+}
+
+func (s *MemoryService) resolvePersonaSnapshotLocked(thread Thread, runPersonaID string) (PersonaSnapshot, error) {
+	if personaID := strings.TrimSpace(runPersonaID); personaID != "" {
+		return s.snapshotForPersonaLocked(personaID, PersonaResolvedFromRun)
+	}
+	if thread.PersonaID != "" {
+		return s.snapshotForPersonaLocked(thread.PersonaID, PersonaResolvedFromThread)
+	}
+	for _, persona := range s.personas {
+		if persona.IsDefault && persona.IsActive {
+			return s.snapshotForPersonaLocked(persona.ID, PersonaResolvedFromDefault)
+		}
+	}
+	return PersonaSnapshot{}, nil
+}
+
+func (s *MemoryService) snapshotForPersonaLocked(personaID string, resolvedFrom PersonaResolvedFrom) (PersonaSnapshot, error) {
+	persona, version, err := s.activePersonaVersionLocked(personaID)
+	if err != nil {
+		return PersonaSnapshot{}, err
+	}
+	return PersonaSnapshot{
+		ID:               persona.ID,
+		Slug:             persona.Slug,
+		Version:          version.Version,
+		Name:             persona.Name,
+		Description:      persona.Description,
+		SystemPrompt:     version.SystemPrompt,
+		ModelRoute:       version.ModelRoute,
+		AllowedToolNames: append([]string(nil), version.AllowedToolNames...),
+		ReasoningMode:    version.ReasoningMode,
+		BudgetSummary:    version.BudgetSummary,
+		ResolvedFrom:     resolvedFrom,
+	}, nil
+}
+
+func (s *MemoryService) activePersonaVersionLocked(personaID string) (Persona, PersonaVersion, error) {
+	persona, ok := s.personas[strings.TrimSpace(personaID)]
+	if !ok || !persona.IsActive {
+		return Persona{}, PersonaVersion{}, NewError(CodeInvalidRequest, "Persona could not be resolved for this run.")
+	}
+	version, ok := s.personaVersions[persona.ID+":"+persona.ActiveVersion]
+	if !ok {
+		return Persona{}, PersonaVersion{}, NewError(CodeInvalidRequest, "Persona could not be resolved for this run.")
+	}
+	return persona, version, nil
+}
+
+func toolResolutionsForNames(names []string) []ToolResolution {
+	tools := make([]ToolResolution, 0, len(names))
+	for _, name := range names {
+		if strings.TrimSpace(name) != ToolNameCurrentTime {
+			continue
+		}
+		tools = append(tools, ToolResolution{Name: ToolNameCurrentTime, ApprovalPolicy: "always_required", ExecutionState: "allowlisted"})
+	}
+	return tools
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }
 
 func runCreatedMetadata(events []RunEvent) map[string]any {
@@ -1030,7 +1266,7 @@ func (s *MemoryService) ensureUserLocked(ident identity.LocalIdentity) User {
 	return user
 }
 
-func (s *MemoryService) upsertThreadLocked(id string, userID string, title string, mode ThreadMode) Thread {
+func (s *MemoryService) upsertThreadLocked(id string, userID string, title string, mode ThreadMode, personaID string) Thread {
 	now := s.now()
 	thread, ok := s.threads[id]
 	if !ok {
@@ -1038,6 +1274,7 @@ func (s *MemoryService) upsertThreadLocked(id string, userID string, title strin
 	}
 	thread.Title = title
 	thread.Mode = mode
+	thread.PersonaID = strings.TrimSpace(personaID)
 	thread.LifecycleStatus = ThreadLifecycleActive
 	thread.ArchivedAt = nil
 	thread.UpdatedAt = now

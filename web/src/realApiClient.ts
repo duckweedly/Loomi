@@ -1,5 +1,5 @@
 import type { ApiClient } from './apiClient'
-import type { Message, ProviderCapability, ProviderFamily, Run, RunEvent, RunSource, RunStatus, Thread, ToolCall, WorkerQueueDiagnostics, WorkerQueueStatus, WorkerStatus } from './domain'
+import type { Message, Persona, ProviderCapability, ProviderFamily, Run, RunEvent, RunSource, RunStatus, Thread, ToolCall, WorkerQueueDiagnostics, WorkerQueueStatus, WorkerStatus } from './domain'
 import { isRuntimeTerminal } from './runtime/executionAdapter'
 import { applyRealRunEvent } from './runtime/realExecutionAdapter'
 
@@ -17,6 +17,15 @@ type ApiThread = {
   created_at: string
   updated_at: string
   archived_at?: string | null
+}
+
+type ApiPersona = {
+  id: string
+  slug: string
+  name: string
+  description: string
+  active_version: string
+  is_default: boolean
 }
 
 type ApiMessage = {
@@ -139,14 +148,26 @@ function mapMessage(message: ApiMessage): Message {
   }
 }
 
+function mapPersona(persona: ApiPersona): Persona {
+  return {
+    id: persona.id,
+    slug: persona.slug,
+    name: persona.name,
+    description: persona.description,
+    activeVersion: persona.active_version,
+    isDefault: persona.is_default,
+  }
+}
+
 function restoreAssistantDraftFromEvents(run: Run, events: RunEvent[]): Run {
   return events.reduce((current, event) => {
-    if (isRuntimeTerminal(current.status)) return current
     if (current.events.some((existing) => existing.id === event.id)) return current
 
     const lastSequence = current.events.at(-1)?.sequence ?? -1
     const shouldApplyAssistantDelta = !event.assistantDelta || event.sequence === undefined || lastSequence <= event.sequence
     const events = [...current.events, event].sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0))
+    if (isRuntimeTerminal(current.status)) return { ...current, events }
+
     const content = event.assistantDelta && shouldApplyAssistantDelta ? `${current.assistantDraft?.content ?? ''}${event.assistantDelta}` : current.assistantDraft?.content ?? ''
     const assistantContent = event.type === 'assistant.message.completed' && event.content ? event.content : content
 
@@ -391,6 +412,11 @@ export const realApiClient: ApiClient = {
     return body.events.map(mapApiRunEvent)
   },
 
+  async listPersonas() {
+    const body = await requestJSON<{ personas: ApiPersona[] }>('/v1/personas')
+    return body.personas.map(mapPersona)
+  },
+
   async listModelProviders() {
     const body = await requestJSON<{ providers: ApiProviderCapability[] }>('/v1/model-providers')
     return body.providers.map(mapApiProviderCapability)
@@ -432,12 +458,12 @@ export const realApiClient: ApiClient = {
     return mapApiToolCall(body.tool_call)
   },
 
-  async startRun(threadId: string, input: { messageId?: string; source?: RunSource; providerId?: string; model?: string } = {}) {
+  async startRun(threadId: string, input: { messageId?: string; source?: RunSource; providerId?: string; model?: string; personaId?: string } = {}) {
     const body = await requestJSON<{ run: ApiRun }>(`/v1/threads/${threadId}/runs`, {
       method: 'POST',
       body: JSON.stringify(input.source === 'model_gateway'
-        ? { message_id: input.messageId, source: 'model_gateway', provider_id: input.providerId, model: input.model }
-        : { script_name: 'm4_smoke' }),
+        ? { message_id: input.messageId, source: 'model_gateway', provider_id: input.providerId, model: input.model, persona_id: input.personaId }
+        : { script_name: 'm4_smoke', persona_id: input.personaId }),
     })
     return loadRunWithEvents(body.run)
   },
@@ -482,7 +508,7 @@ export const realApiClient: ApiClient = {
     return mapThread(body.thread)
   },
 
-  async sendMessage(threadId: string, content: string) {
+  async sendMessage(threadId: string, content: string, personaId?: string) {
     const created = await requestJSON<{ message: ApiMessage }>(`/v1/threads/${threadId}/messages`, {
       method: 'POST',
       body: JSON.stringify({ content, client_message_id: createClientMessageID() }),
@@ -492,7 +518,7 @@ export const realApiClient: ApiClient = {
       const providers = await this.listModelProviders?.()
       const provider = providers?.find((candidate) => candidate.status === 'available')
       if (!provider) throw new ApiRequestError('Model provider is unavailable.', 'provider_unavailable', 503)
-      run = await this.startRun?.(threadId, { messageId: created.message.id, source: 'model_gateway', providerId: provider.id, model: provider.model })
+      run = await this.startRun?.(threadId, { messageId: created.message.id, source: 'model_gateway', providerId: provider.id, model: provider.model, personaId })
     } catch (err) {
       if (!(err instanceof ApiRequestError) || err.code !== 'active_run_exists') throw err
       run = await this.getThreadRun(threadId)

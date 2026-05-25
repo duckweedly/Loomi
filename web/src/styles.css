@@ -1020,6 +1020,22 @@ button, textarea, input, .sidebar, .chat-shell, .run-dock, .right-panel-menu, .r
   font-weight: 650;
 }
 
+.composer-persona {
+  max-width: 190px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  padding: 6px 28px 6px 10px;
+  background: color-mix(in srgb, var(--bg-glass-soft) 70%, transparent);
+  color: var(--composer-button-text);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.composer-persona:disabled {
+  cursor: default;
+  opacity: 0.72;
+}
+
 .composer-folder:disabled,
 .composer-model:disabled,
 .composer-tool:disabled {

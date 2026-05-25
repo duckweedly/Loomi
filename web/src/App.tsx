@@ -28,7 +28,10 @@ export default function App() {
     backendUnavailableAttempted,
     capabilitySignals,
     selectedRuntimeScript,
+    personas,
+    selectedPersonaId,
     selectRuntimeScript,
+    setSelectedPersonaId,
     refresh,
     selectThread,
     createThread,
@@ -214,6 +217,9 @@ export default function App() {
                   backendUnavailableAttempted={backendUnavailableAttempted}
                   capabilitySignals={capabilitySignals}
                   providerCapabilities={providerCapabilities}
+                  personas={personas}
+                  selectedPersonaId={selectedPersonaId}
+                  onSelectPersona={setSelectedPersonaId}
                   onOpenProviderSettings={() => shell.openSettings('providers')}
                   onSendMessage={(content) => void sendMessage(content)}
                   onStopRun={() => void stopRun()}

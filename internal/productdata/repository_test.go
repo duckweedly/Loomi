@@ -68,6 +68,64 @@ func TestRepositoryContractPreparesRunContext(t *testing.T) {
 	}
 }
 
+func TestRepositoryContractPreservesThreadPersonaOnMetadataUpdate(t *testing.T) {
+	var repo Repository = NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	persona := syncContractPersona(t, repo, ident, "contract-thread-persona")
+	thread, err := repo.CreateThread(context.Background(), ident, CreateThreadInput{Title: "Persona thread", Mode: ThreadModeChat, PersonaID: persona.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, err := repo.UpdateThread(context.Background(), ident, thread.ID, UpdateThreadInput{Title: ptr("Renamed persona thread")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.PersonaID != persona.ID {
+		t.Fatalf("updated persona id = %q, want %q", updated.PersonaID, persona.ID)
+	}
+	got, err := repo.GetThread(context.Background(), ident, thread.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.PersonaID != persona.ID {
+		t.Fatalf("got persona id = %q, want %q", got.PersonaID, persona.ID)
+	}
+	threads, err := repo.ListThreads(context.Background(), ident, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, candidate := range threads {
+		if candidate.ID == thread.ID {
+			found = true
+			if candidate.PersonaID != persona.ID {
+				t.Fatalf("listed persona id = %q, want %q", candidate.PersonaID, persona.ID)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("thread %s not listed", thread.ID)
+	}
+	run, err := repo.StartRun(context.Background(), ident, thread.ID, StartRunInput{ScriptName: "persona_contract"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, _, ok, err := repo.ClaimBackgroundJob(context.Background(), ident, ClaimBackgroundJobInput{WorkerID: "worker_persona_contract", LeaseSeconds: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("claim ok = false")
+	}
+	context, err := repo.PrepareRunContext(context.Background(), ident, job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if context.Run.ID != run.ID || context.Persona.ID != persona.ID || context.Persona.ResolvedFrom != PersonaResolvedFromThread {
+		t.Fatalf("context persona = %+v", context.Persona)
+	}
+}
+
 func TestRepositoryContractCoversM7ToolCallRequestProjection(t *testing.T) {
 	var repo Repository = NewMemoryService()
 	ident := identity.LocalDevIdentity()
@@ -446,4 +504,100 @@ func TestPostgresRunEventsUseUniqueSequenceOrdering(t *testing.T) {
 			t.Fatalf("event[%d].Sequence = %d", i, event.Sequence)
 		}
 	}
+}
+
+func TestPostgresPreservesThreadPersonaOnMetadataUpdate(t *testing.T) {
+	databaseURL := os.Getenv("LOOMI_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("LOOMI_TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	repo := NewPostgresRepository(pool)
+	ident := identity.LocalDevIdentity()
+	persona := syncContractPersona(t, repo, ident, "postgres-thread-persona-"+NewThreadID())
+	thread, err := repo.CreateThread(ctx, ident, CreateThreadInput{Title: "Postgres persona thread", Mode: ThreadModeChat, PersonaID: persona.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.UpdateThread(ctx, ident, thread.ID, UpdateThreadInput{Title: ptr("Renamed postgres persona thread")}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := repo.GetThread(ctx, ident, thread.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.PersonaID != persona.ID {
+		t.Fatalf("got persona id = %q, want %q", got.PersonaID, persona.ID)
+	}
+	threads, err := repo.ListThreads(ctx, ident, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, candidate := range threads {
+		if candidate.ID == thread.ID {
+			found = true
+			if candidate.PersonaID != persona.ID {
+				t.Fatalf("listed persona id = %q, want %q", candidate.PersonaID, persona.ID)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("thread %s not listed", thread.ID)
+	}
+	run, err := repo.StartRun(ctx, ident, thread.ID, StartRunInput{ScriptName: "postgres_persona_contract"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, _, ok, err := repo.ClaimBackgroundJob(ctx, ident, ClaimBackgroundJobInput{WorkerID: "worker_postgres_persona_contract", LeaseSeconds: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("claim ok = false")
+	}
+	context, err := repo.PrepareRunContext(ctx, ident, job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if context.Run.ID != run.ID || context.Persona.ID != persona.ID || context.Persona.ResolvedFrom != PersonaResolvedFromThread {
+		t.Fatalf("context persona = %+v", context.Persona)
+	}
+}
+
+func syncContractPersona(t *testing.T, repo Repository, ident identity.LocalIdentity, slug string) Persona {
+	t.Helper()
+	_, err := repo.SyncBuiltInPersonas(context.Background(), ident, []BuiltInPersonaConfig{{
+		Slug:             slug,
+		Name:             "Contract Persona",
+		Description:      "Persona contract fixture.",
+		SystemPrompt:     "contract prompt",
+		ModelRoute:       PersonaModelRoute{ProviderID: "custom", Model: "contract-model"},
+		AllowedToolNames: []string{ToolNameCurrentTime},
+		ReasoningMode:    "balanced",
+		BudgetSummary:    "contract budget",
+		Version:          "1",
+		IsDefault:        true,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	personas, err := repo.ListPersonas(context.Background(), ident)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, persona := range personas {
+		if persona.Slug == slug {
+			return persona
+		}
+	}
+	t.Fatalf("persona slug %q not found in %+v", slug, personas)
+	return Persona{}
 }

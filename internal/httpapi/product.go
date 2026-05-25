@@ -25,6 +25,11 @@ type threadListResponse struct {
 	RequestID string               `json:"request_id"`
 }
 
+type personaListResponse struct {
+	Personas  []productdata.Persona `json:"personas"`
+	RequestID string                `json:"request_id"`
+}
+
 type messageResponse struct {
 	Message   productdata.Message `json:"message"`
 	RequestID string              `json:"request_id"`
@@ -36,13 +41,15 @@ type messageListResponse struct {
 }
 
 type createThreadRequest struct {
-	Title string                 `json:"title"`
-	Mode  productdata.ThreadMode `json:"mode"`
+	Title     string                 `json:"title"`
+	Mode      productdata.ThreadMode `json:"mode"`
+	PersonaID string                 `json:"persona_id"`
 }
 
 type updateThreadRequest struct {
-	Title *string                 `json:"title"`
-	Mode  *productdata.ThreadMode `json:"mode"`
+	Title     *string                 `json:"title"`
+	Mode      *productdata.ThreadMode `json:"mode"`
+	PersonaID *string                 `json:"persona_id"`
 }
 
 type createMessageRequest struct {
@@ -81,7 +88,7 @@ func (s *Server) handleThreads(w http.ResponseWriter, r *http.Request) {
 			writeAPIError(w, productdata.NewError(productdata.CodeInvalidRequest, "Invalid JSON request."))
 			return
 		}
-		thread, err := s.product.CreateThread(r.Context(), identity.LocalDevIdentity(), productdata.CreateThreadInput{Title: req.Title, Mode: req.Mode})
+		thread, err := s.product.CreateThread(r.Context(), identity.LocalDevIdentity(), productdata.CreateThreadInput{Title: req.Title, Mode: req.Mode, PersonaID: req.PersonaID})
 		if err != nil {
 			writeAPIError(w, err)
 			return
@@ -135,11 +142,11 @@ func (s *Server) handleThreadByID(w http.ResponseWriter, r *http.Request) {
 			writeAPIError(w, productdata.NewError(productdata.CodeInvalidRequest, "Invalid JSON request."))
 			return
 		}
-		if req.Title == nil && req.Mode == nil {
+		if req.Title == nil && req.Mode == nil && req.PersonaID == nil {
 			writeAPIError(w, productdata.NewError(productdata.CodeInvalidRequest, "Thread update requires title or mode."))
 			return
 		}
-		thread, err := s.product.UpdateThread(r.Context(), identity.LocalDevIdentity(), threadID, productdata.UpdateThreadInput{Title: req.Title, Mode: req.Mode})
+		thread, err := s.product.UpdateThread(r.Context(), identity.LocalDevIdentity(), threadID, productdata.UpdateThreadInput{Title: req.Title, Mode: req.Mode, PersonaID: req.PersonaID})
 		if err != nil {
 			writeAPIError(w, err)
 			return
@@ -148,6 +155,25 @@ func (s *Server) handleThreadByID(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeMethodNotAllowed(w, "GET, PATCH")
 	}
+}
+
+func (s *Server) handlePersonas(w http.ResponseWriter, r *http.Request) {
+	if !s.productAvailable(w) {
+		return
+	}
+	if r.Method != http.MethodGet {
+		writeMethodNotAllowed(w, "GET")
+		return
+	}
+	personas, err := s.product.ListPersonas(r.Context(), identity.LocalDevIdentity())
+	if err != nil {
+		writeAPIError(w, err)
+		return
+	}
+	if personas == nil {
+		personas = []productdata.Persona{}
+	}
+	writeJSON(w, http.StatusOK, personaListResponse{Personas: personas, RequestID: diagnostics.NewRequestID()})
 }
 
 func (s *Server) handleArchiveThread(w http.ResponseWriter, r *http.Request, threadID string) {

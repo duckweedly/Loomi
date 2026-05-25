@@ -1,4 +1,4 @@
-import type { AssistantDraft as AssistantDraftState, BackendCapabilityState, ChatCanvasState, Message, ProviderCapability, Run, StreamState, Thread } from '../domain'
+import type { AssistantDraft as AssistantDraftState, BackendCapabilityState, ChatCanvasState, Message, Persona, ProviderCapability, Run, StreamState, Thread } from '../domain'
 import type { Locale } from '../i18n'
 import { getDictionary } from '../i18n'
 import { deriveBackendCapabilityStatus, getBackendCapabilityCopy, shouldShowProviderUnavailableWarning } from '../runtime/backendCapabilityStatus'
@@ -24,6 +24,9 @@ type Props = {
     streamDisconnected?: boolean
   }
   providerCapabilities?: ProviderCapability[]
+  personas?: Persona[]
+  selectedPersonaId?: string
+  onSelectPersona?: (personaId: string) => void
   onOpenProviderSettings?: () => void
   onSendMessage: (content: string) => void
   onStopRun: () => void
@@ -129,7 +132,7 @@ function StatePanel({ state, error, locale }: { state: Exclude<ChatCanvasState, 
   )
 }
 
-export function ChatCanvas({ sidebarCollapsed, thread, messages, run, loading, error, dataSourceMode, streamState, backendCapability = 'available', backendUnavailableAttempted = false, capabilitySignals, providerCapabilities = [], onOpenProviderSettings, onSendMessage, onStopRun, onRetryRun, onRegenerateRun, onApproveToolCall, onDenyToolCall, locale }: Props) {
+export function ChatCanvas({ sidebarCollapsed, thread, messages, run, loading, error, dataSourceMode, streamState, backendCapability = 'available', backendUnavailableAttempted = false, capabilitySignals, providerCapabilities = [], personas = [], selectedPersonaId = '', onSelectPersona, onOpenProviderSettings, onSendMessage, onStopRun, onRetryRun, onRegenerateRun, onApproveToolCall, onDenyToolCall, locale }: Props) {
   const state = deriveChatCanvasState({
     loading,
     error,
@@ -212,6 +215,9 @@ export function ChatCanvas({ sidebarCollapsed, thread, messages, run, loading, e
         threadSelected={Boolean(thread)}
         run={run}
         messages={messages}
+        personas={personas}
+        selectedPersonaId={selectedPersonaId}
+        onSelectPersona={onSelectPersona}
         attachLabel={copy.attach}
         stopLabel={copy.stop}
         retryLabel={copy.retry}

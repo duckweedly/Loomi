@@ -35,7 +35,8 @@ func (r *PostgresRepository) CreateThread(ctx context.Context, ident identity.Lo
 	if err != nil {
 		return Thread{}, err
 	}
-	row := r.Pool.QueryRow(ctx, `insert into threads (id, user_id, title, mode, lifecycle_status) values ($1, $2, $3, $4, $5) returning id, user_id, title, mode, lifecycle_status, created_at, updated_at, archived_at`, NewThreadID(), user.ID, title, input.Mode, ThreadLifecycleActive)
+	threadID := NewThreadID()
+	row := r.Pool.QueryRow(ctx, `insert into threads (id, user_id, title, mode, lifecycle_status, persona_id) values ($1, $2, $3, $4, $5, nullif($6, '')) returning id, user_id, title, mode, lifecycle_status, coalesce(persona_id, ''), created_at, updated_at, archived_at`, threadID, user.ID, title, input.Mode, ThreadLifecycleActive, strings.TrimSpace(input.PersonaID))
 	return scanThread(row)
 }
 
@@ -51,7 +52,7 @@ func (r *PostgresRepository) UpsertSeedThread(ctx context.Context, ident identit
 	if err != nil {
 		return Thread{}, err
 	}
-	row := r.Pool.QueryRow(ctx, `insert into threads (id, user_id, title, mode, lifecycle_status) values ($1, $2, $3, $4, 'active') on conflict (id) do update set title=excluded.title, mode=excluded.mode, lifecycle_status='active', archived_at=null, updated_at=now() returning id, user_id, title, mode, lifecycle_status, created_at, updated_at, archived_at`, input.ID, user.ID, title, input.Mode)
+	row := r.Pool.QueryRow(ctx, `insert into threads (id, user_id, title, mode, lifecycle_status) values ($1, $2, $3, $4, 'active') on conflict (id) do update set title=excluded.title, mode=excluded.mode, lifecycle_status='active', archived_at=null, updated_at=now() returning id, user_id, title, mode, lifecycle_status, coalesce(persona_id, ''), created_at, updated_at, archived_at`, input.ID, user.ID, title, input.Mode)
 	return scanThread(row)
 }
 
@@ -60,7 +61,7 @@ func (r *PostgresRepository) ListThreads(ctx context.Context, ident identity.Loc
 	if err != nil {
 		return nil, err
 	}
-	query := `select id, user_id, title, mode, lifecycle_status, created_at, updated_at, archived_at from threads where user_id=$1`
+	query := `select id, user_id, title, mode, lifecycle_status, coalesce(persona_id, ''), created_at, updated_at, archived_at from threads where user_id=$1`
 	args := []any{user.ID}
 	if !includeArchived {
 		query += ` and lifecycle_status='active'`
@@ -87,7 +88,7 @@ func (r *PostgresRepository) GetThread(ctx context.Context, ident identity.Local
 	if err != nil {
 		return Thread{}, err
 	}
-	row := r.Pool.QueryRow(ctx, `select id, user_id, title, mode, lifecycle_status, created_at, updated_at, archived_at from threads where id=$1 and user_id=$2`, threadID, user.ID)
+	row := r.Pool.QueryRow(ctx, `select id, user_id, title, mode, lifecycle_status, coalesce(persona_id, ''), created_at, updated_at, archived_at from threads where id=$1 and user_id=$2`, threadID, user.ID)
 	thread, err := scanThread(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Thread{}, NewError(CodeThreadNotFound, "Thread not found.")
@@ -102,6 +103,7 @@ func (r *PostgresRepository) UpdateThread(ctx context.Context, ident identity.Lo
 	}
 	title := current.Title
 	mode := current.Mode
+	personaID := current.PersonaID
 	if input.Title != nil {
 		normalized, err := NormalizeThreadTitle(*input.Title)
 		if err != nil {
@@ -115,7 +117,10 @@ func (r *PostgresRepository) UpdateThread(ctx context.Context, ident identity.Lo
 		}
 		mode = *input.Mode
 	}
-	row := r.Pool.QueryRow(ctx, `update threads set title=$1, mode=$2, updated_at=now() where id=$3 and user_id=$4 returning id, user_id, title, mode, lifecycle_status, created_at, updated_at, archived_at`, title, mode, threadID, current.UserID)
+	if input.PersonaID != nil {
+		personaID = strings.TrimSpace(*input.PersonaID)
+	}
+	row := r.Pool.QueryRow(ctx, `update threads set title=$1, mode=$2, persona_id=nullif($5, ''), updated_at=now() where id=$3 and user_id=$4 returning id, user_id, title, mode, lifecycle_status, coalesce(persona_id, ''), created_at, updated_at, archived_at`, title, mode, threadID, current.UserID, personaID)
 	return scanThread(row)
 }
 
@@ -124,7 +129,7 @@ func (r *PostgresRepository) ArchiveThread(ctx context.Context, ident identity.L
 	if err != nil {
 		return Thread{}, err
 	}
-	row := r.Pool.QueryRow(ctx, `update threads set lifecycle_status='archived', archived_at=coalesce(archived_at, now()), updated_at=now() where id=$1 and user_id=$2 returning id, user_id, title, mode, lifecycle_status, created_at, updated_at, archived_at`, threadID, current.UserID)
+	row := r.Pool.QueryRow(ctx, `update threads set lifecycle_status='archived', archived_at=coalesce(archived_at, now()), updated_at=now() where id=$1 and user_id=$2 returning id, user_id, title, mode, lifecycle_status, coalesce(persona_id, ''), created_at, updated_at, archived_at`, threadID, current.UserID)
 	return scanThread(row)
 }
 
@@ -279,8 +284,8 @@ func (r *PostgresRepository) StartRun(ctx context.Context, ident identity.LocalI
 		return Run{}, err
 	}
 	defer tx.Rollback(ctx)
-	var threadUserID string
-	if err := tx.QueryRow(ctx, `select user_id from threads where id=$1 and user_id=$2 and lifecycle_status='active'`, threadID, user.ID).Scan(&threadUserID); err != nil {
+	var threadUserID, threadPersonaID string
+	if err := tx.QueryRow(ctx, `select user_id, coalesce(persona_id, '') from threads where id=$1 and user_id=$2 and lifecycle_status='active'`, threadID, user.ID).Scan(&threadUserID, &threadPersonaID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return Run{}, NewError(CodeThreadNotFound, "Thread not found.")
 		}
@@ -290,22 +295,36 @@ func (r *PostgresRepository) StartRun(ctx context.Context, ident identity.LocalI
 	if err != nil {
 		return Run{}, err
 	}
+	snapshot, err := r.resolvePersonaSnapshotTx(ctx, tx, threadPersonaID, input.PersonaID)
+	if err != nil {
+		return Run{}, err
+	}
 	runID := NewRunID()
-	run, err := scanRun(tx.QueryRow(ctx, `insert into runs (id, thread_id, user_id, status, source, title) values ($1, $2, $3, 'queued', $4, $5) returning id, thread_id, user_id, status, source, title, created_at, updated_at, completed_at, stop_requested_at, error_code, error_message`, runID, threadID, user.ID, source, TitleForRunSource(source)))
+	run, err := scanRun(tx.QueryRow(ctx, `insert into runs (id, thread_id, user_id, status, source, title, persona_id) values ($1, $2, $3, 'queued', $4, $5, nullif($6, '')) returning id, thread_id, user_id, status, source, title, created_at, updated_at, completed_at, stop_requested_at, error_code, error_message`, runID, threadID, user.ID, source, TitleForRunSource(source), snapshot.ID))
 	if err != nil {
 		if strings.Contains(err.Error(), "runs_one_active_per_thread_idx") {
 			return Run{}, NewError(CodeActiveRunExists, "Thread already has an active run.")
 		}
 		return Run{}, err
 	}
+	run.PersonaID = snapshot.ID
 	jobID := NewBackgroundJobID()
 	metadata := map[string]any{"source": string(source), "job_id": jobID}
 	if source == RunSourceLocalSimulated {
 		metadata["script_name"] = NormalizeScriptName(input.ScriptName)
 	} else {
 		metadata["message_id"] = input.MessageID
-		metadata["provider_id"] = input.ProviderID
-		metadata["model"] = input.Model
+		metadata["provider_id"] = firstNonEmpty(snapshot.ModelRoute.ProviderID, input.ProviderID)
+		metadata["model"] = firstNonEmpty(snapshot.ModelRoute.Model, input.Model)
+	}
+	if snapshot.ID != "" {
+		metadata["persona_id"] = snapshot.ID
+		metadata["persona_version"] = snapshot.Version
+		metadata["persona_name"] = snapshot.Name
+		metadata["persona_resolved_from"] = string(snapshot.ResolvedFrom)
+		if err := insertPersonaSnapshot(ctx, tx, run.ID, snapshot); err != nil {
+			return Run{}, err
+		}
 	}
 	_, err = scanRunEvent(tx.QueryRow(ctx, `insert into run_events (id, run_id, thread_id, user_id, sequence, category, type, summary, metadata) values ($1, $2, $3, $4, 1, 'lifecycle', 'run_created', 'Run created', $5) returning id, run_id, thread_id, user_id, sequence, category, type, summary, content, metadata, created_at`, NewRunEventID(), run.ID, threadID, user.ID, mustJSON(RedactEventMetadata(metadata))))
 	if err != nil {
@@ -395,7 +414,16 @@ func (r *PostgresRepository) PrepareRunContext(ctx context.Context, ident identi
 	if err != nil {
 		return RunContext{}, err
 	}
-	return buildRunContext(run, thread, messages, job, events)
+	context, err := buildRunContext(run, thread, messages, job, events)
+	if err != nil {
+		return RunContext{}, err
+	}
+	snapshot, err := r.getPersonaSnapshot(ctx, run.ID)
+	if err == nil {
+		context.Persona = snapshot
+		applyPersonaToRunContext(&context)
+	}
+	return context, nil
 }
 
 func (r *PostgresRepository) AppendRunEvent(ctx context.Context, ident identity.LocalIdentity, runID string, input AppendRunEventInput) (RunEvent, error) {
@@ -1019,6 +1047,131 @@ func (r *PostgresRepository) StopRun(ctx context.Context, ident identity.LocalId
 	return StopRunOutput{Run: stopped, Result: StopRunResultStopped, Events: []RunEvent{lifecycle, final}}, tx.Commit(ctx)
 }
 
+func (r *PostgresRepository) SyncBuiltInPersonas(ctx context.Context, ident identity.LocalIdentity, configs []BuiltInPersonaConfig) (PersonaSyncResult, error) {
+	if _, err := r.ensureUser(ctx, ident); err != nil {
+		return PersonaSyncResult{}, err
+	}
+	if err := validateBuiltInPersonaConfigs(configs); err != nil {
+		return PersonaSyncResult{}, err
+	}
+	tx, err := r.Pool.Begin(ctx)
+	if err != nil {
+		return PersonaSyncResult{}, err
+	}
+	defer tx.Rollback(ctx)
+	result := PersonaSyncResult{Synced: len(configs)}
+	for _, config := range configs {
+		slug := strings.TrimSpace(config.Slug)
+		personaID := ""
+		err := tx.QueryRow(ctx, `select id from personas where slug=$1 and source='built_in'`, slug).Scan(&personaID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			personaID = NewPersonaID()
+			result.CreatedPersonas++
+			if _, err := tx.Exec(ctx, `insert into personas (id, slug, name, description, source, is_default, is_active, active_version) values ($1, $2, $3, $4, 'built_in', $5, true, $6)`, personaID, slug, strings.TrimSpace(config.Name), strings.TrimSpace(config.Description), config.IsDefault, strings.TrimSpace(config.Version)); err != nil {
+				return PersonaSyncResult{}, err
+			}
+		} else if err != nil {
+			return PersonaSyncResult{}, err
+		} else if _, err := tx.Exec(ctx, `update personas set name=$1, description=$2, is_default=$3, is_active=true, active_version=$4, updated_at=now() where id=$5`, strings.TrimSpace(config.Name), strings.TrimSpace(config.Description), config.IsDefault, strings.TrimSpace(config.Version), personaID); err != nil {
+			return PersonaSyncResult{}, err
+		}
+		if config.IsDefault {
+			result.DefaultPersonaSlug = slug
+			if _, err := tx.Exec(ctx, `update personas set is_default=false, updated_at=now() where source='built_in' and id<>$1`, personaID); err != nil {
+				return PersonaSyncResult{}, err
+			}
+		}
+		tag, err := tx.Exec(ctx, `insert into persona_versions (persona_id, version, system_prompt, model_route, allowed_tool_names, reasoning_mode, budget_summary) values ($1, $2, $3, $4, $5, $6, $7) on conflict (persona_id, version) do nothing`, personaID, strings.TrimSpace(config.Version), strings.TrimSpace(config.SystemPrompt), mustJSON(config.ModelRoute), config.AllowedToolNames, strings.TrimSpace(config.ReasoningMode), strings.TrimSpace(config.BudgetSummary))
+		if err != nil {
+			return PersonaSyncResult{}, err
+		}
+		if tag.RowsAffected() > 0 {
+			result.CreatedVersions++
+		}
+		result.ActivatedVersions++
+	}
+	if result.DefaultPersonaSlug == "" {
+		_ = tx.QueryRow(ctx, `select slug from personas where source='built_in' and is_default=true and is_active=true limit 1`).Scan(&result.DefaultPersonaSlug)
+	}
+	return result, tx.Commit(ctx)
+}
+
+func (r *PostgresRepository) ListPersonas(ctx context.Context, ident identity.LocalIdentity) ([]Persona, error) {
+	if _, err := r.ensureUser(ctx, ident); err != nil {
+		return nil, err
+	}
+	rows, err := r.Pool.Query(ctx, `select id, slug, name, description, source, is_default, is_active, active_version, created_at, updated_at from personas where is_active=true order by is_default desc, name asc`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var personas []Persona
+	for rows.Next() {
+		var persona Persona
+		if err := rows.Scan(&persona.ID, &persona.Slug, &persona.Name, &persona.Description, &persona.Source, &persona.IsDefault, &persona.IsActive, &persona.ActiveVersion, &persona.CreatedAt, &persona.UpdatedAt); err != nil {
+			return nil, err
+		}
+		personas = append(personas, persona)
+	}
+	return personas, rows.Err()
+}
+
+func (r *PostgresRepository) resolvePersonaSnapshotTx(ctx context.Context, tx pgx.Tx, threadPersonaID string, runPersonaID string) (PersonaSnapshot, error) {
+	if personaID := strings.TrimSpace(runPersonaID); personaID != "" {
+		return selectPersonaSnapshot(ctx, tx, personaID, PersonaResolvedFromRun)
+	}
+	if personaID := strings.TrimSpace(threadPersonaID); personaID != "" {
+		return selectPersonaSnapshot(ctx, tx, personaID, PersonaResolvedFromThread)
+	}
+	var personaID string
+	err := tx.QueryRow(ctx, `select id from personas where source='built_in' and is_default=true and is_active=true limit 1`).Scan(&personaID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return PersonaSnapshot{}, nil
+	}
+	if err != nil {
+		return PersonaSnapshot{}, err
+	}
+	return selectPersonaSnapshot(ctx, tx, personaID, PersonaResolvedFromDefault)
+}
+
+func selectPersonaSnapshot(ctx context.Context, tx pgx.Tx, personaID string, resolvedFrom PersonaResolvedFrom) (PersonaSnapshot, error) {
+	var snapshot PersonaSnapshot
+	var rawRoute []byte
+	err := tx.QueryRow(ctx, `select p.id, p.slug, p.active_version, p.name, p.description, pv.system_prompt, pv.model_route, pv.allowed_tool_names, pv.reasoning_mode, pv.budget_summary from personas p join persona_versions pv on pv.persona_id=p.id and pv.version=p.active_version where p.id=$1 and p.is_active=true`, personaID).Scan(&snapshot.ID, &snapshot.Slug, &snapshot.Version, &snapshot.Name, &snapshot.Description, &snapshot.SystemPrompt, &rawRoute, &snapshot.AllowedToolNames, &snapshot.ReasoningMode, &snapshot.BudgetSummary)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return PersonaSnapshot{}, NewError(CodeInvalidRequest, "Persona could not be resolved for this run.")
+	}
+	if err != nil {
+		return PersonaSnapshot{}, err
+	}
+	if len(rawRoute) > 0 {
+		_ = json.Unmarshal(rawRoute, &snapshot.ModelRoute)
+	}
+	snapshot.ResolvedFrom = resolvedFrom
+	return snapshot, nil
+}
+
+func insertPersonaSnapshot(ctx context.Context, tx pgx.Tx, runID string, snapshot PersonaSnapshot) error {
+	if snapshot.ID == "" {
+		return nil
+	}
+	_, err := tx.Exec(ctx, `insert into run_persona_snapshots (run_id, persona_id, persona_slug, version, name, description, system_prompt, model_route, allowed_tool_names, reasoning_mode, budget_summary, resolved_from) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`, runID, snapshot.ID, snapshot.Slug, snapshot.Version, snapshot.Name, snapshot.Description, snapshot.SystemPrompt, mustJSON(snapshot.ModelRoute), snapshot.AllowedToolNames, snapshot.ReasoningMode, snapshot.BudgetSummary, string(snapshot.ResolvedFrom))
+	return err
+}
+
+func (r *PostgresRepository) getPersonaSnapshot(ctx context.Context, runID string) (PersonaSnapshot, error) {
+	var snapshot PersonaSnapshot
+	var rawRoute []byte
+	err := r.Pool.QueryRow(ctx, `select persona_id, persona_slug, version, name, description, system_prompt, model_route, allowed_tool_names, reasoning_mode, budget_summary, resolved_from from run_persona_snapshots where run_id=$1`, runID).Scan(&snapshot.ID, &snapshot.Slug, &snapshot.Version, &snapshot.Name, &snapshot.Description, &snapshot.SystemPrompt, &rawRoute, &snapshot.AllowedToolNames, &snapshot.ReasoningMode, &snapshot.BudgetSummary, &snapshot.ResolvedFrom)
+	if err != nil {
+		return PersonaSnapshot{}, err
+	}
+	if len(rawRoute) > 0 {
+		_ = json.Unmarshal(rawRoute, &snapshot.ModelRoute)
+	}
+	return snapshot, nil
+}
+
 func (r *PostgresRepository) ensureUser(ctx context.Context, ident identity.LocalIdentity) (User, error) {
 	row := r.Pool.QueryRow(ctx, `insert into users (id, display_name) values ($1, $2) on conflict (id) do update set display_name=excluded.display_name, updated_at=users.updated_at returning id, display_name, created_at, updated_at`, ident.UserID, ident.DisplayName)
 	var user User
@@ -1034,7 +1187,7 @@ type scanner interface {
 
 func scanThread(row scanner) (Thread, error) {
 	var thread Thread
-	if err := row.Scan(&thread.ID, &thread.UserID, &thread.Title, &thread.Mode, &thread.LifecycleStatus, &thread.CreatedAt, &thread.UpdatedAt, &thread.ArchivedAt); err != nil {
+	if err := row.Scan(&thread.ID, &thread.UserID, &thread.Title, &thread.Mode, &thread.LifecycleStatus, &thread.PersonaID, &thread.CreatedAt, &thread.UpdatedAt, &thread.ArchivedAt); err != nil {
 		return Thread{}, err
 	}
 	return thread, nil

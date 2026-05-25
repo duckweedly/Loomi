@@ -1,4 +1,4 @@
-import type { Message, ProviderCapability, Run, Thread, ToolCall, WorkerQueueDiagnostics } from './domain'
+import type { Message, Persona, ProviderCapability, Run, Thread, ToolCall, WorkerQueueDiagnostics } from './domain'
 import { mockApiClient } from './mockApiClient'
 import { hasRealApiBase, realApiClient } from './realApiClient'
 import type { ExecutionAdapter } from './runtime/executionAdapter'
@@ -11,6 +11,7 @@ export type ApiClient = {
   getThreadMessages(threadId: string): Promise<Message[]>
   getThreadRun(threadId: string): Promise<Run>
   getRunEvents(runId: string): Promise<Run['events']>
+  listPersonas?(): Promise<Persona[]>
   listModelProviders?(): Promise<ProviderCapability[]>
   checkModelProvider?(providerId: string): Promise<ProviderCapability>
   saveModelProvider?(input: { baseUrl: string; model: string; apiKey: string }): Promise<ProviderCapability>
@@ -18,12 +19,12 @@ export type ApiClient = {
   getToolCall?(threadId: string, runId: string, toolCallId: string): Promise<ToolCall>
   approveToolCall?(threadId: string, runId: string, toolCallId: string): Promise<ToolCall>
   denyToolCall?(threadId: string, runId: string, toolCallId: string): Promise<ToolCall>
-  startRun?(threadId: string, input?: { messageId?: string; source?: Run['source']; providerId?: string; model?: string }): Promise<Run>
+  startRun?(threadId: string, input?: { messageId?: string; source?: Run['source']; providerId?: string; model?: string; personaId?: string }): Promise<Run>
   subscribeRunEvents?(runId: string, afterSequence: number, onEvent: (event: Run['events'][number]) => void, onError: () => void): () => void
   createThread?(title: string, mode: Thread['mode']): Promise<Thread>
   updateThread?(threadId: string, input: Partial<Pick<Thread, 'title' | 'mode'>>): Promise<Thread>
   archiveThread?(threadId: string): Promise<Thread>
-  sendMessage(threadId: string, content: string): Promise<{ messages: Message[]; run: Run }>
+  sendMessage(threadId: string, content: string, personaId?: string): Promise<{ messages: Message[]; run: Run }>
   stopRun(runId: string): Promise<Run>
 }
 

@@ -98,4 +98,4 @@ M6 job, worker, retry, and diagnostic output must not expose provider credential
 
 ## Deferred capabilities
 
-Desktop runtime, shell/filesystem/browser automation, MCP, Persona/Skill, RAG/memory, plugins, broad workflow DAGs, and multi-agent orchestration remain outside the current slice.
+Desktop runtime, shell/filesystem/browser automation, MCP, Skill marketplace, RAG/memory, plugins, broad workflow DAGs, and multi-agent orchestration remain outside the current slice. M10 adds only the separate persona foundation snapshot used by `RunContext`.
