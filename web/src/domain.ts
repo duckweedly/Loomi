@@ -1,8 +1,8 @@
-export type RunStatus = 'pending' | 'queued' | 'running' | 'recovering' | 'stopping' | 'completed' | 'failed' | 'stopped' | 'cancelled' | 'retrying'
+export type RunStatus = 'pending' | 'queued' | 'running' | 'recovering' | 'blocked_on_tool_approval' | 'stopping' | 'completed' | 'failed' | 'stopped' | 'cancelled' | 'retrying'
 
 export type RuntimeStatus = RunStatus
 
-export type RuntimeEventGroup = 'run-lifecycle' | 'model-stream' | 'worker-job' | 'error'
+export type RuntimeEventGroup = 'run-lifecycle' | 'model-stream' | 'worker-job' | 'tool-call' | 'error'
 
 export type RuntimeEventSeverity = 'info' | 'progress' | 'warning' | 'error'
 
@@ -54,13 +54,26 @@ export type Thread = {
   runStatus: RunStatus
 }
 
+export type ToolCallApprovalStatus = 'not_required' | 'required' | 'approved' | 'denied' | 'cancelled'
+
+export type ToolCallExecutionStatus = 'not_started' | 'blocked' | 'executing' | 'succeeded' | 'failed' | 'cancelled'
+
+export type ToolCallLifecycle = 'requested' | 'approval_required' | 'approved' | 'denied' | 'executing' | 'succeeded' | 'failed' | 'cancelled'
+
 export type ToolCall = {
   id: string
+  toolCallId?: string
   name: string
-  status: 'running' | 'completed'
+  status: 'running' | 'completed' | ToolCallLifecycle
+  approvalStatus?: ToolCallApprovalStatus
+  executionStatus?: ToolCallExecutionStatus
   summary: string
   input: string
   output: string
+  argumentsSummary?: Record<string, unknown>
+  resultSummary?: Record<string, unknown> | null
+  errorCode?: string | null
+  errorMessage?: string | null
 }
 
 export type Message = {
@@ -90,6 +103,14 @@ export type RuntimeEventType =
   | 'worker.lease_renewed'
   | 'pipeline.step.started'
   | 'pipeline.step.completed'
+  | 'tool.call.requested'
+  | 'tool.call.approval_required'
+  | 'tool.call.approved'
+  | 'tool.call.denied'
+  | 'tool.call.executing'
+  | 'tool.call.succeeded'
+  | 'tool.call.failed'
+  | 'tool.call.cancelled'
   | 'run.completed'
   | 'run.failed'
   | 'run.stopped'
@@ -110,6 +131,7 @@ export type RuntimeEvent = {
   content?: string | null
   time: string
   status: RuntimeStatus
+  metadata?: Record<string, unknown>
   assistantDelta?: string
 }
 
@@ -135,6 +157,7 @@ export type Run = {
   context: string
   source?: RunSource
   events: RunEvent[]
+  toolCalls?: ToolCall[]
   scriptId?: RuntimeScriptId
   attemptOfMessageId?: string
   assistantDraft?: AssistantDraft
@@ -174,6 +197,8 @@ export type WorkerQueueDiagnostics = {
   leasedCount: number
   staleCount: number
   retryingCount: number
+  blockedToolApprovalCount?: number
+  resumableToolCallCount?: number
   deadCount: number
   updatedAt: string
 }

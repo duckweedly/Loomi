@@ -3,6 +3,7 @@ package httpapi
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/sheridiany/loomi/internal/diagnostics"
 	"github.com/sheridiany/loomi/internal/identity"
@@ -106,6 +107,10 @@ func (s *Server) handleThreadByID(w http.ResponseWriter, r *http.Request) {
 	}
 	if suffix == "runs" || suffix == "runs/current" {
 		s.handleThreadRuns(w, r, threadID)
+		return
+	}
+	if strings.HasPrefix(suffix, "runs/") {
+		s.handleThreadRunResource(w, r, threadID, strings.TrimPrefix(suffix, "runs/"))
 		return
 	}
 	if suffix == "archive" {

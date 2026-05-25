@@ -43,7 +43,7 @@ func TestGatewayPersistsProviderDeltasAndCompletion(t *testing.T) {
 	}
 }
 
-func TestGatewayRecordsToolCallsAsBoundaryEvents(t *testing.T) {
+func TestGatewayRecordsApprovalRequiredCurrentTimeToolCall(t *testing.T) {
 	svc := productdata.NewMemoryService()
 	ident := identity.LocalDevIdentity()
 	thread, err := svc.CreateThread(context.Background(), ident, productdata.CreateThreadInput{Title: "Gateway", Mode: productdata.ThreadModeChat})
@@ -58,7 +58,7 @@ func TestGatewayRecordsToolCallsAsBoundaryEvents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	provider := StaticProvider{ProviderConfig: ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: "https://example.test/v1", APIKey: "key", Model: "model", Enabled: true}, Events: []ProviderEvent{{Type: ProviderEventToolCall, ToolName: "read_file", Metadata: map[string]any{"arguments": "secret"}}, {Type: ProviderEventCompleted, Text: "done"}}}
+	provider := StaticProvider{ProviderConfig: ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: "https://example.test/v1", APIKey: "key", Model: "model", Enabled: true}, Events: []ProviderEvent{{Type: ProviderEventToolCall, ToolName: productdata.ToolNameCurrentTime, Metadata: map[string]any{"tool_call_id": "tc_1"}}, {Type: ProviderEventCompleted, Text: "done"}}}
 
 	NewGateway(svc, nil, []Provider{provider}).run(context.Background(), run, GatewayRunInput{ThreadID: thread.ID, MessageID: message.ID, ProviderID: "custom"})
 
@@ -66,17 +66,63 @@ func TestGatewayRecordsToolCallsAsBoundaryEvents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var found bool
-	for _, event := range events {
-		if event.Type == "tool_call_blocked" {
-			found = true
-			if event.Metadata["tool_name"] != "read_file" || event.Metadata["arguments"] != nil {
-				t.Fatalf("event = %+v", event)
-			}
+	wantTypes := []string{productdata.EventToolCallRequested, productdata.EventToolCallApprovalRequired}
+	for i, want := range wantTypes {
+		if events[len(events)-2+i].Type != want {
+			t.Fatalf("events = %+v", events)
 		}
 	}
-	if !found {
-		t.Fatalf("events = %+v", events)
+	got, err := svc.GetRun(context.Background(), ident, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != productdata.RunStatusBlockedOnToolApproval {
+		t.Fatalf("run = %+v", got)
+	}
+	call, err := svc.GetToolCall(context.Background(), ident, thread.ID, run.ID, "tc_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if call.ToolName != productdata.ToolNameCurrentTime || call.ApprovalStatus != productdata.ToolCallApprovalRequired || call.ExecutionStatus != productdata.ToolCallExecutionBlocked {
+		t.Fatalf("call = %+v", call)
+	}
+	messages, err := svc.ListMessages(context.Background(), ident, thread.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 1 {
+		t.Fatalf("messages = %+v", messages)
+	}
+}
+
+func TestGatewayRejectsInvalidToolArgumentsWithoutFabricatingDefaults(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, productdata.CreateThreadInput{Title: "Gateway", Mode: productdata.ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _, err := svc.CreateMessage(context.Background(), ident, thread.ID, productdata.CreateMessageInput{Content: "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, productdata.StartRunInput{Source: productdata.RunSourceModelGateway, MessageID: message.ID, ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := StaticProvider{ProviderConfig: ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: "https://example.test/v1", APIKey: "key", Model: "model", Enabled: true}, Events: []ProviderEvent{{Type: ProviderEventToolCall, ToolName: productdata.ToolNameCurrentTime, Metadata: map[string]any{"tool_call_id": "tc_bad", "arguments_summary": map[string]any{"timezone": "Asia/Shanghai"}}}}}
+
+	NewGateway(svc, nil, []Provider{provider}).run(context.Background(), run, GatewayRunInput{ThreadID: thread.ID, MessageID: message.ID, ProviderID: "custom"})
+
+	if _, err := svc.GetToolCall(context.Background(), ident, thread.ID, run.ID, "tc_bad"); err == nil {
+		t.Fatal("GetToolCall() error = nil, want invalid tool argument rejection")
+	}
+	got, err := svc.GetRun(context.Background(), ident, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != productdata.RunStatusFailed {
+		t.Fatalf("run = %+v", got)
 	}
 }
 

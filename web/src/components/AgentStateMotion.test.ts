@@ -38,6 +38,10 @@ describe('deriveAgentMotionState', () => {
     expect(deriveAgentMotionState(run({ events: [{ id: 'evt-3', type: 'context.loaded', label: 'Context', detail: 'Context ready', time: 'Now', status: 'running' }] }))).toBe('thinking')
   })
 
+  test('uses confirm motion while waiting for tool approval', () => {
+    expect(deriveAgentMotionState(run({ status: 'blocked_on_tool_approval', events: [{ id: 'evt-tool', type: 'tool.call.approval_required', label: 'Tool', detail: 'Tool approval required', time: 'Now', status: 'blocked_on_tool_approval' }] }))).toBe('confirm')
+  })
+
   test('ignores completed events when a later active event is still running', () => {
     expect(deriveAgentMotionState(run({
       events: [

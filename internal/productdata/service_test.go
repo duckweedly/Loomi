@@ -209,9 +209,26 @@ func TestMessageValidationAndThreadNotFound(t *testing.T) {
 	}
 }
 
+func TestRedactEventMetadataRedactsSensitiveKeys(t *testing.T) {
+	metadata := RedactEventMetadata(map[string]any{"api_key": "sk-live-123", "nested": map[string]any{"password": "abc123"}, "timezone": "UTC"})
+	if metadata["api_key"] != "[redacted]" {
+		t.Fatalf("api_key was not redacted: %+v", metadata)
+	}
+	nested := metadata["nested"].(map[string]any)
+	if nested["password"] != "[redacted]" {
+		t.Fatalf("nested password was not redacted: %+v", metadata)
+	}
+	if metadata["timezone"] != "UTC" {
+		t.Fatalf("safe metadata was changed: %+v", metadata)
+	}
+}
+
 func TestRunValidation(t *testing.T) {
 	if err := ValidateRunStatus(RunStatusRunning); err != nil {
 		t.Fatalf("ValidateRunStatus(running) error = %v", err)
+	}
+	if err := ValidateRunStatus(RunStatusBlockedOnToolApproval); err != nil {
+		t.Fatalf("ValidateRunStatus(blocked_on_tool_approval) error = %v", err)
 	}
 	if err := ValidateRunEventCategory(RunEventCategoryFinal); err != nil {
 		t.Fatalf("ValidateRunEventCategory(final) error = %v", err)
@@ -219,17 +236,72 @@ func TestRunValidation(t *testing.T) {
 	if err := ValidateRunStatus(RunStatusQueued); err != nil {
 		t.Fatalf("ValidateRunStatus(queued) error = %v", err)
 	}
+	if err := ValidateToolCallApprovalStatus(ToolCallApprovalRequired); err != nil {
+		t.Fatalf("ValidateToolCallApprovalStatus(required) error = %v", err)
+	}
+	if err := ValidateToolCallExecutionStatus(ToolCallExecutionBlocked); err != nil {
+		t.Fatalf("ValidateToolCallExecutionStatus(blocked) error = %v", err)
+	}
 	if err := ValidateRunStatus(RunStatus("unknown")); err == nil || ErrorCode(err) != CodeInvalidRequest {
 		t.Fatalf("invalid status err = %v", err)
 	}
 	if err := ValidateRunEventCategory(RunEventCategory("tool")); err == nil || ErrorCode(err) != CodeInvalidRequest {
 		t.Fatalf("invalid category err = %v", err)
 	}
-	if !IsRunActive(RunStatusRunning) || IsRunActive(RunStatusCompleted) {
+	if err := ValidateToolCallApprovalStatus(ToolCallApprovalStatus("unknown")); err == nil || ErrorCode(err) != CodeInvalidRequest {
+		t.Fatalf("invalid approval status err = %v", err)
+	}
+	if err := ValidateToolCallExecutionStatus(ToolCallExecutionStatus("unknown")); err == nil || ErrorCode(err) != CodeInvalidRequest {
+		t.Fatalf("invalid execution status err = %v", err)
+	}
+	if !IsRunActive(RunStatusRunning) || !IsRunActive(RunStatusBlockedOnToolApproval) || IsRunActive(RunStatusCompleted) {
 		t.Fatalf("active status helpers returned wrong result")
 	}
 	if !IsRunTerminal(RunStatusStopped) || IsRunTerminal(RunStatusPending) {
 		t.Fatalf("terminal status helpers returned wrong result")
+	}
+}
+
+func TestRecordToolCallRequestValidatesM7SafetyBoundary(t *testing.T) {
+	svc := NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, CreateThreadInput{Title: "M7 tool safety", Mode: ThreadModeChat})
+	if err != nil {
+		t.Fatalf("CreateThread() error = %v", err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, StartRunInput{Source: RunSourceModelGateway, MessageID: "msg_1", ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatalf("StartRun() error = %v", err)
+	}
+	call, events, err := svc.RecordToolCallRequest(context.Background(), ident, run.ID, RecordToolCallRequestInput{ToolCallID: "tc_1", ToolName: "runtime.get_current_time", ArgumentsSummary: map[string]any{"timezone": "UTC"}, ArgumentsHash: "hash_1", ApprovalStatus: ToolCallApprovalRequired, ExecutionStatus: ToolCallExecutionBlocked})
+	if err != nil {
+		t.Fatalf("RecordToolCallRequest() error = %v", err)
+	}
+	if call.ArgumentsSummary["timezone"] != "UTC" || events[0].Metadata["arguments_summary"].(map[string]any)["timezone"] != "UTC" {
+		t.Fatalf("tool metadata: call=%+v events=%+v", call, events)
+	}
+	again, againEvents, err := svc.RecordToolCallRequest(context.Background(), ident, run.ID, RecordToolCallRequestInput{ToolCallID: "tc_1", ToolName: "runtime.get_current_time", ArgumentsSummary: map[string]any{"timezone": "UTC"}, ArgumentsHash: "hash_1", ApprovalStatus: ToolCallApprovalRequired, ExecutionStatus: ToolCallExecutionBlocked})
+	if err != nil {
+		t.Fatalf("RecordToolCallRequest(duplicate) error = %v", err)
+	}
+	if again.ID != call.ID || len(againEvents) != 0 {
+		t.Fatalf("duplicate call = %+v events = %+v", again, againEvents)
+	}
+	if _, _, err := svc.RecordToolCallRequest(context.Background(), ident, run.ID, RecordToolCallRequestInput{ToolCallID: "tc_2", ToolName: "runtime.get_current_time", ArgumentsSummary: map[string]any{"timezone": "Asia/Shanghai"}, ArgumentsHash: "hash_2", ApprovalStatus: ToolCallApprovalRequired, ExecutionStatus: ToolCallExecutionBlocked}); err == nil || ErrorCode(err) != CodeInvalidRequest {
+		t.Fatalf("non-UTC timezone err = %v", err)
+	}
+	if _, _, err := svc.RecordToolCallRequest(context.Background(), ident, run.ID, RecordToolCallRequestInput{ToolCallID: "tc_2", ToolName: "runtime.get_current_time", ArgumentsSummary: map[string]any{"timezone": "UTC", "api_key": "sk-live-123"}, ArgumentsHash: "hash_2", ApprovalStatus: ToolCallApprovalRequired, ExecutionStatus: ToolCallExecutionBlocked}); err == nil || ErrorCode(err) != CodeInvalidRequest {
+		t.Fatalf("unknown argument err = %v", err)
+	}
+	if _, _, err := svc.RecordToolCallRequest(context.Background(), ident, run.ID, RecordToolCallRequestInput{ToolCallID: "tc_2", ToolName: "runtime.unknown", ArgumentsSummary: map[string]any{"timezone": "UTC"}, ArgumentsHash: "hash_2", ApprovalStatus: ToolCallApprovalRequired, ExecutionStatus: ToolCallExecutionBlocked}); err == nil || ErrorCode(err) != CodeInvalidRequest {
+		t.Fatalf("unsupported tool err = %v", err)
+	}
+	diagnostics, err := svc.WorkerQueueDiagnostics(context.Background(), ident)
+	if err != nil {
+		t.Fatalf("WorkerQueueDiagnostics() error = %v", err)
+	}
+	if diagnostics.BlockedToolApprovalCount != 1 {
+		t.Fatalf("BlockedToolApprovalCount = %d, want 1", diagnostics.BlockedToolApprovalCount)
 	}
 }
 

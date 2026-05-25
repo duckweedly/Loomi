@@ -45,6 +45,11 @@ type runEventListResponse struct {
 	RequestID string                 `json:"request_id"`
 }
 
+type toolCallResponse struct {
+	ToolCall  productdata.ToolCall `json:"tool_call"`
+	RequestID string               `json:"request_id"`
+}
+
 type stopRunResponse struct {
 	Run       productdata.Run           `json:"run"`
 	Result    productdata.StopRunResult `json:"result"`
@@ -154,6 +159,36 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request, runID string)
 		return
 	}
 	writeJSON(w, http.StatusOK, runResponse{Run: run, RequestID: diagnostics.NewRequestID()})
+}
+
+func (s *Server) handleThreadRunResource(w http.ResponseWriter, r *http.Request, threadID string, suffix string) {
+	runID, rest := splitResourcePath(suffix, "")
+	if runID == "" {
+		writeAPIError(w, productdata.NewError(productdata.CodeRunNotFound, "Run not found."))
+		return
+	}
+	if strings.HasPrefix(rest, "tool-calls/") {
+		s.handleToolCall(w, r, threadID, runID, strings.TrimPrefix(rest, "tool-calls/"))
+		return
+	}
+	writeAPIError(w, productdata.NewError(productdata.CodeRunNotFound, "Run not found."))
+}
+
+func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, threadID string, runID string, toolCallID string) {
+	if r.Method != http.MethodGet {
+		writeMethodNotAllowed(w, "GET")
+		return
+	}
+	if toolCallID == "" || strings.Contains(toolCallID, "/") {
+		writeAPIError(w, productdata.NewError(productdata.CodeRunNotFound, "Run not found."))
+		return
+	}
+	call, err := s.product.GetToolCall(r.Context(), identity.LocalDevIdentity(), threadID, runID, toolCallID)
+	if err != nil {
+		writeAPIError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, toolCallResponse{ToolCall: call, RequestID: diagnostics.NewRequestID()})
 }
 
 func (s *Server) handleRunEvents(w http.ResponseWriter, r *http.Request, runID string) {

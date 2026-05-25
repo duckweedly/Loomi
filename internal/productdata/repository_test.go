@@ -37,6 +37,78 @@ func TestRepositoryContractCoversM5AssistantAndModelGateway(t *testing.T) {
 	}
 }
 
+func TestRepositoryContractCoversM7ToolCallRequestProjection(t *testing.T) {
+	var repo Repository = NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := repo.CreateThread(context.Background(), ident, CreateThreadInput{Title: "M7", Mode: ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := repo.StartRun(context.Background(), ident, thread.ID, StartRunInput{Source: RunSourceModelGateway, MessageID: "msg_1", ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	call, events, err := repo.RecordToolCallRequest(context.Background(), ident, run.ID, RecordToolCallRequestInput{ToolCallID: "tc_1", ToolName: "runtime.get_current_time", ArgumentsSummary: map[string]any{"timezone": "UTC"}, ArgumentsHash: "hash_1", ApprovalStatus: ToolCallApprovalRequired, ExecutionStatus: ToolCallExecutionBlocked})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if call.ThreadID != thread.ID || call.RunID != run.ID || call.ToolCallID != "tc_1" || call.ApprovalStatus != ToolCallApprovalRequired || call.ExecutionStatus != ToolCallExecutionBlocked {
+		t.Fatalf("call = %+v", call)
+	}
+	if call.ArgumentsSummary["timezone"] != "UTC" {
+		t.Fatalf("arguments summary = %+v", call.ArgumentsSummary)
+	}
+	if len(events) != 2 || events[0].Type != EventToolCallRequested || events[1].Type != EventToolCallApprovalRequired {
+		t.Fatalf("events = %+v", events)
+	}
+	again, againEvents, err := repo.RecordToolCallRequest(context.Background(), ident, run.ID, RecordToolCallRequestInput{ToolCallID: "tc_1", ToolName: "runtime.get_current_time", ArgumentsSummary: map[string]any{"timezone": "UTC"}, ArgumentsHash: "hash_1", ApprovalStatus: ToolCallApprovalRequired, ExecutionStatus: ToolCallExecutionBlocked})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.ID != call.ID || len(againEvents) != 0 {
+		t.Fatalf("again=%+v events=%+v", again, againEvents)
+	}
+	got, err := repo.GetToolCall(context.Background(), ident, thread.ID, run.ID, "tc_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ID != call.ID || got.ThreadID != thread.ID || got.RunID != run.ID {
+		t.Fatalf("got = %+v, call = %+v", got, call)
+	}
+	if _, err := repo.GetToolCall(context.Background(), ident, "wrong-thread", run.ID, "tc_1"); err == nil || ErrorCode(err) != CodeRunNotFound {
+		t.Fatalf("wrong scoped lookup err = %v", err)
+	}
+	if _, _, err := repo.RecordToolCallRequest(context.Background(), ident, run.ID, RecordToolCallRequestInput{ToolCallID: "tc_2", ToolName: "runtime.get_current_time", ArgumentsSummary: map[string]any{"timezone": "UTC"}, ArgumentsHash: "hash_2", ApprovalStatus: ToolCallApprovalRequired, ExecutionStatus: ToolCallExecutionBlocked}); err == nil || ErrorCode(err) != CodeInvalidRequest {
+		t.Fatalf("second tool err = %v", err)
+	}
+	diagnostics, err := repo.WorkerQueueDiagnostics(context.Background(), ident)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diagnostics.BlockedToolApprovalCount != 1 {
+		t.Fatalf("BlockedToolApprovalCount = %d, want 1", diagnostics.BlockedToolApprovalCount)
+	}
+}
+
+func TestRepositoryContractRejectsToolCallsForTerminalRuns(t *testing.T) {
+	var repo Repository = NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := repo.CreateThread(context.Background(), ident, CreateThreadInput{Title: "M7 terminal", Mode: ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := repo.StartRun(context.Background(), ident, thread.ID, StartRunInput{Source: RunSourceModelGateway, MessageID: "msg_1", ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.StopRun(context.Background(), ident, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := repo.RecordToolCallRequest(context.Background(), ident, run.ID, RecordToolCallRequestInput{ToolCallID: "tc_1", ToolName: "runtime.get_current_time", ArgumentsSummary: map[string]any{"timezone": "UTC"}, ArgumentsHash: "hash_1", ApprovalStatus: ToolCallApprovalRequired, ExecutionStatus: ToolCallExecutionBlocked}); err == nil || ErrorCode(err) != CodeInvalidRequest {
+		t.Fatalf("terminal run tool call err = %v", err)
+	}
+}
+
 func TestRepositoryContractCoversM6JobCreationAndClaim(t *testing.T) {
 	var repo Repository = NewMemoryService()
 	ident := identity.LocalDevIdentity()

@@ -25,6 +25,7 @@ describe('deriveChatCanvasState', () => {
     expect(deriveChatCanvasState({ loading: false, selectedThreadId: 'thread-a', messageCount: 1, run: { ...baseRun, status: 'pending', events: [] } })).toBe('waiting-run')
     expect(deriveChatCanvasState({ loading: false, selectedThreadId: 'thread-a', messageCount: 1, run: { ...baseRun, status: 'queued', events: [] } })).toBe('waiting-run')
     expect(deriveChatCanvasState({ loading: false, selectedThreadId: 'thread-a', messageCount: 1, run: baseRun })).toBe('running')
+    expect(deriveChatCanvasState({ loading: false, selectedThreadId: 'thread-a', messageCount: 1, run: { ...baseRun, status: 'blocked_on_tool_approval' } })).toBe('waiting-run')
     expect(deriveChatCanvasState({ loading: false, selectedThreadId: 'thread-a', messageCount: 2, run: { ...baseRun, status: 'completed' } })).toBe('completed')
     expect(deriveChatCanvasState({ loading: false, selectedThreadId: 'thread-a', messageCount: 1, run: { ...baseRun, status: 'failed' } })).toBe('failed')
     expect(deriveChatCanvasState({ loading: false, selectedThreadId: 'thread-a', messageCount: 1, run: { ...baseRun, status: 'stopped' } })).toBe('stopped')

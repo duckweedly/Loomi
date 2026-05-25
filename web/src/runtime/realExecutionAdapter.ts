@@ -1,4 +1,4 @@
-import type { Run, RuntimeEvent } from '../domain'
+import type { Run, RuntimeEvent, ToolCall, ToolCallApprovalStatus, ToolCallExecutionStatus, ToolCallLifecycle } from '../domain'
 import type { ExecutionAdapter } from './executionAdapter'
 import { isRuntimeTerminal } from './executionAdapter'
 
@@ -13,12 +13,77 @@ export type RealRuntimeCapabilitySignal = {
   streamDisconnected?: boolean
 }
 
+type ToolEventMapping = {
+  status: ToolCallLifecycle
+  approvalStatus?: ToolCallApprovalStatus
+  executionStatus?: ToolCallExecutionStatus
+}
+
+function toolEventMapping(type: string): ToolEventMapping | null {
+  switch (type) {
+    case 'tool.call.requested':
+      return { status: 'requested' }
+    case 'tool.call.approval_required':
+      return { status: 'approval_required', approvalStatus: 'required', executionStatus: 'blocked' }
+    case 'tool.call.approved':
+      return { status: 'approved', approvalStatus: 'approved' }
+    case 'tool.call.denied':
+      return { status: 'denied', approvalStatus: 'denied' }
+    case 'tool.call.executing':
+      return { status: 'executing', executionStatus: 'executing' }
+    case 'tool.call.succeeded':
+      return { status: 'succeeded', executionStatus: 'succeeded' }
+    case 'tool.call.failed':
+      return { status: 'failed', executionStatus: 'failed' }
+    case 'tool.call.cancelled':
+      return { status: 'cancelled', approvalStatus: 'cancelled', executionStatus: 'cancelled' }
+    default:
+      return null
+  }
+}
+
+function metadataRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === 'object' && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : undefined
+}
+
+function metadataString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value : undefined
+}
+
+function applyToolEvent(toolCalls: ToolCall[] | undefined, event: RuntimeEvent, mapping: ToolEventMapping): ToolCall[] {
+  const toolCallId = metadataString(event.metadata?.tool_call_id)
+  const index = toolCalls?.findIndex((call) => call.toolCallId === toolCallId) ?? -1
+  const current = index >= 0 ? toolCalls?.[index] : toolCalls?.[0]
+  const next: ToolCall = {
+    id: current?.id ?? event.id,
+    toolCallId: toolCallId ?? current?.toolCallId,
+    name: metadataString(event.metadata?.tool_name) ?? current?.name ?? event.label,
+    status: mapping.status,
+    approvalStatus: mapping.approvalStatus ?? current?.approvalStatus,
+    executionStatus: mapping.executionStatus ?? current?.executionStatus,
+    summary: event.detail,
+    input: current?.input ?? '',
+    output: event.content ?? current?.output ?? '',
+    argumentsSummary: metadataRecord(event.metadata?.arguments_summary) ?? current?.argumentsSummary,
+    resultSummary: metadataRecord(event.metadata?.result_summary) ?? current?.resultSummary,
+    errorCode: metadataString(event.metadata?.error_code) ?? current?.errorCode,
+    errorMessage: metadataString(event.metadata?.error_message) ?? current?.errorMessage,
+  }
+  if (!toolCalls?.length) return [next]
+  if (index >= 0) return toolCalls.map((call, itemIndex) => itemIndex === index ? next : call)
+  return [next, ...toolCalls]
+}
+
 export function applyRealRunEvent(run: Run, event: RuntimeEvent): Run {
   if (isRuntimeTerminal(run.status)) return run
   if (run.events.some((existing) => existing.id === event.id)) return run
 
   const events = [...run.events, event].sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0))
   const completedAt = event.status === 'completed' || event.status === 'failed' || event.status === 'stopped' ? event.time : run.completedAt
+  const toolMapping = toolEventMapping(event.type)
+  if (toolMapping) {
+    return { ...run, status: event.status, events, completedAt, toolCalls: applyToolEvent(run.toolCalls, event, toolMapping) }
+  }
   if (event.type === 'model.delta' || event.type === 'message.model_output_delta') {
     return {
       ...run,

@@ -2,6 +2,8 @@ package runtime
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"strings"
 
@@ -89,7 +91,10 @@ func (g *Gateway) run(ctx context.Context, run productdata.Run, input GatewayRun
 			g.append(ctx, run.ID, productdata.AppendRunEventInput{Category: productdata.RunEventCategoryFinal, Type: "run_completed", Summary: "Run completed", Metadata: providerMetadata(provider.Config())})
 			return
 		case ProviderEventToolCall:
-			g.append(ctx, run.ID, productdata.AppendRunEventInput{Category: productdata.RunEventCategoryProgress, Type: "tool_call_blocked", Summary: "Tool execution is outside this milestone.", Metadata: mergeMetadata(provider.Config(), map[string]any{"tool_name": event.ToolName})})
+			if !g.recordToolCallRequest(ctx, run, event) {
+				g.fail(ctx, run.ID, "tool_call_rejected", "Tool request could not be accepted.")
+			}
+			return
 		case ProviderEventRefusal:
 			g.fail(ctx, run.ID, "model_refusal", fallbackMessage(event.Message, "Model response was refused."))
 			return
@@ -155,6 +160,41 @@ func (g *Gateway) append(ctx context.Context, runID string, input productdata.Ap
 		g.Broadcaster.Publish(event)
 	}
 	return true
+}
+
+func (g *Gateway) recordToolCallRequest(ctx context.Context, run productdata.Run, event ProviderEvent) bool {
+	toolCallID := metadataString(event.Metadata, "tool_call_id")
+	if toolCallID == "" {
+		toolCallID = "tc_1"
+	}
+	arguments := toolArgumentsSummary(event.Metadata)
+	_, events, err := g.Service.RecordToolCallRequest(ctx, identity.LocalDevIdentity(), run.ID, productdata.RecordToolCallRequestInput{ToolCallID: toolCallID, ToolName: event.ToolName, ArgumentsSummary: arguments, ArgumentsHash: argumentsHash(arguments), ApprovalStatus: productdata.ToolCallApprovalRequired, ExecutionStatus: productdata.ToolCallExecutionBlocked})
+	if err != nil {
+		return false
+	}
+	if g.Broadcaster != nil {
+		for _, recorded := range events {
+			g.Broadcaster.Publish(recorded)
+		}
+	}
+	return true
+}
+
+func argumentsHash(arguments map[string]any) string {
+	value := "timezone=UTC"
+	if timezone, ok := arguments["timezone"].(string); ok {
+		value = "timezone=" + timezone
+	}
+	sum := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(sum[:])
+}
+
+func toolArgumentsSummary(metadata map[string]any) map[string]any {
+	arguments, ok := metadata["arguments_summary"].(map[string]any)
+	if ok {
+		return arguments
+	}
+	return map[string]any{}
 }
 
 func (g *Gateway) fail(ctx context.Context, runID string, code string, message string) {

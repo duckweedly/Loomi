@@ -199,6 +199,7 @@ export const dictionaries: Record<Locale, Dictionary> = {
         'run-lifecycle': '运行生命周期',
         'model-stream': '模型流',
         'worker-job': 'Worker/Job',
+        'tool-call': '工具调用',
         error: '错误',
       },
       workerJob: {
@@ -374,6 +375,7 @@ export const dictionaries: Record<Locale, Dictionary> = {
         'run-lifecycle': 'Run lifecycle',
         'model-stream': 'Model stream',
         'worker-job': 'Worker/job',
+        'tool-call': 'Tool call',
         error: 'Error',
       },
       workerJob: {

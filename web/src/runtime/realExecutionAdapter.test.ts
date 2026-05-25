@@ -46,6 +46,19 @@ describe('applyRealRunEvent', () => {
     expect(next.events[0].type).toBe('progress.tool_call_blocked')
   })
 
+  test('maps M7 tool lifecycle events into stable tool call state', () => {
+    const run = { id: 'run-a', threadId: 'thread-a', status: 'running', model: 'Model gateway', context: 'model_gateway', source: 'model_gateway', events: [], toolCalls: [] } as const
+    const requested: RuntimeEvent = { id: 'evt-tool-1', runId: 'run-a', threadId: 'thread-a', sequence: 1, type: 'tool.call.requested', label: 'tool', detail: 'Tool call requested', time: 'Now', status: 'blocked_on_tool_approval', group: 'tool-call' }
+    const approved: RuntimeEvent = { id: 'evt-tool-2', runId: 'run-a', threadId: 'thread-a', sequence: 2, type: 'tool.call.approved', label: 'tool', detail: 'Tool call approved', time: 'Now', status: 'running', group: 'tool-call' }
+
+    const pending = applyRealRunEvent(run, requested)
+    const next = applyRealRunEvent(pending, approved)
+
+    expect(pending.status).toBe('blocked_on_tool_approval')
+    expect(pending.toolCalls?.[0]).toMatchObject({ status: 'requested', summary: 'Tool call requested' })
+    expect(next.toolCalls?.[0]).toMatchObject({ status: 'approved', approvalStatus: 'approved' })
+  })
+
   test('maps backend setup provider and stream failures to capability signals', () => {
     expect(mapRealRuntimeCapabilitySignal(new Error('Failed to fetch'))).toEqual({ backendUnavailable: true })
     expect(mapRealRuntimeCapabilitySignal(Object.assign(new Error('model setup missing'), { code: 'model_setup_missing' }))).toEqual({ modelSetupMissing: true })

@@ -8,7 +8,7 @@ export type RuntimeEventGroupView = {
   events: RunEvent[]
 }
 
-const eventGroups: RuntimeEventGroup[] = ['run-lifecycle', 'model-stream', 'worker-job', 'error']
+const eventGroups: RuntimeEventGroup[] = ['run-lifecycle', 'model-stream', 'worker-job', 'tool-call', 'error']
 
 function isErrorEvent(event: RunEvent) {
   return event.status === 'failed' || event.severity === 'error' || /(^|\.)(error|failed|unavailable|timeout)$/.test(event.type)

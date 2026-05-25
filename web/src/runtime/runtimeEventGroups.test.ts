@@ -41,14 +41,16 @@ describe('runtime event groups', () => {
       event({ id: 'evt-model', sequence: 2, type: 'model.usage', usage: { inputTokens: 7, outputTokens: 11 } }),
       event({ id: 'evt-run', sequence: 1, type: 'run.created' }),
       event({ id: 'evt-worker', sequence: 3, type: 'job.queued' }),
-      event({ id: 'evt-error', sequence: 4, type: 'stream.error', status: 'failed' }),
+      event({ id: 'evt-tool', sequence: 4, type: 'tool.call.requested', group: 'tool-call' }),
+      event({ id: 'evt-error', sequence: 5, type: 'stream.error', status: 'failed' }),
     ])
 
-    expect(grouped.map((group) => group.id)).toEqual(['run-lifecycle', 'model-stream', 'worker-job', 'error'])
+    expect(grouped.map((group) => group.id)).toEqual(['run-lifecycle', 'model-stream', 'worker-job', 'tool-call', 'error'])
     expect(grouped[0].events.map((item) => item.id)).toEqual(['evt-run'])
     expect(grouped[1].events[0].usage).toEqual({ inputTokens: 7, outputTokens: 11 })
     expect(grouped[2].events.map((item) => item.id)).toEqual(['evt-worker'])
-    expect(grouped[3].events.map((item) => item.id)).toEqual(['evt-error'])
+    expect(grouped[3].events.map((item) => item.id)).toEqual(['evt-tool'])
+    expect(grouped[4].events.map((item) => item.id)).toEqual(['evt-error'])
   })
 })
 
@@ -58,9 +60,10 @@ describe('localized runtime event groups', () => {
       event({ id: 'evt-run', sequence: 1, type: 'run.created' }),
       event({ id: 'evt-model', sequence: 2, type: 'model.delta' }),
       event({ id: 'evt-worker', sequence: 3, type: 'worker.claimed' }),
-      event({ id: 'evt-error', sequence: 4, type: 'provider.error', status: 'failed' }),
+      event({ id: 'evt-tool', sequence: 4, type: 'tool.call.requested', group: 'tool-call' }),
+      event({ id: 'evt-error', sequence: 5, type: 'provider.error', status: 'failed' }),
     ], 'zh')
 
-    expect(grouped.map((group) => group.title)).toEqual(['运行生命周期', '模型流', 'Worker/Job', '错误'])
+    expect(grouped.map((group) => group.title)).toEqual(['运行生命周期', '模型流', 'Worker/Job', '工具调用', '错误'])
   })
 })

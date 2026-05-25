@@ -1,0 +1,295 @@
+openapi: 3.1.0
+info:
+  title: Loomi M7 Tool Call Approval Core API Draft
+  version: 0.1.0
+  description: >
+    Draft HTTP contract for M7 approval-gated internal tool calls. This contract
+    layers on existing thread, run, history, stream, and worker behavior.
+servers:
+  - url: http://127.0.0.1:8080
+paths:
+  /v1/threads/{thread_id}/runs:
+    post:
+      summary: Start a run that may produce approval-gated tool calls
+      description: >
+        Existing M6/M5 run start endpoint. M7 does not add a separate start path;
+        model tool requests are emitted through run events and persisted tool-call
+        state when the provider requests an allowlisted tool.
+      parameters:
+        - $ref: '#/components/parameters/ThreadId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [message_id, source]
+              properties:
+                message_id:
+                  type: string
+                source:
+                  type: string
+                  enum: [model_gateway]
+                provider_id:
+                  type: string
+      responses:
+        '202':
+          description: Run accepted for background execution
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Run'
+  /v1/threads/{thread_id}/runs/{run_id}/events:
+    get:
+      summary: Read persisted run events including M7 tool lifecycle events
+      parameters:
+        - $ref: '#/components/parameters/ThreadId'
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '200':
+          description: Ordered run events
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [events]
+                properties:
+                  events:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/RunEvent'
+  /v1/threads/{thread_id}/runs/{run_id}/events/stream:
+    get:
+      summary: History-first SSE stream including M7 tool lifecycle events
+      parameters:
+        - $ref: '#/components/parameters/ThreadId'
+        - $ref: '#/components/parameters/RunId'
+        - name: after_sequence
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+      responses:
+        '200':
+          description: text/event-stream of ordered RunEvent payloads
+          content:
+            text/event-stream:
+              schema:
+                type: string
+  /v1/threads/{thread_id}/runs/{run_id}/tool-calls/{tool_call_id}:
+    get:
+      summary: Read current redacted tool-call projection
+      parameters:
+        - $ref: '#/components/parameters/ThreadId'
+        - $ref: '#/components/parameters/RunId'
+        - $ref: '#/components/parameters/ToolCallId'
+      responses:
+        '200':
+          description: Current tool-call state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ToolCall'
+        '404':
+          description: Tool call not found within scoped thread/run
+  /v1/threads/{thread_id}/runs/{run_id}/tool-calls/{tool_call_id}/approve:
+    post:
+      summary: Idempotently approve a pending tool call
+      description: >
+        Repeating an approve request for an already-approved pending/resumable tool call returns 200 with the current state and must not duplicate events or wakeups. A 409 is reserved for a conflicting decision that would reverse an incompatible terminal or already-progressed state.
+      parameters:
+        - $ref: '#/components/parameters/ThreadId'
+        - $ref: '#/components/parameters/RunId'
+        - $ref: '#/components/parameters/ToolCallId'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ToolDecisionRequest'
+      responses:
+        '200':
+          description: Existing or newly approved state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ToolCall'
+        '409':
+          description: Conflicting decision that would reverse a denied, cancelled, executing, succeeded, or failed state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SafeError'
+  /v1/threads/{thread_id}/runs/{run_id}/tool-calls/{tool_call_id}/deny:
+    post:
+      summary: Idempotently deny a pending tool call
+      description: >
+        Repeating a deny request for an already-denied tool call returns 200 with the current denied state and must not duplicate events. A 409 is reserved for a conflicting decision that would reverse an approved, executing, succeeded, failed, or cancelled state.
+      parameters:
+        - $ref: '#/components/parameters/ThreadId'
+        - $ref: '#/components/parameters/RunId'
+        - $ref: '#/components/parameters/ToolCallId'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ToolDecisionRequest'
+      responses:
+        '200':
+          description: Existing or newly denied state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ToolCall'
+        '409':
+          description: Conflicting decision that would reverse an approved, executing, succeeded, failed, or cancelled state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SafeError'
+components:
+  parameters:
+    ThreadId:
+      name: thread_id
+      in: path
+      required: true
+      schema:
+        type: string
+    RunId:
+      name: run_id
+      in: path
+      required: true
+      schema:
+        type: string
+    ToolCallId:
+      name: tool_call_id
+      in: path
+      required: true
+      schema:
+        type: string
+  schemas:
+    Run:
+      type: object
+      required: [id, thread_id, status, source]
+      properties:
+        id:
+          type: string
+        thread_id:
+          type: string
+        status:
+          type: string
+          enum: [pending, queued, running, recovering, blocked_on_tool_approval, completed, failed, stopped]
+        source:
+          type: string
+          enum: [model_gateway]
+    ToolCall:
+      type: object
+      required:
+        - thread_id
+        - run_id
+        - tool_call_id
+        - tool_name
+        - arguments_summary
+        - approval_status
+        - execution_status
+      properties:
+        thread_id:
+          type: string
+        run_id:
+          type: string
+        tool_call_id:
+          type: string
+        tool_name:
+          type: string
+          example: runtime.get_current_time
+        arguments_summary:
+          type: object
+          additionalProperties: true
+          description: Redacted, schema-valid summary only.
+        approval_status:
+          type: string
+          enum: [not_required, required, approved, denied, cancelled]
+        execution_status:
+          type: string
+          enum: [not_started, blocked, executing, succeeded, failed, cancelled]
+        result_summary:
+          type: object
+          nullable: true
+          additionalProperties: true
+        error_code:
+          type: string
+          nullable: true
+        error_message:
+          type: string
+          nullable: true
+        requested_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    ToolDecisionRequest:
+      type: object
+      properties:
+        idempotency_key:
+          type: string
+          description: Optional client retry key. State-machine idempotency is still required without it.
+        reason:
+          type: string
+          description: Optional user-safe note, especially for deny.
+    RunEvent:
+      type: object
+      required: [id, run_id, thread_id, sequence, category, type, summary, metadata, created_at]
+      properties:
+        id:
+          type: string
+        run_id:
+          type: string
+        thread_id:
+          type: string
+        sequence:
+          type: integer
+        category:
+          type: string
+          enum: [lifecycle, progress, message, error, final]
+        type:
+          type: string
+          enum:
+            - run_created
+            - run_queued
+            - run_started
+            - model_request_started
+            - model_output_delta
+            - model_output_completed
+            - tool_call_requested
+            - tool_call_approval_required
+            - tool_call_approved
+            - tool_call_denied
+            - tool_call_executing
+            - tool_call_succeeded
+            - tool_call_failed
+            - tool_call_cancelled
+            - run_completed
+            - run_failed
+            - run_stopped
+        summary:
+          type: string
+        content:
+          type: string
+          nullable: true
+        metadata:
+          type: object
+          additionalProperties: true
+        created_at:
+          type: string
+          format: date-time
+    SafeError:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+        message:
+          type: string

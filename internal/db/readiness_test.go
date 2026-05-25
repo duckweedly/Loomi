@@ -47,8 +47,14 @@ func TestReadyChecksSchemaFailure(t *testing.T) {
 }
 
 func TestSchemaVersionReady(t *testing.T) {
-	if err := schemaVersionReady(5, false); err != nil {
-		t.Fatalf("schemaVersionReady(5, false) error = %v", err)
+	if err := schemaVersionReady(6, false); err != nil {
+		t.Fatalf("schemaVersionReady(6, false) error = %v", err)
+	}
+}
+
+func TestSchemaVersionRejectsM6OnlyBaseline(t *testing.T) {
+	if err := schemaVersionReady(5, false); err == nil {
+		t.Fatal("schemaVersionReady(5, false) error = nil, want error")
 	}
 }
 

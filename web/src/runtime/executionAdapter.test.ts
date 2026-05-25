@@ -49,4 +49,17 @@ describe('M6 execution adapter worker events', () => {
     expect(next.status).toBe('running')
     expect(next.events.map((event) => event.type)).toEqual(['pipeline.step.started', 'pipeline.step.completed'])
   })
+
+  test('replays M7 tool events into a stable tool-call view model', () => {
+    const requested: RuntimeEvent = { id: 'evt-tool-1', runId: 'run-a', threadId: 'thread-a', sequence: 1, type: 'tool.call.requested', label: 'tool', detail: 'Tool call requested', time: 'Now', status: 'blocked_on_tool_approval', group: 'tool-call', metadata: { tool_call_id: 'tc_1', tool_name: 'runtime.get_current_time', arguments_summary: { timezone: 'UTC' }, approval_status: 'required', execution_status: 'blocked' } }
+    const required: RuntimeEvent = { id: 'evt-tool-2', runId: 'run-a', threadId: 'thread-a', sequence: 2, type: 'tool.call.approval_required', label: 'tool', detail: 'Tool approval required', time: 'Now', status: 'blocked_on_tool_approval', group: 'tool-call', metadata: { tool_call_id: 'tc_1', tool_name: 'runtime.get_current_time', arguments_summary: { timezone: 'UTC' }, approval_status: 'required', execution_status: 'blocked' } }
+    const approved: RuntimeEvent = { id: 'evt-tool-3', runId: 'run-a', threadId: 'thread-a', sequence: 3, type: 'tool.call.approved', label: 'tool', detail: 'Tool call approved', time: 'Now', status: 'running', group: 'tool-call', metadata: { tool_call_id: 'tc_1', tool_name: 'runtime.get_current_time', arguments_summary: { timezone: 'UTC' }, approval_status: 'approved', execution_status: 'blocked' } }
+
+    const next = applyRealRunEvent(applyRealRunEvent(applyRealRunEvent(baseRun, requested), required), approved)
+
+    expect(next.status).toBe('running')
+    expect(next.toolCalls).toHaveLength(1)
+    expect(next.toolCalls?.[0]).toMatchObject({ toolCallId: 'tc_1', name: 'runtime.get_current_time', status: 'approved', approvalStatus: 'approved', executionStatus: 'blocked', summary: 'Tool call approved', argumentsSummary: { timezone: 'UTC' } })
+    expect(next.events.map((event) => event.type)).toEqual(['tool.call.requested', 'tool.call.approval_required', 'tool.call.approved'])
+  })
 })

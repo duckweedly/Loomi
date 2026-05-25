@@ -18,5 +18,5 @@ export function isRuntimeTerminal(status: Run['status']) {
 }
 
 export function isRuntimeActive(status: Run['status']) {
-  return status === 'pending' || status === 'queued' || status === 'running' || status === 'retrying' || status === 'recovering' || status === 'stopping'
+  return status === 'pending' || status === 'queued' || status === 'running' || status === 'retrying' || status === 'recovering' || status === 'blocked_on_tool_approval' || status === 'stopping'
 }

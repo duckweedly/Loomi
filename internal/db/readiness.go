@@ -44,7 +44,6 @@ func (c PostgresChecker) SchemaReady(ctx context.Context) error {
 	if c.Pool == nil {
 		return errors.New("database pool is nil")
 	}
-	// M4 的 run/event API 依赖 version 3，readyz 不能提前放行。
 	var version int
 	var dirty bool
 	row := c.Pool.QueryRow(ctx, "select version, dirty from schema_migrations order by version desc limit 1")
@@ -55,8 +54,8 @@ func (c PostgresChecker) SchemaReady(ctx context.Context) error {
 }
 
 func schemaVersionReady(version int, dirty bool) error {
-	if version < 5 || dirty {
-		return errors.New("m6 schema unavailable")
+	if version < 6 || dirty {
+		return errors.New("m7 schema unavailable")
 	}
 	return nil
 }

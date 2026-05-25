@@ -224,6 +224,49 @@ func TestRunEventStreamReconnectUsesAfterSequence(t *testing.T) {
 	}
 }
 
+func TestRunEventStreamReplaysApprovalRequiredToolEvents(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	run := createRuntimeTestRun(t, svc)
+	if _, _, err := svc.RecordToolCallRequest(context.Background(), identity.LocalDevIdentity(), run.ID, productdata.RecordToolCallRequestInput{ToolCallID: "tc_1", ToolName: productdata.ToolNameCurrentTime, ArgumentsSummary: map[string]any{"timezone": "UTC"}, ArgumentsHash: "hash_1", ApprovalStatus: productdata.ToolCallApprovalRequired, ExecutionStatus: productdata.ToolCallExecutionBlocked}); err != nil {
+		t.Fatal(err)
+	}
+	srv := NewServerWithRuntime(config.Config{AppEnv: "local"}, fakeChecker{}, svc, nil, nil)
+
+	res := requestJSON(t, srv, http.MethodGet, "/v1/runs/"+run.ID+"/events/stream?after_sequence=2", "")
+
+	body := res.Body.String()
+	requested := strings.Index(body, productdata.EventToolCallRequested)
+	required := strings.Index(body, productdata.EventToolCallApprovalRequired)
+	if requested < 0 || required < 0 || requested > required {
+		t.Fatalf("body=%s", body)
+	}
+	if !strings.Contains(body, `"tool_call_id":"tc_1"`) || !strings.Contains(body, `"execution_status":"blocked"`) {
+		t.Fatalf("body=%s", body)
+	}
+}
+
+func TestScopedToolCallHandlerReturnsProjection(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	thread := createRuntimeTestThread(t, svc)
+	run, err := svc.StartRun(context.Background(), identity.LocalDevIdentity(), thread.ID, productdata.StartRunInput{Source: productdata.RunSourceModelGateway, ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.RecordToolCallRequest(context.Background(), identity.LocalDevIdentity(), run.ID, productdata.RecordToolCallRequestInput{ToolCallID: "tc_1", ToolName: productdata.ToolNameCurrentTime, ArgumentsSummary: map[string]any{"timezone": "UTC"}, ArgumentsHash: "hash_1", ApprovalStatus: productdata.ToolCallApprovalRequired, ExecutionStatus: productdata.ToolCallExecutionBlocked}); err != nil {
+		t.Fatal(err)
+	}
+	srv := NewServerWithProduct(config.Config{AppEnv: "local"}, fakeChecker{}, svc)
+
+	res := requestJSON(t, srv, http.MethodGet, "/v1/threads/"+thread.ID+"/runs/"+run.ID+"/tool-calls/tc_1", "")
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), `"tool_call_id":"tc_1"`) || !strings.Contains(res.Body.String(), `"execution_status":"blocked"`) {
+		t.Fatalf("body=%s", res.Body.String())
+	}
+}
+
 func TestRunEventStreamSubscribesBeforeHistoryRead(t *testing.T) {
 	svc := productdata.NewMemoryService()
 	run := createRuntimeTestRun(t, svc)

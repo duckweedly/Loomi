@@ -26,6 +26,8 @@ type Service interface {
 	ListRunEvents(context.Context, identity.LocalIdentity, string, int) ([]RunEvent, error)
 	AppendRunEvent(context.Context, identity.LocalIdentity, string, AppendRunEventInput) (RunEvent, error)
 	StopRun(context.Context, identity.LocalIdentity, string) (StopRunOutput, error)
+	GetToolCall(context.Context, identity.LocalIdentity, string, string, string) (ToolCall, error)
+	RecordToolCallRequest(context.Context, identity.LocalIdentity, string, RecordToolCallRequestInput) (ToolCall, []RunEvent, error)
 	ClaimBackgroundJob(context.Context, identity.LocalIdentity, ClaimBackgroundJobInput) (BackgroundJob, Run, bool, error)
 	RenewBackgroundJobLease(context.Context, identity.LocalIdentity, RenewBackgroundJobLeaseInput) (BackgroundJob, bool, error)
 	RecoverBackgroundJobs(context.Context, identity.LocalIdentity, RecoverBackgroundJobsInput) ([]BackgroundJobRecovery, error)
@@ -53,6 +55,7 @@ type MemoryService struct {
 	runs           map[string]Run
 	runEvents      map[string][]RunEvent
 	backgroundJobs map[string]BackgroundJob
+	toolCalls      map[string]ToolCall
 }
 
 func NewMemoryService() *MemoryService {
@@ -64,6 +67,7 @@ func NewMemoryService() *MemoryService {
 		runs:           map[string]Run{},
 		runEvents:      map[string][]RunEvent{},
 		backgroundJobs: map[string]BackgroundJob{},
+		toolCalls:      map[string]ToolCall{},
 	}
 }
 
@@ -361,6 +365,58 @@ func (s *MemoryService) AppendRunEvent(_ context.Context, ident identity.LocalId
 	return event, nil
 }
 
+func (s *MemoryService) GetToolCall(_ context.Context, ident identity.LocalIdentity, threadID string, runID string, toolCallID string) (ToolCall, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user := s.ensureUserLocked(ident)
+	run, ok := s.runs[runID]
+	if !ok || run.UserID != user.ID || run.ThreadID != threadID {
+		return ToolCall{}, NewError(CodeRunNotFound, "Run not found.")
+	}
+	call, ok := s.toolCalls[run.ID+":"+strings.TrimSpace(toolCallID)]
+	if !ok {
+		return ToolCall{}, NewError(CodeRunNotFound, "Run not found.")
+	}
+	return call, nil
+}
+
+func (s *MemoryService) RecordToolCallRequest(_ context.Context, ident identity.LocalIdentity, runID string, input RecordToolCallRequestInput) (ToolCall, []RunEvent, error) {
+	input, err := ValidateToolCallRequestInput(input)
+	if err != nil {
+		return ToolCall{}, nil, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user := s.ensureUserLocked(ident)
+	run, ok := s.runs[runID]
+	if !ok || run.UserID != user.ID {
+		return ToolCall{}, nil, NewError(CodeRunNotFound, "Run not found.")
+	}
+	if IsRunTerminal(run.Status) {
+		return ToolCall{}, nil, NewError(CodeInvalidRequest, "Terminal runs cannot request tools.")
+	}
+	for _, existing := range s.toolCalls {
+		if existing.RunID == run.ID && existing.ToolCallID != input.ToolCallID {
+			return ToolCall{}, nil, NewError(CodeInvalidRequest, "Only one tool call is supported per run.")
+		}
+	}
+	key := run.ID + ":" + input.ToolCallID
+	if existing, ok := s.toolCalls[key]; ok {
+		return existing, nil, nil
+	}
+	now := s.now()
+	arguments := RedactEventMetadata(input.ArgumentsSummary)
+	call := ToolCall{ID: NewToolCallID(), ThreadID: run.ThreadID, RunID: run.ID, ToolCallID: input.ToolCallID, ToolName: input.ToolName, ArgumentsSummary: arguments, ApprovalStatus: input.ApprovalStatus, ExecutionStatus: input.ExecutionStatus, RequestedAt: now, UpdatedAt: now}
+	s.toolCalls[key] = call
+	run.Status = RunStatusBlockedOnToolApproval
+	run.UpdatedAt = now
+	s.runs[run.ID] = run
+	metadata := map[string]any{"tool_call_id": call.ToolCallID, "tool_name": call.ToolName, "arguments_summary": call.ArgumentsSummary, "approval_status": string(call.ApprovalStatus), "execution_status": string(call.ExecutionStatus)}
+	requested := s.appendRunEventLocked(run, RunEventCategoryProgress, EventToolCallRequested, "Tool call requested", nil, metadata, now)
+	required := s.appendRunEventLocked(run, RunEventCategoryProgress, EventToolCallApprovalRequired, "Tool approval required", nil, metadata, now)
+	return call, []RunEvent{requested, required}, nil
+}
+
 func (s *MemoryService) StopRun(_ context.Context, ident identity.LocalIdentity, runID string) (StopRunOutput, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -586,6 +642,18 @@ func (s *MemoryService) WorkerQueueDiagnostics(_ context.Context, ident identity
 	user := s.ensureUserLocked(ident)
 	now := s.now()
 	diagnostics := WorkerQueueDiagnostics{QueueStatus: WorkerQueueStatusReady, WorkerStatus: WorkerStatusReady, UpdatedAt: now}
+	for _, call := range s.toolCalls {
+		run, ok := s.runs[call.RunID]
+		if !ok || run.UserID != user.ID {
+			continue
+		}
+		if call.ApprovalStatus == ToolCallApprovalRequired && call.ExecutionStatus == ToolCallExecutionBlocked {
+			diagnostics.BlockedToolApprovalCount++
+		}
+		if call.ApprovalStatus == ToolCallApprovalApproved && call.ExecutionStatus == ToolCallExecutionNotStarted {
+			diagnostics.ResumableToolCallCount++
+		}
+	}
 	for _, job := range s.backgroundJobs {
 		if job.UserID != user.ID {
 			continue

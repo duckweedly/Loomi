@@ -33,6 +33,7 @@ describe('runtime state orchestration helpers', () => {
     expect(shouldBlockRuntimeSubmit({ ...run, status: 'running' })).toBe(true)
     expect(shouldBlockRuntimeSubmit({ ...run, status: 'retrying' })).toBe(true)
     expect(shouldBlockRuntimeSubmit({ ...run, status: 'recovering' })).toBe(true)
+    expect(shouldBlockRuntimeSubmit({ ...run, status: 'blocked_on_tool_approval' })).toBe(true)
     expect(shouldBlockRuntimeSubmit({ ...run, status: 'stopping' })).toBe(true)
     expect(shouldBlockRuntimeSubmit({ ...run, status: 'completed' })).toBe(false)
     expect(shouldBlockRuntimeSubmit({ ...run, status: 'cancelled' })).toBe(false)
@@ -167,6 +168,20 @@ describe('runtime state orchestration helpers', () => {
     expect(next.status).toBe('failed')
     expect(next.assistantDraft).toMatchObject({ status: 'failed' })
     expect(next.events.map((event) => event.type)).toEqual(['job.recovering', 'job.retry_scheduled', 'job.retry_exhausted'])
+  })
+
+  test('replays approval-required tool stream events into tool-call view model', () => {
+    const runningRun: Run = { ...run, status: 'running', events: [], toolCalls: [] }
+    const events: Run['events'] = [
+      { id: 'evt-tool-requested', runId: run.id, threadId: run.threadId, sequence: 1, type: 'tool.call.requested', label: 'Tool', detail: 'Tool call requested', time: 'Now', status: 'blocked_on_tool_approval', group: 'tool-call', metadata: { tool_call_id: 'tc_1', tool_name: 'runtime.get_current_time', arguments_summary: { timezone: 'UTC' }, approval_status: 'required', execution_status: 'blocked' } },
+      { id: 'evt-tool-required', runId: run.id, threadId: run.threadId, sequence: 2, type: 'tool.call.approval_required', label: 'Tool', detail: 'Tool approval required', time: 'Now', status: 'blocked_on_tool_approval', group: 'tool-call', metadata: { tool_call_id: 'tc_1', tool_name: 'runtime.get_current_time', arguments_summary: { timezone: 'UTC' }, approval_status: 'required', execution_status: 'blocked' } },
+    ]
+
+    const next = events.reduce(applyRunStreamEventToRun, runningRun)
+
+    expect(next.status).toBe('blocked_on_tool_approval')
+    expect(next.toolCalls).toHaveLength(1)
+    expect(next.toolCalls?.[0]).toMatchObject({ toolCallId: 'tc_1', name: 'runtime.get_current_time', status: 'approval_required', approvalStatus: 'required', executionStatus: 'blocked', argumentsSummary: { timezone: 'UTC' } })
   })
 
   test('replays queued worker history before terminal completion', () => {

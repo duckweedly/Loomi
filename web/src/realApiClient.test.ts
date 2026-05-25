@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { createClientMessageID, mapApiProviderCapability, mapApiRun, mapApiRunEvent, mapApiWorkerQueueDiagnostics } from './realApiClient'
+import { createClientMessageID, mapApiProviderCapability, mapApiRun, mapApiRunEvent, mapApiToolCall, mapApiWorkerQueueDiagnostics } from './realApiClient'
 
 describe('createClientMessageID', () => {
   test('does not rely on Date.now alone', () => {
@@ -18,6 +18,40 @@ describe('createClientMessageID', () => {
   })
 })
 
+describe('M7 tool-call mapping', () => {
+  test('maps scoped tool-call projection without raw provider payload fields', () => {
+    const call = mapApiToolCall({
+      id: 'tool_1',
+      thread_id: 'thread_1',
+      run_id: 'run_1',
+      tool_call_id: 'tc_1',
+      tool_name: 'runtime.get_current_time',
+      arguments_summary: { timezone: 'UTC' },
+      approval_status: 'required',
+      execution_status: 'blocked',
+      result_summary: null,
+      error_code: null,
+      error_message: null,
+    })
+
+    expect(call).toEqual({
+      id: 'tool_1',
+      toolCallId: 'tc_1',
+      name: 'runtime.get_current_time',
+      status: 'approval_required',
+      approvalStatus: 'required',
+      executionStatus: 'blocked',
+      summary: 'Approval required',
+      input: '{"timezone":"UTC"}',
+      output: '',
+      argumentsSummary: { timezone: 'UTC' },
+      resultSummary: null,
+      errorCode: null,
+      errorMessage: null,
+    })
+  })
+})
+
 describe('M6 worker queue diagnostics mapping', () => {
   test('maps worker queue diagnostics without credential fields', () => {
     const diagnostics = mapApiWorkerQueueDiagnostics({
@@ -28,6 +62,8 @@ describe('M6 worker queue diagnostics mapping', () => {
       stale_count: 1,
       retrying_count: 1,
       dead_count: 1,
+      blocked_tool_approval_count: 3,
+      resumable_tool_call_count: 2,
       updated_at: '2026-05-24T10:00:00Z',
     })
 
@@ -39,6 +75,8 @@ describe('M6 worker queue diagnostics mapping', () => {
       staleCount: 1,
       retryingCount: 1,
       deadCount: 1,
+      blockedToolApprovalCount: 3,
+      resumableToolCallCount: 2,
       updatedAt: '2026-05-24T10:00:00Z',
     })
   })
@@ -264,12 +302,14 @@ describe('M4 run mapping', () => {
     expect(providerError.detail).toContain('overloaded')
   })
 
-  test('preserves canonical dotted worker and backend event types from real API events', () => {
+  test('preserves canonical dotted worker backend and tool event types from real API events', () => {
     const worker = mapApiRunEvent({ id: 'evt-worker', run_id: 'run-1', thread_id: 'thread-1', sequence: 8, category: 'progress', type: 'worker.claimed', summary: 'Worker claimed', content: null, metadata: {}, created_at: '2026-05-23T00:00:05Z' })
-    const backend = mapApiRunEvent({ id: 'evt-backend', run_id: 'run-1', thread_id: 'thread-1', sequence: 9, category: 'progress', type: 'backend.unavailable', summary: 'Backend unavailable', content: null, metadata: {}, created_at: '2026-05-23T00:00:06Z' })
+    const tool = mapApiRunEvent({ id: 'evt-tool', run_id: 'run-1', thread_id: 'thread-1', sequence: 9, category: 'progress', type: 'tool_call_approval_required', summary: 'Tool approval required', content: null, metadata: { tool_call_id: 'tc_1', tool_name: 'runtime.get_current_time', arguments_summary: { timezone: 'UTC' } }, created_at: '2026-05-23T00:00:06Z' })
+    const backend = mapApiRunEvent({ id: 'evt-backend', run_id: 'run-1', thread_id: 'thread-1', sequence: 10, category: 'progress', type: 'backend.unavailable', summary: 'Backend unavailable', content: null, metadata: {}, created_at: '2026-05-23T00:00:07Z' })
 
     expect(worker.type).toBe('worker.claimed')
     expect(worker.group).toBe('worker-job')
+    expect(tool).toMatchObject({ type: 'tool.call.approval_required', group: 'tool-call', status: 'blocked_on_tool_approval', metadata: { tool_call_id: 'tc_1', tool_name: 'runtime.get_current_time', arguments_summary: { timezone: 'UTC' } } })
     expect(backend.type).toBe('backend.unavailable')
     expect(backend.group).toBe('error')
     expect(backend.severity).toBe('error')

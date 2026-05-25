@@ -18,6 +18,7 @@ export function deriveAgentMotionState(run: Run | null): AgentMotionState {
   if (run.status === 'completed' && run.events.length === 0) return 'idle'
   if (run.status === 'completed') return 'done'
   if (run.status === 'failed' || run.status === 'stopped') return 'error'
+  if (run.status === 'blocked_on_tool_approval') return 'confirm'
   if (run.status === 'queued' || run.status === 'recovering' || run.status === 'stopping') return 'thinking'
   if (run.assistantDraft?.status === 'streaming') return 'speaking'
   if (run.assistantDraft?.status === 'failed' || run.assistantDraft?.status === 'stopped') return 'error'

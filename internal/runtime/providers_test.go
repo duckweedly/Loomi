@@ -86,6 +86,25 @@ func TestHTTPProviderStreamsOpenAICompatibleTextAndToolEvents(t *testing.T) {
 	}
 }
 
+func TestHTTPProviderPreservesOpenAIToolArgumentsAsMetadata(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"id\":\"tc_1\",\"function\":{\"name\":\"runtime.get_current_time\",\"arguments\":\"{\\\"timezone\\\":\\\"Asia/Shanghai\\\"}\"}}]}}]}\n\n"))
+	}))
+	defer server.Close()
+	provider := NewHTTPProvider(ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: server.URL+"/v1", APIKey: "secret-key", Model: "gpt-5.5", Enabled: true}, server.Client())
+
+	events := collectProviderEvents(t, provider)
+
+	if len(events) != 1 || events[0].Type != ProviderEventToolCall || events[0].Metadata["tool_call_id"] != "tc_1" {
+		t.Fatalf("events = %+v", events)
+	}
+	arguments, ok := events[0].Metadata["arguments_summary"].(map[string]any)
+	if !ok || arguments["timezone"] != "Asia/Shanghai" {
+		t.Fatalf("metadata = %+v", events[0].Metadata)
+	}
+}
+
 func TestHTTPProviderNormalizesStreamingErrors(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")

@@ -25,6 +25,10 @@ type BackgroundJobKind string
 
 type BackgroundJobStatus string
 
+type ToolCallApprovalStatus string
+
+type ToolCallExecutionStatus string
+
 type WorkerQueueStatus string
 
 type WorkerStatus string
@@ -43,13 +47,14 @@ const (
 	MessageRoleUser      MessageRole = "user"
 	MessageRoleAssistant MessageRole = "assistant"
 
-	RunStatusPending    RunStatus = "pending"
-	RunStatusQueued     RunStatus = "queued"
-	RunStatusRunning    RunStatus = "running"
-	RunStatusRecovering RunStatus = "recovering"
-	RunStatusCompleted  RunStatus = "completed"
-	RunStatusFailed     RunStatus = "failed"
-	RunStatusStopped    RunStatus = "stopped"
+	RunStatusPending               RunStatus = "pending"
+	RunStatusQueued                RunStatus = "queued"
+	RunStatusRunning               RunStatus = "running"
+	RunStatusRecovering            RunStatus = "recovering"
+	RunStatusBlockedOnToolApproval RunStatus = "blocked_on_tool_approval"
+	RunStatusCompleted             RunStatus = "completed"
+	RunStatusFailed                RunStatus = "failed"
+	RunStatusStopped               RunStatus = "stopped"
 
 	RunSourceLocalSimulated RunSource = "local_simulated"
 	RunSourceModelGateway   RunSource = "model_gateway"
@@ -70,6 +75,19 @@ const (
 	BackgroundJobStatusCancelled BackgroundJobStatus = "cancelled"
 	BackgroundJobStatusDead      BackgroundJobStatus = "dead"
 
+	ToolCallApprovalNotRequired ToolCallApprovalStatus = "not_required"
+	ToolCallApprovalRequired    ToolCallApprovalStatus = "required"
+	ToolCallApprovalApproved    ToolCallApprovalStatus = "approved"
+	ToolCallApprovalDenied      ToolCallApprovalStatus = "denied"
+	ToolCallApprovalCancelled   ToolCallApprovalStatus = "cancelled"
+
+	ToolCallExecutionNotStarted ToolCallExecutionStatus = "not_started"
+	ToolCallExecutionBlocked    ToolCallExecutionStatus = "blocked"
+	ToolCallExecutionExecuting  ToolCallExecutionStatus = "executing"
+	ToolCallExecutionSucceeded  ToolCallExecutionStatus = "succeeded"
+	ToolCallExecutionFailed     ToolCallExecutionStatus = "failed"
+	ToolCallExecutionCancelled  ToolCallExecutionStatus = "cancelled"
+
 	WorkerQueueStatusReady     WorkerQueueStatus = "ready"
 	WorkerQueueStatusPaused    WorkerQueueStatus = "paused"
 	WorkerQueueStatusUnhealthy WorkerQueueStatus = "unhealthy"
@@ -89,19 +107,27 @@ const (
 	PipelineStepRecover        PipelineStepName = "recover"
 	PipelineStepFail           PipelineStepName = "fail"
 
-	EventRunQueued             = "run_queued"
-	EventJobClaimed            = "job_claimed"
-	EventLeaseRenewed          = "lease_renewed"
-	EventPipelineStepStarted   = "pipeline_step_started"
-	EventPipelineStepCompleted = "pipeline_step_completed"
-	EventJobRecovering         = "job_recovering"
-	EventJobRetryScheduled     = "job_retry_scheduled"
-	EventStopRequested         = "stop_requested"
-	EventJobAttemptFailed      = "job_attempt_failed"
-	EventJobRetryExhausted     = "job_retry_exhausted"
-	EventRunCompleted          = "run_completed"
-	EventRunFailed             = "run_failed"
-	EventRunStopped            = "run_stopped"
+	EventRunQueued                = "run_queued"
+	EventJobClaimed               = "job_claimed"
+	EventLeaseRenewed             = "lease_renewed"
+	EventPipelineStepStarted      = "pipeline_step_started"
+	EventPipelineStepCompleted    = "pipeline_step_completed"
+	EventJobRecovering            = "job_recovering"
+	EventJobRetryScheduled        = "job_retry_scheduled"
+	EventStopRequested            = "stop_requested"
+	EventJobAttemptFailed         = "job_attempt_failed"
+	EventJobRetryExhausted        = "job_retry_exhausted"
+	EventToolCallRequested        = "tool_call_requested"
+	EventToolCallApprovalRequired = "tool_call_approval_required"
+	EventToolCallApproved         = "tool_call_approved"
+	EventToolCallDenied           = "tool_call_denied"
+	EventToolCallExecuting        = "tool_call_executing"
+	EventToolCallSucceeded        = "tool_call_succeeded"
+	EventToolCallFailed           = "tool_call_failed"
+	EventToolCallCancelled        = "tool_call_cancelled"
+	EventRunCompleted             = "run_completed"
+	EventRunFailed                = "run_failed"
+	EventRunStopped               = "run_stopped"
 
 	CodeInvalidRequest        Code = "invalid_request"
 	CodeThreadNotFound        Code = "thread_not_found"
@@ -116,6 +142,7 @@ const (
 const (
 	MaxThreadTitleLength     = 120
 	MaxClientMessageIDLength = 120
+	ToolNameCurrentTime      = "runtime.get_current_time"
 )
 
 type ProductError struct {
@@ -181,6 +208,22 @@ type Run struct {
 	ErrorMessage    *string    `json:"error_message,omitempty"`
 }
 
+type ToolCall struct {
+	ID               string                  `json:"id"`
+	ThreadID         string                  `json:"thread_id"`
+	RunID            string                  `json:"run_id"`
+	ToolCallID       string                  `json:"tool_call_id"`
+	ToolName         string                  `json:"tool_name"`
+	ArgumentsSummary map[string]any          `json:"arguments_summary"`
+	ApprovalStatus   ToolCallApprovalStatus  `json:"approval_status"`
+	ExecutionStatus  ToolCallExecutionStatus `json:"execution_status"`
+	ResultSummary    map[string]any          `json:"result_summary,omitempty"`
+	ErrorCode        *string                 `json:"error_code,omitempty"`
+	ErrorMessage     *string                 `json:"error_message,omitempty"`
+	RequestedAt      time.Time               `json:"requested_at"`
+	UpdatedAt        time.Time               `json:"updated_at"`
+}
+
 type BackgroundJob struct {
 	ID               string              `json:"id"`
 	RunID            string              `json:"run_id"`
@@ -203,14 +246,16 @@ type BackgroundJob struct {
 }
 
 type WorkerQueueDiagnostics struct {
-	QueueStatus   WorkerQueueStatus `json:"queue_status"`
-	WorkerStatus  WorkerStatus      `json:"worker_status"`
-	QueuedCount   int               `json:"queued_count"`
-	LeasedCount   int               `json:"leased_count"`
-	StaleCount    int               `json:"stale_count"`
-	RetryingCount int               `json:"retrying_count"`
-	DeadCount     int               `json:"dead_count"`
-	UpdatedAt     time.Time         `json:"updated_at"`
+	QueueStatus              WorkerQueueStatus `json:"queue_status"`
+	WorkerStatus             WorkerStatus      `json:"worker_status"`
+	QueuedCount              int               `json:"queued_count"`
+	LeasedCount              int               `json:"leased_count"`
+	StaleCount               int               `json:"stale_count"`
+	RetryingCount            int               `json:"retrying_count"`
+	BlockedToolApprovalCount int               `json:"blocked_tool_approval_count"`
+	ResumableToolCallCount   int               `json:"resumable_tool_call_count"`
+	DeadCount                int               `json:"dead_count"`
+	UpdatedAt                time.Time         `json:"updated_at"`
 }
 
 type RunEvent struct {
@@ -310,6 +355,15 @@ type RecoverBackgroundJobsInput struct {
 	ErrorMessage string
 }
 
+type RecordToolCallRequestInput struct {
+	ToolCallID       string
+	ToolName         string
+	ArgumentsSummary map[string]any
+	ArgumentsHash    string
+	ApprovalStatus   ToolCallApprovalStatus
+	ExecutionStatus  ToolCallExecutionStatus
+}
+
 type BackgroundJobRecovery struct {
 	Job       BackgroundJob
 	Run       Run
@@ -335,6 +389,7 @@ func NewMessageID() string       { return prefixedID("msg") }
 func NewRunID() string           { return prefixedID("run") }
 func NewRunEventID() string      { return prefixedID("evt") }
 func NewBackgroundJobID() string { return prefixedID("job") }
+func NewToolCallID() string      { return prefixedID("tool") }
 
 func prefixedID(prefix string) string {
 	buf := make([]byte, 6)
@@ -355,11 +410,68 @@ func ValidateMessageRole(role MessageRole) error {
 
 func ValidateRunStatus(status RunStatus) error {
 	switch status {
-	case RunStatusPending, RunStatusQueued, RunStatusRunning, RunStatusRecovering, RunStatusCompleted, RunStatusFailed, RunStatusStopped:
+	case RunStatusPending, RunStatusQueued, RunStatusRunning, RunStatusRecovering, RunStatusBlockedOnToolApproval, RunStatusCompleted, RunStatusFailed, RunStatusStopped:
 		return nil
 	default:
 		return NewError(CodeInvalidRequest, "Run status is invalid.")
 	}
+}
+
+func ValidateToolCallApprovalStatus(status ToolCallApprovalStatus) error {
+	switch status {
+	case ToolCallApprovalNotRequired, ToolCallApprovalRequired, ToolCallApprovalApproved, ToolCallApprovalDenied, ToolCallApprovalCancelled:
+		return nil
+	default:
+		return NewError(CodeInvalidRequest, "Tool call approval status is invalid.")
+	}
+}
+
+func ValidateToolCallExecutionStatus(status ToolCallExecutionStatus) error {
+	switch status {
+	case ToolCallExecutionNotStarted, ToolCallExecutionBlocked, ToolCallExecutionExecuting, ToolCallExecutionSucceeded, ToolCallExecutionFailed, ToolCallExecutionCancelled:
+		return nil
+	default:
+		return NewError(CodeInvalidRequest, "Tool call execution status is invalid.")
+	}
+}
+
+func ValidateToolCallRequestInput(input RecordToolCallRequestInput) (RecordToolCallRequestInput, error) {
+	input.ToolCallID = strings.TrimSpace(input.ToolCallID)
+	input.ToolName = strings.TrimSpace(input.ToolName)
+	input.ArgumentsHash = strings.TrimSpace(input.ArgumentsHash)
+	if input.ToolCallID == "" || input.ToolName == "" {
+		return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Tool call id and name are required.")
+	}
+	if input.ToolName != ToolNameCurrentTime {
+		return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Tool is not supported.")
+	}
+	if input.ApprovalStatus != ToolCallApprovalRequired || input.ExecutionStatus != ToolCallExecutionBlocked {
+		return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Tool call must start blocked on approval.")
+	}
+	if err := ValidateToolCallApprovalStatus(input.ApprovalStatus); err != nil {
+		return RecordToolCallRequestInput{}, err
+	}
+	if err := ValidateToolCallExecutionStatus(input.ExecutionStatus); err != nil {
+		return RecordToolCallRequestInput{}, err
+	}
+	if input.ArgumentsSummary == nil {
+		input.ArgumentsSummary = map[string]any{}
+	}
+	for key := range input.ArgumentsSummary {
+		if key != "timezone" {
+			return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Tool call argument is not supported.")
+		}
+	}
+	value, ok := input.ArgumentsSummary["timezone"]
+	if !ok || value == nil {
+		input.ArgumentsSummary["timezone"] = "UTC"
+		return input, nil
+	}
+	timezone, ok := value.(string)
+	if !ok || timezone != "UTC" {
+		return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Tool call timezone must be UTC.")
+	}
+	return input, nil
 }
 
 func NormalizeRunSource(source RunSource) (RunSource, error) {
@@ -403,7 +515,7 @@ func IsRunTerminal(status RunStatus) bool {
 
 func IsRunActive(status RunStatus) bool {
 	switch status {
-	case RunStatusPending, RunStatusQueued, RunStatusRunning, RunStatusRecovering:
+	case RunStatusPending, RunStatusQueued, RunStatusRunning, RunStatusRecovering, RunStatusBlockedOnToolApproval:
 		return true
 	default:
 		return false
@@ -497,9 +609,23 @@ func RedactEventMetadata(metadata map[string]any) map[string]any {
 	}
 	redacted := make(map[string]any, len(metadata))
 	for key, value := range metadata {
+		if isSensitiveMetadataKey(key) {
+			redacted[key] = "[redacted]"
+			continue
+		}
 		redacted[key] = redactMetadataValue(value)
 	}
 	return redacted
+}
+
+func isSensitiveMetadataKey(key string) bool {
+	lower := strings.ToLower(key)
+	for _, marker := range []string{"api_key", "authorization", "password", "secret", "token", "credential"} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func redactMetadataValue(value any) any {

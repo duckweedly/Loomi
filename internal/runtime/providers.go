@@ -400,11 +400,22 @@ func dispatchOpenAIEvent(ctx context.Context, data string, ch chan<- ProviderEve
 		}
 		for _, toolCall := range choice.Delta.ToolCalls {
 			if toolCall.Function.Name != "" {
-				_ = sendProviderEvent(ctx, ch, ProviderEvent{Type: ProviderEventToolCall, ToolName: toolCall.Function.Name})
+				metadata := map[string]any{}
+					if toolCall.ID != "" {
+						metadata["tool_call_id"] = toolCall.ID
+					}
+					if toolCall.Function.Arguments != "" {
+						metadata["arguments_summary"] = parseToolArgumentsSummary(toolCall.Function.Arguments)
+					}
+					_ = sendProviderEvent(ctx, ch, ProviderEvent{Type: ProviderEventToolCall, ToolName: toolCall.Function.Name, Metadata: metadata})
 			}
 		}
 		if choice.Delta.FunctionCall.Name != "" {
-			_ = sendProviderEvent(ctx, ch, ProviderEvent{Type: ProviderEventToolCall, ToolName: choice.Delta.FunctionCall.Name})
+			metadata := map[string]any{}
+				if choice.Delta.FunctionCall.Arguments != "" {
+					metadata["arguments_summary"] = parseToolArgumentsSummary(choice.Delta.FunctionCall.Arguments)
+				}
+				_ = sendProviderEvent(ctx, ch, ProviderEvent{Type: ProviderEventToolCall, ToolName: choice.Delta.FunctionCall.Name, Metadata: metadata})
 		}
 		if choice.FinishReason == "stop" || choice.FinishReason == "length" {
 			_ = sendProviderEvent(ctx, ch, ProviderEvent{Type: ProviderEventCompleted, FinishInfo: choice.FinishReason})
@@ -412,6 +423,14 @@ func dispatchOpenAIEvent(ctx context.Context, data string, ch chan<- ProviderEve
 		}
 	}
 	return false
+}
+
+func parseToolArgumentsSummary(raw string) map[string]any {
+	var arguments map[string]any
+	if err := json.Unmarshal([]byte(raw), &arguments); err != nil {
+		return map[string]any{"_invalid_json": true}
+	}
+	return arguments
 }
 
 func dispatchGeminiEvent(ctx context.Context, data string, ch chan<- ProviderEvent) bool {
@@ -647,11 +666,14 @@ type openAIStreamEvent struct {
 			Content      string `json:"content"`
 			Refusal      string `json:"refusal"`
 			FunctionCall struct {
-				Name string `json:"name"`
+				Name      string `json:"name"`
+				Arguments string `json:"arguments"`
 			} `json:"function_call"`
 			ToolCalls []struct {
+				ID       string `json:"id"`
 				Function struct {
-					Name string `json:"name"`
+					Name      string `json:"name"`
+					Arguments string `json:"arguments"`
 				} `json:"function"`
 			} `json:"tool_calls"`
 		} `json:"delta"`

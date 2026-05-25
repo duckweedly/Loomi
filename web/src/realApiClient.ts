@@ -1,5 +1,5 @@
 import type { ApiClient } from './apiClient'
-import type { Message, ProviderCapability, ProviderFamily, Run, RunEvent, RunSource, RunStatus, Thread, WorkerQueueDiagnostics, WorkerQueueStatus, WorkerStatus } from './domain'
+import type { Message, ProviderCapability, ProviderFamily, Run, RunEvent, RunSource, RunStatus, Thread, ToolCall, WorkerQueueDiagnostics, WorkerQueueStatus, WorkerStatus } from './domain'
 import { isRuntimeTerminal } from './runtime/executionAdapter'
 
 const apiBaseUrl = (import.meta.env.VITE_LOOMI_API_BASE_URL ?? '').replace(/\/$/, '')
@@ -59,7 +59,23 @@ export type ApiWorkerQueueDiagnostics = {
   stale_count: number
   retrying_count: number
   dead_count: number
+  blocked_tool_approval_count?: number
+  resumable_tool_call_count?: number
   updated_at: string
+}
+
+export type ApiToolCall = {
+  id: string
+  thread_id: string
+  run_id: string
+  tool_call_id: string
+  tool_name: string
+  arguments_summary: Record<string, unknown>
+  approval_status: ToolCall['approvalStatus']
+  execution_status: ToolCall['executionStatus']
+  result_summary?: Record<string, unknown> | null
+  error_code?: string | null
+  error_message?: string | null
 }
 
 type ApiRunEvent = {
@@ -196,6 +212,14 @@ function canonicalRunEventType(event: ApiRunEvent) {
     stop_requested: 'run.stopping',
     job_attempt_failed: 'job.attempt_failed',
     job_retry_exhausted: 'job.retry_exhausted',
+    tool_call_requested: 'tool.call.requested',
+    tool_call_approval_required: 'tool.call.approval_required',
+    tool_call_approved: 'tool.call.approved',
+    tool_call_denied: 'tool.call.denied',
+    tool_call_executing: 'tool.call.executing',
+    tool_call_succeeded: 'tool.call.succeeded',
+    tool_call_failed: 'tool.call.failed',
+    tool_call_cancelled: 'tool.call.cancelled',
     run_completed: 'run.completed',
     run_failed: 'run.failed',
     run_stopped: 'run.stopped',
@@ -215,6 +239,8 @@ export function mapApiWorkerQueueDiagnostics(diagnostics: ApiWorkerQueueDiagnost
     staleCount: diagnostics.stale_count,
     retryingCount: diagnostics.retrying_count,
     deadCount: diagnostics.dead_count,
+    blockedToolApprovalCount: diagnostics.blocked_tool_approval_count,
+    resumableToolCallCount: diagnostics.resumable_tool_call_count,
     updatedAt: diagnostics.updated_at,
   }
 }
@@ -230,11 +256,31 @@ export function mapApiProviderCapability(provider: ApiProviderCapability): Provi
   }
 }
 
+export function mapApiToolCall(call: ApiToolCall): ToolCall {
+  const status = call.approval_status === 'required' && call.execution_status === 'blocked' ? 'approval_required' : call.execution_status === 'succeeded' ? 'succeeded' : call.execution_status === 'failed' ? 'failed' : call.execution_status === 'cancelled' ? 'cancelled' : 'requested'
+  return {
+    id: call.id,
+    toolCallId: call.tool_call_id,
+    name: call.tool_name,
+    status,
+    approvalStatus: call.approval_status,
+    executionStatus: call.execution_status,
+    summary: status === 'approval_required' ? 'Approval required' : call.tool_name,
+    input: JSON.stringify(call.arguments_summary),
+    output: call.result_summary ? JSON.stringify(call.result_summary) : '',
+    argumentsSummary: call.arguments_summary,
+    resultSummary: call.result_summary ?? null,
+    errorCode: call.error_code ?? null,
+    errorMessage: call.error_message ?? null,
+  }
+}
+
 export function mapApiRunEvent(event: ApiRunEvent): RunEvent {
   const type = canonicalRunEventType(event)
   const metadataDetail = metadataString(event.metadata)
   const isError = /(^|\.)(error|failed|unavailable|timeout)$/.test(type) || event.category === 'error'
   const isModelStream = type.startsWith('model.') || type.startsWith('assistant.') || type === 'message.model_output_delta' || type === 'message.model_output_completed'
+  const isToolCall = type.startsWith('tool.call.')
   return {
     id: event.id,
     runId: event.run_id,
@@ -247,13 +293,16 @@ export function mapApiRunEvent(event: ApiRunEvent): RunEvent {
     content: event.content ?? null,
     time: event.created_at,
     status: statusFromApiEvent(event),
+    metadata: event.metadata,
     group: isError
       ? 'error'
       : isModelStream
         ? 'model-stream'
-        : type.startsWith('worker.') || type.startsWith('job.') || type.startsWith('pipeline.')
-          ? 'worker-job'
-          : 'run-lifecycle',
+        : isToolCall
+          ? 'tool-call'
+          : type.startsWith('worker.') || type.startsWith('job.') || type.startsWith('pipeline.')
+            ? 'worker-job'
+            : 'run-lifecycle',
     severity: isError ? 'error' : type === 'model.delta' || type === 'assistant.drafting' || type === 'message.model_output_delta' ? 'progress' : 'info',
     usage: tokenUsage(event.metadata),
     assistantDelta: type === 'model.delta' || type === 'message.model_output_delta' ? event.content ?? undefined : undefined,
@@ -263,6 +312,7 @@ export function mapApiRunEvent(event: ApiRunEvent): RunEvent {
 function statusFromApiEvent(event: ApiRunEvent): RunStatus {
   const type = canonicalRunEventType(event)
   if (type === 'run.queued') return 'queued'
+  if (type === 'tool.call.approval_required') return 'blocked_on_tool_approval'
   if (type === 'job.recovering' || type === 'run.recovering') return 'recovering'
   if (type === 'run.stopping') return 'stopping'
   if (type === 'run.stopped') return 'stopped'
@@ -338,6 +388,11 @@ export const realApiClient: ApiClient = {
   async getWorkerQueueDiagnostics() {
     const body = await requestJSON<{ diagnostics: ApiWorkerQueueDiagnostics }>('/v1/diagnostics/worker-queue')
     return mapApiWorkerQueueDiagnostics(body.diagnostics)
+  },
+
+  async getToolCall(threadId: string, runId: string, toolCallId: string) {
+    const body = await requestJSON<{ tool_call: ApiToolCall }>(`/v1/threads/${threadId}/runs/${runId}/tool-calls/${toolCallId}`)
+    return mapApiToolCall(body.tool_call)
   },
 
   async startRun(threadId: string, input: { messageId?: string; source?: RunSource; providerId?: string; model?: string } = {}) {

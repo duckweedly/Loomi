@@ -143,10 +143,10 @@ export function applyRunStreamEventToRun(run: Run, event: RunEvent): Run {
 
   const lastSequence = run.events.at(-1)?.sequence ?? -1
   const shouldApplyAssistantDelta = !event.assistantDelta || event.sequence === undefined || lastSequence <= event.sequence
-  let nextRun: Run = { ...run, events: mergeRunEvents(run.events, [event]) }
+  let nextRun: Run = event.type.startsWith('tool.call.') ? applyRealRunEvent(run, { ...event, runId: event.runId ?? run.id, threadId: event.threadId ?? run.threadId }) : { ...run, events: mergeRunEvents(run.events, [event]) }
   if (event.assistantDelta && shouldApplyAssistantDelta) nextRun = applyAssistantDeltaToRun(nextRun, event.assistantDelta, event.id)
 
-  if (event.status === 'running') return nextRun
+  if (event.status === 'running' || event.status === 'blocked_on_tool_approval') return { ...nextRun, status: event.status }
   if (event.status === 'completed') {
     return {
       ...nextRun,
