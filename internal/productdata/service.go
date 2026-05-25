@@ -28,6 +28,11 @@ type Service interface {
 	StopRun(context.Context, identity.LocalIdentity, string) (StopRunOutput, error)
 	GetToolCall(context.Context, identity.LocalIdentity, string, string, string) (ToolCall, error)
 	RecordToolCallRequest(context.Context, identity.LocalIdentity, string, RecordToolCallRequestInput) (ToolCall, []RunEvent, error)
+	ApproveToolCall(context.Context, identity.LocalIdentity, string, string, string) (ToolCall, []RunEvent, error)
+	DenyToolCall(context.Context, identity.LocalIdentity, string, string, string) (ToolCall, []RunEvent, error)
+	StartToolCallExecution(context.Context, identity.LocalIdentity, string, string, string) (ToolCall, []RunEvent, error)
+	CompleteToolCallSuccess(context.Context, identity.LocalIdentity, string, string, string, map[string]any) (ToolCall, []RunEvent, error)
+	FailToolCallExecution(context.Context, identity.LocalIdentity, string, string, string, string, string) (ToolCall, []RunEvent, error)
 	ClaimBackgroundJob(context.Context, identity.LocalIdentity, ClaimBackgroundJobInput) (BackgroundJob, Run, bool, error)
 	RenewBackgroundJobLease(context.Context, identity.LocalIdentity, RenewBackgroundJobLeaseInput) (BackgroundJob, bool, error)
 	RecoverBackgroundJobs(context.Context, identity.LocalIdentity, RecoverBackgroundJobsInput) ([]BackgroundJobRecovery, error)
@@ -411,10 +416,186 @@ func (s *MemoryService) RecordToolCallRequest(_ context.Context, ident identity.
 	run.Status = RunStatusBlockedOnToolApproval
 	run.UpdatedAt = now
 	s.runs[run.ID] = run
+	for id, job := range s.backgroundJobs {
+		if job.RunID == run.ID && job.UserID == user.ID && (job.Status == BackgroundJobStatusQueued || job.Status == BackgroundJobStatusRetrying) {
+			job.Status = BackgroundJobStatusCancelled
+			job.UpdatedAt = now
+			s.backgroundJobs[id] = job
+		}
+	}
 	metadata := map[string]any{"tool_call_id": call.ToolCallID, "tool_name": call.ToolName, "arguments_summary": call.ArgumentsSummary, "approval_status": string(call.ApprovalStatus), "execution_status": string(call.ExecutionStatus)}
 	requested := s.appendRunEventLocked(run, RunEventCategoryProgress, EventToolCallRequested, "Tool call requested", nil, metadata, now)
 	required := s.appendRunEventLocked(run, RunEventCategoryProgress, EventToolCallApprovalRequired, "Tool approval required", nil, metadata, now)
 	return call, []RunEvent{requested, required}, nil
+}
+
+func (s *MemoryService) ApproveToolCall(_ context.Context, ident identity.LocalIdentity, threadID string, runID string, toolCallID string) (ToolCall, []RunEvent, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user := s.ensureUserLocked(ident)
+	run, call, key, err := s.scopedToolCallLocked(user.ID, threadID, runID, toolCallID)
+	if err != nil {
+		return ToolCall{}, nil, err
+	}
+	if call.ApprovalStatus == ToolCallApprovalApproved {
+		if call.ExecutionStatus == ToolCallExecutionNotStarted || call.ExecutionStatus == ToolCallExecutionExecuting || call.ExecutionStatus == ToolCallExecutionSucceeded || call.ExecutionStatus == ToolCallExecutionFailed {
+			return call, nil, nil
+		}
+		return ToolCall{}, nil, NewError(CodeInvalidRequest, "Tool call cannot be approved.")
+	}
+	if call.ApprovalStatus != ToolCallApprovalRequired || call.ExecutionStatus != ToolCallExecutionBlocked || IsRunTerminal(run.Status) {
+		return ToolCall{}, nil, NewError(CodeInvalidRequest, "Tool call cannot be approved.")
+	}
+	now := s.now()
+	call.ApprovalStatus = ToolCallApprovalApproved
+	call.ExecutionStatus = ToolCallExecutionNotStarted
+	call.UpdatedAt = now
+	s.toolCalls[key] = call
+	run.Status = RunStatusQueued
+	run.UpdatedAt = now
+	s.runs[run.ID] = run
+	for id, job := range s.backgroundJobs {
+		if job.RunID == run.ID && job.UserID == user.ID && !IsBackgroundJobTerminal(job.Status) {
+			job.Status = BackgroundJobStatusCancelled
+			job.UpdatedAt = now
+			s.backgroundJobs[id] = job
+		}
+	}
+	jobID := NewBackgroundJobID()
+	metadata := RedactEventMetadata(map[string]any{"source": string(run.Source), "job_id": jobID, "tool_call_id": call.ToolCallID, "resume_reason": "tool_call_approved"})
+	s.backgroundJobs[jobID] = BackgroundJob{ID: jobID, RunID: run.ID, ThreadID: run.ThreadID, UserID: user.ID, Kind: BackgroundJobKindRunExecution, Status: BackgroundJobStatusQueued, Priority: 50, MaxAttempts: 3, ScheduledAt: now, Metadata: metadata, CreatedAt: now, UpdatedAt: now}
+	event := s.appendRunEventLocked(run, RunEventCategoryProgress, EventToolCallApproved, "Tool call approved", nil, toolCallEventMetadata(call), now)
+	return call, []RunEvent{event}, nil
+}
+
+func (s *MemoryService) DenyToolCall(_ context.Context, ident identity.LocalIdentity, threadID string, runID string, toolCallID string) (ToolCall, []RunEvent, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user := s.ensureUserLocked(ident)
+	run, call, key, err := s.scopedToolCallLocked(user.ID, threadID, runID, toolCallID)
+	if err != nil {
+		return ToolCall{}, nil, err
+	}
+	if call.ApprovalStatus == ToolCallApprovalDenied {
+		return call, nil, nil
+	}
+	if call.ExecutionStatus == ToolCallExecutionExecuting || call.ExecutionStatus == ToolCallExecutionSucceeded || call.ExecutionStatus == ToolCallExecutionFailed || call.ExecutionStatus == ToolCallExecutionCancelled {
+		return ToolCall{}, nil, NewError(CodeInvalidRequest, "Tool call cannot be denied.")
+	}
+	if IsRunTerminal(run.Status) {
+		return ToolCall{}, nil, NewError(CodeInvalidRequest, "Tool call cannot be denied.")
+	}
+	now := s.now()
+	call.ApprovalStatus = ToolCallApprovalDenied
+	call.ExecutionStatus = ToolCallExecutionCancelled
+	call.UpdatedAt = now
+	s.toolCalls[key] = call
+	run.Status = RunStatusStopped
+	run.CompletedAt = &now
+	run.UpdatedAt = now
+	s.runs[run.ID] = run
+	for id, job := range s.backgroundJobs {
+		if job.RunID == run.ID && job.UserID == user.ID && !IsBackgroundJobTerminal(job.Status) {
+			job.Status = BackgroundJobStatusCancelled
+			job.UpdatedAt = now
+			s.backgroundJobs[id] = job
+		}
+	}
+	denied := s.appendRunEventLocked(run, RunEventCategoryProgress, EventToolCallDenied, "Tool call denied by user", nil, toolCallEventMetadata(call), now)
+	final := s.appendRunEventLocked(run, RunEventCategoryFinal, EventRunStopped, "Run stopped after tool denial", nil, map[string]any{"tool_call_id": call.ToolCallID, "reason": "tool_call_denied"}, now)
+	return call, []RunEvent{denied, final}, nil
+}
+
+func (s *MemoryService) StartToolCallExecution(_ context.Context, ident identity.LocalIdentity, threadID string, runID string, toolCallID string) (ToolCall, []RunEvent, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user := s.ensureUserLocked(ident)
+	run, call, key, err := s.scopedToolCallLocked(user.ID, threadID, runID, toolCallID)
+	if err != nil {
+		return ToolCall{}, nil, err
+	}
+	if call.ExecutionStatus == ToolCallExecutionExecuting {
+		return call, nil, nil
+	}
+	if call.ExecutionStatus == ToolCallExecutionSucceeded || call.ExecutionStatus == ToolCallExecutionFailed || call.ExecutionStatus == ToolCallExecutionCancelled {
+		return call, nil, nil
+	}
+	if call.ApprovalStatus != ToolCallApprovalApproved || call.ExecutionStatus != ToolCallExecutionNotStarted || IsRunTerminal(run.Status) {
+		return ToolCall{}, nil, NewError(CodeInvalidRequest, "Tool call cannot execute.")
+	}
+	now := s.now()
+	call.ExecutionStatus = ToolCallExecutionExecuting
+	call.UpdatedAt = now
+	s.toolCalls[key] = call
+	event := s.appendRunEventLocked(run, RunEventCategoryProgress, EventToolCallExecuting, "Tool call executing", nil, toolCallEventMetadata(call), now)
+	return call, []RunEvent{event}, nil
+}
+
+func (s *MemoryService) CompleteToolCallSuccess(_ context.Context, ident identity.LocalIdentity, threadID string, runID string, toolCallID string, resultSummary map[string]any) (ToolCall, []RunEvent, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user := s.ensureUserLocked(ident)
+	run, call, key, err := s.scopedToolCallLocked(user.ID, threadID, runID, toolCallID)
+	if err != nil {
+		return ToolCall{}, nil, err
+	}
+	if call.ExecutionStatus == ToolCallExecutionSucceeded {
+		return call, nil, nil
+	}
+	if call.ExecutionStatus != ToolCallExecutionExecuting || IsRunTerminal(run.Status) {
+		return ToolCall{}, nil, NewError(CodeInvalidRequest, "Tool call cannot succeed.")
+	}
+	now := s.now()
+	call.ExecutionStatus = ToolCallExecutionSucceeded
+	call.ResultSummary = RedactEventMetadata(resultSummary)
+	call.UpdatedAt = now
+	s.toolCalls[key] = call
+	run.Status = RunStatusCompleted
+	run.CompletedAt = &now
+	run.UpdatedAt = now
+	s.runs[run.ID] = run
+	succeeded := s.appendRunEventLocked(run, RunEventCategoryProgress, EventToolCallSucceeded, "Tool call succeeded", nil, toolCallEventMetadata(call), now)
+	final := s.appendRunEventLocked(run, RunEventCategoryFinal, EventRunCompleted, "Run completed", nil, map[string]any{"tool_call_id": call.ToolCallID}, now)
+	return call, []RunEvent{succeeded, final}, nil
+}
+
+func (s *MemoryService) FailToolCallExecution(_ context.Context, ident identity.LocalIdentity, threadID string, runID string, toolCallID string, errorCode string, errorMessage string) (ToolCall, []RunEvent, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user := s.ensureUserLocked(ident)
+	run, call, key, err := s.scopedToolCallLocked(user.ID, threadID, runID, toolCallID)
+	if err != nil {
+		return ToolCall{}, nil, err
+	}
+	if call.ExecutionStatus == ToolCallExecutionFailed {
+		return call, nil, nil
+	}
+	if call.ExecutionStatus != ToolCallExecutionExecuting || IsRunTerminal(run.Status) {
+		return ToolCall{}, nil, NewError(CodeInvalidRequest, "Tool call cannot fail.")
+	}
+	now := s.now()
+	code := strings.TrimSpace(errorCode)
+	if code == "" {
+		code = "tool_execution_failed"
+	}
+	message := RedactEventText(strings.TrimSpace(errorMessage))
+	if message == "" {
+		message = "Tool execution failed."
+	}
+	call.ExecutionStatus = ToolCallExecutionFailed
+	call.ErrorCode = &code
+	call.ErrorMessage = &message
+	call.UpdatedAt = now
+	s.toolCalls[key] = call
+	run.Status = RunStatusFailed
+	run.CompletedAt = &now
+	run.ErrorCode = &code
+	run.ErrorMessage = &message
+	run.UpdatedAt = now
+	s.runs[run.ID] = run
+	failed := s.appendRunEventLocked(run, RunEventCategoryError, EventToolCallFailed, message, nil, toolCallEventMetadata(call), now)
+	final := s.appendRunEventLocked(run, RunEventCategoryFinal, EventRunFailed, message, nil, map[string]any{"tool_call_id": call.ToolCallID, "error_code": code}, now)
+	return call, []RunEvent{failed, final}, nil
 }
 
 func (s *MemoryService) StopRun(_ context.Context, ident identity.LocalIdentity, runID string) (StopRunOutput, error) {
@@ -444,6 +625,33 @@ func (s *MemoryService) StopRun(_ context.Context, ident identity.LocalIdentity,
 	lifecycle := s.appendRunEventLocked(run, RunEventCategoryProgress, EventStopRequested, "Stop requested", nil, map[string]any{}, now)
 	final := s.appendRunEventLocked(run, RunEventCategoryFinal, EventRunStopped, "Run stopped", nil, map[string]any{}, now)
 	return StopRunOutput{Run: run, Result: StopRunResultStopped, Events: []RunEvent{lifecycle, final}}, nil
+}
+
+func (s *MemoryService) scopedToolCallLocked(userID string, threadID string, runID string, toolCallID string) (Run, ToolCall, string, error) {
+	run, ok := s.runs[runID]
+	if !ok || run.UserID != userID || run.ThreadID != threadID {
+		return Run{}, ToolCall{}, "", NewError(CodeRunNotFound, "Run not found.")
+	}
+	key := run.ID + ":" + strings.TrimSpace(toolCallID)
+	call, ok := s.toolCalls[key]
+	if !ok {
+		return Run{}, ToolCall{}, "", NewError(CodeRunNotFound, "Run not found.")
+	}
+	return run, call, key, nil
+}
+
+func toolCallEventMetadata(call ToolCall) map[string]any {
+	metadata := map[string]any{"tool_call_id": call.ToolCallID, "tool_name": call.ToolName, "arguments_summary": call.ArgumentsSummary, "approval_status": string(call.ApprovalStatus), "execution_status": string(call.ExecutionStatus)}
+	if call.ResultSummary != nil {
+		metadata["result_summary"] = call.ResultSummary
+	}
+	if call.ErrorCode != nil {
+		metadata["error_code"] = *call.ErrorCode
+	}
+	if call.ErrorMessage != nil {
+		metadata["error_message"] = *call.ErrorMessage
+	}
+	return RedactEventMetadata(metadata)
 }
 
 func (s *MemoryService) ClaimBackgroundJob(_ context.Context, ident identity.LocalIdentity, input ClaimBackgroundJobInput) (BackgroundJob, Run, bool, error) {

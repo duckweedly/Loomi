@@ -305,6 +305,41 @@ func TestRecordToolCallRequestValidatesM7SafetyBoundary(t *testing.T) {
 	}
 }
 
+func TestToolCallExecutionEventsRedactResultAndErrors(t *testing.T) {
+	svc := NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, CreateThreadInput{Title: "M7 result redaction", Mode: ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, StartRunInput{Source: RunSourceModelGateway, MessageID: "msg_1", ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.RecordToolCallRequest(context.Background(), ident, run.ID, RecordToolCallRequestInput{ToolCallID: "tc_1", ToolName: ToolNameCurrentTime, ArgumentsSummary: map[string]any{"timezone": "UTC"}, ArgumentsHash: "hash_1", ApprovalStatus: ToolCallApprovalRequired, ExecutionStatus: ToolCallExecutionBlocked}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.ApproveToolCall(context.Background(), ident, thread.ID, run.ID, "tc_1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.StartToolCallExecution(context.Background(), ident, thread.ID, run.ID, "tc_1"); err != nil {
+		t.Fatal(err)
+	}
+	call, events, err := svc.CompleteToolCallSuccess(context.Background(), ident, thread.ID, run.ID, "tc_1", map[string]any{"timezone": "UTC", "api_key": "sk-live-secret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if call.ResultSummary["api_key"] == "sk-live-secret" {
+		t.Fatalf("result was not redacted: %+v", call.ResultSummary)
+	}
+	if len(events) != 2 || events[0].Type != EventToolCallSucceeded {
+		t.Fatalf("events = %+v", events)
+	}
+	if result, ok := events[0].Metadata["result_summary"].(map[string]any); ok && result["api_key"] == "sk-live-secret" {
+		t.Fatalf("event metadata was not redacted: %+v", events[0].Metadata)
+	}
+}
+
 func TestStartRunCreatesInitialLifecycleEvent(t *testing.T) {
 	svc := NewMemoryService()
 	ident := identity.LocalDevIdentity()

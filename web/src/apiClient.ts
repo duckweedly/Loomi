@@ -16,6 +16,8 @@ export type ApiClient = {
   saveModelProvider?(input: { baseUrl: string; model: string; apiKey: string }): Promise<ProviderCapability>
   getWorkerQueueDiagnostics?(): Promise<WorkerQueueDiagnostics>
   getToolCall?(threadId: string, runId: string, toolCallId: string): Promise<ToolCall>
+  approveToolCall?(threadId: string, runId: string, toolCallId: string): Promise<ToolCall>
+  denyToolCall?(threadId: string, runId: string, toolCallId: string): Promise<ToolCall>
   startRun?(threadId: string, input?: { messageId?: string; source?: Run['source']; providerId?: string; model?: string }): Promise<Run>
   subscribeRunEvents?(runId: string, afterSequence: number, onEvent: (event: Run['events'][number]) => void, onError: () => void): () => void
   createThread?(title: string, mode: Thread['mode']): Promise<Thread>

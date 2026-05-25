@@ -219,15 +219,45 @@ func (s *Server) handleThreadRunResource(w http.ResponseWriter, r *http.Request,
 }
 
 func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, threadID string, runID string, toolCallID string) {
+	toolCallID, action := splitResourcePath(toolCallID, "")
+	if toolCallID == "" {
+		writeAPIError(w, productdata.NewError(productdata.CodeRunNotFound, "Run not found."))
+		return
+	}
+	if action != "" {
+		s.handleToolCallDecision(w, r, threadID, runID, toolCallID, action)
+		return
+	}
 	if r.Method != http.MethodGet {
 		writeMethodNotAllowed(w, "GET")
 		return
 	}
-	if toolCallID == "" || strings.Contains(toolCallID, "/") {
+	call, err := s.product.GetToolCall(r.Context(), identity.LocalDevIdentity(), threadID, runID, toolCallID)
+	if err != nil {
+		writeAPIError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, toolCallResponse{ToolCall: call, RequestID: diagnostics.NewRequestID()})
+}
+
+func (s *Server) handleToolCallDecision(w http.ResponseWriter, r *http.Request, threadID string, runID string, toolCallID string, action string) {
+	if r.Method != http.MethodPost {
+		writeMethodNotAllowed(w, "POST")
+		return
+	}
+	var (
+		call productdata.ToolCall
+		err  error
+	)
+	switch action {
+	case "approve":
+		call, _, err = s.product.ApproveToolCall(r.Context(), identity.LocalDevIdentity(), threadID, runID, toolCallID)
+	case "deny":
+		call, _, err = s.product.DenyToolCall(r.Context(), identity.LocalDevIdentity(), threadID, runID, toolCallID)
+	default:
 		writeAPIError(w, productdata.NewError(productdata.CodeRunNotFound, "Run not found."))
 		return
 	}
-	call, err := s.product.GetToolCall(r.Context(), identity.LocalDevIdentity(), threadID, runID, toolCallID)
 	if err != nil {
 		writeAPIError(w, err)
 		return

@@ -290,3 +290,63 @@ func TestWorkerLeavesQueuedGatewayRunBlockedOnToolApproval(t *testing.T) {
 		}
 	}
 }
+
+func TestWorkerExecutesApprovedCurrentTimeToolOnce(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, productdata.CreateThreadInput{Title: "Approved tool", Mode: productdata.ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, productdata.StartRunInput{Source: productdata.RunSourceModelGateway, MessageID: "msg_1", ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.RecordToolCallRequest(context.Background(), ident, run.ID, productdata.RecordToolCallRequestInput{ToolCallID: "tc_1", ToolName: productdata.ToolNameCurrentTime, ArgumentsSummary: map[string]any{"timezone": "UTC"}, ArgumentsHash: "hash_1", ApprovalStatus: productdata.ToolCallApprovalRequired, ExecutionStatus: productdata.ToolCallExecutionBlocked}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.ApproveToolCall(context.Background(), ident, thread.ID, run.ID, "tc_1"); err != nil {
+		t.Fatal(err)
+	}
+	worker := NewWorker(svc, nil, QueuedRunRouter{Gateway: NewGateway(svc, nil, nil)})
+	worker.WorkerID = "worker_tool"
+
+	ok, err := worker.ProcessOne(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("ProcessOne() ok = false")
+	}
+	call, err := svc.GetToolCall(context.Background(), ident, thread.ID, run.ID, "tc_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if call.ExecutionStatus != productdata.ToolCallExecutionSucceeded || call.ResultSummary["timezone"] != "UTC" {
+		t.Fatalf("call = %+v", call)
+	}
+	events, err := svc.ListRunEvents(context.Background(), ident, run.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var executing, succeeded int
+	for _, event := range events {
+		if event.Type == productdata.EventToolCallExecuting {
+			executing++
+		}
+		if event.Type == productdata.EventToolCallSucceeded {
+			succeeded++
+		}
+	}
+	if executing != 1 || succeeded != 1 {
+		t.Fatalf("events = %+v", events)
+	}
+
+	ok, err = worker.ProcessOne(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok {
+		t.Fatal("second ProcessOne() ok = true, want no duplicate job")
+	}
+}

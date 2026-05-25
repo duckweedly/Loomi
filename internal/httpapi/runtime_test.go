@@ -287,6 +287,107 @@ func TestScopedToolCallHandlerReturnsProjection(t *testing.T) {
 	}
 }
 
+func TestToolCallApproveDenyHandlersAreIdempotentAndScoped(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	thread := createRuntimeTestThread(t, svc)
+	run, err := svc.StartRun(context.Background(), identity.LocalDevIdentity(), thread.ID, productdata.StartRunInput{Source: productdata.RunSourceModelGateway, ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.RecordToolCallRequest(context.Background(), identity.LocalDevIdentity(), run.ID, productdata.RecordToolCallRequestInput{ToolCallID: "tc_approve", ToolName: productdata.ToolNameCurrentTime, ArgumentsSummary: map[string]any{"timezone": "UTC"}, ArgumentsHash: "hash_1", ApprovalStatus: productdata.ToolCallApprovalRequired, ExecutionStatus: productdata.ToolCallExecutionBlocked}); err != nil {
+		t.Fatal(err)
+	}
+	srv := NewServerWithProduct(config.Config{AppEnv: "local"}, fakeChecker{}, svc)
+
+	path := "/v1/threads/" + thread.ID + "/runs/" + run.ID + "/tool-calls/tc_approve/approve"
+	res := requestJSON(t, srv, http.MethodPost, path, "")
+	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), `"approval_status":"approved"`) || !strings.Contains(res.Body.String(), `"execution_status":"not_started"`) {
+		t.Fatalf("approve status=%d body=%s", res.Code, res.Body.String())
+	}
+	again := requestJSON(t, srv, http.MethodPost, path, "")
+	if again.Code != http.StatusOK || !strings.Contains(again.Body.String(), `"approval_status":"approved"`) {
+		t.Fatalf("approve retry status=%d body=%s", again.Code, again.Body.String())
+	}
+	wrongScope := requestJSON(t, srv, http.MethodPost, "/v1/threads/wrong/runs/"+run.ID+"/tool-calls/tc_approve/approve", "")
+	if wrongScope.Code != http.StatusNotFound {
+		t.Fatalf("wrong scope status=%d body=%s", wrongScope.Code, wrongScope.Body.String())
+	}
+}
+
+func TestToolCallDenyHandlerStopsRunWithoutExecution(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	thread := createRuntimeTestThread(t, svc)
+	run, err := svc.StartRun(context.Background(), identity.LocalDevIdentity(), thread.ID, productdata.StartRunInput{Source: productdata.RunSourceModelGateway, ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.RecordToolCallRequest(context.Background(), identity.LocalDevIdentity(), run.ID, productdata.RecordToolCallRequestInput{ToolCallID: "tc_deny", ToolName: productdata.ToolNameCurrentTime, ArgumentsSummary: map[string]any{"timezone": "UTC"}, ArgumentsHash: "hash_1", ApprovalStatus: productdata.ToolCallApprovalRequired, ExecutionStatus: productdata.ToolCallExecutionBlocked}); err != nil {
+		t.Fatal(err)
+	}
+	srv := NewServerWithProduct(config.Config{AppEnv: "local"}, fakeChecker{}, svc)
+
+	path := "/v1/threads/" + thread.ID + "/runs/" + run.ID + "/tool-calls/tc_deny/deny"
+	res := requestJSON(t, srv, http.MethodPost, path, "")
+	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), `"approval_status":"denied"`) {
+		t.Fatalf("deny status=%d body=%s", res.Code, res.Body.String())
+	}
+	again := requestJSON(t, srv, http.MethodPost, path, "")
+	if again.Code != http.StatusOK || !strings.Contains(again.Body.String(), `"approval_status":"denied"`) {
+		t.Fatalf("deny retry status=%d body=%s", again.Code, again.Body.String())
+	}
+	gotRun, err := svc.GetRun(context.Background(), identity.LocalDevIdentity(), run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotRun.Status != productdata.RunStatusStopped {
+		t.Fatalf("run = %+v", gotRun)
+	}
+	events, err := svc.ListRunEvents(context.Background(), identity.LocalDevIdentity(), run.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range events {
+		if event.Type == productdata.EventToolCallExecuting {
+			t.Fatalf("denied run executed: %+v", events)
+		}
+	}
+}
+
+func TestRunEventStreamReplaysToolApprovalExecutionAndResultEvents(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	thread := createRuntimeTestThread(t, svc)
+	run, err := svc.StartRun(context.Background(), identity.LocalDevIdentity(), thread.ID, productdata.StartRunInput{Source: productdata.RunSourceModelGateway, ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.RecordToolCallRequest(context.Background(), identity.LocalDevIdentity(), run.ID, productdata.RecordToolCallRequestInput{ToolCallID: "tc_1", ToolName: productdata.ToolNameCurrentTime, ArgumentsSummary: map[string]any{"timezone": "UTC"}, ArgumentsHash: "hash_1", ApprovalStatus: productdata.ToolCallApprovalRequired, ExecutionStatus: productdata.ToolCallExecutionBlocked}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.ApproveToolCall(context.Background(), identity.LocalDevIdentity(), thread.ID, run.ID, "tc_1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.StartToolCallExecution(context.Background(), identity.LocalDevIdentity(), thread.ID, run.ID, "tc_1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.CompleteToolCallSuccess(context.Background(), identity.LocalDevIdentity(), thread.ID, run.ID, "tc_1", map[string]any{"timezone": "UTC"}); err != nil {
+		t.Fatal(err)
+	}
+	srv := NewServerWithProduct(config.Config{AppEnv: "local"}, fakeChecker{}, svc)
+
+	res := requestJSON(t, srv, http.MethodGet, "/v1/runs/"+run.ID+"/events/stream", "")
+
+	body := res.Body.String()
+	approved := strings.Index(body, productdata.EventToolCallApproved)
+	executing := strings.Index(body, productdata.EventToolCallExecuting)
+	succeeded := strings.Index(body, productdata.EventToolCallSucceeded)
+	if approved < 0 || executing < 0 || succeeded < 0 || !(approved < executing && executing < succeeded) {
+		t.Fatalf("body=%s", body)
+	}
+	if !strings.Contains(body, `"result_summary":{"timezone":"UTC"}`) {
+		t.Fatalf("body=%s", body)
+	}
+}
+
 func TestRunEventStreamSubscribesBeforeHistoryRead(t *testing.T) {
 	svc := productdata.NewMemoryService()
 	run := createRuntimeTestRun(t, svc)

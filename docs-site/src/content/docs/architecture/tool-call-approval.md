@@ -5,7 +5,7 @@ description: Approval-gated internal tool-call foundation, audit events, and saf
 
 M7 starts the tool-calling slice without opening broad tool execution. The foundation records model-requested internal tool calls, blocks runs on approval, keeps a redacted current-state projection, and replays the lifecycle through persisted run events.
 
-The implemented Phase 2 slice is infrastructure foundation, and the US1 observable request slice now converts allowlisted provider `runtime.get_current_time` requests into durable approval-required tool calls. Approve/deny HTTP handlers, full enabled UI controls, and worker execution resume are later M7 user-story work.
+The implemented execution closure now converts allowlisted provider `runtime.get_current_time` requests into durable approval-required tool calls, lets the user approve or deny, resumes approved runs through the existing M6 worker/job path, executes the internal current-time tool, and replays approval/execution/result states through SSE.
 
 ## Boundary
 
@@ -14,6 +14,8 @@ The product data layer owns durable tool-call state and run events. Runtime code
 M7 reuses the M6 worker/job and M4 run/event/SSE foundations:
 
 - runs can enter `blocked_on_tool_approval`
+- approve moves a blocked run back to a queued worker-resumable state
+- deny finalizes the MVP run as stopped without execution
 - history-first SSE continues to replay persisted events by sequence
 - worker diagnostics can count approval-blocked and resumable tool calls
 - RunRail/runtime grouping separates tool-call events from model stream and worker/job rows
@@ -77,6 +79,17 @@ M7 Phase 2 does not add:
 
 Model-generated tool arguments are untrusted data. Persisted summaries and events must not contain raw provider payloads, API keys, Authorization headers, passwords, tokens, credentials, shell output, file contents, or arbitrary URL contents. Redaction checks both sensitive keys and sensitive-looking values before metadata is persisted.
 
+## Approval execution closure
+
+Approve and deny decisions are owned by the product data layer so projection updates and run events share one transaction boundary. Repeated same-decision requests return current state without duplicate decision events. Wrong-scope or incompatible states are rejected before state changes.
+
+Approved calls create a normal queued run job with `tool_call_id` metadata. The queued run router recognizes that metadata and executes the approved tool directly instead of making another provider request. Execution writes `tool_call_executing` before invocation and then exactly one terminal tool event:
+
+- `tool_call_succeeded` with redacted `result_summary`
+- `tool_call_failed` with redacted `error_code` and `error_message`
+
+The MVP completes the run after a successful tool result and fails the run after a tool execution failure. Denial writes `tool_call_denied` and `run_stopped`.
+
 ## Current limitations
 
-Phase 2 records and replays the foundation. US1 now converts allowlisted provider tool calls through the gateway, blocks the run on approval, exposes scoped tool-call reads, and renders disabled approval placeholders. It does not yet expose approve/deny endpoints, enable approval controls, execute approved tools through the worker, or continue the model loop with tool results.
+M7 still does not feed the tool result back into a second model request, does not run multiple tools in one run, and does not add shell, filesystem, arbitrary network, MCP, browser automation, memory/RAG, desktop runtime, or multi-agent capabilities.

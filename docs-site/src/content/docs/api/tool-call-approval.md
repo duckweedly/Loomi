@@ -3,7 +3,7 @@ title: M7 Tool Call Approval API
 description: Tool-call projection, event payloads, diagnostics fields, and Phase 2 API-facing contracts.
 ---
 
-M7 Phase 2 adds the backend and frontend contracts needed for approval-gated internal tool calls. The US1 observable request slice now records provider-requested `runtime.get_current_time` calls, replays approval-required events, and exposes scoped current-state reads. HTTP approve/deny endpoints are specified for M7 but not implemented yet.
+M7 now supports the minimal approval execution loop for `runtime.get_current_time`: provider-requested calls are recorded, blocked for approval, approved or denied idempotently, executed by the worker after approval, and replayed through history-first SSE.
 
 Local desktop Settings can also save one OpenAI-compatible `custom` model provider into the running local API process. That endpoint only returns redacted capability data and never echoes the API key.
 
@@ -110,15 +110,39 @@ Frontend API mapping converts these backend types to dotted runtime types such a
 
 `blocked_tool_approval_count` counts tool calls with `approval_status = required` and `execution_status = blocked`. `resumable_tool_call_count` counts calls approved but not started.
 
-## Planned approve/deny endpoints
+## Approve and deny endpoints
 
-The M7 contract reserves these paths for later implementation:
+The scoped tool-call read and decision paths are:
 
 - `GET /v1/threads/{thread_id}/runs/{run_id}/tool-calls/{tool_call_id}`
 - `POST /v1/threads/{thread_id}/runs/{run_id}/tool-calls/{tool_call_id}/approve`
 - `POST /v1/threads/{thread_id}/runs/{run_id}/tool-calls/{tool_call_id}/deny`
 
-Approve/deny must be idempotent for repeated same decisions and reject conflicting reversals after incompatible states.
+Approve is valid from `approval_status = required` and `execution_status = blocked`. It records `tool_call_approved`, changes execution to `not_started`, and queues the existing M6 worker path for resume. Repeated approve returns the current approved projection without duplicating events or jobs.
+
+Deny is valid before execution starts. It records `tool_call_denied`, cancels pending run jobs, marks the tool execution cancelled, and writes `run_stopped`. Repeated deny returns the current denied projection without duplicate events.
+
+Wrong thread/run/user scope returns not found. Incompatible states such as terminal execution or reversing a denied call return a safe invalid request error.
+
+## Execution events
+
+Approved worker execution writes:
+
+```json
+{
+  "type": "tool_call_succeeded",
+  "category": "progress",
+  "metadata": {
+    "tool_call_id": "tc_1",
+    "tool_name": "runtime.get_current_time",
+    "approval_status": "approved",
+    "execution_status": "succeeded",
+    "result_summary": { "timezone": "UTC", "source": "runtime" }
+  }
+}
+```
+
+Failures use `tool_call_failed` with redacted `error_code` and `error_message`, then `run_failed`.
 
 ## Redaction and validation
 

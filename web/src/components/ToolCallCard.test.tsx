@@ -33,4 +33,29 @@ describe('ToolCallCard M7 approval-required state', () => {
     expect(html).not.toContain('api_key')
     expect(html).not.toContain('secret')
   })
+
+  test('enables approval controls when real action handlers are available', () => {
+    const html = renderToStaticMarkup(createElement(ToolCallCard, {
+      toolCall: {
+        id: 'tool_1',
+        toolCallId: 'tc_1',
+        name: 'runtime.get_current_time',
+        status: 'approval_required',
+        approvalStatus: 'required',
+        executionStatus: 'blocked',
+        summary: 'Approval required',
+        input: '{"timezone":"UTC"}',
+        output: '',
+        argumentsSummary: { timezone: 'UTC' },
+        resultSummary: null,
+        errorCode: null,
+        errorMessage: null,
+      },
+      onApprove: () => undefined,
+      onDeny: () => undefined,
+    }))
+
+    expect(html).toContain('Approve')
+    expect(html).not.toContain('disabled=""')
+  })
 })

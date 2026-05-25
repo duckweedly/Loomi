@@ -3,7 +3,7 @@ title: Local M7 Tool Call Approval Runbook
 description: Local validation commands and smoke expectations for the M7 tool-call approval foundation.
 ---
 
-M7 currently has the Phase 2 foundation plus the US1 observable request slice: schema, product-data services, runtime tool definition, provider-to-approval-required conversion for `runtime.get_current_time`, scoped tool-call reads, stream replay tests, diagnostics counters, and frontend approval-required placeholders. Full approve/deny UI and execution smoke paths are later M7 tasks.
+M7 now has the minimal approval execution closure: schema, product-data services, runtime tool definition, provider-to-approval-required conversion for `runtime.get_current_time`, scoped tool-call reads, idempotent approve/deny, worker resume, current-time execution, terminal result/error events, and frontend approval controls.
 
 ## Start local services
 
@@ -28,9 +28,9 @@ curl -sS http://127.0.0.1:8080/v1/model-providers \
 
 The response and later provider list only expose redacted capability fields. The current implementation stores this provider in the running API process and updates the model gateway immediately; restart the API to clear it.
 
-## Foundation smoke expectations
+## Approval execution smoke expectations
 
-Until approve/deny endpoints land, validate the foundation and observable request slice with automated tests:
+Validate the foundation and execution closure with automated tests and a local browser smoke:
 
 - `tool_calls` migration creates a unique `(run_id, tool_call_id)` projection and rolls back cleanly.
 - `RecordToolCallRequest` records `tool_call_requested` and `tool_call_approval_required` once for duplicate requests.
@@ -42,7 +42,11 @@ Until approve/deny endpoints land, validate the foundation and observable reques
 - frontend runtime replay maps `tool.call.*` events into one stable `ToolCall` view model.
 - gateway provider tool-call events for `runtime.get_current_time` become `tool_call_requested` and `tool_call_approval_required` without assistant message persistence or tool execution.
 - scoped `GET /v1/threads/{thread_id}/runs/{run_id}/tool-calls/{tool_call_id}` returns the redacted current projection.
-- ToolCallCard renders approval-required placeholders with disabled controls until approve/deny handlers land.
+- `POST /approve` records one approved event and queues exactly one resume.
+- `POST /deny` records one denied event, stops the MVP run, and never writes executing.
+- approved `runtime.get_current_time` writes `tool_call_executing` then `tool_call_succeeded`.
+- tool failures write `tool_call_failed` with redacted error fields.
+- ToolCallCard approve/deny buttons call the real API and show loading, disabled, and error states.
 
 ## Validation commands
 
@@ -53,8 +57,16 @@ bun run --cwd web build
 bun run --cwd docs-site build
 ```
 
+## Browser smoke
+
+1. Open the local web shell against the local API.
+2. Trigger a model or fake-provider run that emits `runtime.get_current_time`.
+3. Confirm the ToolCallCard shows approval required.
+4. Click Deny and confirm the card becomes denied and no executing event appears.
+5. Trigger another run, click Approve, and confirm approved -> executing -> succeeded appears in ToolCallCard, RunRail, Timeline, and after refresh/SSE replay.
+
 If a local Postgres integration database is available, also run the repository tests with the appropriate database environment for the Postgres path.
 
 ## Current non-goals
 
-Do not smoke-test shell tools, filesystem tools, MCP, browser automation, arbitrary network tools, multi-agent execution, RAG/memory, or approval bypass in M7. Those capabilities are outside the approved M7 scope.
+Do not smoke-test shell tools, filesystem tools, MCP, browser automation, arbitrary network tools, multi-agent execution, RAG/memory, multi-tool concurrency, or approval bypass in M7. Those capabilities are outside the approved M7 scope.

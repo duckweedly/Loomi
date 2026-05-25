@@ -567,7 +567,7 @@ export const dictionaries: Record<Locale, Dictionary> = {
       providerCapability: 'Provider capability',
       providerCapabilityHelper: 'Shows redacted provider id, family, model, and status when available.',
       providerConsoleTitle: 'Provider Test Console',
-      providerConsoleDescription: 'Reads configured providers and safely triggers a connection test.'
+      providerConsoleDescription: 'Reads configured providers and safely triggers a connection test.',
       providerConfiguredProviders: 'Configured providers',
       providerConfiguredProvidersHelper: 'These providers come from backend configuration and local Settings; only redacted capability is shown.',
       providerConsoleEmpty: 'No configured providers',

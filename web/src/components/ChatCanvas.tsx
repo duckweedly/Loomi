@@ -29,6 +29,8 @@ type Props = {
   onStopRun: () => void
   onRetryRun?: () => void
   onRegenerateRun?: () => void
+  onApproveToolCall?: (toolCall: NonNullable<Run['toolCalls']>[number]) => Promise<void> | void
+  onDenyToolCall?: (toolCall: NonNullable<Run['toolCalls']>[number]) => Promise<void> | void
   locale: Locale
 }
 
@@ -100,6 +102,18 @@ function AssistantDraft({ run, locale }: { run: Run | null; locale: Locale }) {
   )
 }
 
+function ActiveToolCalls({ run, onApproveToolCall, onDenyToolCall }: { run: Run | null; onApproveToolCall?: (toolCall: NonNullable<Run['toolCalls']>[number]) => Promise<void> | void; onDenyToolCall?: (toolCall: NonNullable<Run['toolCalls']>[number]) => Promise<void> | void }) {
+  if (!run?.toolCalls?.length) return null
+  return (
+    <article className="message-row assistant draft tool-call-draft">
+      <div className="message-avatar">L</div>
+      <div className="message-bubble">
+        {run.toolCalls.map((toolCall) => <ToolCallCard key={toolCall.toolCallId ?? toolCall.id} toolCall={toolCall} onApprove={onApproveToolCall} onDeny={onDenyToolCall} />)}
+      </div>
+    </article>
+  )
+}
+
 function ToolBoundaryNotice({ run, locale }: { run: Run | null; locale: Locale }) {
   if (!run?.events.some((event) => event.type === 'progress.tool_call_blocked')) return null
   return <div className="api-error">{getDictionary(locale).chatCanvas.toolBoundaryNotice}</div>
@@ -115,7 +129,7 @@ function StatePanel({ state, error, locale }: { state: Exclude<ChatCanvasState, 
   )
 }
 
-export function ChatCanvas({ sidebarCollapsed, thread, messages, run, loading, error, dataSourceMode, streamState, backendCapability = 'available', backendUnavailableAttempted = false, capabilitySignals, providerCapabilities = [], onOpenProviderSettings, onSendMessage, onStopRun, onRetryRun, onRegenerateRun, locale }: Props) {
+export function ChatCanvas({ sidebarCollapsed, thread, messages, run, loading, error, dataSourceMode, streamState, backendCapability = 'available', backendUnavailableAttempted = false, capabilitySignals, providerCapabilities = [], onOpenProviderSettings, onSendMessage, onStopRun, onRetryRun, onRegenerateRun, onApproveToolCall, onDenyToolCall, locale }: Props) {
   const state = deriveChatCanvasState({
     loading,
     error,
@@ -179,11 +193,13 @@ export function ChatCanvas({ sidebarCollapsed, thread, messages, run, loading, e
           <>
             <MessageHistory messages={messages} locale={locale} />
             {shouldShowAssistantDraft && <AssistantDraft run={run} locale={locale} />}
+            <ActiveToolCalls run={run} onApproveToolCall={onApproveToolCall} onDenyToolCall={onDenyToolCall} />
           </>
         ) : (
           <>
             {shouldShowHistory && <MessageHistory messages={messages} locale={locale} />}
             {shouldShowAssistantDraft && <AssistantDraft run={run} locale={locale} />}
+            <ActiveToolCalls run={run} onApproveToolCall={onApproveToolCall} onDenyToolCall={onDenyToolCall} />
             {(state === 'no-thread' || state === 'empty-thread' || state === 'loading' || state === 'error' || state === 'backend-unavailable') && <StatePanel state={state} error={state === 'error' ? error : null} locale={locale} />}
           </>
         )}

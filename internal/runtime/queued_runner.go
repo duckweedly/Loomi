@@ -14,6 +14,9 @@ type QueuedRunRouter struct {
 }
 
 func (r QueuedRunRouter) Run(ctx context.Context, run productdata.Run, job productdata.BackgroundJob) error {
+	if toolCallID := metadataString(job.Metadata, "tool_call_id"); toolCallID != "" {
+		return r.runApprovedTool(ctx, run, toolCallID)
+	}
 	if run.Source == productdata.RunSourceModelGateway {
 		if r.Gateway != nil {
 			r.Gateway.run(ctx, run, gatewayInputFromJob(run, job))
@@ -25,6 +28,33 @@ func (r QueuedRunRouter) Run(ctx context.Context, run productdata.Run, job produ
 		return r.Local.Run(ctx, run, job)
 	}
 	return nil
+}
+
+func (r QueuedRunRouter) runApprovedTool(ctx context.Context, run productdata.Run, toolCallID string) error {
+	if r.Gateway == nil || r.Gateway.Service == nil {
+		return nil
+	}
+	call, _, err := r.Gateway.Service.StartToolCallExecution(ctx, identity.LocalDevIdentity(), run.ThreadID, run.ID, toolCallID)
+	if err != nil {
+		return err
+	}
+	tool := CurrentTimeToolDefinition()
+	if call.ToolName != tool.Name {
+		_, _, _ = r.Gateway.Service.FailToolCallExecution(ctx, identity.LocalDevIdentity(), run.ThreadID, run.ID, toolCallID, "unsupported_tool", "Tool is not supported.")
+		return nil
+	}
+	args, err := tool.NormalizeArguments(call.ArgumentsSummary)
+	if err != nil {
+		_, _, _ = r.Gateway.Service.FailToolCallExecution(ctx, identity.LocalDevIdentity(), run.ThreadID, run.ID, toolCallID, "invalid_tool_arguments", err.Error())
+		return nil
+	}
+	result, err := tool.Execute(args)
+	if err != nil {
+		_, _, _ = r.Gateway.Service.FailToolCallExecution(ctx, identity.LocalDevIdentity(), run.ThreadID, run.ID, toolCallID, "tool_execution_failed", err.Error())
+		return nil
+	}
+	_, _, err = r.Gateway.Service.CompleteToolCallSuccess(ctx, identity.LocalDevIdentity(), run.ThreadID, run.ID, toolCallID, result)
+	return err
 }
 
 func (r QueuedRunRouter) gatewayResult(ctx context.Context, runID string) error {

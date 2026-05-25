@@ -1,6 +1,7 @@
 import type { ApiClient } from './apiClient'
 import type { Message, ProviderCapability, ProviderFamily, Run, RunEvent, RunSource, RunStatus, Thread, ToolCall, WorkerQueueDiagnostics, WorkerQueueStatus, WorkerStatus } from './domain'
 import { isRuntimeTerminal } from './runtime/executionAdapter'
+import { applyRealRunEvent } from './runtime/realExecutionAdapter'
 
 const apiBaseUrl = (import.meta.env.VITE_LOOMI_API_BASE_URL ?? '').replace(/\/$/, '')
 
@@ -179,7 +180,10 @@ export function mapApiRun(run: ApiRun, events: RunEvent[] = []): Run {
     events: [],
     assistantDraft,
   }
-  return restoreAssistantDraftFromEvents(mappedRun, events)
+  const restored = restoreAssistantDraftFromEvents(mappedRun, events)
+  return events
+    .filter((event) => event.type.startsWith('tool.call.'))
+    .reduce((current, event) => applyRealRunEvent({ ...current, events: current.events.filter((existing) => existing.id !== event.id) }, { ...event, runId: event.runId ?? run.id, threadId: event.threadId ?? run.thread_id }), restored)
 }
 
 function metadataString(metadata: Record<string, unknown>) {
@@ -257,7 +261,21 @@ export function mapApiProviderCapability(provider: ApiProviderCapability): Provi
 }
 
 export function mapApiToolCall(call: ApiToolCall): ToolCall {
-  const status = call.approval_status === 'required' && call.execution_status === 'blocked' ? 'approval_required' : call.execution_status === 'succeeded' ? 'succeeded' : call.execution_status === 'failed' ? 'failed' : call.execution_status === 'cancelled' ? 'cancelled' : 'requested'
+  const status = call.approval_status === 'required' && call.execution_status === 'blocked'
+    ? 'approval_required'
+    : call.approval_status === 'approved' && call.execution_status === 'not_started'
+      ? 'approved'
+      : call.approval_status === 'denied'
+        ? 'denied'
+        : call.execution_status === 'executing'
+          ? 'executing'
+          : call.execution_status === 'succeeded'
+            ? 'succeeded'
+            : call.execution_status === 'failed'
+              ? 'failed'
+              : call.execution_status === 'cancelled'
+                ? 'cancelled'
+                : 'requested'
   return {
     id: call.id,
     toolCallId: call.tool_call_id,
@@ -265,7 +283,7 @@ export function mapApiToolCall(call: ApiToolCall): ToolCall {
     status,
     approvalStatus: call.approval_status,
     executionStatus: call.execution_status,
-    summary: status === 'approval_required' ? 'Approval required' : call.tool_name,
+    summary: status === 'approval_required' ? 'Approval required' : status === 'denied' ? 'Denied' : status === 'approved' ? 'Approved' : status === 'executing' ? 'Executing' : call.tool_name,
     input: JSON.stringify(call.arguments_summary),
     output: call.result_summary ? JSON.stringify(call.result_summary) : '',
     argumentsSummary: call.arguments_summary,
@@ -400,6 +418,16 @@ export const realApiClient: ApiClient = {
 
   async getToolCall(threadId: string, runId: string, toolCallId: string) {
     const body = await requestJSON<{ tool_call: ApiToolCall }>(`/v1/threads/${threadId}/runs/${runId}/tool-calls/${toolCallId}`)
+    return mapApiToolCall(body.tool_call)
+  },
+
+  async approveToolCall(threadId: string, runId: string, toolCallId: string) {
+    const body = await requestJSON<{ tool_call: ApiToolCall }>(`/v1/threads/${threadId}/runs/${runId}/tool-calls/${toolCallId}/approve`, { method: 'POST' })
+    return mapApiToolCall(body.tool_call)
+  },
+
+  async denyToolCall(threadId: string, runId: string, toolCallId: string) {
+    const body = await requestJSON<{ tool_call: ApiToolCall }>(`/v1/threads/${threadId}/runs/${runId}/tool-calls/${toolCallId}/deny`, { method: 'POST' })
     return mapApiToolCall(body.tool_call)
   },
 

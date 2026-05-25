@@ -109,6 +109,118 @@ func TestRepositoryContractRejectsToolCallsForTerminalRuns(t *testing.T) {
 	}
 }
 
+func TestRepositoryContractApprovesToolCallsIdempotently(t *testing.T) {
+	var repo Repository = NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := repo.CreateThread(context.Background(), ident, CreateThreadInput{Title: "M7 approve", Mode: ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := repo.StartRun(context.Background(), ident, thread.ID, StartRunInput{Source: RunSourceModelGateway, MessageID: "msg_1", ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := repo.RecordToolCallRequest(context.Background(), ident, run.ID, RecordToolCallRequestInput{ToolCallID: "tc_1", ToolName: ToolNameCurrentTime, ArgumentsSummary: map[string]any{"timezone": "UTC"}, ArgumentsHash: "hash_1", ApprovalStatus: ToolCallApprovalRequired, ExecutionStatus: ToolCallExecutionBlocked}); err != nil {
+		t.Fatal(err)
+	}
+
+	call, events, err := repo.ApproveToolCall(context.Background(), ident, thread.ID, run.ID, "tc_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if call.ApprovalStatus != ToolCallApprovalApproved || call.ExecutionStatus != ToolCallExecutionNotStarted {
+		t.Fatalf("approved call = %+v", call)
+	}
+	if len(events) != 1 || events[0].Type != EventToolCallApproved {
+		t.Fatalf("events = %+v", events)
+	}
+	diagnostics, err := repo.WorkerQueueDiagnostics(context.Background(), ident)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diagnostics.BlockedToolApprovalCount != 0 || diagnostics.ResumableToolCallCount != 1 || diagnostics.QueuedCount != 1 {
+		t.Fatalf("diagnostics = %+v", diagnostics)
+	}
+
+	again, againEvents, err := repo.ApproveToolCall(context.Background(), ident, thread.ID, run.ID, "tc_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.ID != call.ID || len(againEvents) != 0 {
+		t.Fatalf("again=%+v events=%+v", again, againEvents)
+	}
+}
+
+func TestRepositoryContractDeniesToolCallsIdempotently(t *testing.T) {
+	var repo Repository = NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := repo.CreateThread(context.Background(), ident, CreateThreadInput{Title: "M7 deny", Mode: ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := repo.StartRun(context.Background(), ident, thread.ID, StartRunInput{Source: RunSourceModelGateway, MessageID: "msg_1", ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := repo.RecordToolCallRequest(context.Background(), ident, run.ID, RecordToolCallRequestInput{ToolCallID: "tc_1", ToolName: ToolNameCurrentTime, ArgumentsSummary: map[string]any{"timezone": "UTC"}, ArgumentsHash: "hash_1", ApprovalStatus: ToolCallApprovalRequired, ExecutionStatus: ToolCallExecutionBlocked}); err != nil {
+		t.Fatal(err)
+	}
+
+	call, events, err := repo.DenyToolCall(context.Background(), ident, thread.ID, run.ID, "tc_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if call.ApprovalStatus != ToolCallApprovalDenied || call.ExecutionStatus != ToolCallExecutionCancelled {
+		t.Fatalf("denied call = %+v", call)
+	}
+	if len(events) != 2 || events[0].Type != EventToolCallDenied || events[1].Type != EventRunStopped {
+		t.Fatalf("events = %+v", events)
+	}
+	gotRun, err := repo.GetRun(context.Background(), ident, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotRun.Status != RunStatusStopped {
+		t.Fatalf("run = %+v", gotRun)
+	}
+
+	again, againEvents, err := repo.DenyToolCall(context.Background(), ident, thread.ID, run.ID, "tc_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.ID != call.ID || len(againEvents) != 0 {
+		t.Fatalf("again=%+v events=%+v", again, againEvents)
+	}
+}
+
+func TestRepositoryContractRejectsConflictingOrWrongScopeToolDecisions(t *testing.T) {
+	var repo Repository = NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := repo.CreateThread(context.Background(), ident, CreateThreadInput{Title: "M7 conflicts", Mode: ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := repo.StartRun(context.Background(), ident, thread.ID, StartRunInput{Source: RunSourceModelGateway, MessageID: "msg_1", ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := repo.RecordToolCallRequest(context.Background(), ident, run.ID, RecordToolCallRequestInput{ToolCallID: "tc_1", ToolName: ToolNameCurrentTime, ArgumentsSummary: map[string]any{"timezone": "UTC"}, ArgumentsHash: "hash_1", ApprovalStatus: ToolCallApprovalRequired, ExecutionStatus: ToolCallExecutionBlocked}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := repo.ApproveToolCall(context.Background(), ident, "wrong-thread", run.ID, "tc_1"); err == nil || ErrorCode(err) != CodeRunNotFound {
+		t.Fatalf("wrong scope err = %v", err)
+	}
+	if _, _, err := repo.ApproveToolCall(context.Background(), ident, thread.ID, run.ID, "tc_missing"); err == nil || ErrorCode(err) != CodeRunNotFound {
+		t.Fatalf("unknown err = %v", err)
+	}
+	if _, _, err := repo.DenyToolCall(context.Background(), ident, thread.ID, run.ID, "tc_1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := repo.ApproveToolCall(context.Background(), ident, thread.ID, run.ID, "tc_1"); err == nil || ErrorCode(err) != CodeInvalidRequest {
+		t.Fatalf("conflict err = %v", err)
+	}
+}
+
 func TestRepositoryContractCoversM6JobCreationAndClaim(t *testing.T) {
 	var repo Repository = NewMemoryService()
 	ident := identity.LocalDevIdentity()

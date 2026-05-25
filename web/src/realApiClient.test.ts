@@ -50,6 +50,55 @@ describe('M7 tool-call mapping', () => {
       errorMessage: null,
     })
   })
+
+  test('maps approved denied and executing tool-call projections', () => {
+    expect(mapApiToolCall({
+      id: 'tool_approved',
+      thread_id: 'thread_1',
+      run_id: 'run_1',
+      tool_call_id: 'tc_1',
+      tool_name: 'runtime.get_current_time',
+      arguments_summary: { timezone: 'UTC' },
+      approval_status: 'approved',
+      execution_status: 'not_started',
+      result_summary: null,
+      error_code: null,
+      error_message: null,
+    })).toMatchObject({ status: 'approved', approvalStatus: 'approved', executionStatus: 'not_started', summary: 'Approved' })
+
+    expect(mapApiToolCall({
+      id: 'tool_denied',
+      thread_id: 'thread_1',
+      run_id: 'run_1',
+      tool_call_id: 'tc_1',
+      tool_name: 'runtime.get_current_time',
+      arguments_summary: { timezone: 'UTC' },
+      approval_status: 'denied',
+      execution_status: 'cancelled',
+      result_summary: null,
+      error_code: null,
+      error_message: null,
+    })).toMatchObject({ status: 'denied', approvalStatus: 'denied', summary: 'Denied' })
+
+    expect(mapApiToolCall({
+      id: 'tool_executing',
+      thread_id: 'thread_1',
+      run_id: 'run_1',
+      tool_call_id: 'tc_1',
+      tool_name: 'runtime.get_current_time',
+      arguments_summary: { timezone: 'UTC' },
+      approval_status: 'approved',
+      execution_status: 'executing',
+      result_summary: null,
+      error_code: null,
+      error_message: null,
+    })).toMatchObject({ status: 'executing', executionStatus: 'executing', summary: 'Executing' })
+  })
+
+  test('exposes approve and deny API paths', () => {
+    const source = Bun.file(new URL('./realApiClient.ts', import.meta.url)).text()
+    return expect(source).resolves.toContain('/tool-calls/${toolCallId}/approve')
+  })
 })
 
 describe('M6 worker queue diagnostics mapping', () => {
@@ -151,6 +200,27 @@ describe('M4 run mapping', () => {
     expect(run.context).toBe('model_gateway')
     expect(run.status).toBe('recovering')
     expect(run.assistantDraft).toMatchObject({ status: 'recovering' })
+  })
+
+  test('restores tool-call cards from loaded event history', () => {
+    const events = [
+      mapApiRunEvent({ id: 'evt-tool-1', run_id: 'run-1', thread_id: 'thread-1', sequence: 1, category: 'progress', type: 'tool_call_requested', summary: 'Tool call requested', content: null, metadata: { tool_call_id: 'tc_1', tool_name: 'runtime.get_current_time', arguments_summary: { timezone: 'UTC' }, approval_status: 'required', execution_status: 'blocked' }, created_at: '2026-05-25T00:00:00Z' }),
+      mapApiRunEvent({ id: 'evt-tool-2', run_id: 'run-1', thread_id: 'thread-1', sequence: 2, category: 'progress', type: 'tool_call_approval_required', summary: 'Tool approval required', content: null, metadata: { tool_call_id: 'tc_1', tool_name: 'runtime.get_current_time', arguments_summary: { timezone: 'UTC' }, approval_status: 'required', execution_status: 'blocked' }, created_at: '2026-05-25T00:00:01Z' }),
+    ]
+    const run = mapApiRun({
+      id: 'run-1',
+      thread_id: 'thread-1',
+      status: 'blocked_on_tool_approval',
+      source: 'model_gateway',
+      title: 'Model gateway run',
+      created_at: '2026-05-25T00:00:00Z',
+      updated_at: '2026-05-25T00:00:01Z',
+      completed_at: null,
+      error_code: null,
+      error_message: null,
+    }, events)
+
+    expect(run.toolCalls?.[0]).toMatchObject({ toolCallId: 'tc_1', status: 'approval_required', approvalStatus: 'required', executionStatus: 'blocked' })
   })
 
   test('restores assistant draft from loaded model event history', () => {

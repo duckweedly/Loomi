@@ -490,6 +490,9 @@ func (r *PostgresRepository) RecordToolCallRequest(ctx context.Context, ident id
 	if _, err := tx.Exec(ctx, `update runs set status=$1, updated_at=now() where id=$2 and user_id=$3`, run.Status, run.ID, user.ID); err != nil {
 		return ToolCall{}, nil, err
 	}
+	if _, err := tx.Exec(ctx, `update background_jobs set status='cancelled', updated_at=now() where run_id=$1 and user_id=$2 and status in ('queued', 'retrying')`, run.ID, user.ID); err != nil {
+		return ToolCall{}, nil, err
+	}
 	metadata := map[string]any{"tool_call_id": call.ToolCallID, "tool_name": call.ToolName, "arguments_summary": call.ArgumentsSummary, "approval_status": string(call.ApprovalStatus), "execution_status": string(call.ExecutionStatus)}
 	requested, err := insertRunEvent(ctx, tx, run, RunEventCategoryProgress, EventToolCallRequested, "Tool call requested", nil, metadata)
 	if err != nil {
@@ -500,6 +503,212 @@ func (r *PostgresRepository) RecordToolCallRequest(ctx context.Context, ident id
 		return ToolCall{}, nil, err
 	}
 	return call, []RunEvent{requested, required}, tx.Commit(ctx)
+}
+
+func (r *PostgresRepository) ApproveToolCall(ctx context.Context, ident identity.LocalIdentity, threadID string, runID string, toolCallID string) (ToolCall, []RunEvent, error) {
+	user, err := r.ensureUser(ctx, ident)
+	if err != nil {
+		return ToolCall{}, nil, err
+	}
+	tx, err := r.Pool.Begin(ctx)
+	if err != nil {
+		return ToolCall{}, nil, err
+	}
+	defer tx.Rollback(ctx)
+	run, call, err := scopedPostgresToolCall(ctx, tx, user.ID, threadID, runID, toolCallID)
+	if err != nil {
+		return ToolCall{}, nil, err
+	}
+	if call.ApprovalStatus == ToolCallApprovalApproved {
+		if call.ExecutionStatus == ToolCallExecutionNotStarted || call.ExecutionStatus == ToolCallExecutionExecuting || call.ExecutionStatus == ToolCallExecutionSucceeded || call.ExecutionStatus == ToolCallExecutionFailed {
+			return call, nil, tx.Commit(ctx)
+		}
+		return ToolCall{}, nil, NewError(CodeInvalidRequest, "Tool call cannot be approved.")
+	}
+	if call.ApprovalStatus != ToolCallApprovalRequired || call.ExecutionStatus != ToolCallExecutionBlocked || IsRunTerminal(run.Status) {
+		return ToolCall{}, nil, NewError(CodeInvalidRequest, "Tool call cannot be approved.")
+	}
+	call, err = scanToolCall(tx.QueryRow(ctx, `update tool_calls set approval_status='approved', execution_status='not_started', updated_at=now() where id=$1 returning id, thread_id, run_id, tool_call_id, tool_name, arguments_summary, approval_status, execution_status, result_summary, error_code, error_message, requested_at, updated_at`, call.ID))
+	if err != nil {
+		return ToolCall{}, nil, err
+	}
+	run.Status = RunStatusQueued
+	if _, err := tx.Exec(ctx, `update runs set status='queued', updated_at=now() where id=$1 and user_id=$2`, run.ID, user.ID); err != nil {
+		return ToolCall{}, nil, err
+	}
+	if _, err := tx.Exec(ctx, `update background_jobs set status='cancelled', updated_at=now() where run_id=$1 and user_id=$2 and status in ('queued', 'leased', 'retrying')`, run.ID, user.ID); err != nil {
+		return ToolCall{}, nil, err
+	}
+	jobID := NewBackgroundJobID()
+	metadata := RedactEventMetadata(map[string]any{"source": string(run.Source), "job_id": jobID, "tool_call_id": call.ToolCallID, "resume_reason": "tool_call_approved"})
+	if _, err := tx.Exec(ctx, `insert into background_jobs (id, run_id, thread_id, user_id, kind, status, priority, max_attempts, scheduled_at, metadata) values ($1, $2, $3, $4, $5, 'queued', 50, 3, now(), $6)`, jobID, run.ID, run.ThreadID, user.ID, BackgroundJobKindRunExecution, mustJSON(metadata)); err != nil {
+		return ToolCall{}, nil, err
+	}
+	event, err := insertRunEvent(ctx, tx, run, RunEventCategoryProgress, EventToolCallApproved, "Tool call approved", nil, toolCallEventMetadata(call))
+	if err != nil {
+		return ToolCall{}, nil, err
+	}
+	return call, []RunEvent{event}, tx.Commit(ctx)
+}
+
+func (r *PostgresRepository) DenyToolCall(ctx context.Context, ident identity.LocalIdentity, threadID string, runID string, toolCallID string) (ToolCall, []RunEvent, error) {
+	user, err := r.ensureUser(ctx, ident)
+	if err != nil {
+		return ToolCall{}, nil, err
+	}
+	tx, err := r.Pool.Begin(ctx)
+	if err != nil {
+		return ToolCall{}, nil, err
+	}
+	defer tx.Rollback(ctx)
+	run, call, err := scopedPostgresToolCall(ctx, tx, user.ID, threadID, runID, toolCallID)
+	if err != nil {
+		return ToolCall{}, nil, err
+	}
+	if call.ApprovalStatus == ToolCallApprovalDenied {
+		return call, nil, tx.Commit(ctx)
+	}
+	if call.ExecutionStatus == ToolCallExecutionExecuting || call.ExecutionStatus == ToolCallExecutionSucceeded || call.ExecutionStatus == ToolCallExecutionFailed || call.ExecutionStatus == ToolCallExecutionCancelled || IsRunTerminal(run.Status) {
+		return ToolCall{}, nil, NewError(CodeInvalidRequest, "Tool call cannot be denied.")
+	}
+	call, err = scanToolCall(tx.QueryRow(ctx, `update tool_calls set approval_status='denied', execution_status='cancelled', updated_at=now() where id=$1 returning id, thread_id, run_id, tool_call_id, tool_name, arguments_summary, approval_status, execution_status, result_summary, error_code, error_message, requested_at, updated_at`, call.ID))
+	if err != nil {
+		return ToolCall{}, nil, err
+	}
+	if _, err := tx.Exec(ctx, `update background_jobs set status='cancelled', updated_at=now() where run_id=$1 and user_id=$2 and status in ('queued', 'leased', 'retrying')`, run.ID, user.ID); err != nil {
+		return ToolCall{}, nil, err
+	}
+	stopped, err := scanRun(tx.QueryRow(ctx, `update runs set status='stopped', completed_at=now(), updated_at=now() where id=$1 and user_id=$2 returning id, thread_id, user_id, status, source, title, created_at, updated_at, completed_at, stop_requested_at, error_code, error_message`, run.ID, user.ID))
+	if err != nil {
+		return ToolCall{}, nil, err
+	}
+	denied, err := insertRunEvent(ctx, tx, stopped, RunEventCategoryProgress, EventToolCallDenied, "Tool call denied by user", nil, toolCallEventMetadata(call))
+	if err != nil {
+		return ToolCall{}, nil, err
+	}
+	final, err := insertRunEvent(ctx, tx, stopped, RunEventCategoryFinal, EventRunStopped, "Run stopped after tool denial", nil, map[string]any{"tool_call_id": call.ToolCallID, "reason": "tool_call_denied"})
+	if err != nil {
+		return ToolCall{}, nil, err
+	}
+	return call, []RunEvent{denied, final}, tx.Commit(ctx)
+}
+
+func (r *PostgresRepository) StartToolCallExecution(ctx context.Context, ident identity.LocalIdentity, threadID string, runID string, toolCallID string) (ToolCall, []RunEvent, error) {
+	user, err := r.ensureUser(ctx, ident)
+	if err != nil {
+		return ToolCall{}, nil, err
+	}
+	tx, err := r.Pool.Begin(ctx)
+	if err != nil {
+		return ToolCall{}, nil, err
+	}
+	defer tx.Rollback(ctx)
+	run, call, err := scopedPostgresToolCall(ctx, tx, user.ID, threadID, runID, toolCallID)
+	if err != nil {
+		return ToolCall{}, nil, err
+	}
+	if call.ExecutionStatus == ToolCallExecutionExecuting || call.ExecutionStatus == ToolCallExecutionSucceeded || call.ExecutionStatus == ToolCallExecutionFailed || call.ExecutionStatus == ToolCallExecutionCancelled {
+		return call, nil, tx.Commit(ctx)
+	}
+	if call.ApprovalStatus != ToolCallApprovalApproved || call.ExecutionStatus != ToolCallExecutionNotStarted || IsRunTerminal(run.Status) {
+		return ToolCall{}, nil, NewError(CodeInvalidRequest, "Tool call cannot execute.")
+	}
+	call, err = scanToolCall(tx.QueryRow(ctx, `update tool_calls set execution_status='executing', updated_at=now() where id=$1 returning id, thread_id, run_id, tool_call_id, tool_name, arguments_summary, approval_status, execution_status, result_summary, error_code, error_message, requested_at, updated_at`, call.ID))
+	if err != nil {
+		return ToolCall{}, nil, err
+	}
+	event, err := insertRunEvent(ctx, tx, run, RunEventCategoryProgress, EventToolCallExecuting, "Tool call executing", nil, toolCallEventMetadata(call))
+	if err != nil {
+		return ToolCall{}, nil, err
+	}
+	return call, []RunEvent{event}, tx.Commit(ctx)
+}
+
+func (r *PostgresRepository) CompleteToolCallSuccess(ctx context.Context, ident identity.LocalIdentity, threadID string, runID string, toolCallID string, resultSummary map[string]any) (ToolCall, []RunEvent, error) {
+	user, err := r.ensureUser(ctx, ident)
+	if err != nil {
+		return ToolCall{}, nil, err
+	}
+	tx, err := r.Pool.Begin(ctx)
+	if err != nil {
+		return ToolCall{}, nil, err
+	}
+	defer tx.Rollback(ctx)
+	run, call, err := scopedPostgresToolCall(ctx, tx, user.ID, threadID, runID, toolCallID)
+	if err != nil {
+		return ToolCall{}, nil, err
+	}
+	if call.ExecutionStatus == ToolCallExecutionSucceeded {
+		return call, nil, tx.Commit(ctx)
+	}
+	if call.ExecutionStatus != ToolCallExecutionExecuting || IsRunTerminal(run.Status) {
+		return ToolCall{}, nil, NewError(CodeInvalidRequest, "Tool call cannot succeed.")
+	}
+	result := RedactEventMetadata(resultSummary)
+	call, err = scanToolCall(tx.QueryRow(ctx, `update tool_calls set execution_status='succeeded', result_summary=$1, updated_at=now() where id=$2 returning id, thread_id, run_id, tool_call_id, tool_name, arguments_summary, approval_status, execution_status, result_summary, error_code, error_message, requested_at, updated_at`, mustJSON(result), call.ID))
+	if err != nil {
+		return ToolCall{}, nil, err
+	}
+	completed, err := scanRun(tx.QueryRow(ctx, `update runs set status='completed', completed_at=now(), updated_at=now() where id=$1 and user_id=$2 returning id, thread_id, user_id, status, source, title, created_at, updated_at, completed_at, stop_requested_at, error_code, error_message`, run.ID, user.ID))
+	if err != nil {
+		return ToolCall{}, nil, err
+	}
+	succeeded, err := insertRunEvent(ctx, tx, completed, RunEventCategoryProgress, EventToolCallSucceeded, "Tool call succeeded", nil, toolCallEventMetadata(call))
+	if err != nil {
+		return ToolCall{}, nil, err
+	}
+	final, err := insertRunEvent(ctx, tx, completed, RunEventCategoryFinal, EventRunCompleted, "Run completed", nil, map[string]any{"tool_call_id": call.ToolCallID})
+	if err != nil {
+		return ToolCall{}, nil, err
+	}
+	return call, []RunEvent{succeeded, final}, tx.Commit(ctx)
+}
+
+func (r *PostgresRepository) FailToolCallExecution(ctx context.Context, ident identity.LocalIdentity, threadID string, runID string, toolCallID string, errorCode string, errorMessage string) (ToolCall, []RunEvent, error) {
+	user, err := r.ensureUser(ctx, ident)
+	if err != nil {
+		return ToolCall{}, nil, err
+	}
+	tx, err := r.Pool.Begin(ctx)
+	if err != nil {
+		return ToolCall{}, nil, err
+	}
+	defer tx.Rollback(ctx)
+	run, call, err := scopedPostgresToolCall(ctx, tx, user.ID, threadID, runID, toolCallID)
+	if err != nil {
+		return ToolCall{}, nil, err
+	}
+	if call.ExecutionStatus == ToolCallExecutionFailed {
+		return call, nil, tx.Commit(ctx)
+	}
+	if call.ExecutionStatus != ToolCallExecutionExecuting || IsRunTerminal(run.Status) {
+		return ToolCall{}, nil, NewError(CodeInvalidRequest, "Tool call cannot fail.")
+	}
+	code := strings.TrimSpace(errorCode)
+	if code == "" {
+		code = "tool_execution_failed"
+	}
+	message := RedactEventText(strings.TrimSpace(errorMessage))
+	if message == "" {
+		message = "Tool execution failed."
+	}
+	call, err = scanToolCall(tx.QueryRow(ctx, `update tool_calls set execution_status='failed', error_code=$1, error_message=$2, updated_at=now() where id=$3 returning id, thread_id, run_id, tool_call_id, tool_name, arguments_summary, approval_status, execution_status, result_summary, error_code, error_message, requested_at, updated_at`, code, message, call.ID))
+	if err != nil {
+		return ToolCall{}, nil, err
+	}
+	failedRun, err := scanRun(tx.QueryRow(ctx, `update runs set status='failed', completed_at=now(), updated_at=now(), error_code=$1, error_message=$2 where id=$3 and user_id=$4 returning id, thread_id, user_id, status, source, title, created_at, updated_at, completed_at, stop_requested_at, error_code, error_message`, code, message, run.ID, user.ID))
+	if err != nil {
+		return ToolCall{}, nil, err
+	}
+	failed, err := insertRunEvent(ctx, tx, failedRun, RunEventCategoryError, EventToolCallFailed, message, nil, toolCallEventMetadata(call))
+	if err != nil {
+		return ToolCall{}, nil, err
+	}
+	final, err := insertRunEvent(ctx, tx, failedRun, RunEventCategoryFinal, EventRunFailed, message, nil, map[string]any{"tool_call_id": call.ToolCallID, "error_code": code})
+	if err != nil {
+		return ToolCall{}, nil, err
+	}
+	return call, []RunEvent{failed, final}, tx.Commit(ctx)
 }
 
 func (r *PostgresRepository) ClaimBackgroundJob(ctx context.Context, ident identity.LocalIdentity, input ClaimBackgroundJobInput) (BackgroundJob, Run, bool, error) {
@@ -732,6 +941,24 @@ func insertRunEvent(ctx context.Context, tx pgx.Tx, run Run, category RunEventCa
 		return RunEvent{}, err
 	}
 	return scanRunEvent(tx.QueryRow(ctx, `insert into run_events (id, run_id, thread_id, user_id, sequence, category, type, summary, content, metadata) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) returning id, run_id, thread_id, user_id, sequence, category, type, summary, content, metadata, created_at`, NewRunEventID(), run.ID, run.ThreadID, run.UserID, nextSequence, category, eventType, RedactEventText(summary), content, mustJSON(RedactEventMetadata(metadata))))
+}
+
+func scopedPostgresToolCall(ctx context.Context, tx pgx.Tx, userID string, threadID string, runID string, toolCallID string) (Run, ToolCall, error) {
+	run, err := scanRun(tx.QueryRow(ctx, `select id, thread_id, user_id, status, source, title, created_at, updated_at, completed_at, stop_requested_at, error_code, error_message from runs where id=$1 and thread_id=$2 and user_id=$3 for update`, runID, threadID, userID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Run{}, ToolCall{}, NewError(CodeRunNotFound, "Run not found.")
+	}
+	if err != nil {
+		return Run{}, ToolCall{}, err
+	}
+	call, err := scanToolCall(tx.QueryRow(ctx, `select id, thread_id, run_id, tool_call_id, tool_name, arguments_summary, approval_status, execution_status, result_summary, error_code, error_message, requested_at, updated_at from tool_calls where thread_id=$1 and run_id=$2 and tool_call_id=$3 for update`, threadID, runID, strings.TrimSpace(toolCallID)))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Run{}, ToolCall{}, NewError(CodeRunNotFound, "Run not found.")
+	}
+	if err != nil {
+		return Run{}, ToolCall{}, err
+	}
+	return run, call, nil
 }
 
 func (r *PostgresRepository) StopRun(ctx context.Context, ident identity.LocalIdentity, runID string) (StopRunOutput, error) {

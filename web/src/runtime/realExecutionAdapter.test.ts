@@ -59,6 +59,21 @@ describe('applyRealRunEvent', () => {
     expect(next.toolCalls?.[0]).toMatchObject({ status: 'approved', approvalStatus: 'approved' })
   })
 
+  test('maps M7 terminal tool events into result and error states', () => {
+    const run = { id: 'run-a', threadId: 'thread-a', status: 'running', model: 'Model gateway', context: 'model_gateway', source: 'model_gateway', events: [], toolCalls: [] } as const
+    const succeeded: RuntimeEvent = { id: 'evt-tool-success', runId: 'run-a', threadId: 'thread-a', sequence: 1, type: 'tool.call.succeeded', label: 'tool', detail: 'Tool call succeeded', time: 'Now', status: 'running', group: 'tool-call', metadata: { tool_call_id: 'tc_1', tool_name: 'runtime.get_current_time', approval_status: 'approved', execution_status: 'succeeded', result_summary: { timezone: 'UTC' } } }
+    const failed: RuntimeEvent = { id: 'evt-tool-failed', runId: 'run-a', threadId: 'thread-a', sequence: 2, type: 'tool.call.failed', label: 'tool', detail: 'Tool call failed', time: 'Later', status: 'failed', group: 'tool-call', metadata: { tool_call_id: 'tc_2', tool_name: 'runtime.get_current_time', approval_status: 'approved', execution_status: 'failed', error_code: 'tool_execution_failed', error_message: 'Tool execution failed.' } }
+    const denied: RuntimeEvent = { id: 'evt-tool-denied', runId: 'run-a', threadId: 'thread-a', sequence: 3, type: 'tool.call.denied', label: 'tool', detail: 'Tool call denied', time: 'Later', status: 'stopped', group: 'tool-call', metadata: { tool_call_id: 'tc_3', tool_name: 'runtime.get_current_time', approval_status: 'denied', execution_status: 'cancelled' } }
+
+    const successRun = applyRealRunEvent(run, succeeded)
+    const failedRun = applyRealRunEvent(run, failed)
+    const deniedRun = applyRealRunEvent(run, denied)
+
+    expect(successRun.toolCalls?.[0]).toMatchObject({ status: 'succeeded', executionStatus: 'succeeded', resultSummary: { timezone: 'UTC' } })
+    expect(failedRun.toolCalls?.[0]).toMatchObject({ status: 'failed', executionStatus: 'failed', errorCode: 'tool_execution_failed', errorMessage: 'Tool execution failed.' })
+    expect(deniedRun.toolCalls?.[0]).toMatchObject({ status: 'denied', approvalStatus: 'denied', executionStatus: 'cancelled' })
+  })
+
   test('maps backend setup provider and stream failures to capability signals', () => {
     expect(mapRealRuntimeCapabilitySignal(new Error('Failed to fetch'))).toEqual({ backendUnavailable: true })
     expect(mapRealRuntimeCapabilitySignal(Object.assign(new Error('model setup missing'), { code: 'model_setup_missing' }))).toEqual({ modelSetupMissing: true })

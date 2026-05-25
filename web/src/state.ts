@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { apiClient, executionAdapter } from './apiClient'
 import { setMockRuntimeScript } from './mockApiClient'
-import type { BackendCapabilityState, Message, ProviderCapability, Run, RunEvent, RuntimeEvent, RuntimeScriptId, StaleEventGuard, StreamState, Thread, ThreadRuntimeState } from './domain'
+import type { BackendCapabilityState, Message, ProviderCapability, Run, RunEvent, RuntimeEvent, RuntimeScriptId, StaleEventGuard, StreamState, Thread, ThreadRuntimeState, ToolCall } from './domain'
 import { isRuntimeActive, isRuntimeTerminal } from './runtime/executionAdapter'
 import { deriveCapabilitySignalFromEvent } from './runtime/backendCapabilityStatus'
 import { applyRealRunEvent, mapRealRuntimeCapabilitySignal } from './runtime/realExecutionAdapter'
@@ -412,6 +412,31 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
     setThreads(await apiClient.listThreads())
   }, [run])
 
+  const applyToolCallProjection = useCallback((toolCall: ToolCall) => {
+    setRun((current) => {
+      if (!current || current.id !== toolCall.id && current.id !== toolCall.toolCallId && current.id !== runRef.current?.id) return current
+      const existing = current.toolCalls ?? []
+      const index = existing.findIndex((candidate) => candidate.toolCallId === toolCall.toolCallId)
+      const toolCalls = index >= 0 ? existing.map((candidate, itemIndex) => itemIndex === index ? toolCall : candidate) : [toolCall, ...existing]
+      const next = { ...current, toolCalls }
+      runRef.current = next
+      return next
+    })
+  }, [])
+
+  const approveToolCall = useCallback(async (toolCall: ToolCall) => {
+    if (!run || !apiClient.approveToolCall) return
+    const approved = await apiClient.approveToolCall(run.threadId, run.id, toolCall.toolCallId ?? toolCall.id)
+    applyToolCallProjection(approved)
+    setStreamState('connecting')
+  }, [applyToolCallProjection, run])
+
+  const denyToolCall = useCallback(async (toolCall: ToolCall) => {
+    if (!run || !apiClient.denyToolCall) return
+    const denied = await apiClient.denyToolCall(run.threadId, run.id, toolCall.toolCallId ?? toolCall.id)
+    applyToolCallProjection(denied)
+  }, [applyToolCallProjection, run])
+
   const retryRun = useCallback(async () => {
     if (!run || run.status !== 'failed') return
     setError(null)
@@ -521,6 +546,8 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
     archiveThread,
     sendMessage,
     stopRun,
+    approveToolCall,
+    denyToolCall,
     retryRun,
     regenerateRun,
   }
