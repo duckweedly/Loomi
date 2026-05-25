@@ -27,6 +27,11 @@ type modelProviderListResponse struct {
 	RequestID string                              `json:"request_id"`
 }
 
+type localProviderDetectionResponse struct {
+	Providers []productruntime.LocalProviderCapability `json:"providers"`
+	RequestID string                                   `json:"request_id"`
+}
+
 type checkModelProviderRequest struct {
 	ProviderID string `json:"provider_id"`
 }
@@ -77,6 +82,14 @@ func (s *Server) handleModelProviders(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeMethodNotAllowed(w, "GET, POST")
 	}
+}
+
+func (s *Server) handleLocalProviderDetections(w http.ResponseWriter, r *http.Request) {
+	input := s.localProviderDetectionInput
+	if input.HomeDir == "" && input.CodexHome == "" && input.ClaudeConfigDir == "" && input.Env == nil && !input.Disabled {
+		input = productruntime.LocalProviderDetectionInputFromProcess()
+	}
+	writeJSON(w, http.StatusOK, localProviderDetectionResponse{Providers: productruntime.DetectLocalProviders(input), RequestID: diagnostics.NewRequestID()})
 }
 
 func (s *Server) handleModelProviderSave(w http.ResponseWriter, r *http.Request) {

@@ -21,14 +21,15 @@ type GatewayRunner interface {
 }
 
 type Server struct {
-	cfg           config.Config
-	checker       db.Checker
-	product       productdata.Service
-	broadcaster   *productruntime.Broadcaster
-	runner        RuntimeRunner
-	gatewayRunner GatewayRunner
-	providers     []productruntime.ProviderConfig
-	mux           *http.ServeMux
+	cfg                         config.Config
+	checker                     db.Checker
+	product                     productdata.Service
+	broadcaster                 *productruntime.Broadcaster
+	runner                      RuntimeRunner
+	gatewayRunner               GatewayRunner
+	providers                   []productruntime.ProviderConfig
+	localProviderDetectionInput productruntime.LocalProviderDetectionInput
+	mux                         *http.ServeMux
 }
 
 func NewServer(cfg config.Config, checker db.Checker) *Server {
@@ -53,6 +54,8 @@ func NewServerWithRuntimes(cfg config.Config, checker db.Checker, product produc
 	s.mux.HandleFunc("/v1/personas", s.handlePersonas)
 	s.mux.HandleFunc("/v1/model-providers", s.handleModelProviders)
 	s.mux.HandleFunc("POST /v1/model-providers/check", s.handleModelProviderCheck)
+	s.mux.HandleFunc("GET /v1/local-provider-detections", s.handleLocalProviderDetections)
+	s.mux.HandleFunc("/v1/tools/catalog", s.handleToolsCatalog)
 	s.mux.HandleFunc("/v1/memory", s.handleMemory)
 	s.mux.HandleFunc("/v1/memory/", s.handleMemoryByID)
 	s.mux.HandleFunc("/v1/threads", s.handleThreads)

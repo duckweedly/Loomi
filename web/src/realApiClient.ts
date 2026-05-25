@@ -1,5 +1,5 @@
 import type { ApiClient } from './apiClient'
-import type { MemoryAuditItem, MemoryEntry, MemoryFilters, Message, Persona, ProviderCapability, ProviderFamily, Run, RunEvent, RunSource, RunStatus, Thread, ToolCall, WorkerQueueDiagnostics, WorkerQueueStatus, WorkerStatus } from './domain'
+import type { LocalProviderDetection, MemoryAuditItem, MemoryEntry, MemoryFilters, Message, Persona, ProviderCapability, ProviderFamily, Run, RunEvent, RunSource, RunStatus, Thread, ToolCall, ToolCatalogItem, WorkerQueueDiagnostics, WorkerQueueStatus, WorkerStatus } from './domain'
 import { isRuntimeTerminal } from './runtime/executionAdapter'
 import { applyRealRunEvent } from './runtime/realExecutionAdapter'
 
@@ -61,6 +61,18 @@ export type ApiProviderCapability = {
   message?: string | null
 }
 
+export type ApiLocalProviderDetection = {
+  provider_id: string
+  display_name: string
+  provider_kind: string
+  auth_mode: LocalProviderDetection['authMode']
+  status: LocalProviderDetection['status']
+  model_candidates: string[]
+  source: LocalProviderDetection['source']
+  redaction_applied: boolean
+  message?: string | null
+}
+
 export type ApiWorkerQueueDiagnostics = {
   queue_status: WorkerQueueStatus
   worker_status: WorkerStatus
@@ -86,6 +98,19 @@ export type ApiToolCall = {
   result_summary?: Record<string, unknown> | null
   error_code?: string | null
   error_message?: string | null
+}
+
+export type ApiToolCatalogItem = {
+  name: string
+  display_name: string
+  description: string
+  source: ToolCatalogItem['source']
+  group: ToolCatalogItem['group']
+  input_schema_hash?: string | null
+  risk_level: ToolCatalogItem['riskLevel']
+  approval_policy: ToolCatalogItem['approvalPolicy']
+  enabled: boolean
+  execution_state: ToolCatalogItem['executionState']
 }
 
 export type ApiMemoryEntry = {
@@ -189,6 +214,21 @@ function mapPersona(persona: ApiPersona): Persona {
     description: persona.description,
     activeVersion: persona.active_version,
     isDefault: persona.is_default,
+  }
+}
+
+function mapApiToolCatalogItem(tool: ApiToolCatalogItem): ToolCatalogItem {
+  return {
+    name: tool.name,
+    displayName: tool.display_name,
+    description: tool.description,
+    source: tool.source,
+    group: tool.group,
+    inputSchemaHash: tool.input_schema_hash ?? undefined,
+    riskLevel: tool.risk_level,
+    approvalPolicy: tool.approval_policy,
+    enabled: tool.enabled,
+    executionState: tool.execution_state,
   }
 }
 
@@ -316,6 +356,20 @@ export function mapApiProviderCapability(provider: ApiProviderCapability): Provi
     baseUrl: provider.base_url ?? null,
     model: provider.model,
     status: provider.status,
+    message: provider.message ?? null,
+  }
+}
+
+export function mapApiLocalProviderDetection(provider: ApiLocalProviderDetection): LocalProviderDetection {
+  return {
+    providerId: provider.provider_id,
+    displayName: provider.display_name,
+    providerKind: provider.provider_kind,
+    authMode: provider.auth_mode,
+    status: provider.status,
+    modelCandidates: provider.model_candidates,
+    source: provider.source,
+    redactionApplied: provider.redaction_applied,
     message: provider.message ?? null,
   }
 }
@@ -537,6 +591,16 @@ export const realApiClient: ApiClient = {
   async listModelProviders() {
     const body = await requestJSON<{ providers: ApiProviderCapability[] }>('/v1/model-providers')
     return body.providers.map(mapApiProviderCapability)
+  },
+
+  async listToolCatalog() {
+    const body = await requestJSON<{ tools: ApiToolCatalogItem[] }>('/v1/tools/catalog')
+    return body.tools.map(mapApiToolCatalogItem)
+  },
+
+  async listLocalProviderDetections() {
+    const body = await requestJSON<{ providers: ApiLocalProviderDetection[] }>('/v1/local-provider-detections')
+    return body.providers.map(mapApiLocalProviderDetection)
   },
 
   async checkModelProvider(providerId: string) {

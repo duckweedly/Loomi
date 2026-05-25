@@ -1,5 +1,5 @@
 import type { ApiClient } from './apiClient'
-import type { Message, Run, RuntimeScriptId } from './domain'
+import type { Message, Run, RuntimeScriptId, ToolCatalogItem } from './domain'
 import { messages, runs, threads } from './mockData'
 import { isRuntimeTerminal } from './runtime/executionAdapter'
 import { mockExecutionAdapter } from './runtime/mockExecutionAdapter'
@@ -10,6 +10,19 @@ let threadStore = [...threads]
 let messageStore = [...messages]
 let runStore = runs.map((run) => ({ ...run, events: [...run.events] }))
 let selectedRuntimeScriptId: RuntimeScriptId = 'success'
+
+const mockToolCatalog: ToolCatalogItem[] = [{
+  name: 'runtime.get_current_time',
+  displayName: 'Current time',
+  description: 'Returns the current UTC time.',
+  source: 'builtin',
+  group: 'runtime',
+  inputSchemaHash: 'sha256:mock-current-time',
+  riskLevel: 'low',
+  approvalPolicy: 'always_required',
+  enabled: true,
+  executionState: 'executable',
+}]
 
 function nextMockId(prefix: string) {
   mockId += 1
@@ -132,6 +145,37 @@ export const mockApiClient: ApiClient = {
 
   async getRunEvents(runId: string) {
     return runStore.find((run) => run.id === runId)?.events ?? []
+  },
+
+  async listLocalProviderDetections() {
+    return [
+      {
+        providerId: 'local_claude_code',
+        displayName: 'Local Claude Code',
+        providerKind: 'claude_code',
+        authMode: 'unknown',
+        status: 'unavailable',
+        modelCandidates: ['claude-sonnet-4-5'],
+        source: 'unknown',
+        redactionApplied: true,
+        message: 'Not detected.',
+      },
+      {
+        providerId: 'local_codex',
+        displayName: 'Local Codex',
+        providerKind: 'codex',
+        authMode: 'unknown',
+        status: 'unavailable',
+        modelCandidates: ['gpt-5'],
+        source: 'unknown',
+        redactionApplied: true,
+        message: 'Not detected.',
+      },
+    ]
+  },
+
+  async listToolCatalog() {
+    return mockToolCatalog
   },
 
   subscribeRunEvents(runId: string, afterSequence: number, onEvent) {

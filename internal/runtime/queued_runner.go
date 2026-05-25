@@ -20,6 +20,7 @@ type MCPToolExecutor interface {
 
 func (r QueuedRunRouter) Run(ctx context.Context, run productdata.Run, job productdata.BackgroundJob) error {
 	svc := r.service()
+	var prepared *productdata.RunContext
 	if svc != nil && job.ID != "" {
 		state := &PipelineState{RunContext: productdata.RunContext{Run: run, Job: job}}
 		pipeline := Pipeline{Recorder: PipelineRecorder{Service: svc, Broadcaster: r.broadcaster()}}
@@ -40,13 +41,14 @@ func (r QueuedRunRouter) Run(ctx context.Context, run productdata.Run, job produ
 		}
 		run = state.RunContext.Run
 		job = state.RunContext.Job
+		prepared = &state.RunContext
 	}
-	return r.dispatch(ctx, run, job)
+	return r.dispatch(ctx, run, job, prepared)
 }
 
-func (r QueuedRunRouter) dispatch(ctx context.Context, run productdata.Run, job productdata.BackgroundJob) error {
+func (r QueuedRunRouter) dispatch(ctx context.Context, run productdata.Run, job productdata.BackgroundJob, prepared *productdata.RunContext) error {
 	if toolCallID := metadataString(job.Metadata, "tool_call_id"); toolCallID != "" {
-		return r.runApprovedTool(ctx, run, toolCallID)
+		return r.runApprovedTool(ctx, run, toolCallID, prepared)
 	}
 	if run.Source == productdata.RunSourceModelGateway {
 		if r.Gateway != nil {
@@ -81,7 +83,7 @@ func (r QueuedRunRouter) broadcaster() *Broadcaster {
 	return nil
 }
 
-func (r QueuedRunRouter) runApprovedTool(ctx context.Context, run productdata.Run, toolCallID string) error {
+func (r QueuedRunRouter) runApprovedTool(ctx context.Context, run productdata.Run, toolCallID string, prepared *productdata.RunContext) error {
 	if r.Gateway == nil || r.Gateway.Service == nil {
 		return nil
 	}
@@ -96,42 +98,18 @@ func (r QueuedRunRouter) runApprovedTool(ctx context.Context, run productdata.Ru
 	if err != nil {
 		return err
 	}
-	if productdata.IsMCPToolName(call.ToolName) {
-		if r.MCPExecutor == nil {
-			_, _, _ = r.Gateway.Service.FailToolCallExecution(ctx, identity.LocalDevIdentity(), run.ThreadID, run.ID, toolCallID, "mcp_executor_unavailable", "MCP executor is unavailable.")
-			return nil
-		}
-		result, err := r.MCPExecutor.ExecuteMCPTool(ctx, call)
-		if err != nil {
-			_, _, _ = r.Gateway.Service.FailToolCallExecution(ctx, identity.LocalDevIdentity(), run.ThreadID, run.ID, toolCallID, "mcp_tool_execution_failed", err.Error())
-			return nil
-		}
-		if _, _, err = r.Gateway.Service.CompleteToolCallSuccess(ctx, identity.LocalDevIdentity(), run.ThreadID, run.ID, toolCallID, RedactMCPSummary(result)); err != nil {
-			return err
-		}
-		input := r.gatewayContinuationInput(ctx, run, toolCallID)
-		if input.MessageID == "" || input.ProviderID == "" {
-			return productdata.NewError(productdata.CodeInvalidRequest, "Continuation context is missing.")
-		}
-		r.Gateway.ContinueAfterToolResult(ctx, run, input)
-		return r.gatewayResult(ctx, run.ID)
+	enabledTools := []productdata.ToolResolution(nil)
+	if prepared != nil {
+		enabledTools = prepared.EnabledTools
 	}
-	tool := CurrentTimeToolDefinition()
-	if call.ToolName != tool.Name {
-		_, _, _ = r.Gateway.Service.FailToolCallExecution(ctx, identity.LocalDevIdentity(), run.ThreadID, run.ID, toolCallID, "unsupported_tool", "Tool is not supported.")
-		return nil
-	}
-	args, err := tool.NormalizeArguments(call.ArgumentsSummary)
-	if err != nil {
-		_, _, _ = r.Gateway.Service.FailToolCallExecution(ctx, identity.LocalDevIdentity(), run.ThreadID, run.ID, toolCallID, "invalid_tool_arguments", err.Error())
-		return nil
-	}
-	result, err := tool.Execute(args)
+	catalog := toolCatalogForExecution(enabledTools)
+	broker := ToolBroker{Executor: DefaultToolExecutor{MCPExecutor: r.MCPExecutor}}
+	result, err := broker.Execute(ctx, ToolInvocationFromCall(call, catalog, enabledTools))
 	if err != nil {
 		_, _, _ = r.Gateway.Service.FailToolCallExecution(ctx, identity.LocalDevIdentity(), run.ThreadID, run.ID, toolCallID, "tool_execution_failed", err.Error())
 		return nil
 	}
-	if _, _, err = r.Gateway.Service.CompleteToolCallSuccess(ctx, identity.LocalDevIdentity(), run.ThreadID, run.ID, toolCallID, result); err != nil {
+	if _, _, err = r.Gateway.Service.CompleteToolCallSuccess(ctx, identity.LocalDevIdentity(), run.ThreadID, run.ID, toolCallID, result.ResultSummary); err != nil {
 		return err
 	}
 	input := r.gatewayContinuationInput(ctx, run, toolCallID)
@@ -140,6 +118,37 @@ func (r QueuedRunRouter) runApprovedTool(ctx context.Context, run productdata.Ru
 	}
 	r.Gateway.ContinueAfterToolResult(ctx, run, input)
 	return r.gatewayResult(ctx, run.ID)
+}
+
+func toolCatalogForExecution(enabledTools []productdata.ToolResolution) []productdata.ToolCatalogEntry {
+	catalog := []productdata.ToolCatalogEntry{}
+	for _, tool := range enabledTools {
+		entry := productdata.ToolCatalogEntry{
+			Name:            tool.Name,
+			DisplayName:     tool.Name,
+			Source:          productdata.ToolCatalogSource(tool.Source),
+			Group:           productdata.ToolCatalogGroup(tool.Group),
+			InputSchemaHash: tool.InputSchemaHash,
+			RiskLevel:       productdata.ToolRiskLevel(tool.RiskLevel),
+			ApprovalPolicy:  productdata.ToolApprovalPolicy(tool.ApprovalPolicy),
+			Enabled:         true,
+			ExecutionState:  productdata.ToolExecutionState(tool.ExecutionState),
+		}
+		if entry.Source == "" {
+			entry.Source = productdata.ToolCatalogSourceBuiltin
+		}
+		if entry.Group == "" {
+			entry.Group = productdata.ToolCatalogGroupRuntime
+		}
+		if entry.RiskLevel == "" {
+			entry.RiskLevel = productdata.ToolRiskLow
+		}
+		if entry.ApprovalPolicy == "" {
+			entry.ApprovalPolicy = productdata.ToolApprovalAlwaysRequired
+		}
+		catalog = append(catalog, entry)
+	}
+	return catalog
 }
 
 func (r QueuedRunRouter) gatewayResult(ctx context.Context, runID string) error {

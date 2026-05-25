@@ -36,7 +36,47 @@ Claude Code 项目内命令使用横线格式：
 
 `/speckit-implement` 按任务实现，并在必要时回到 spec 或 plan 修正前提。
 
-## 当前候选完成：M17 Work Artifact Evidence Closeout
+## 当前候选完成：M18.5 Local Provider Autodetect Foundation
+
+当前 Spec Kit 功能目录：
+
+```text
+specs/026-local-provider-autodetect-foundation/
+```
+
+关键产物：
+
+- `spec.md`：定义 Claude Code/Codex 本地 provider 检测、safe capability fields、explicit opt-in、Settings 状态和非目标。
+- `plan.md`：确定 detector 在 backend runtime/provider 边界，API 使用 read-only endpoint，Settings 只显示 detection evidence，不接入 model gateway。
+- `research.md`：记录 detection-only、fixture roots/env map、dedicated endpoint、safe status/model labels、helper/keychain/refresh unsupported 等决策。
+- `data-model.md`：定义 LocalProviderDetectionInput、LocalProviderCapability、LocalProviderDetectionResponse 和状态转换。
+- `contracts/`：定义 `GET /v1/local-provider-detections` 和 Settings provider UI 契约。
+- `quickstart.md`：记录 detector/httpapi/web/full validation。
+- `tasks.md`：按 detector、API、Settings UI、docs/validation 拆分。
+
+状态：M18.5 complete candidate。当前实现可识别 fixture Claude Code `.claude.json` primaryApiKey、`.claude/settings.json` env、`.claude/.credentials.json` OAuth shape，以及 Codex env/API key/auth-file/OAuth token presence；通过 `GET /v1/local-provider-detections` 和 Settings > Providers 显示 Local Claude Code / Local Codex 状态。M18.5 不执行 CLI/helper，不读 keychain，不刷新 OAuth，不调用外网，不保存 token，不自动启用或切换 provider，不做 Tool Runtime、workspace read/grep、sandbox、browser、web search 或 plugin marketplace。
+
+## 当前候选完成：M18 Tool Runtime + Tool Catalog Foundation
+
+当前 Spec Kit 功能目录：
+
+```text
+specs/025-tool-runtime-catalog-foundation/
+```
+
+关键产物：
+
+- `spec.md`：定义统一 Tool catalog、broker/executor、RunContext/persona/discovery policy、approval/event/redaction、read-only API/UI 和明确非目标。
+- `plan.md`：确定复用 M7/M12 approval projection、M9 RunContext、M10 persona、M11/M12 MCP discovery/execution、现有 Settings/docs-site，不新增强工具。
+- `research.md`：记录 computed catalog、single broker entrypoint、reuse lifecycle events、local stdio MCP only、Settings read-only 决策。
+- `data-model.md`：定义 Tool Catalog Entry、Tool Invocation、Tool Result 和 RunContext Tool Runtime Summary。
+- `contracts/`：定义 Tools catalog API、broker checks、event/redaction、Settings UI safe display。
+- `quickstart.md`：记录验证命令和 builtin/MCP approval-to-broker smoke。
+- `tasks.md`：按 Spec Kit、tests、catalog/broker、API/smoke、web UI、docs/validation 拆分。
+
+状态：M18 complete candidate。`runtime.get_current_time` 与本地 stdio MCP approved execution 都从 worker resume 进入 `ToolBroker`；RunContext enabled tools 由 catalog + persona allowlist + MCP discovery schema hash 交集生成；`GET /v1/tools/catalog` 和 Settings > Tools 仅展示 safe catalog。M18 不包含 workspace/shell/sandbox/browser/web/artifact tools、plugin marketplace、remote MCP/OAuth、Local Provider autodetect、多工具循环、多 agent 或 worker queue rewrite。
+
+## 近期已完成：M17 Work Artifact Evidence Closeout
 
 当前 Spec Kit 功能目录：
 
@@ -78,18 +118,17 @@ specs/023-work-mode-foundation/
 
 ## 后续路线纠偏：M18+ Tool Runtime 优先
 
-M17 已进入 Work Artifact Evidence Closeout 时，后续不再继续优先扩 Work 外壳。M18 开始应优先补工具 runtime，因为 Work mode 没有工具时只能展示计划和元数据，无法真正完成工作。
+M18 已完成 Tool Runtime + Tool Catalog foundation，后续工具能力应继续复用 broker/catalog，而不是直接在 worker/provider 里增加执行分支。
 
 后续 Spec Kit 应按以下方向拆分：
 
 - `024` 保持当前 M17 Work artifact/evidence closeout，不临时扩大范围。
-- `025` 建议用于 M18 Tool Runtime + Tool Catalog：Tool catalog/registry、source、risk level、approval policy、schema hash、enabled state、统一 Tool broker/executor、`runtime.get_current_time` 与本地 stdio MCP executor 接入同一 runtime。
-- `026` 建议用于 M19 Workspace Read Tools：只读 `workspace.glob`、`workspace.grep`、`workspace.read`，绑定 workspace/project scope，禁止文件写入和 host shell。
-- `027` 建议用于 M20 Artifact Tools：DB/object-store backed artifact create/read/list，把 Work artifact references 接真实 artifact。
-- `028` 建议用于 M21 Sandbox Code/Shell Tools：隔离 sandbox provider、`exec_command`、`python_execute`、continuation/terminate、stdout/stderr streaming、timeout/resource limits。
-- `029` 建议用于 M22 Web Search/Fetch Tools：`web.search`、`web.fetch`、citation、URL policy 和 SSRF/private-network guard。
-- `030` 建议用于 M23 Browser Automation Tools：sandbox browser navigate/snapshot/screenshot/click/type/console/network。
-- `031` 建议用于 M24 Tool Settings + MCP Management：Settings > Tools、MCP server list、本地 stdio config UI、provider health、enable/disable 和 approval policy override。
+- `027` 建议用于 M19 Workspace Read Tools：只读 `workspace.glob`、`workspace.grep`、`workspace.read`，绑定 workspace/project scope，禁止文件写入和 host shell。
+- `028` 建议用于 M20 Artifact Tools：DB/object-store backed artifact create/read/list，把 Work artifact references 接真实 artifact。
+- `029` 建议用于 M21 Sandbox Code/Shell Tools：隔离 sandbox provider、`exec_command`、`python_execute`、continuation/terminate、stdout/stderr streaming、timeout/resource limits。
+- `030` 建议用于 M22 Web Search/Fetch Tools：`web.search`、`web.fetch`、citation、URL policy 和 SSRF/private-network guard。
+- `031` 建议用于 M23 Browser Automation Tools：sandbox browser navigate/snapshot/screenshot/click/type/console/network。
+- `032` 建议用于 M24 Tool Settings + MCP Management：Settings > Tools、MCP server list、本地 stdio config UI、provider health、enable/disable 和 approval policy override。
 
 Desktop Runtime、Channels、Heartbeat、Plugin、Activity Recorder、marketplace 和复杂多 agent 编排应排在上述工具 runtime、安全边界和 sandbox 能力之后。
 

@@ -29,6 +29,31 @@ export type ProviderCapability = {
   message?: string | null
 }
 
+export type LocalProviderDetection = {
+  providerId: 'local_claude_code' | 'local_codex' | string
+  displayName: string
+  providerKind: 'claude_code' | 'codex' | string
+  authMode: 'api_key' | 'oauth' | 'unknown'
+  status: 'available' | 'unavailable' | 'needs_login' | 'unsupported' | 'disabled'
+  modelCandidates: string[]
+  source: 'local_config' | 'env' | 'keychain_unchecked' | 'unknown'
+  redactionApplied: boolean
+  message?: string | null
+}
+
+export type ToolCatalogItem = {
+  name: string
+  displayName: string
+  description: string
+  source: 'builtin' | 'mcp'
+  group: 'runtime' | 'mcp' | 'workspace' | 'artifact' | 'sandbox' | 'web' | 'browser'
+  inputSchemaHash?: string
+  riskLevel: 'low' | 'medium' | 'high'
+  approvalPolicy: 'always_required' | 'read_only' | 'disabled'
+  enabled: boolean
+  executionState: 'executable' | 'disabled' | 'not_discovered' | 'not_allowed' | 'non_executable'
+}
+
 export type MemoryEntry = {
   id: string
   title: string

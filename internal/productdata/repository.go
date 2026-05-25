@@ -469,6 +469,30 @@ func (r *PostgresRepository) PrepareRunContext(ctx context.Context, ident identi
 	return context, nil
 }
 
+func (r *PostgresRepository) ListToolCatalog(ctx context.Context, ident identity.LocalIdentity) ([]ToolCatalogEntry, error) {
+	user, err := r.ensureUser(ctx, ident)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := r.Pool.Query(ctx, `select id, run_id, thread_id, user_id, sequence, category, type, summary, content, metadata, created_at from run_events where user_id=$1 and type in ('mcp_discovery_succeeded','mcp_discovery_failed','mcp_discovery_rejected') order by created_at asc, id asc`, user.ID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var events []RunEvent
+	for rows.Next() {
+		event, err := scanRunEvent(rows)
+		if err != nil {
+			return nil, err
+		}
+		events = append(events, event)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return SafeToolCatalogFromEvents(events), nil
+}
+
 func (r *PostgresRepository) CreateMemoryEntry(ctx context.Context, ident identity.LocalIdentity, input CreateMemoryEntryInput) (MemoryEntry, error) {
 	user, err := r.ensureUser(ctx, ident)
 	if err != nil {

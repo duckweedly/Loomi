@@ -1,6 +1,6 @@
 import { ArrowLeft, ChevronRight } from 'lucide-react'
 import type { ReactNode } from 'react'
-import type { BackendCapabilityState, MemoryAuditItem, MemoryEntry, MemoryFilters, ProviderCapability, RunStatus, RuntimeScriptId, StreamState, Thread } from '../domain'
+import type { BackendCapabilityState, LocalProviderDetection, MemoryAuditItem, MemoryEntry, MemoryFilters, ProviderCapability, RunStatus, RuntimeScriptId, StreamState, Thread, ToolCatalogItem } from '../domain'
 import type { ProviderCheckResult, ProviderSaveResult } from '../state'
 import type { ProviderDraftSettings } from '../useWorkspaceShellState'
 import type { Locale } from '../i18n'
@@ -19,6 +19,9 @@ type Props = {
   selectedThreadTitle?: string
   selectedRunStatus?: RunStatus
   providerCapabilities: ProviderCapability[]
+  toolCatalog: ToolCatalogItem[]
+  localProviderDetections: LocalProviderDetection[]
+  localProviderDetectionError?: string | null
   memoryEntries: MemoryEntry[]
   memoryQuery: string
   memoryFilters: MemoryFilters
@@ -41,6 +44,7 @@ type Props = {
   onProviderDraftSettingsChange: (settings: ProviderDraftSettings) => void
   onSaveProvider: (settings: ProviderDraftSettings) => void
   onCheckProvider: (providerId: string) => void
+  onDetectLocalProviders: () => void
   onMemoryQueryChange: (query: string) => void
   onMemoryFiltersChange: (filters: MemoryFilters) => void
   onOpenMemoryDetail: (entry: MemoryEntry) => void
@@ -161,6 +165,46 @@ function ProviderCheckConsole({ providerCapabilities, providerCheckResults, onCh
   )
 }
 
+function localProviderStatusLabel(status: LocalProviderDetection['status'], t: ReturnType<typeof getDictionary>['settings']) {
+  if (status === 'available') return t.localProviderDetected
+  if (status === 'needs_login') return t.localProviderNeedsLogin
+  if (status === 'unsupported') return t.localProviderUnsupported
+  if (status === 'disabled') return t.disabled
+  return t.localProviderNotDetected
+}
+
+function LocalProviderDetectionList({ localProviderDetections, localProviderDetectionError, t }: Pick<Props, 'localProviderDetections' | 'localProviderDetectionError'> & { t: ReturnType<typeof getDictionary>['settings'] }) {
+  if (localProviderDetectionError) {
+    return <p className="provider-check-result failed">{localProviderDetectionError}</p>
+  }
+  if (!localProviderDetections.length) {
+    return <p className="provider-check-result idle">{t.localProviderDetectionIdle}</p>
+  }
+  return (
+    <div className="provider-console-list">
+      {localProviderDetections.map((provider) => (
+        <article className="provider-console-card" key={provider.providerId}>
+          <div className="provider-console-main">
+            <div className="provider-console-title">
+              <strong>{provider.displayName}</strong>
+              <span className={`setting-status-badge ${provider.status === 'available' ? 'available' : 'unavailable'}`}>{localProviderStatusLabel(provider.status, t)}</span>
+            </div>
+            <div className="provider-console-meta">
+              <span>{provider.providerId}</span>
+              <span>{provider.providerKind}</span>
+              <span>{provider.authMode}</span>
+              <span>{provider.source}</span>
+              <span>{provider.modelCandidates.join(', ')}</span>
+            </div>
+            <p className="provider-check-result idle">{provider.message ?? (provider.status === 'available' ? t.localProviderDetected : t.localProviderNotDetected)}</p>
+            <p className="provider-check-result idle">{t.localProviderExplicitOptIn} · {t.localProviderNoSecrets}</p>
+          </div>
+        </article>
+      ))}
+    </div>
+  )
+}
+
 function RuntimeStatusRows({ dataSourceMode, backendCapability, streamState, selectedThreadTitle, selectedRunStatus, providerCapabilities, t }: Pick<Props, 'dataSourceMode' | 'backendCapability' | 'streamState' | 'selectedThreadTitle' | 'selectedRunStatus' | 'providerCapabilities'> & { t: ReturnType<typeof getDictionary>['settings'] }) {
   return (
     <>
@@ -171,6 +215,32 @@ function RuntimeStatusRows({ dataSourceMode, backendCapability, streamState, sel
       <SettingRow label={t.selectedRunStatus} helperText={t.selectedRunStatusHelper} status="read_only" t={t} control={<StatusValue>{selectedRunStatus ?? t.noActiveRun}</StatusValue>} />
       <SettingRow label={t.providerCapability} helperText={t.providerCapabilityHelper} status="read_only" t={t} control={<ProviderCapabilityList providerCapabilities={providerCapabilities} t={t} />} />
     </>
+  )
+}
+
+function ToolsPanel({ tools }: { tools: ToolCatalogItem[] }) {
+  if (!tools.length) return <StatusValue>No tools discovered</StatusValue>
+  return (
+    <div className="tools-catalog-list" data-testid="tools-catalog-list">
+      {tools.map((tool) => (
+        <article className="tools-catalog-row" key={tool.name}>
+          <div className="tools-catalog-main">
+            <strong>{tool.displayName || tool.name}</strong>
+            <code>{tool.name}</code>
+            <span>{tool.description}</span>
+            {tool.inputSchemaHash && <small>{tool.inputSchemaHash}</small>}
+          </div>
+          <div className="tools-catalog-badges">
+            <span>{tool.source}</span>
+            <span>{tool.group}</span>
+            <span>{tool.riskLevel}</span>
+            <span>{tool.approvalPolicy}</span>
+            <span>{tool.enabled ? 'enabled' : 'disabled'}</span>
+            <span>{tool.executionState}</span>
+          </div>
+        </article>
+      ))}
+    </div>
   )
 }
 
@@ -206,6 +276,9 @@ export function SettingsView({
   selectedThreadTitle,
   selectedRunStatus,
   providerCapabilities,
+  toolCatalog,
+  localProviderDetections,
+  localProviderDetectionError,
   memoryEntries,
   memoryQuery,
   memoryFilters,
@@ -228,6 +301,7 @@ export function SettingsView({
   onProviderDraftSettingsChange,
   onSaveProvider,
   onCheckProvider,
+  onDetectLocalProviders,
   onMemoryQueryChange,
   onMemoryFiltersChange,
   onOpenMemoryDetail,
@@ -243,6 +317,7 @@ export function SettingsView({
   const isGeneral = selectedCategory.id === 'general'
   const isProviders = selectedCategory.id === 'providers'
   const isMemory = selectedCategory.id === 'memory'
+  const isTools = selectedCategory.id === 'tools'
   const isAbout = selectedCategory.id === 'about'
 
   return (
@@ -354,6 +429,15 @@ export function SettingsView({
 
             <section className="settings-card">
               <div className="settings-card-head">
+                <h2>{t.localProviderAutodetectTitle}</h2>
+                <p>{t.localProviderAutodetectDescription}</p>
+                <button className="provider-test-button" onClick={onDetectLocalProviders}>{t.localProviderDetectAction}</button>
+              </div>
+              <LocalProviderDetectionList localProviderDetections={localProviderDetections} localProviderDetectionError={localProviderDetectionError} t={t} />
+            </section>
+
+            <section className="settings-card">
+              <div className="settings-card-head">
                 <h2>{t.providerLocalDraftTitle}</h2>
                 <p>{t.providerLocalDraftDescription}</p>
               </div>
@@ -445,6 +529,18 @@ export function SettingsView({
           </div>
         )}
 
+        {isTools && (
+          <div className="settings-card-stack">
+            <section className="settings-card">
+              <div className="settings-card-head">
+                <h2>Tools</h2>
+                <p>{selectedCategory.description}</p>
+              </div>
+              <ToolsPanel tools={toolCatalog} />
+            </section>
+          </div>
+        )}
+
         {isAbout && (
           <div className="settings-card-stack">
             <section className="settings-card">
@@ -459,7 +555,7 @@ export function SettingsView({
           </div>
         )}
 
-        {!isGeneral && !isProviders && !isMemory && !isAbout && <PlaceholderPanel selectedCategory={selectedCategory} t={t} />}
+        {!isGeneral && !isProviders && !isMemory && !isTools && !isAbout && <PlaceholderPanel selectedCategory={selectedCategory} t={t} />}
       </section>
     </div>
   )

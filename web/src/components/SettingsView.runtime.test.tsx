@@ -56,4 +56,22 @@ describe('SettingsView provider test console', () => {
     expect(source).toContain('providerDraftSettings.model')
     expect(source).toContain('apiKeySet')
   })
+
+  test('renders local provider autodetect status without opt-in controls or secrets', async () => {
+    const source = await Bun.file(new URL('./SettingsView.tsx', import.meta.url)).text()
+    const copy = await Bun.file(new URL('../i18n.ts', import.meta.url)).text()
+
+    expect(source).toContain('LocalProviderDetectionList')
+    expect(source).toContain('localProviderDetections')
+    expect(source).toContain('onDetectLocalProviders')
+    expect(source).toContain('t.localProviderDetectAction')
+    expect(source).toContain('t.localProviderDetectionIdle')
+    expect(source).toContain('t.localProviderAutodetectTitle')
+    expect(source).toContain('t.localProviderExplicitOptIn')
+    expect(source).toContain('t.localProviderNoSecrets')
+    expect(source).not.toContain('access_token')
+    expect(source).not.toContain('refresh_token')
+    expect(source).not.toContain('sk-')
+    expect(copy).toContain("localProviderAutodetectTitle: 'Local provider autodetect'")
+  })
 })

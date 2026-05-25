@@ -28,6 +28,7 @@ type Service interface {
 	ListRunEvents(context.Context, identity.LocalIdentity, string, int) ([]RunEvent, error)
 	AppendRunEvent(context.Context, identity.LocalIdentity, string, AppendRunEventInput) (RunEvent, error)
 	PrepareRunContext(context.Context, identity.LocalIdentity, BackgroundJob) (RunContext, error)
+	ListToolCatalog(context.Context, identity.LocalIdentity) ([]ToolCatalogEntry, error)
 	SyncBuiltInPersonas(context.Context, identity.LocalIdentity, []BuiltInPersonaConfig) (PersonaSyncResult, error)
 	ListPersonas(context.Context, identity.LocalIdentity) ([]Persona, error)
 	StopRun(context.Context, identity.LocalIdentity, string) (StopRunOutput, error)
@@ -467,6 +468,21 @@ func (s *MemoryService) PrepareRunContext(ctx context.Context, ident identity.Lo
 	return context, nil
 }
 
+func (s *MemoryService) ListToolCatalog(_ context.Context, ident identity.LocalIdentity) ([]ToolCatalogEntry, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user := s.ensureUserLocked(ident)
+	events := make([]RunEvent, 0)
+	for _, runEvents := range s.runEvents {
+		for _, event := range runEvents {
+			if event.UserID == user.ID {
+				events = append(events, event)
+			}
+		}
+	}
+	return SafeToolCatalogFromEvents(events), nil
+}
+
 func (s *MemoryService) CreateMemoryEntry(_ context.Context, ident identity.LocalIdentity, input CreateMemoryEntryInput) (MemoryEntry, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -793,9 +809,13 @@ func buildRunContext(run Run, thread Thread, messages []Message, job BackgroundJ
 			Available:  providerID != "",
 		},
 		EnabledTools: []ToolResolution{{
-			Name:           ToolNameCurrentTime,
-			ApprovalPolicy: "always_required",
-			ExecutionState: "allowlisted",
+			Name:            ToolNameCurrentTime,
+			ApprovalPolicy:  string(ToolApprovalAlwaysRequired),
+			ExecutionState:  string(ToolExecutionStateExecutable),
+			Source:          string(ToolCatalogSourceBuiltin),
+			Group:           string(ToolCatalogGroupRuntime),
+			InputSchemaHash: builtinCurrentTimeCatalogEntry().InputSchemaHash,
+			RiskLevel:       string(ToolRiskLow),
 		}},
 	}
 	if toolCallID != "" {
@@ -1073,7 +1093,7 @@ func applyPersonaToRunContext(context *RunContext, events []RunEvent) {
 		if context.Persona.ModelRoute.Model != "" {
 			context.ProviderRoute.Model = context.Persona.ModelRoute.Model
 		}
-		context.EnabledTools = toolResolutionsForNames(context.Persona.AllowedToolNames)
+		context.EnabledTools = toolResolutionsForNamesAndEvents(context.Persona.AllowedToolNames, events)
 	}
 	context.MCPAvailability = mcpAvailabilityForToolResolutions(context.EnabledTools, events)
 }
@@ -1151,26 +1171,37 @@ func (s *MemoryService) activePersonaVersionLocked(personaID string) (Persona, P
 }
 
 func toolResolutionsForNames(names []string) []ToolResolution {
+	return toolResolutionsForNamesAndEvents(names, nil)
+}
+
+func toolResolutionsForNamesAndEvents(names []string, events []RunEvent) []ToolResolution {
+	catalog := ToolCatalogFromEvents(events)
+	byName := map[string]ToolCatalogEntry{}
+	for _, entry := range catalog {
+		byName[entry.Name] = entry
+	}
 	tools := make([]ToolResolution, 0, len(names))
 	for _, name := range names {
 		toolName := strings.TrimSpace(name)
-		if toolName != ToolNameCurrentTime {
-			if IsMCPToolName(toolName) {
-				tools = append(tools, ToolResolution{Name: toolName, ApprovalPolicy: "always_required", ExecutionState: "discovered_non_executable"})
-			}
+		entry, ok := byName[toolName]
+		if !ok || !entry.Enabled || entry.ExecutionState != ToolExecutionStateExecutable {
 			continue
 		}
-		tools = append(tools, ToolResolution{Name: ToolNameCurrentTime, ApprovalPolicy: "always_required", ExecutionState: "allowlisted"})
+		tools = append(tools, ToolResolution{Name: entry.Name, ApprovalPolicy: string(entry.ApprovalPolicy), ExecutionState: string(entry.ExecutionState), Source: string(entry.Source), Group: string(entry.Group), InputSchemaHash: entry.InputSchemaHash, RiskLevel: string(entry.RiskLevel)})
 	}
 	return tools
 }
 
 func mcpAvailabilityForToolResolutions(tools []ToolResolution, events []RunEvent) MCPToolAvailabilitySummary {
 	names := make([]string, 0)
+	executableNames := make([]string, 0)
 	byServer := map[string]*MCPServerAvailabilitySummary{}
 	for _, tool := range tools {
 		if IsMCPToolName(tool.Name) {
 			names = append(names, tool.Name)
+			if tool.ExecutionState == string(ToolExecutionStateExecutable) {
+				executableNames = appendUniqueString(executableNames, tool.Name)
+			}
 			slug := mcpServerSlugFromToolName(tool.Name)
 			server := ensureMCPServerAvailability(byServer, slug)
 			server.CandidateNames = appendUniqueString(server.CandidateNames, tool.Name)
@@ -1226,11 +1257,25 @@ func mcpAvailabilityForToolResolutions(tools []ToolResolution, events []RunEvent
 		ServersFailed:               serversFailed,
 		ServerSummaries:             serverSummaries,
 		CandidateNames:              names,
-		NonExecutableCandidateNames: append([]string(nil), names...),
-		ExecutionEnabled:            false,
+		NonExecutableCandidateNames: nonExecutableMCPNames(names, executableNames),
+		ExecutionEnabled:            len(executableNames) > 0,
 		RedactedErrorCodes:          errorCodes,
 		LastDiscoveredAt:            lastDiscoveredAt,
 	}
+}
+
+func nonExecutableMCPNames(names []string, executable []string) []string {
+	enabled := map[string]struct{}{}
+	for _, name := range executable {
+		enabled[name] = struct{}{}
+	}
+	result := make([]string, 0)
+	for _, name := range names {
+		if _, ok := enabled[name]; !ok {
+			result = appendUniqueString(result, name)
+		}
+	}
+	return result
 }
 
 func ensureMCPServerAvailability(byServer map[string]*MCPServerAvailabilitySummary, slug string) *MCPServerAvailabilitySummary {
@@ -1689,11 +1734,13 @@ func (s *MemoryService) scopedToolCallLocked(userID string, threadID string, run
 func toolCallEventMetadata(call ToolCall) map[string]any {
 	metadata := map[string]any{"tool_call_id": call.ToolCallID, "tool_name": call.ToolName, "arguments_summary": call.ArgumentsSummary, "approval_status": string(call.ApprovalStatus), "execution_status": string(call.ExecutionStatus)}
 	if IsMCPToolName(call.ToolName) {
-		metadata["tool_source"] = ToolSourceMCP
+		metadata["tool_source"] = string(ToolCatalogSourceMCP)
+		metadata["tool_group"] = string(ToolCatalogGroupMCP)
 		metadata["server_slug"] = mcpServerSlugFromToolName(call.ToolName)
 		metadata["candidate_schema_hash"] = call.CandidateSchemaHash
 	} else {
-		metadata["tool_source"] = ToolSourceInternal
+		metadata["tool_source"] = string(ToolCatalogSourceBuiltin)
+		metadata["tool_group"] = string(ToolCatalogGroupRuntime)
 	}
 	if call.ResultSummary != nil {
 		metadata["result_summary"] = call.ResultSummary

@@ -13,7 +13,6 @@ describe('SettingsView placeholder categories', () => {
       'activity-recorder',
       'context',
       'safety',
-      'tools',
       'routes',
       'advanced',
     ])

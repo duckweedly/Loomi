@@ -81,6 +81,8 @@ The following remain out of scope until later milestones:
 - Threads and messages
 - Runs, run events, and SSE
 - Worker/job execution
-- LLM gateway and tool calls
+- LLM gateway, tool calls, and tool catalog
 - Persona selection and safe persona summaries
 - Desktop runtime and local bridge
+
+M18 Tool Runtime Catalog adds `GET /v1/tools/catalog`; see [Tool Runtime Catalog API](./tool-runtime-catalog/).

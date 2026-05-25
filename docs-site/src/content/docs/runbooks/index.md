@@ -5,7 +5,7 @@ description: Loomi 本地开发、验证和排错手册入口。
 
 这里记录可执行操作：如何启动服务、如何跑测试、如何执行 migration、如何排查事件流、如何清理本地状态、如何验证桌面壳和后端联通。
 
-M13 memory 的真实 Postgres/API smoke 见 [M13 Memory 本地 Smoke](./local-m13-memory/)。M15 Chat integrated closeout smoke 见 [Local M15 Chat Smoke](./local-m15-chat-smoke/)。
+M13 memory 的真实 Postgres/API smoke 见 [M13 Memory 本地 Smoke](./local-m13-memory/)。M15 Chat integrated closeout smoke 见 [Local M15 Chat Smoke](./local-m15-chat-smoke/)。M18 Tool Runtime Catalog 验证见 [Local M18 Tool Runtime Catalog Validation](./local-m18-tool-runtime-catalog/)。
 
 ## M2 本地 API + DB 验证
 

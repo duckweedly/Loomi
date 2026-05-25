@@ -179,6 +179,16 @@ type Dictionary = {
     providerApiKeyHelper: string
     providerConfigured: string
     providerNotConfigured: string
+    localProviderAutodetectTitle: string
+    localProviderAutodetectDescription: string
+    localProviderDetected: string
+    localProviderNotDetected: string
+    localProviderNeedsLogin: string
+    localProviderUnsupported: string
+    localProviderExplicitOptIn: string
+    localProviderNoSecrets: string
+    localProviderDetectAction: string
+    localProviderDetectionIdle: string
     aboutLocalApp: string
     aboutLocalAppDescription: string
     appName: string
@@ -387,6 +397,16 @@ export const dictionaries: Record<Locale, Dictionary> = {
       providerApiKeyHelper: '密钥只发送给本地 API 保存到当前进程，不会从接口返回或在界面回显。',
       providerConfigured: '已填写',
       providerNotConfigured: '未填写',
+      localProviderAutodetectTitle: '本地 Provider 自动检测',
+      localProviderAutodetectDescription: '只检测 Claude Code / Codex 登录态或密钥是否可能可用；不会启用、读取明文或发起模型调用。',
+      localProviderDetected: 'detected',
+      localProviderNotDetected: 'not detected',
+      localProviderNeedsLogin: 'needs login',
+      localProviderUnsupported: 'unsupported',
+      localProviderExplicitOptIn: 'requires explicit opt-in before use',
+      localProviderNoSecrets: 'no secrets shown',
+      localProviderDetectAction: '检测本机 Provider',
+      localProviderDetectionIdle: '点击检测后才会读取本机 Provider 可用性摘要。',
       aboutLocalApp: '本地应用状态',
       aboutLocalAppDescription: '显示已知本地状态；构建和账号信息仍是占位。',
       appName: '应用',
@@ -593,6 +613,16 @@ export const dictionaries: Record<Locale, Dictionary> = {
       providerApiKeyHelper: 'The key is sent only to the local API and is never returned or echoed in the UI.',
       providerConfigured: 'Set',
       providerNotConfigured: 'Not set',
+      localProviderAutodetectTitle: 'Local provider autodetect',
+      localProviderAutodetectDescription: 'Detects whether Claude Code or Codex may be usable locally; it does not enable providers, show secrets, or start model calls.',
+      localProviderDetected: 'detected',
+      localProviderNotDetected: 'not detected',
+      localProviderNeedsLogin: 'needs login',
+      localProviderUnsupported: 'unsupported',
+      localProviderExplicitOptIn: 'requires explicit opt-in before use',
+      localProviderNoSecrets: 'no secrets shown',
+      localProviderDetectAction: 'Detect local providers',
+      localProviderDetectionIdle: 'Run detection to inspect local provider availability.',
       aboutLocalApp: 'Local app status',
       aboutLocalAppDescription: 'Shows known local state; build and account metadata remain placeholders.',
       appName: 'Application',

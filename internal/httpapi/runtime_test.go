@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -130,6 +132,64 @@ func TestModelProviderHandlersExposeUnavailableAndMisconfigured(t *testing.T) {
 	}
 }
 
+func TestLocalProviderDetectionHandlerReturnsSafeProviders(t *testing.T) {
+	home := t.TempDir()
+	writeHTTPRuntimeTestFile(t, home+"/.claude.json", `{"primaryApiKey":"sk-ant-http-secret"}`)
+	writeHTTPRuntimeTestFile(t, home+"/.codex/auth.json", `{"auth_mode":"chatgpt","tokens":{"access_token":"access-http-secret","refresh_token":"refresh-http-secret"}}`)
+	srv := NewServerWithProduct(config.Config{AppEnv: "local"}, fakeChecker{}, productdata.NewMemoryService())
+	srv.localProviderDetectionInput = productruntime.LocalProviderDetectionInput{HomeDir: home, Env: map[string]string{}}
+
+	res := requestJSON(t, srv, http.MethodGet, "/v1/local-provider-detections", "")
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", res.Code, res.Body.String())
+	}
+	body := res.Body.String()
+	for _, expected := range []string{"local_claude_code", "Local Claude Code", "local_codex", "Local Codex", `"redaction_applied":true`, "Explicit opt-in"} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("body missing %q: %s", expected, body)
+		}
+	}
+}
+
+func TestLocalProviderDetectionHandlerDoesNotExposeSecretsOrPrivatePaths(t *testing.T) {
+	home := t.TempDir()
+	writeHTTPRuntimeTestFile(t, home+"/.claude/settings.json", `{"env":{"ANTHROPIC_AUTH_TOKEN":"Bearer private-token","ANTHROPIC_BASE_URL":"https://example.test/private/path","ANTHROPIC_MODEL":"claude-test"}}`)
+	writeHTTPRuntimeTestFile(t, home+"/.codex/auth.json", `{"OPENAI_API_KEY":"sk-private-codex"}`)
+	srv := NewServerWithProduct(config.Config{AppEnv: "local"}, fakeChecker{}, productdata.NewMemoryService())
+	srv.localProviderDetectionInput = productruntime.LocalProviderDetectionInput{HomeDir: home, Env: map[string]string{}}
+
+	res := requestJSON(t, srv, http.MethodGet, "/v1/local-provider-detections", "")
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", res.Code, res.Body.String())
+	}
+	body := res.Body.String()
+	for _, forbidden := range []string{"sk-", "Bearer", "private-token", "access_token", "refresh_token", home, "/private/path"} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("body leaked %q: %s", forbidden, body)
+		}
+	}
+}
+
+func TestLocalProviderDetectionHandlerReturnsDisabledAndUnsupportedStableStatuses(t *testing.T) {
+	home := t.TempDir()
+	writeHTTPRuntimeTestFile(t, home+"/.claude.json", `{"apiKeyHelper":"echo secret"}`)
+	srv := NewServerWithProduct(config.Config{AppEnv: "local"}, fakeChecker{}, productdata.NewMemoryService())
+	srv.localProviderDetectionInput = productruntime.LocalProviderDetectionInput{HomeDir: home, Env: map[string]string{}}
+
+	unsupported := requestJSON(t, srv, http.MethodGet, "/v1/local-provider-detections", "")
+	if unsupported.Code != http.StatusOK || !strings.Contains(unsupported.Body.String(), `"status":"unsupported"`) {
+		t.Fatalf("unsupported status = %d body=%s", unsupported.Code, unsupported.Body.String())
+	}
+
+	srv.localProviderDetectionInput = productruntime.LocalProviderDetectionInput{HomeDir: home, Env: map[string]string{}, Disabled: true}
+	disabled := requestJSON(t, srv, http.MethodGet, "/v1/local-provider-detections", "")
+	if disabled.Code != http.StatusOK || !strings.Contains(disabled.Body.String(), `"status":"disabled"`) {
+		t.Fatalf("disabled status = %d body=%s", disabled.Code, disabled.Body.String())
+	}
+}
+
 func TestStartRunHandlerCreatesModelGatewayRun(t *testing.T) {
 	svc := productdata.NewMemoryService()
 	thread := createRuntimeTestThread(t, svc)
@@ -148,6 +208,16 @@ func TestStartRunHandlerCreatesModelGatewayRun(t *testing.T) {
 	}
 	if body.Run.Source != productdata.RunSourceModelGateway || body.Run.Title != "Model gateway run" {
 		t.Fatalf("run = %+v", body.Run)
+	}
+}
+
+func writeHTTPRuntimeTestFile(t *testing.T, path string, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
 	}
 }
 

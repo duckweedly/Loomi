@@ -49,6 +49,16 @@ type MemorySafetyState string
 
 type MemoryWriteStatus string
 
+type ToolCatalogSource string
+
+type ToolCatalogGroup string
+
+type ToolRiskLevel string
+
+type ToolApprovalPolicy string
+
+type ToolExecutionState string
+
 const (
 	ThreadModeChat ThreadMode = "chat"
 	ThreadModeWork ThreadMode = "work"
@@ -166,22 +176,42 @@ const (
 )
 
 const (
-	MaxThreadTitleLength                       = 120
-	MaxClientMessageIDLength                   = 120
-	ToolNameCurrentTime                        = "runtime.get_current_time"
-	ToolSourceInternal                         = "internal"
-	ToolSourceMCP                              = "mcp"
-	MemoryScopeUser          MemoryScopeType   = "user"
-	MemoryScopeThread        MemoryScopeType   = "thread"
-	MemoryEntryApproved      MemoryEntryStatus = "approved"
-	MemoryEntryTombstoned    MemoryEntryStatus = "tombstoned"
-	MemoryEntryDisabled      MemoryEntryStatus = "disabled"
-	MemorySafetySafe         MemorySafetyState = "safe"
-	MemorySafetyRedacted     MemorySafetyState = "redacted"
-	MemorySafetyBlocked      MemorySafetyState = "blocked"
-	MemoryWritePending       MemoryWriteStatus = "pending"
-	MemoryWriteApproved      MemoryWriteStatus = "approved"
-	MemoryWriteDenied        MemoryWriteStatus = "denied"
+	MaxThreadTitleLength                               = 120
+	MaxClientMessageIDLength                           = 120
+	ToolNameCurrentTime                                = "runtime.get_current_time"
+	ToolSourceInternal                                 = "internal"
+	ToolSourceMCP                                      = "mcp"
+	ToolCatalogSourceBuiltin        ToolCatalogSource  = "builtin"
+	ToolCatalogSourceMCP            ToolCatalogSource  = "mcp"
+	ToolCatalogGroupRuntime         ToolCatalogGroup   = "runtime"
+	ToolCatalogGroupMCP             ToolCatalogGroup   = "mcp"
+	ToolCatalogGroupWorkspace       ToolCatalogGroup   = "workspace"
+	ToolCatalogGroupArtifact        ToolCatalogGroup   = "artifact"
+	ToolCatalogGroupSandbox         ToolCatalogGroup   = "sandbox"
+	ToolCatalogGroupWeb             ToolCatalogGroup   = "web"
+	ToolCatalogGroupBrowser         ToolCatalogGroup   = "browser"
+	ToolRiskLow                     ToolRiskLevel      = "low"
+	ToolRiskMedium                  ToolRiskLevel      = "medium"
+	ToolRiskHigh                    ToolRiskLevel      = "high"
+	ToolApprovalAlwaysRequired      ToolApprovalPolicy = "always_required"
+	ToolApprovalReadOnly            ToolApprovalPolicy = "read_only"
+	ToolApprovalDisabled            ToolApprovalPolicy = "disabled"
+	ToolExecutionStateExecutable    ToolExecutionState = "executable"
+	ToolExecutionStateDisabled      ToolExecutionState = "disabled"
+	ToolExecutionStateNotDiscovered ToolExecutionState = "not_discovered"
+	ToolExecutionStateNotAllowed    ToolExecutionState = "not_allowed"
+	ToolExecutionStateNonExecutable ToolExecutionState = "non_executable"
+	MemoryScopeUser                 MemoryScopeType    = "user"
+	MemoryScopeThread               MemoryScopeType    = "thread"
+	MemoryEntryApproved             MemoryEntryStatus  = "approved"
+	MemoryEntryTombstoned           MemoryEntryStatus  = "tombstoned"
+	MemoryEntryDisabled             MemoryEntryStatus  = "disabled"
+	MemorySafetySafe                MemorySafetyState  = "safe"
+	MemorySafetyRedacted            MemorySafetyState  = "redacted"
+	MemorySafetyBlocked             MemorySafetyState  = "blocked"
+	MemoryWritePending              MemoryWriteStatus  = "pending"
+	MemoryWriteApproved             MemoryWriteStatus  = "approved"
+	MemoryWriteDenied               MemoryWriteStatus  = "denied"
 )
 
 type ProductError struct {
@@ -264,6 +294,20 @@ type ToolCall struct {
 	ErrorMessage        *string                 `json:"error_message,omitempty"`
 	RequestedAt         time.Time               `json:"requested_at"`
 	UpdatedAt           time.Time               `json:"updated_at"`
+}
+
+type ToolCatalogEntry struct {
+	Name            string             `json:"name"`
+	DisplayName     string             `json:"display_name"`
+	Description     string             `json:"description"`
+	Source          ToolCatalogSource  `json:"source"`
+	Group           ToolCatalogGroup   `json:"group"`
+	InputSchemaHash string             `json:"input_schema_hash,omitempty"`
+	RiskLevel       ToolRiskLevel      `json:"risk_level"`
+	ApprovalPolicy  ToolApprovalPolicy `json:"approval_policy"`
+	Enabled         bool               `json:"enabled"`
+	ExecutionState  ToolExecutionState `json:"execution_state"`
+	SafeMetadata    map[string]any     `json:"safe_metadata,omitempty"`
 }
 
 type BackgroundJob struct {
@@ -404,9 +448,13 @@ type ProviderRoute struct {
 }
 
 type ToolResolution struct {
-	Name           string
-	ApprovalPolicy string
-	ExecutionState string
+	Name            string
+	ApprovalPolicy  string
+	ExecutionState  string
+	Source          string
+	Group           string
+	InputSchemaHash string
+	RiskLevel       string
 }
 
 type MCPToolAvailabilitySummary struct {
@@ -638,12 +686,17 @@ func (m MCPToolAvailabilitySummary) safeServerSummaries() []any {
 
 func (c RunContext) ToolResolutionSummary() map[string]any {
 	names := make([]string, 0, len(c.EnabledTools))
+	schemaHashes := map[string]string{}
 	for _, tool := range c.EnabledTools {
 		names = append(names, tool.Name)
+		if tool.InputSchemaHash != "" {
+			schemaHashes[tool.Name] = tool.InputSchemaHash
+		}
 	}
 	return RedactEventMetadata(map[string]any{
 		"enabled_tool_count":          len(c.EnabledTools),
 		"enabled_tools":               names,
+		"tool_schema_hashes":          schemaHashes,
 		"has_continuation_projection": c.ContinuationProjection.Available,
 	})
 }

@@ -1,4 +1,4 @@
-import type { MemoryAuditItem, MemoryEntry, MemoryFilters, Message, Persona, ProviderCapability, Run, Thread, ToolCall, WorkerQueueDiagnostics } from './domain'
+import type { LocalProviderDetection, MemoryAuditItem, MemoryEntry, MemoryFilters, Message, Persona, ProviderCapability, Run, Thread, ToolCall, ToolCatalogItem, WorkerQueueDiagnostics } from './domain'
 import { mockApiClient } from './mockApiClient'
 import { hasRealApiBase, realApiClient } from './realApiClient'
 import type { ExecutionAdapter } from './runtime/executionAdapter'
@@ -13,6 +13,8 @@ export type ApiClient = {
   getRunEvents(runId: string): Promise<Run['events']>
   listPersonas?(): Promise<Persona[]>
   listModelProviders?(): Promise<ProviderCapability[]>
+  listToolCatalog?(): Promise<ToolCatalogItem[]>
+  listLocalProviderDetections?(): Promise<LocalProviderDetection[]>
   checkModelProvider?(providerId: string): Promise<ProviderCapability>
   saveModelProvider?(input: { baseUrl: string; model: string; apiKey: string }): Promise<ProviderCapability>
   getWorkerQueueDiagnostics?(): Promise<WorkerQueueDiagnostics>

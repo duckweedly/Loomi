@@ -44,6 +44,9 @@ export default function App() {
     retryRun,
     regenerateRun,
     providerCapabilities,
+    toolCatalog,
+    localProviderDetections,
+    localProviderDetectionError,
     providerCheckResults,
     providerSaveResult,
     memoryEntries,
@@ -59,6 +62,7 @@ export default function App() {
     memoryAuditError,
     pendingDeleteMemoryEntry,
     checkProvider,
+    detectLocalProviders,
     saveProvider,
     setMemorySearchQuery,
     updateMemoryFilters,
@@ -207,6 +211,9 @@ export default function App() {
                   selectedThreadTitle={selectedThread?.title}
                   selectedRunStatus={run?.status}
                   providerCapabilities={providerCapabilities}
+                  toolCatalog={toolCatalog}
+                  localProviderDetections={localProviderDetections}
+                  localProviderDetectionError={localProviderDetectionError}
                   memoryEntries={memoryEntries}
                   memoryQuery={memoryQuery}
                   memoryFilters={memoryFilters}
@@ -232,6 +239,7 @@ export default function App() {
                     shell.setProviderDraftSettings({ ...settings, apiKey: '', apiKeySet: true })
                   }}
                   onCheckProvider={(providerId) => void checkProvider(providerId)}
+                  onDetectLocalProviders={() => void detectLocalProviders()}
                   onMemoryQueryChange={setMemorySearchQuery}
                   onMemoryFiltersChange={updateMemoryFilters}
                   onOpenMemoryDetail={(entry) => void openMemoryDetail(entry)}

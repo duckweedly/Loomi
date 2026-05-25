@@ -28,6 +28,8 @@ Returns configured provider capabilities:
 
 `status` is one of `available`, `unavailable`, or `misconfigured`. Custom provider URLs are redacted to scheme and host; userinfo, path, query, and fragment are not exposed.
 
+Local Claude Code and Local Codex autodetect results are not returned here because they are not configured model-gateway providers. Use `GET /v1/local-provider-detections` for detection-only local provider candidates.
+
 ### `POST /v1/model-providers/check`
 
 Request:

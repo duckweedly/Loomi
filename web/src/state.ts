@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { apiClient, executionAdapter } from './apiClient'
 import { setMockRuntimeScript } from './mockApiClient'
-import type { BackendCapabilityState, MemoryAuditItem, MemoryEntry, MemoryFilters, Message, Persona, ProviderCapability, Run, RunEvent, RuntimeEvent, RuntimeScriptId, StaleEventGuard, StreamState, Thread, ThreadRuntimeState, ToolCall } from './domain'
+import type { BackendCapabilityState, LocalProviderDetection, MemoryAuditItem, MemoryEntry, MemoryFilters, Message, Persona, ProviderCapability, Run, RunEvent, RuntimeEvent, RuntimeScriptId, StaleEventGuard, StreamState, Thread, ThreadRuntimeState, ToolCall, ToolCatalogItem } from './domain'
 import { isRuntimeActive, isRuntimeTerminal } from './runtime/executionAdapter'
 import { deriveCapabilitySignalFromEvent } from './runtime/backendCapabilityStatus'
 import { applyRealRunEvent, mapRealRuntimeCapabilitySignal } from './runtime/realExecutionAdapter'
@@ -265,6 +265,9 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
   const [capabilitySignals, setCapabilitySignals] = useState({ backendUnavailable: false, modelSetupMissing: false, providerUnavailable: false, streamDisconnected: false })
   const [selectedRuntimeScript, setSelectedRuntimeScript] = useState<RuntimeScriptId>('success')
   const [providerCapabilities, setProviderCapabilities] = useState<ProviderCapability[]>([])
+  const [toolCatalog, setToolCatalog] = useState<ToolCatalogItem[]>([])
+  const [localProviderDetections, setLocalProviderDetections] = useState<LocalProviderDetection[]>([])
+  const [localProviderDetectionError, setLocalProviderDetectionError] = useState<string | null>(null)
   const [personas, setPersonas] = useState<Persona[]>([])
   const [selectedPersonaId, setSelectedPersonaId] = useState('')
   const [providerCheckResults, setProviderCheckResults] = useState<Record<string, ProviderCheckResult>>({})
@@ -338,6 +341,39 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
       })
       .catch(() => {
         if (!cancelled) setProviderCapabilities([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const detectLocalProviders = useCallback(async () => {
+    if (!apiClient.listLocalProviderDetections) {
+      setLocalProviderDetections([])
+      setLocalProviderDetectionError('Local provider detection endpoint unavailable')
+      return
+    }
+    setLocalProviderDetectionError(null)
+    try {
+      setLocalProviderDetections(await apiClient.listLocalProviderDetections())
+    } catch (err) {
+      setLocalProviderDetections([])
+      setLocalProviderDetectionError(err instanceof Error ? redactProviderCheckMessage(err.message) : 'Local provider detection unavailable')
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!apiClient.listToolCatalog) {
+      setToolCatalog([])
+      return
+    }
+    let cancelled = false
+    apiClient.listToolCatalog()
+      .then((tools) => {
+        if (!cancelled) setToolCatalog(tools)
+      })
+      .catch(() => {
+        if (!cancelled) setToolCatalog([])
       })
     return () => {
       cancelled = true
@@ -705,6 +741,9 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
     capabilitySignals,
     selectedRuntimeScript,
     providerCapabilities,
+    toolCatalog,
+    localProviderDetections,
+    localProviderDetectionError,
     personas,
     selectedPersonaId,
     providerCheckResults,
@@ -724,6 +763,7 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
     selectRuntimeScript,
     setSelectedPersonaId,
     checkProvider,
+    detectLocalProviders,
     saveProvider,
     setMemorySearchQuery,
     updateMemoryFilters,

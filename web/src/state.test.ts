@@ -60,6 +60,17 @@ describe('provider check state helpers', () => {
     expect(source).toContain('apiClient.checkModelProvider')
     expect(source).toContain('redactProviderCheckMessage')
   })
+
+  test('local provider detections require an explicit action and stay separate from configured providers', async () => {
+    const source = await Bun.file(new URL('./state.ts', import.meta.url)).text()
+
+    expect(source).toContain('localProviderDetections')
+    expect(source).toContain('detectLocalProviders')
+    expect(source).toContain('apiClient.listLocalProviderDetections')
+    expect(source).toContain('setLocalProviderDetections')
+    expect(source).not.toContain('apiClient.listLocalProviderDetections()\\n      .then')
+    expect(source).not.toContain('setProviderCapabilities(localProviderDetections')
+  })
 })
 
 describe('getWorkspaceRefreshThreadId', () => {

@@ -2364,6 +2364,45 @@ button, textarea, input, .sidebar, .chat-shell, .run-dock, .right-panel-menu, .r
 .provider-check-result.success { color: var(--green); }
 .provider-check-result.failed { color: var(--orange); }
 
+.tools-catalog-list {
+  display: grid;
+  gap: 10px;
+}
+
+.tools-catalog-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: center;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 12px;
+  background: color-mix(in srgb, var(--material-floating) 42%, transparent);
+}
+
+.tools-catalog-main,
+.tools-catalog-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.tools-catalog-main code,
+.tools-catalog-main span,
+.tools-catalog-main small,
+.tools-catalog-badges span {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.tools-catalog-main code,
+.tools-catalog-badges span {
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  padding: 3px 7px;
+}
+
 .provider-test-button,
 .provider-save-button {
   border: 1px solid var(--border-subtle);

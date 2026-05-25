@@ -384,7 +384,7 @@ func TestSyncBuiltInPersonasRejectsUnsupportedTool(t *testing.T) {
 	}
 }
 
-func TestSyncBuiltInPersonasAllowsMCPToolReferenceAsNonExecutable(t *testing.T) {
+func TestSyncBuiltInPersonasKeepsUndiscoveredMCPOutOfEnabledTools(t *testing.T) {
 	svc := NewMemoryService()
 	ident := identity.LocalDevIdentity()
 	if _, err := svc.SyncBuiltInPersonas(context.Background(), ident, []BuiltInPersonaConfig{{
@@ -419,12 +419,11 @@ func TestSyncBuiltInPersonasAllowsMCPToolReferenceAsNonExecutable(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(ctxData.EnabledTools) != 2 {
+	if len(ctxData.EnabledTools) != 1 {
 		t.Fatalf("enabled tools = %+v", ctxData.EnabledTools)
 	}
-	mcp := ctxData.EnabledTools[1]
-	if mcp.Name != "mcp.local-search.search" || mcp.ExecutionState != "discovered_non_executable" {
-		t.Fatalf("mcp tool resolution = %+v", mcp)
+	if ctxData.EnabledTools[0].Name != ToolNameCurrentTime {
+		t.Fatalf("enabled tools = %+v", ctxData.EnabledTools)
 	}
 }
 
