@@ -15,12 +15,21 @@ import (
 )
 
 type StdioMCPToolExecutor struct {
-	Configs map[string]MCPServerConfig
+	Configs      map[string]MCPServerConfig
+	ConfigLoader func(context.Context) (map[string]MCPServerConfig, error)
 }
 
 func (e StdioMCPToolExecutor) ExecuteMCPTool(ctx context.Context, call productdata.ToolCall) (map[string]any, error) {
 	serverSlug := mcpServerSlug(call.ToolName)
-	config, ok := e.Configs[serverSlug]
+	configs := e.Configs
+	if e.ConfigLoader != nil {
+		loaded, err := e.ConfigLoader(ctx)
+		if err != nil {
+			return nil, errors.New("mcp_config_unavailable")
+		}
+		configs = loaded
+	}
+	config, ok := configs[serverSlug]
 	if !ok {
 		return nil, errors.New("mcp_config_unavailable")
 	}

@@ -1,13 +1,18 @@
-import type { AssistantDraft as AssistantDraftState, BackendCapabilityState, ChatCanvasState, Message, Persona, ProviderCapability, Run, StreamState, Thread } from '../domain'
+import { useState } from 'react'
+import { ChevronDown, ChevronRight } from 'lucide-react'
+import type { AssistantDraft as AssistantDraftState, BackendCapabilityState, ChatCanvasState, Message, Persona, ProviderCapability, Run, StreamState, Thread, WorkspaceRootConfig } from '../domain'
 import type { Locale } from '../i18n'
 import { getDictionary } from '../i18n'
-import { deriveBackendCapabilityStatus, getBackendCapabilityCopy, getProviderUnavailableWarning, shouldShowProviderUnavailableWarning } from '../runtime/backendCapabilityStatus'
+import { getProviderUnavailableWarning, shouldShowProviderUnavailableWarning } from '../runtime/backendCapabilityStatus'
 import { deriveChatCanvasState } from '../runtime/chatCanvasState'
-import { shouldBlockRuntimeSubmit } from '../state'
+import { humanToolName } from '../runtime/toolPreview'
+import type { ProviderSaveResult } from '../state'
 import { deriveWorkPlanProjection } from '../workModeProjection'
 import { Composer } from './Composer'
 import { ToolCallCard } from './ToolCallCard'
 import { WorkPlanView } from './WorkPlanView'
+
+const activeRunStatuses = new Set<Run['status']>(['pending', 'queued', 'running', 'recovering', 'blocked_on_tool_approval', 'stopping', 'retrying'])
 
 type Props = {
   sidebarCollapsed: boolean
@@ -27,10 +32,13 @@ type Props = {
     streamDisconnected?: boolean
   }
   providerCapabilities?: ProviderCapability[]
+  workspaceRootConfig?: WorkspaceRootConfig | null
+  workspaceRootSaveResult?: ProviderSaveResult
   personas?: Persona[]
   selectedPersonaId?: string
   onSelectPersona?: (personaId: string) => void
   onOpenProviderSettings?: () => void
+  onChooseWorkspaceFolder?: () => void
   onSendMessage: (content: string) => void
   onStopRun: () => void
   onRetryRun?: () => void
@@ -58,15 +66,155 @@ function createStateCopy(locale: Locale): Record<Exclude<ChatCanvasState, 'histo
   }
 }
 
+function safeHref(href: string) {
+  return /^(https?:|mailto:)/i.test(href) ? href : '#'
+}
+
+function renderInlineMarkdown(text: string, blockKey: string) {
+  const parts = text.split(/(`[^`]+`|\*\*[^*]+\*\*|\[[^\]]+\]\([^)]+\))/g)
+  return parts.filter(Boolean).map((part, index) => {
+    const key = `${blockKey}-${index}`
+    if (part.startsWith('`') && part.endsWith('`')) return <code key={key}>{part.slice(1, -1)}</code>
+    if (part.startsWith('**') && part.endsWith('**')) return <strong key={key}>{part.slice(2, -2)}</strong>
+    const link = part.match(/^\[([^\]]+)\]\(([^)]+)\)$/)
+    if (link) return <a key={key} href={safeHref(link[2])} rel="noreferrer" target="_blank">{link[1]}</a>
+    return part
+  })
+}
+
+function isMarkdownTableSeparator(line: string) {
+  const cells = line.trim().split('|').map((cell) => cell.trim()).filter(Boolean)
+  return cells.length > 0 && cells.every((cell) => /^:?-{3,}:?$/.test(cell))
+}
+
+function parseMarkdownTableRow(line: string) {
+  const trimmed = line.trim().replace(/^\|/, '').replace(/\|$/, '')
+  return trimmed.split('|').map((cell) => cell.trim())
+}
+
+function isMarkdownTableStart(lines: string[], index: number) {
+  return lines[index]?.includes('|') && isMarkdownTableSeparator(lines[index + 1] ?? '')
+}
+
+function MarkdownMessage({ content }: { content: string }) {
+  const lines = content.replace(/\r\n/g, '\n').split('\n')
+  const blocks = []
+  for (let index = 0; index < lines.length;) {
+    const line = lines[index]
+    if (line.trim() === '') {
+      index += 1
+      continue
+    }
+    if (line.trim().startsWith('```')) {
+      const codeLines = []
+      index += 1
+      while (index < lines.length && !lines[index].trim().startsWith('```')) {
+        codeLines.push(lines[index])
+        index += 1
+      }
+      index += 1
+      blocks.push(<pre key={`code-${index}`}><code>{codeLines.join('\n')}</code></pre>)
+      continue
+    }
+    if (isMarkdownTableStart(lines, index)) {
+      const headers = parseMarkdownTableRow(lines[index])
+      index += 2
+      const rows = []
+      while (index < lines.length && lines[index].trim() !== '' && lines[index].includes('|') && !lines[index].trim().startsWith('```')) {
+        rows.push(parseMarkdownTableRow(lines[index]))
+        index += 1
+      }
+      blocks.push(
+        <div className="message-table-wrap" key={`table-${index}`}>
+          <table>
+            <thead>
+              <tr>{headers.map((header, cellIndex) => <th key={`th-${cellIndex}`}>{renderInlineMarkdown(header, `th-${index}-${cellIndex}`)}</th>)}</tr>
+            </thead>
+            <tbody>
+              {rows.map((row, rowIndex) => (
+                <tr key={`tr-${index}-${rowIndex}`}>
+                  {headers.map((_, cellIndex) => <td key={`td-${index}-${rowIndex}-${cellIndex}`}>{renderInlineMarkdown(row[cellIndex] ?? '', `td-${index}-${rowIndex}-${cellIndex}`)}</td>)}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>,
+      )
+      continue
+    }
+    const heading = line.match(/^(#{1,3})\s+(.+)$/)
+    if (heading) {
+      const children = renderInlineMarkdown(heading[2], `heading-${index}`)
+      blocks.push(heading[1].length === 1 ? <h1 key={`heading-${index}`}>{children}</h1> : heading[1].length === 2 ? <h2 key={`heading-${index}`}>{children}</h2> : <h3 key={`heading-${index}`}>{children}</h3>)
+      index += 1
+      continue
+    }
+    if (/^\s*[-*]\s+/.test(line)) {
+      const items = []
+      while (index < lines.length && /^\s*[-*]\s+/.test(lines[index])) {
+        items.push(<li key={`li-${index}`}>{renderInlineMarkdown(lines[index].replace(/^\s*[-*]\s+/, ''), `li-${index}`)}</li>)
+        index += 1
+      }
+      blocks.push(<ul key={`ul-${index}`}>{items}</ul>)
+      continue
+    }
+    const paragraph = [line.trim()]
+    index += 1
+    while (index < lines.length && lines[index].trim() !== '' && !lines[index].trim().startsWith('```') && !/^(#{1,3})\s+/.test(lines[index]) && !/^\s*[-*]\s+/.test(lines[index]) && !isMarkdownTableStart(lines, index)) {
+      paragraph.push(lines[index].trim())
+      index += 1
+    }
+    blocks.push(<p key={`p-${index}`}>{renderInlineMarkdown(paragraph.join(' '), `p-${index}`)}</p>)
+  }
+  return <div className="message-markdown">{blocks}</div>
+}
+
+function displayMessageTime(value: string, locale: Locale) {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return date.toLocaleTimeString(locale === 'zh' ? 'zh-CN' : 'en-US', { hour: '2-digit', minute: '2-digit' })
+}
+
+function runMessageId(run: Run | null) {
+  if (!run) return ''
+  for (const event of run.events) {
+    const value = event.metadata?.message_id
+    if (typeof value === 'string' && value.trim()) return value.trim()
+  }
+  return ''
+}
+
+function visibleRunForTranscript(run: Run | null, messages: Message[]) {
+  if (!run) return null
+  let latestUserIndex = -1
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index].role === 'user') {
+      latestUserIndex = index
+      break
+    }
+  }
+  if (latestUserIndex < 0) return run
+  const latestUser = messages[latestUserIndex]
+  const sourceMessageId = runMessageId(run)
+  if (sourceMessageId && latestUser.id && sourceMessageId !== latestUser.id) return null
+  const messagesAfterLatestUser = messages.slice(latestUserIndex + 1)
+  const persistedAssistantAfterLatestUser = messagesAfterLatestUser.some((message) => message.role === 'assistant')
+  const persistedAssistantFromAnotherRun = messagesAfterLatestUser.some((message) => message.role === 'assistant' && message.runId && message.runId !== run.id)
+  const hasPendingApproval = run.toolCalls?.some((toolCall) => toolCall.status === 'approval_required') ?? false
+  if (hasPendingApproval && run.assistantDraft?.status === 'completed') return null
+  if ((activeRunStatuses.has(run.status) || hasPendingApproval) && (persistedAssistantFromAnotherRun || persistedAssistantAfterLatestUser)) return null
+  return run
+}
+
 function MessageHistory({ messages, locale }: { messages: Message[]; locale: Locale }) {
   const copy = getDictionary(locale).chatCanvas
-  return messages.map((message) => (
-    <article key={message.id} className={`message-row ${message.role}`}>
+  return messages.map((message, index) => (
+    <article key={`${message.id}-${index}`} className={`message-row ${message.role}`}>
       <div className="message-avatar">{message.role === 'assistant' ? 'L' : 'U'}</div>
       <div className="message-bubble">
-        <div className="message-meta">{message.role === 'assistant' ? copy.assistant : copy.user} · {message.createdAt}</div>
-        <p className="message-markdown">{message.content}</p>
-        {message.toolCalls?.map((toolCall) => <ToolCallCard key={toolCall.id} toolCall={toolCall} />)}
+        <div className="message-meta">{message.role === 'assistant' ? copy.assistant : copy.user} · {displayMessageTime(message.createdAt, locale)}</div>
+        <MarkdownMessage content={message.content} />
+        {message.toolCalls?.length ? <ToolCallList toolCalls={message.toolCalls} locale={locale} /> : null}
       </div>
     </article>
   ))
@@ -102,19 +250,56 @@ function AssistantDraft({ run, locale }: { run: Run | null; locale: Locale }) {
       <div className="message-avatar">L</div>
       <div className="message-bubble">
         <div className="message-meta">{copy.assistant} · {draftStatusLabel(draft.status, locale)}</div>
-        <p className="message-markdown">{draft.content || draftFallback(draft.status, locale)}</p>
+        <MarkdownMessage content={draft.content || draftFallback(draft.status, locale)} />
       </div>
     </article>
   )
 }
 
-function ActiveToolCalls({ run, onApproveToolCall, onDenyToolCall }: { run: Run | null; onApproveToolCall?: (toolCall: NonNullable<Run['toolCalls']>[number]) => Promise<void> | void; onDenyToolCall?: (toolCall: NonNullable<Run['toolCalls']>[number]) => Promise<void> | void }) {
+function ToolCallGroup({ toolCalls, locale }: { toolCalls: NonNullable<Run['toolCalls']>; locale: Locale }) {
+  const [expanded, setExpanded] = useState(false)
+  const copy = locale === 'zh'
+    ? { title: `完成 ${toolCalls.length} 个工具`, details: '查看工具详情' }
+    : { title: `${toolCalls.length} tools completed`, details: 'View tool details' }
+  const names = [...new Set(toolCalls.map((toolCall) => humanToolName(toolCall.name, locale)))].slice(0, 3).join(' · ')
+
+  return (
+    <div className="tool-stack">
+      <button className="tool-stack-toggle" type="button" aria-expanded={expanded} onClick={() => setExpanded((value) => !value)}>
+        <span>{copy.title}</span>
+        {names && <em>{names}</em>}
+        <small>{copy.details}</small>
+        {expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+      </button>
+      {expanded && (
+        <div className="tool-stack-list">
+          {toolCalls.map((toolCall, index) => <ToolCallCard key={`${toolCall.toolCallId ?? toolCall.id}-${index}`} toolCall={toolCall} locale={locale} />)}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function ToolCallList({ toolCalls, locale, onApproveToolCall, onDenyToolCall }: { toolCalls: NonNullable<Run['toolCalls']>; locale: Locale; onApproveToolCall?: (toolCall: NonNullable<Run['toolCalls']>[number]) => Promise<void> | void; onDenyToolCall?: (toolCall: NonNullable<Run['toolCalls']>[number]) => Promise<void> | void }) {
+  const approvalCalls = toolCalls.filter((toolCall) => toolCall.status === 'approval_required')
+  const completedCalls = toolCalls.filter((toolCall) => toolCall.status !== 'approval_required')
+  return (
+    <>
+      {completedCalls.length > 1 ? (
+        <ToolCallGroup toolCalls={completedCalls} locale={locale} />
+      ) : completedCalls.map((toolCall, index) => <ToolCallCard key={`${toolCall.toolCallId ?? toolCall.id}-${index}`} toolCall={toolCall} locale={locale} />)}
+      {approvalCalls.map((toolCall, index) => <ToolCallCard key={`${toolCall.toolCallId ?? toolCall.id}-approval-${index}`} toolCall={toolCall} locale={locale} onApprove={onApproveToolCall} onDeny={onDenyToolCall} />)}
+    </>
+  )
+}
+
+function ActiveToolCalls({ run, locale, onApproveToolCall, onDenyToolCall }: { run: Run | null; locale: Locale; onApproveToolCall?: (toolCall: NonNullable<Run['toolCalls']>[number]) => Promise<void> | void; onDenyToolCall?: (toolCall: NonNullable<Run['toolCalls']>[number]) => Promise<void> | void }) {
   if (!run?.toolCalls?.length) return null
   return (
     <article className="message-row assistant draft tool-call-draft">
       <div className="message-avatar">L</div>
       <div className="message-bubble">
-        {run.toolCalls.map((toolCall) => <ToolCallCard key={toolCall.toolCallId ?? toolCall.id} toolCall={toolCall} onApprove={onApproveToolCall} onDeny={onDenyToolCall} />)}
+        <ToolCallList toolCalls={run.toolCalls} locale={locale} onApproveToolCall={onApproveToolCall} onDenyToolCall={onDenyToolCall} />
       </div>
     </article>
   )
@@ -123,6 +308,20 @@ function ActiveToolCalls({ run, onApproveToolCall, onDenyToolCall }: { run: Run 
 function ToolBoundaryNotice({ run, locale }: { run: Run | null; locale: Locale }) {
   if (!run?.events.some((event) => event.type === 'progress.tool_call_blocked')) return null
   return <div className="api-error">{getDictionary(locale).chatCanvas.toolBoundaryNotice}</div>
+}
+
+function ApprovalNotice({ run, locale, onStopRun }: { run: Run | null; locale: Locale; onStopRun: () => void }) {
+  if (run?.status !== 'blocked_on_tool_approval' && !run?.toolCalls?.some((toolCall) => toolCall.status === 'approval_required')) return null
+  const copy = getDictionary(locale).chatCanvas
+  return (
+    <div className="approval-notice" role="status">
+      <div>
+        <strong>{locale === 'zh' ? '等待你确认' : 'Waiting for your confirmation'}</strong>
+        <span>{locale === 'zh' ? '确认下面的工具请求后，Loomi 才会继续。' : 'Review the tool request below before Loomi continues.'}</span>
+      </div>
+      <button type="button" onClick={onStopRun}>{copy.stop}</button>
+    </div>
+  )
 }
 
 function StatePanel({ state, error, locale }: { state: Exclude<ChatCanvasState, 'history'>; error?: string | null; locale: Locale }) {
@@ -135,7 +334,8 @@ function StatePanel({ state, error, locale }: { state: Exclude<ChatCanvasState, 
   )
 }
 
-export function ChatCanvas({ sidebarCollapsed, thread, messages, run, loading, error, dataSourceMode, streamState, backendCapability = 'available', backendUnavailableAttempted = false, capabilitySignals, providerCapabilities = [], personas = [], selectedPersonaId = '', onSelectPersona, onOpenProviderSettings, onSendMessage, onStopRun, onRetryRun, onRegenerateRun, onApproveToolCall, onDenyToolCall, locale }: Props) {
+export function ChatCanvas({ thread, messages, run, loading, error, dataSourceMode, backendCapability = 'available', backendUnavailableAttempted = false, providerCapabilities = [], workspaceRootConfig, workspaceRootSaveResult, onOpenProviderSettings, onChooseWorkspaceFolder, onSendMessage, onStopRun, onRetryRun, onRegenerateRun, onApproveToolCall, onDenyToolCall, locale }: Props) {
+  const visibleRun = visibleRunForTranscript(run, messages)
   const state = deriveChatCanvasState({
     loading,
     error,
@@ -143,56 +343,34 @@ export function ChatCanvas({ sidebarCollapsed, thread, messages, run, loading, e
     backendUnavailableAttempted,
     selectedThreadId: thread?.id ?? null,
     messageCount: messages.length,
-    run,
+    run: visibleRun,
   })
   const copy = getDictionary(locale).chatCanvas
   const stateCopy = createStateCopy(locale)
   const composerDisabled = state === 'loading' || state === 'error' || state === 'no-thread' || state === 'backend-unavailable' || state === 'waiting-run' || state === 'running' || state === 'recovering' || state === 'stopping'
-  const composerPlaceholder = state === 'history' || !composerDisabled ? copy.messageLoomi : stateCopy[state].title
+  const mode = thread?.mode ?? 'chat'
+  const composerPlaceholder = state === 'history' || !composerDisabled ? (mode === 'work' ? copy.describeTask : copy.messageLoomi) : stateCopy[state].title
   const providerUnavailableBeforeSend = shouldShowProviderUnavailableWarning(dataSourceMode, providerCapabilities)
   const providerUnavailableWarning = getProviderUnavailableWarning(providerCapabilities, locale)
-  const activeRun = shouldBlockRuntimeSubmit(run)
-  const activeProvider = providerCapabilities.find((provider) => provider.id === 'local_codex' && provider.status === 'available' && provider.executionState === 'supported')
-    ?? providerCapabilities.find((provider) => provider.status === 'available' && provider.executionState !== 'unsupported')
-  const activeProviderLabel = activeProvider ? `${activeProvider.id} · ${activeProvider.model}` : undefined
-  const capabilityStatus = deriveBackendCapabilityStatus({
-    dataSourceMode,
-    runtimeSource: run?.context === 'model_gateway' ? 'model_gateway' : 'local_simulated',
-    backendUnavailable: backendCapability === 'unavailable' || backendUnavailableAttempted || capabilitySignals?.backendUnavailable,
-    modelSetupMissing: capabilitySignals?.modelSetupMissing,
-    providerUnavailable: providerUnavailableBeforeSend,
-    activeRun,
-    streamDisconnected: Boolean(run && (run.status === 'pending' || run.status === 'queued' || run.status === 'running' || run.status === 'retrying' || run.status === 'recovering' || run.status === 'blocked_on_tool_approval' || run.status === 'stopping') && (capabilitySignals?.streamDisconnected || streamState === 'recoverable_error')),
-    runRecovering: run?.status === 'recovering' || run?.assistantDraft?.status === 'recovering',
-  })
-  const capabilityCopy = getBackendCapabilityCopy(capabilityStatus, locale)
-  const hasPersistedCompletedDraftMessage = run?.assistantDraft?.status === 'completed' && messages.some((message) => (
+  const workspaceFolderStatus = mode === 'work'
+    ? workspaceRootSaveResult?.message || (workspaceRootConfig?.configured ? copy.workspaceRootSelected(workspaceRootConfig.displayName) : copy.workspaceRootHome)
+    : undefined
+  const hasPersistedCompletedDraftMessage = visibleRun?.assistantDraft?.status === 'completed' && messages.some((message) => (
     message.role === 'assistant' && (
-      message.id === run.assistantDraft?.messageId ||
-      message.runId === run.id ||
-      (message.threadId === run.threadId && message.content === run.assistantDraft?.content)
+      message.id === visibleRun.assistantDraft?.messageId ||
+      message.runId === visibleRun.id ||
+      (message.threadId === visibleRun.threadId && message.content === visibleRun.assistantDraft?.content)
     )
   ))
-  const shouldShowAssistantDraft = Boolean(run && !hasPersistedCompletedDraftMessage)
+  const shouldShowAssistantDraft = Boolean(visibleRun && !hasPersistedCompletedDraftMessage)
   const shouldShowHistory = state === 'history' || state === 'waiting-run' || state === 'running' || state === 'completed' || state === 'failed' || state === 'stopped' || state === 'recovering' || state === 'stopping'
-  const workPlanProjection = deriveWorkPlanProjection(thread, messages, run)
+  const workPlanProjection = deriveWorkPlanProjection(thread, messages, visibleRun)
 
   return (
     <section className="chat-shell glass-panel" data-chat-state={state}>
-      <div className="context-bar">
-        <span>{copy.context}</span>
-        <strong>{run?.context === 'local_simulated' ? copy.localSimulated : run?.context === 'model_gateway' ? copy.modelGateway : run?.context ?? '-'}</strong>
-        <span className="context-line" />
-        {sidebarCollapsed && <strong>{thread?.title ?? 'Untitled'}</strong>}
-        <span>{thread?.mode ?? 'work'}</span>
-        <span className={`capability-chip ${capabilityStatus}`}>{capabilityCopy.title}</span>
-        <span className="capability-detail">{capabilityCopy.detail}</span>
-        <span>{streamState}</span>
-        {activeRun && <button className="titlebar-button" onClick={onStopRun}>{copy.stop}</button>}
-      </div>
-
       {error && <div className="api-error">{error}</div>}
-      <ToolBoundaryNotice run={run} locale={locale} />
+      <ToolBoundaryNotice run={visibleRun} locale={locale} />
+      <ApprovalNotice run={visibleRun} locale={locale} onStopRun={onStopRun} />
       {providerUnavailableBeforeSend && (
         <div className="provider-warning" role="status">
           <span>{providerUnavailableWarning}</span>
@@ -201,18 +379,18 @@ export function ChatCanvas({ sidebarCollapsed, thread, messages, run, loading, e
       )}
 
       <div className="message-list">
-        {workPlanProjection && <WorkPlanView projection={workPlanProjection} loading={loading} error={error} />}
+        {workPlanProjection && <WorkPlanView projection={workPlanProjection} loading={loading} error={error} locale={locale} />}
         {state === 'history' ? (
           <>
             <MessageHistory messages={messages} locale={locale} />
-            {shouldShowAssistantDraft && <AssistantDraft run={run} locale={locale} />}
-            <ActiveToolCalls run={run} onApproveToolCall={onApproveToolCall} onDenyToolCall={onDenyToolCall} />
+            {shouldShowAssistantDraft && <AssistantDraft run={visibleRun} locale={locale} />}
+            <ActiveToolCalls run={visibleRun} locale={locale} onApproveToolCall={onApproveToolCall} onDenyToolCall={onDenyToolCall} />
           </>
         ) : (
           <>
             {shouldShowHistory && <MessageHistory messages={messages} locale={locale} />}
-            {shouldShowAssistantDraft && <AssistantDraft run={run} locale={locale} />}
-            <ActiveToolCalls run={run} onApproveToolCall={onApproveToolCall} onDenyToolCall={onDenyToolCall} />
+            {shouldShowAssistantDraft && <AssistantDraft run={visibleRun} locale={locale} />}
+            <ActiveToolCalls run={visibleRun} locale={locale} onApproveToolCall={onApproveToolCall} onDenyToolCall={onDenyToolCall} />
             {(state === 'no-thread' || state === 'empty-thread' || state === 'loading' || state === 'error' || state === 'backend-unavailable') && <StatePanel state={state} error={state === 'error' ? error : null} locale={locale} />}
           </>
         )}
@@ -222,21 +400,20 @@ export function ChatCanvas({ sidebarCollapsed, thread, messages, run, loading, e
         disabled={composerDisabled}
         providerUnavailable={providerUnavailableBeforeSend}
         placeholder={composerPlaceholder}
+        mode={mode}
         threadSelected={Boolean(thread)}
-        run={run}
+        run={visibleRun}
         messages={messages}
-        personas={personas}
-        selectedPersonaId={selectedPersonaId}
-        activeProviderLabel={activeProviderLabel}
-        onSelectPersona={onSelectPersona}
-        attachLabel={copy.attach}
         stopLabel={copy.stop}
         retryLabel={copy.retry}
         regenerateLabel={copy.regenerate}
+        workspaceFolderLabel={copy.chooseWorkspaceFolder}
+        workspaceFolderStatus={workspaceFolderStatus}
         onSubmit={onSendMessage}
         onStop={onStopRun}
         onRetry={onRetryRun}
         onRegenerate={onRegenerateRun}
+        onChooseWorkspaceFolder={onChooseWorkspaceFolder}
       />
     </section>
   )

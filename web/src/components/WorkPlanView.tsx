@@ -1,117 +1,211 @@
 import { FileText, ListChecks, LoaderCircle, PackageCheck } from 'lucide-react'
 import type { WorkPlanProjection, WorkStepStatus } from '../domain'
+import type { Locale } from '../i18n'
 
 type Props = {
   projection: WorkPlanProjection
   loading: boolean
   error?: string | null
+  locale?: Locale
 }
 
-const stepLabels: Record<WorkStepStatus, string> = {
-  pending: 'Pending',
-  running: 'Running',
-  completed: 'Done',
-  blocked: 'Blocked',
-  failed: 'Failed',
+const workPlanCopy: Record<Locale, {
+  aria: string
+  loading: string
+  unavailable: string
+  workPlan: string
+  waitingMetadata: string
+  steps: string
+  todos: string
+  artifacts: string
+  recent: string
+  noSteps: string
+  noTodos: string
+  noArtifacts: string
+  noEvents: string
+  updatedBy: (name: string) => string
+  redacted: string
+  status: Record<WorkStepStatus | WorkPlanProjection['status'], string>
+}> = {
+  zh: {
+    aria: '工作计划',
+    loading: '正在读取工作计划',
+    unavailable: '工作计划不可用',
+    workPlan: '工作计划',
+    waitingMetadata: '等待计划信息',
+    steps: '步骤',
+    todos: '待办',
+    artifacts: '产物',
+    recent: '最近进度',
+    noSteps: '还没有步骤。',
+    noTodos: '还没有待办。',
+    noArtifacts: '还没有产物引用。',
+    noEvents: '还没有进度。',
+    updatedBy: (name) => `更新来源 ${name}`,
+    redacted: '已隐藏敏感信息',
+    status: {
+      empty: '空',
+      pending: '待处理',
+      queued: '排队中',
+      running: '运行中',
+      retrying: '重试中',
+      recovering: '恢复中',
+      blocked: '受阻',
+      blocked_on_tool_approval: '等待确认',
+      stopping: '停止中',
+      completed: '完成',
+      failed: '失败',
+      stopped: '已停止',
+      cancelled: '已取消',
+    },
+  },
+  en: {
+    aria: 'Work plan',
+    loading: 'Loading work plan',
+    unavailable: 'Work plan unavailable',
+    workPlan: 'Work plan',
+    waitingMetadata: 'Waiting for plan metadata',
+    steps: 'Steps',
+    todos: 'Todos',
+    artifacts: 'Artifacts',
+    recent: 'Recent progress',
+    noSteps: 'No steps projected yet.',
+    noTodos: 'No todo snapshot yet.',
+    noArtifacts: 'No artifact references yet.',
+    noEvents: 'No recent events yet.',
+    updatedBy: (name) => `Updated by ${name}`,
+    redacted: 'Redacted unsafe metadata',
+    status: {
+      empty: 'Empty',
+      pending: 'Pending',
+      queued: 'Queued',
+      running: 'Running',
+      retrying: 'Retrying',
+      recovering: 'Recovering',
+      blocked: 'Blocked',
+      blocked_on_tool_approval: 'Confirm',
+      stopping: 'Stopping',
+      completed: 'Done',
+      failed: 'Failed',
+      stopped: 'Stopped',
+      cancelled: 'Cancelled',
+    },
+  },
 }
 
-export function WorkPlanView({ projection, loading, error }: Props) {
+function displayTime(value: string, locale: Locale) {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return date.toLocaleTimeString(locale === 'zh' ? 'zh-CN' : 'en-US', { hour: '2-digit', minute: '2-digit' })
+}
+
+function localizedProjectionText(value: string, locale: Locale) {
+  if (locale !== 'zh') return value
+  if (value === 'No plan metadata yet.') return '还没有计划信息。'
+  if (value === 'No active run yet.') return '还没有运行记录。'
+  const runStatus = value.match(/^Run (.+)$/)
+  if (runStatus) return `运行状态 ${workPlanCopy.zh.status[runStatus[1] as WorkPlanProjection['status']] ?? runStatus[1]}`
+  return value
+}
+
+export function WorkPlanView({ projection, loading, error, locale = 'en' }: Props) {
+  const copy = workPlanCopy[locale]
   if (loading) {
     return (
-      <section className="work-plan-view loading" aria-label="Work plan">
+      <section className="work-plan-view loading" aria-label={copy.aria}>
         <LoaderCircle size={16} strokeWidth={1.7} />
-        <strong>Loading work plan</strong>
+        <strong>{copy.loading}</strong>
       </section>
     )
   }
 
   if (error) {
     return (
-      <section className="work-plan-view error" aria-label="Work plan">
-        <strong>Work plan unavailable</strong>
+      <section className="work-plan-view error" aria-label={copy.aria}>
+        <strong>{copy.unavailable}</strong>
         <span>{error}</span>
       </section>
     )
   }
 
   return (
-    <section className="work-plan-view" aria-label="Work plan">
+    <section className="work-plan-view" aria-label={copy.aria}>
       <div className="work-plan-header">
         <div>
-          <span className="rail-card-kicker">Work plan</span>
+          <span className="rail-card-kicker">{copy.workPlan}</span>
           <h2>{projection.goal}</h2>
         </div>
-        <span className={`work-plan-status ${projection.status}`}>{projection.status}</span>
+        <span className={`work-plan-status ${projection.status}`}>{copy.status[projection.status] ?? projection.status}</span>
       </div>
 
       {projection.emptyReason ? (
         <div className="work-plan-empty">
-          <strong>No plan yet</strong>
-          <span>{projection.emptyReason}</span>
+          <strong>{copy.waitingMetadata}</strong>
+          <span>{localizedProjectionText(projection.emptyReason, locale)}</span>
         </div>
       ) : (
         <div className="work-plan-grid">
           <section className="work-plan-section">
             <div className="work-plan-section-title">
               <ListChecks size={15} strokeWidth={1.8} />
-              <strong>Steps</strong>
+              <strong>{copy.steps}</strong>
             </div>
             {projection.steps.length ? projection.steps.map((step, index) => (
-              <div className="work-step-row" key={step.id}>
+              <div className="work-step-row" key={`${step.id}-${index}`}>
                 <span className={`work-step-index ${step.status}`}>{index + 1}</span>
                 <div>
                   <strong>{step.title}</strong>
                   {step.summary && <span>{step.summary}</span>}
                 </div>
-                <em>{stepLabels[step.status]}</em>
+                <em>{copy.status[step.status]}</em>
               </div>
-            )) : <p>No steps projected yet.</p>}
+            )) : <p>{copy.noSteps}</p>}
           </section>
 
           <section className="work-plan-section">
             <div className="work-plan-section-title">
               <ListChecks size={15} strokeWidth={1.8} />
-              <strong>Todos</strong>
+              <strong>{copy.todos}</strong>
             </div>
             {projection.todoSnapshot?.items.length ? (
               <>
                 {projection.todoSnapshot.items.map((todo, index) => (
-                  <div className="work-step-row" key={todo.id}>
+                  <div className="work-step-row" key={`${todo.id}-${index}`}>
                     <span className={`work-step-index ${todo.status}`}>{index + 1}</span>
                     <div>
                       <strong>{todo.title}</strong>
                       {todo.summary && <span>{todo.summary}</span>}
                     </div>
-                    <em>{stepLabels[todo.status]}</em>
+                    <em>{copy.status[todo.status]}</em>
                   </div>
                 ))}
                 <p>
                   {[
-                    projection.todoSnapshot.updatedBy ? `Updated by ${projection.todoSnapshot.updatedBy}` : '',
+                    projection.todoSnapshot.updatedBy ? copy.updatedBy(projection.todoSnapshot.updatedBy) : '',
                     projection.todoSnapshot.updatedAtEventId,
-                    projection.todoSnapshot.redactionApplied ? 'Redacted unsafe metadata' : '',
+                    projection.todoSnapshot.redactionApplied ? copy.redacted : '',
                   ].filter(Boolean).join(' · ')}
                 </p>
               </>
-            ) : <p>No todo snapshot yet.</p>}
+            ) : <p>{copy.noTodos}</p>}
           </section>
 
           <section className="work-plan-section">
             <div className="work-plan-section-title">
               <PackageCheck size={15} strokeWidth={1.8} />
-              <strong>Artifacts</strong>
+              <strong>{copy.artifacts}</strong>
             </div>
-            {projection.artifacts.length ? projection.artifacts.map((artifact) => (
-              <article className="work-artifact-card" key={artifact.id}>
+            {projection.artifacts.length ? projection.artifacts.map((artifact, index) => (
+              <article className="work-artifact-card" key={`${artifact.id}-${index}`}>
                 <div>
                   <strong>{artifact.title}</strong>
                   <span>{artifact.type}</span>
                 </div>
                 <p>{artifact.summary}</p>
-                <small>{[artifact.id, artifact.sourceThreadId, artifact.sourceRunId, artifact.updatedAt ?? artifact.createdAt].filter(Boolean).join(' · ')}</small>
-                {artifact.redactionApplied && <span className="work-artifact-redaction">Redacted unsafe metadata</span>}
+                <small>{[artifact.type, artifact.updatedAt ?? artifact.createdAt].filter(Boolean).join(' · ')}</small>
+                {artifact.redactionApplied && <span className="work-artifact-redaction">{copy.redacted}</span>}
               </article>
-            )) : <p>No artifact references yet.</p>}
+            )) : <p>{copy.noArtifacts}</p>}
           </section>
         </div>
       )}
@@ -119,20 +213,20 @@ export function WorkPlanView({ projection, loading, error }: Props) {
       <section className="work-plan-section recent">
         <div className="work-plan-section-title">
           <FileText size={15} strokeWidth={1.8} />
-          <strong>Recent progress</strong>
+          <strong>{copy.recent}</strong>
         </div>
-        <p>{projection.statusDetail}</p>
+        <p>{localizedProjectionText(projection.statusDetail, locale)}</p>
         {projection.recentEvents.length ? (
           <div className="work-progress-list">
-            {projection.recentEvents.map((event) => (
-              <div className="work-progress-row" key={event.id}>
-                <span>{event.time}</span>
-                <strong>{event.type}</strong>
-                <em>{event.detail}</em>
+            {projection.recentEvents.map((event, index) => (
+              <div className="work-progress-row" key={`${event.id}-${index}`}>
+                <span>{displayTime(event.time, locale)}</span>
+                <strong>{event.title ?? event.type}</strong>
+                {event.detail && event.detail !== event.title && <em>{event.detail}</em>}
               </div>
             ))}
           </div>
-        ) : <span className="work-plan-muted">No recent events yet.</span>}
+        ) : <span className="work-plan-muted">{copy.noEvents}</span>}
       </section>
     </section>
   )

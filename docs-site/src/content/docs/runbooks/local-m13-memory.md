@@ -72,6 +72,7 @@ VITE_LOOMI_API_BASE_URL=http://127.0.0.1:8080 bun run --cwd web dev --host 127.0
 - 进入 Settings > Memory。
 - 验证 Memory category 可打开。
 - 验证 list/search/delete 状态连接真实 API，删除后条目消失。
+- 验证默认界面只展示搜索、记忆列表、简洁历史和空状态；高级筛选折叠，系统快照事件不刷屏。
 - M14 full smoke additionally verifies detail, filters, delete confirmation, and audit history from `/v1/memory/audit`.
 - DevTools console 无红色错误。
 

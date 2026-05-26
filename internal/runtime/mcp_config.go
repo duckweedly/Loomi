@@ -71,6 +71,10 @@ func ValidateMCPServerConfig(config MCPServerConfig) (MCPServerConfig, error) {
 	}
 	if config.TimeoutMS <= 0 {
 		config.TimeoutMS = 5000
+	} else if config.TimeoutMS < 100 {
+		config.TimeoutMS = 100
+	} else if config.TimeoutMS > 60000 {
+		config.TimeoutMS = 60000
 	}
 	return config, nil
 }

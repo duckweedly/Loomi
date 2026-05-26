@@ -21,6 +21,8 @@ type Config struct {
 	WorkerMaxAttempts       int
 	WorkerPollMillis        int
 	ModelProviders          []ModelProvider
+	TavilyAPIKey            string
+	BraveSearchAPIKey       string
 }
 
 type ModelProvider struct {
@@ -45,6 +47,8 @@ func Load() (Config, error) {
 		WorkerMaxAttempts:       3,
 		WorkerPollMillis:        250,
 		ModelProviders:          loadModelProviders(),
+		TavilyAPIKey:            os.Getenv("LOOMI_TAVILY_API_KEY"),
+		BraveSearchAPIKey:       os.Getenv("LOOMI_BRAVE_SEARCH_API_KEY"),
 	}
 
 	if raw := os.Getenv("READINESS_TIMEOUT_SECONDS"); raw != "" {

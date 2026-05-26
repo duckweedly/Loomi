@@ -1,5 +1,5 @@
 import type { ApiClient } from './apiClient'
-import type { LocalProviderDetection, MCPServerStatus, Message, ProviderCapability, Run, RuntimeScriptId, ToolCatalogItem } from './domain'
+import type { InstalledSkill, LocalProviderDetection, MCPServerConfigInput, MCPServerStatus, Message, Persona, ProviderCapability, Run, RuntimeScriptId, ToolCatalogItem } from './domain'
 import { messages, runs, threads } from './mockData'
 import { isRuntimeTerminal } from './runtime/executionAdapter'
 import { mockExecutionAdapter } from './runtime/mockExecutionAdapter'
@@ -12,6 +12,34 @@ let runStore = runs.map((run) => ({ ...run, events: [...run.events] }))
 let selectedRuntimeScriptId: RuntimeScriptId = 'success'
 let mockLocalProviderDetections: LocalProviderDetection[] = []
 let mockProviderCapabilities: ProviderCapability[] = []
+
+const mockPersonas: Persona[] = [{
+  id: 'persona-default',
+  slug: 'default',
+  name: 'Loomi Default',
+  description: 'Default local persona with bounded tool access.',
+  activeVersion: '2026-05-26.1',
+  isDefault: true,
+}]
+
+const mockInstalledSkills: InstalledSkill[] = [{
+  id: 'project:speckit-implement',
+  name: 'speckit-implement',
+  description: 'Execute implementation tasks from the project Spec Kit plan.',
+  source: 'project',
+  sourceLabel: 'Project .agents',
+  package: 'speckit',
+  path: '.agents/skills/speckit-implement/SKILL.md',
+  installed: true,
+}, {
+  id: 'codex:skill-creator',
+  name: 'skill-creator',
+  description: 'Guide for creating effective Codex skills.',
+  source: 'codex',
+  sourceLabel: 'Codex',
+  path: '~/.codex/skills/.system/skill-creator/SKILL.md',
+  installed: true,
+}]
 
 const mockToolCatalog: ToolCatalogItem[] = [{
   name: 'runtime.get_current_time',
@@ -78,7 +106,60 @@ const mockToolCatalog: ToolCatalogItem[] = [{
   approvalPolicy: 'always_required',
   enabled: true,
   executionState: 'executable',
-  safeMetadata: { read_only: false, write_capable: true, scope: 'workspace', arguments: ['path', 'old_text', 'new_text', 'max_bytes'] },
+  safeMetadata: {
+    read_only: false,
+    write_capable: true,
+    requires_read_before_edit: true,
+    returns_diff: true,
+    normalizes_line_endings: true,
+    preserves_indentation: true,
+    strips_trailing_whitespace_except_markdown: true,
+    scope: 'workspace',
+    arguments: ['path', 'old_text', 'new_text', 'max_bytes'],
+  },
+}, {
+  name: 'workspace.patch_preview',
+  displayName: 'Workspace patch preview',
+  description: 'Preview one bounded exact text replacement before applying it.',
+  source: 'builtin',
+  group: 'workspace',
+  riskLevel: 'high',
+  approvalPolicy: 'always_required',
+  enabled: true,
+  executionState: 'executable',
+  safeMetadata: {
+    read_only: true,
+    write_capable: false,
+    requires_read_before_preview: true,
+    returns_diff: true,
+    preview_only: true,
+    normalizes_line_endings: true,
+    preserves_indentation: true,
+    strips_trailing_whitespace_except_markdown: true,
+    scope: 'workspace',
+    arguments: ['path', 'old_text', 'new_text', 'max_bytes'],
+  },
+}, {
+  name: 'workspace.patch_apply',
+  displayName: 'Workspace patch apply',
+  description: 'Apply one previously previewed bounded text replacement.',
+  source: 'builtin',
+  group: 'workspace',
+  riskLevel: 'high',
+  approvalPolicy: 'always_required',
+  enabled: true,
+  executionState: 'executable',
+  safeMetadata: {
+    read_only: false,
+    write_capable: true,
+    requires_patch_preview: true,
+    returns_diff: true,
+    normalizes_line_endings: true,
+    preserves_indentation: true,
+    strips_trailing_whitespace_except_markdown: true,
+    scope: 'workspace',
+    arguments: ['path', 'old_text', 'new_text', 'max_bytes'],
+  },
 }, {
   name: 'sandbox.exec_command',
   displayName: 'Sandbox exec command',
@@ -89,7 +170,7 @@ const mockToolCatalog: ToolCatalogItem[] = [{
   approvalPolicy: 'always_required',
   enabled: true,
   executionState: 'executable',
-  safeMetadata: { argv_only: true, exec_capable: true, read_only: true, isolated_sandbox: false, scope: 'bounded_read_only_command', allowed_commands: ['pwd', 'ls', 'git status'], arguments: ['argv', 'cwd', 'timeout_ms', 'max_output_bytes'] },
+  safeMetadata: { argv_only: true, exec_capable: true, validation_capable: true, read_only: false, isolated_sandbox: false, scope: 'bounded_command', allowed_commands: ['pwd', 'ls', 'cat', 'head', 'tail', 'sed -n', 'wc', 'rg', 'git status', 'git diff', 'git log', 'git show', 'go test', 'bun test', 'bun run build'], arguments: ['argv', 'cwd', 'timeout_ms', 'max_output_bytes'] },
 }, {
   name: 'lsp.diagnostics',
   displayName: 'LSP diagnostics',
@@ -134,6 +215,17 @@ const mockToolCatalog: ToolCatalogItem[] = [{
   enabled: true,
   executionState: 'executable',
   safeMetadata: { read_only: true, scope: 'web', network_access: 'public_http_only', arguments: ['url', 'max_bytes', 'timeout_ms'] },
+}, {
+  name: 'web.search',
+  displayName: 'Web search',
+  description: 'Search the public web through configured Brave or Tavily provider and return bounded safe results.',
+  source: 'builtin',
+  group: 'web',
+  riskLevel: 'medium',
+  approvalPolicy: 'always_required',
+  enabled: true,
+  executionState: 'executable',
+  safeMetadata: { read_only: true, scope: 'web', network_access: 'search_provider_api', providers: ['tavily', 'brave'], arguments: ['query', 'provider', 'limit', 'timeout_ms'] },
 }, {
   name: 'browser.open',
   displayName: 'Browser open',
@@ -235,7 +327,7 @@ const mockToolCatalog: ToolCatalogItem[] = [{
   safeMetadata: { read_only: false, scope: 'agent', coordination_only: true, autonomous_execution: false, arguments: ['task_id', 'result_summary'] },
 }]
 
-const mockMCPServers: MCPServerStatus[] = [{
+let mockMCPServers: MCPServerStatus[] = [{
   serverSafeId: 'mcp:local-smoke',
   serverSlug: 'local-smoke',
   displayName: 'Local Smoke',
@@ -371,6 +463,14 @@ export const mockApiClient: ApiClient = {
     return runStore.find((run) => run.id === runId)?.events ?? []
   },
 
+  async listPersonas() {
+    return mockPersonas
+  },
+
+  async listSkills() {
+    return mockInstalledSkills
+  },
+
   async listModelProviders() {
     return mockProviderCapabilities
   },
@@ -434,6 +534,36 @@ export const mockApiClient: ApiClient = {
 
   async listMCPServers() {
     return mockMCPServers
+  },
+
+  async saveMCPServer(input: MCPServerConfigInput) {
+    const server: MCPServerStatus = {
+      serverSafeId: `mcp:${input.slug}`,
+      serverSlug: input.slug,
+      displayName: input.displayName,
+      transport: input.transport,
+      enabled: input.enabled,
+      configSource: 'local',
+      discoveryStatus: input.enabled ? 'not_discovered' : 'disabled',
+      candidateCount: 0,
+      candidateNames: [],
+      executionMode: 'disabled',
+    }
+    mockMCPServers = [...mockMCPServers.filter((item) => item.serverSlug !== input.slug), server].sort((a, b) => a.serverSlug.localeCompare(b.serverSlug))
+    return server
+  },
+
+  async deleteMCPServer(slug: string) {
+    mockMCPServers = mockMCPServers.filter((item) => item.serverSlug !== slug)
+    return mockMCPServers
+  },
+
+  async discoverMCPServer(slug: string) {
+    const server = mockMCPServers.find((item) => item.serverSlug === slug)
+    if (!server) throw new Error('MCP server config was not found.')
+    const discovered: MCPServerStatus = { ...server, discoveryStatus: server.enabled ? 'succeeded' : 'disabled', candidateNames: server.enabled ? [`mcp.${slug}.echo`] : [], candidateCount: server.enabled ? 1 : 0, executionMode: server.enabled ? 'approval_gated' : 'disabled', lastDiscoveredAt: new Date().toISOString() }
+    mockMCPServers = mockMCPServers.map((item) => (item.serverSlug === slug ? discovered : item))
+    return discovered
   },
 
   subscribeRunEvents(runId: string, afterSequence: number, onEvent) {

@@ -35,7 +35,6 @@ describe('RunRail restrained runtime polish', () => {
   test('renders stable grouped timeline sections with error and usage details', () => {
     const html = renderToStaticMarkup(createElement(RunRail, {
       open: true,
-      onOpenArtifact: () => {},
       run: {
         id: 'run-a',
         threadId: 'thread-a',
@@ -51,19 +50,18 @@ describe('RunRail restrained runtime polish', () => {
       },
     }))
 
-    expect(html).toContain('Run lifecycle')
-    expect(html).toContain('Model stream')
-    expect(html).toContain('Worker/job')
-    expect(html).toContain('Error')
-    expect(html).toContain('7 in / 11 out')
+    expect(html).toContain('Recent activity')
+    expect(html).toContain('Run failed')
     expect(html).toContain('provider failed')
-    expect(html).toContain('runtime-event-group error')
+    expect(html).toContain('runtime-event-group recent')
+    expect(html).not.toContain('Run created')
+    expect(html).not.toContain('Model usage')
+    expect(html).not.toContain('7 in / 11 out')
   })
 
   test('renders productized M6 worker event labels and unknown fallback', () => {
     const html = renderToStaticMarkup(createElement(RunRail, {
       open: true,
-      onOpenArtifact: () => {},
       run: {
         id: 'run-a',
         threadId: 'thread-a',
@@ -79,18 +77,18 @@ describe('RunRail restrained runtime polish', () => {
       },
     }))
 
-    expect(html).toContain('Job claimed by worker')
-    expect(html).toContain('Lease renewed')
-    expect(html).toContain('Job recovering')
-    expect(html).toContain('Unknown worker event')
-    expect(html).toContain('future_worker_event')
+    expect(html).toContain('No activity yet')
+    expect(html).not.toContain('Job claimed by worker')
+    expect(html).not.toContain('Lease renewed')
+    expect(html).not.toContain('Job recovering')
+    expect(html).not.toContain('Unknown worker event')
+    expect(html).not.toContain('future_worker_event')
   })
 
   test('renders productized worker event labels from Chinese i18n copy', () => {
     const html = renderToStaticMarkup(createElement(RunRail, {
       open: true,
       locale: 'zh',
-      onOpenArtifact: () => {},
       run: {
         id: 'run-a',
         threadId: 'thread-a',
@@ -104,14 +102,14 @@ describe('RunRail restrained runtime polish', () => {
       },
     }))
 
-    expect(html).toContain('Worker 已领取任务')
-    expect(html).toContain('未知 Worker 事件')
+    expect(html).toContain('暂无活动')
+    expect(html).not.toContain('Worker 已领取任务')
+    expect(html).not.toContain('未知 Worker 事件')
   })
 
   test('renders provider errors and cancelled events with distinct row classes', () => {
     const html = renderToStaticMarkup(createElement(RunRail, {
       open: true,
-      onOpenArtifact: () => {},
       run: {
         id: 'run-a',
         threadId: 'thread-a',
@@ -134,13 +132,95 @@ describe('RunRail restrained runtime polish', () => {
   test('shows capability status detail in the rail', () => {
     const html = renderToStaticMarkup(createElement(RunRail, {
       open: true,
-      onOpenArtifact: () => {},
       capabilityStatus: 'provider-unavailable',
       run: null,
     }))
 
     expect(html).toContain('Provider unavailable')
     expect(html).toContain('provider rejected')
+  })
+
+  test('renders human-first tool event labels without raw tool names or paths', () => {
+    const html = renderToStaticMarkup(createElement(RunRail, {
+      open: true,
+      run: {
+        id: 'run-a',
+        threadId: 'thread-a',
+        status: 'running',
+        model: 'Local simulated',
+        context: 'local_simulated',
+        events: [
+          { id: 'evt-read', runId: 'run-a', threadId: 'thread-a', sequence: 1, type: 'tool.call.approval_required', label: 'Tool', detail: 'workspace.read waiting for approval', time: 'Now', status: 'running', metadata: { tool_name: 'workspace.read', arguments_summary: { path: 'web/src/App.tsx' } } },
+          { id: 'evt-web', runId: 'run-a', threadId: 'thread-a', sequence: 2, type: 'tool.call.succeeded', label: 'Tool', detail: 'web.fetch completed', time: 'Now', status: 'completed', metadata: { tool_name: 'web.fetch', result_summary: { status_code: 200 } } },
+          { id: 'evt-lsp', runId: 'run-a', threadId: 'thread-a', sequence: 3, type: 'tool.call.succeeded', label: 'Tool', detail: 'lsp.symbols completed', time: 'Now', status: 'completed', metadata: { tool_name: 'lsp.symbols' } },
+          { id: 'evt-artifact', runId: 'run-a', threadId: 'thread-a', sequence: 4, type: 'tool.call.succeeded', label: 'Tool', detail: 'artifact.read completed', time: 'Now', status: 'completed', metadata: { tool_name: 'artifact.read' } },
+          { id: 'evt-agent', runId: 'run-a', threadId: 'thread-a', sequence: 5, type: 'tool.call.succeeded', label: 'Tool', detail: 'agent.spawn completed', time: 'Now', status: 'completed', metadata: { tool_name: 'agent.spawn' } },
+        ],
+      },
+    }))
+
+    expect(html).toContain('Read project files')
+    expect(html).toContain('Visit web page')
+    expect(html).toContain('Analyze code')
+    expect(html).toContain('Handle artifact')
+    expect(html).toContain('Coordinate subtasks')
+    expect(html).not.toContain('workspace.read')
+    expect(html).not.toContain('web.fetch')
+    expect(html).not.toContain('lsp.symbols')
+    expect(html).not.toContain('artifact.read')
+    expect(html).not.toContain('agent.spawn')
+    expect(html).not.toContain('web/src/App.tsx')
+    expect(html).not.toContain('Workspace tool · workspace.read waiting for approval')
+    expect(html).not.toContain('Web fetch tool · medium risk · public HTTP only')
+  })
+
+  test('redacts sensitive tool metadata before rendering timeline rows', () => {
+    const html = renderToStaticMarkup(createElement(RunRail, {
+      open: true,
+      run: {
+        id: 'run-a',
+        threadId: 'thread-a',
+        status: 'completed',
+        model: 'Local simulated',
+        context: 'local_simulated',
+        events: [
+          {
+            id: 'evt-read',
+            runId: 'run-a',
+            threadId: 'thread-a',
+            sequence: 1,
+            type: 'tool.call.succeeded',
+            label: 'Tool',
+            detail: 'workspace.read /Users/xuean/project/.env Authorization Bearer sk-secret-token cookie=session token=hidden api_key=secret secret=value password=pw credential=cred session=sid',
+            time: 'Now',
+            status: 'completed',
+            metadata: {
+              tool_name: 'workspace.read',
+              arguments_summary: { path: '/Users/xuean/project/.env', authorization: 'Bearer sk-secret-token', cookie: 'session=abc' },
+              result_summary: { stdout: 'raw stdout payload', stderr: 'raw stderr payload', raw_body: '<html>secret</html>', status_code: 200 },
+            },
+          },
+        ],
+      },
+    }))
+
+    expect(html).toContain('Read project files completed')
+    expect(html).not.toContain('workspace.read')
+    expect(html).toContain('status_code: 200')
+    expect(html).not.toContain('/Users/xuean/project')
+    expect(html).not.toContain('.env')
+    expect(html).not.toContain('Authorization')
+    expect(html).not.toContain('sk-secret-token')
+    expect(html).not.toContain('session=abc')
+    expect(html).not.toContain('token=hidden')
+    expect(html).not.toContain('api_key=secret')
+    expect(html).not.toContain('secret=value')
+    expect(html).not.toContain('password=pw')
+    expect(html).not.toContain('credential=cred')
+    expect(html).not.toContain('session=sid')
+    expect(html).not.toContain('raw stdout payload')
+    expect(html).not.toContain('raw stderr payload')
+    expect(html).not.toContain('<html>secret</html>')
   })
 })
 
@@ -149,7 +229,6 @@ describe('RunRail localized runtime copy', () => {
     const html = renderToStaticMarkup(createElement(RunRail, {
       open: true,
       locale: 'zh',
-      onOpenArtifact: () => {},
       capabilityStatus: 'provider-unavailable',
       run: {
         id: 'run-a',
@@ -165,10 +244,11 @@ describe('RunRail localized runtime copy', () => {
       },
     }))
 
-    expect(html).toContain('运行生命周期')
-    expect(html).toContain('模型流')
-    expect(html).toContain('Worker/Job')
-    expect(html).toContain('错误')
+    expect(html).toContain('进度')
+    expect(html).toContain('最近活动')
+    expect(html).toContain('运行失败')
+    expect(html).not.toContain('已创建运行')
+    expect(html).not.toContain('Worker 已领取任务')
     expect(html).toContain('Provider 不可用')
     expect(html).toContain('Provider 拒绝或未能完成生成')
   })

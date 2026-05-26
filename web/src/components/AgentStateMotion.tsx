@@ -1,16 +1,28 @@
 import { loomiHedgehogImage } from '../assets/loomiHedgehog'
 import type { Run } from '../domain'
+import type { Locale } from '../i18n'
 
 export type AgentMotionState = 'idle' | 'thinking' | 'tool' | 'speaking' | 'confirm' | 'done' | 'error'
 
-const stateLabels: Record<AgentMotionState, string> = {
-  idle: 'Idle',
-  thinking: 'Thinking',
-  tool: 'Tool',
-  speaking: 'Speaking',
-  confirm: 'Confirm',
-  done: 'Done',
-  error: 'Error',
+const stateLabels: Record<Locale, Record<AgentMotionState, string>> = {
+  zh: {
+    idle: '空闲',
+    thinking: '思考中',
+    tool: '使用工具',
+    speaking: '回复中',
+    confirm: '等待确认',
+    done: '完成',
+    error: '出错',
+  },
+  en: {
+    idle: 'Idle',
+    thinking: 'Thinking',
+    tool: 'Tool',
+    speaking: 'Speaking',
+    confirm: 'Confirm',
+    done: 'Done',
+    error: 'Error',
+  },
 }
 
 export function deriveAgentMotionState(run: Run | null): AgentMotionState {
@@ -41,13 +53,15 @@ export function deriveAgentMotionState(run: Run | null): AgentMotionState {
 type Props = {
   run: Run | null
   compact?: boolean
+  locale?: Locale
 }
 
-export function AgentStateMotion({ run, compact = false }: Props) {
+export function AgentStateMotion({ run, compact = false, locale = 'en' }: Props) {
   const state = deriveAgentMotionState(run)
+  const labels = stateLabels[locale]
 
   return (
-    <div className={compact ? 'agent-motion-card compact' : 'agent-motion-card'} data-state={state} aria-label={`Agent state: ${stateLabels[state]}`}>
+    <div className={compact ? 'agent-motion-card compact' : 'agent-motion-card'} data-state={state} aria-label={`${locale === 'zh' ? 'Agent 状态' : 'Agent state'}: ${labels[state]}`}>
       <div className="agent-motion-stage">
         <div className="agent-motion-ring" />
         <div className="agent-motion-shadow" />
@@ -62,8 +76,8 @@ export function AgentStateMotion({ run, compact = false }: Props) {
         </div>
       </div>
       <div className="agent-motion-meta">
-        <span className="agent-motion-kicker">Agent</span>
-        <strong>{stateLabels[state]}</strong>
+        <span className="agent-motion-kicker">{locale === 'zh' ? 'AGENT' : 'Agent'}</span>
+        <strong>{labels[state]}</strong>
       </div>
     </div>
   )

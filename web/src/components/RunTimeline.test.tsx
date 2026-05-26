@@ -11,7 +11,6 @@ describe('RunTimeline M7 tool grouping', () => {
       rightToolsOpen: false,
       selectedPanelId: 'activity',
       onSelectPanel: () => {},
-      onOpenArtifact: () => {},
       run: {
         id: 'run-a',
         threadId: 'thread-a',
@@ -26,10 +25,8 @@ describe('RunTimeline M7 tool grouping', () => {
       },
     }))
 
-    expect(html).toContain('Model stream')
-    expect(html).toContain('Tool call')
-    expect(html).toContain('draft')
-    expect(html).toContain('Tool approval required')
-    expect(html.indexOf('Model stream')).toBeLessThan(html.indexOf('Tool call'))
+    expect(html).toContain('Tool call waiting for approval')
+    expect(html).not.toContain('Model stream')
+    expect(html).not.toContain('draft')
   })
 })

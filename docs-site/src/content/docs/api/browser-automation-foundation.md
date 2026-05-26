@@ -25,7 +25,7 @@ description: Catalog, arguments, and result contract for M27 browser tools.
 }
 ```
 
-`browser.snapshot` accepts `session_id`. `browser.click_link` accepts `session_id`, `link_index`, optional `max_bytes`, and optional `timeout_ms`.
+`browser.snapshot` and `browser.screenshot` accept `session_id`. `browser.click_link` accepts `session_id`, `link_index`, optional `max_bytes`, and optional `timeout_ms`. `browser.type` accepts `session_id`, `target`, and `text`. `browser.press` accepts `session_id` and `key`.
 
 Chat mode RunContext resolution omits all browser tools. Work mode can include them when persona allowlist permits them.
 
@@ -60,7 +60,34 @@ Chat mode RunContext resolution omits all browser tools. Work mode can include t
 }
 ```
 
-The runtime rejects relative URLs, non-HTTP(S) schemes, username/password credentials, localhost, loopback, link-local, private, multicast, unspecified hosts, failed resolution, blocked redirects, unknown sessions, and blocked link targets.
+`browser.screenshot`:
+
+```json
+{
+  "session_id": "br_..."
+}
+```
+
+`browser.type`:
+
+```json
+{
+  "session_id": "br_...",
+  "target": "q",
+  "text": "Loomi"
+}
+```
+
+`browser.press`:
+
+```json
+{
+  "session_id": "br_...",
+  "key": "Enter"
+}
+```
+
+The runtime rejects relative URLs, non-HTTP(S) schemes, username/password credentials, localhost, loopback, link-local, private, multicast, unspecified hosts, failed resolution, blocked redirects, unknown sessions, blocked link targets, unknown input targets, and keys outside the bounded allowlist.
 
 ## Result Summary
 
@@ -76,6 +103,13 @@ The runtime rejects relative URLs, non-HTTP(S) schemes, username/password creden
   "content_type": "text/html",
   "title": "Example Docs",
   "text_excerpt": "Bounded visible text...",
+  "inputs": [
+    {
+      "index": 0,
+      "target": "q",
+      "label": "Search"
+    }
+  ],
   "links": [
     {
       "index": 0,
@@ -92,4 +126,6 @@ The runtime rejects relative URLs, non-HTTP(S) schemes, username/password creden
 }
 ```
 
-Events and continuation context persist safe summaries only. They do not include raw HTML, cookies, Set-Cookie values, Authorization values, provider raw payloads, local paths, or secret-looking content.
+`browser.screenshot` returns `format = text` and `screenshot_text`; it does not return image bytes. `browser.type` returns `target`, `text_length`, and `form_value_count`, not typed text. `browser.press` returns the key and whether the key was `Enter`.
+
+Events and continuation context persist safe summaries only. They do not include raw HTML, cookies, Set-Cookie values, Authorization values, typed text, provider raw payloads, local paths, or secret-looking content.

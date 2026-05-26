@@ -65,7 +65,7 @@ The first UI boundary is Settings > Memory:
 
 The UI does not expose automatic distillation, provider selection, OpenViking, vector search, or bulk import controls.
 
-M14 expands this surface to list/search/filter, detail drawer or modal, explicit delete confirmation, loading/empty/error/tombstoned states, and a real audit/history panel. The audit surface is backed by productdata memory events and must not fabricate UI-only history.
+M14 expands this surface to list/search/filter, detail drawer or modal, explicit delete confirmation, loading/empty/error/tombstoned states, and a real audit/history panel. The audit surface is backed by productdata memory events and must not fabricate UI-only history. The default UI keeps engineering filters collapsed and folds routine `memory_snapshot_loaded` events into a small system snapshot note, while write/delete/proposal events remain visible as human-readable history.
 
 ## M14 Management And Audit Flow
 

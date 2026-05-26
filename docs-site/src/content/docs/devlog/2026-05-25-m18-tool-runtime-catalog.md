@@ -16,6 +16,14 @@ M18 added the first unified tool catalog and broker boundary. `runtime.get_curre
 - Adjusted MCP catalog projection to keep the latest successful schema hash and avoid claiming executor availability in Settings/API when the worker executor cannot be proven.
 - Adjusted broker execution to derive the execution catalog from the current prepared RunContext, preventing stale historical discovery hashes from blocking a valid current run.
 
+## Later Discovery Update
+
+- Added builtin `tool.load_tools` and `skill.load_skill` discovery helpers.
+- Kept both helpers low-risk, read-only, and auto-approved.
+- `tool.load_tools` returns safe descriptions for tools already enabled in the current run by exact name or keyword.
+- `skill.load_skill` returns safe installed skill manifest summaries and explicitly does not return full skill instruction bodies.
+- Provider schemas still come from the run enabled-tool snapshot; this update is not yet true dynamic schema injection.
+
 ## Validation
 
 ```bash
@@ -24,6 +32,13 @@ bun test --cwd web
 bun run --cwd web build
 bun run --cwd docs-site build
 git diff --check
+```
+
+Focused discovery validation:
+
+```bash
+go test ./internal/productdata ./internal/runtime -run 'TestValidateDiscovery|TestToolCatalogIncludesDiscovery|TestDiscovery|TestToolDefinitionsForPersona|TestGatewayExposesCodeAgentToolsToProvider' -count=1
+go test ./internal/httpapi -run TestDiscoveryLoadToolsAutoApprovedSmoke -count=1
 ```
 
 ## Known Limits

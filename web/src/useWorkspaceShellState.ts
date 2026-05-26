@@ -37,8 +37,8 @@ const initialShellState: WorkspaceShellSnapshot = {
   settingsCategoryId: 'general',
   settingsOpen: false,
   sidebarCollapsed: false,
-  sidebarWidth: 292,
-  theme: 'dark',
+  sidebarWidth: 252,
+  theme: 'light',
 }
 
 type WorkspaceShellAction =

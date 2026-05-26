@@ -70,6 +70,19 @@ type AgentTaskService interface {
 	CompleteAgentTask(context.Context, identity.LocalIdentity, CompleteAgentTaskInput) (AgentTask, error)
 }
 
+type ModelProviderConfigStore interface {
+	SaveModelProviderConfig(context.Context, identity.LocalIdentity, ModelProviderConfig) (ModelProviderConfig, error)
+	ListModelProviderConfigs(context.Context, identity.LocalIdentity) ([]ModelProviderConfig, error)
+	SaveWebSearchConfig(context.Context, identity.LocalIdentity, WebSearchConfig) (WebSearchConfig, error)
+	GetWebSearchConfig(context.Context, identity.LocalIdentity) (WebSearchConfig, error)
+}
+
+type MCPServerConfigStore interface {
+	SaveMCPServerConfig(context.Context, identity.LocalIdentity, MCPServerConfigRecord) (MCPServerConfigRecord, error)
+	ListMCPServerConfigs(context.Context, identity.LocalIdentity) ([]MCPServerConfigRecord, error)
+	DeleteMCPServerConfig(context.Context, identity.LocalIdentity, string) error
+}
+
 type SeedService interface {
 	Service
 	UpsertSeedThread(context.Context, identity.LocalIdentity, SeedThreadInput) (Thread, error)
@@ -100,6 +113,9 @@ type MemoryService struct {
 	memoryDecisionKeys map[string]MemoryWriteDecision
 	artifacts          map[string]Artifact
 	agentTasks         map[string]AgentTask
+	modelProviders     map[string]ModelProviderConfig
+	webSearchConfigs   map[string]WebSearchConfig
+	mcpServerConfigs   map[string]MCPServerConfigRecord
 }
 
 func NewMemoryService() *MemoryService {
@@ -122,7 +138,98 @@ func NewMemoryService() *MemoryService {
 		memoryDecisionKeys: map[string]MemoryWriteDecision{},
 		artifacts:          map[string]Artifact{},
 		agentTasks:         map[string]AgentTask{},
+		modelProviders:     map[string]ModelProviderConfig{},
+		webSearchConfigs:   map[string]WebSearchConfig{},
+		mcpServerConfigs:   map[string]MCPServerConfigRecord{},
 	}
+}
+
+func (s *MemoryService) SaveModelProviderConfig(_ context.Context, ident identity.LocalIdentity, input ModelProviderConfig) (ModelProviderConfig, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user := s.ensureUserLocked(ident)
+	provider := normalizeModelProviderConfig(input)
+	if provider.ID == "" || provider.Model == "" || provider.APIKey == "" {
+		return ModelProviderConfig{}, NewError(CodeProviderMisconfigured, "Provider configuration is incomplete.")
+	}
+	provider.UserID = user.ID
+	s.modelProviders[provider.ID] = provider
+	return provider, nil
+}
+
+func (s *MemoryService) ListModelProviderConfigs(_ context.Context, ident identity.LocalIdentity) ([]ModelProviderConfig, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user := s.ensureUserLocked(ident)
+	providers := make([]ModelProviderConfig, 0, len(s.modelProviders))
+	for _, provider := range s.modelProviders {
+		if provider.UserID == user.ID {
+			providers = append(providers, provider)
+		}
+	}
+	sort.Slice(providers, func(i, j int) bool { return providers[i].ID < providers[j].ID })
+	return providers, nil
+}
+
+func (s *MemoryService) SaveWebSearchConfig(_ context.Context, ident identity.LocalIdentity, input WebSearchConfig) (WebSearchConfig, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user := s.ensureUserLocked(ident)
+	existing := s.webSearchConfigs[user.ID]
+	next := normalizeWebSearchConfig(input)
+	if next.TavilyAPIKey == "" {
+		next.TavilyAPIKey = existing.TavilyAPIKey
+	}
+	if next.BraveAPIKey == "" {
+		next.BraveAPIKey = existing.BraveAPIKey
+	}
+	next.UserID = user.ID
+	s.webSearchConfigs[user.ID] = next
+	return next, nil
+}
+
+func (s *MemoryService) GetWebSearchConfig(_ context.Context, ident identity.LocalIdentity) (WebSearchConfig, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user := s.ensureUserLocked(ident)
+	config := s.webSearchConfigs[user.ID]
+	config.UserID = user.ID
+	return config, nil
+}
+
+func (s *MemoryService) SaveMCPServerConfig(_ context.Context, ident identity.LocalIdentity, input MCPServerConfigRecord) (MCPServerConfigRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user := s.ensureUserLocked(ident)
+	record := normalizeMCPServerConfigRecord(input)
+	if record.Slug == "" {
+		return MCPServerConfigRecord{}, NewError(CodeInvalidRequest, "MCP server slug is required.")
+	}
+	record.UserID = user.ID
+	s.mcpServerConfigs[user.ID+":"+record.Slug] = record
+	return record, nil
+}
+
+func (s *MemoryService) ListMCPServerConfigs(_ context.Context, ident identity.LocalIdentity) ([]MCPServerConfigRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user := s.ensureUserLocked(ident)
+	records := make([]MCPServerConfigRecord, 0, len(s.mcpServerConfigs))
+	for _, record := range s.mcpServerConfigs {
+		if record.UserID == user.ID {
+			records = append(records, record)
+		}
+	}
+	sort.Slice(records, func(i, j int) bool { return records[i].Slug < records[j].Slug })
+	return records, nil
+}
+
+func (s *MemoryService) DeleteMCPServerConfig(_ context.Context, ident identity.LocalIdentity, slug string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user := s.ensureUserLocked(ident)
+	delete(s.mcpServerConfigs, user.ID+":"+strings.TrimSpace(slug))
+	return nil
 }
 
 func (s *MemoryService) SpawnAgentTask(_ context.Context, ident identity.LocalIdentity, input SpawnAgentTaskInput) (AgentTask, error) {
@@ -1323,7 +1430,7 @@ func applyPersonaToRunContext(context *RunContext, events []RunEvent) {
 func withoutWorkModeToolResolutions(tools []ToolResolution) []ToolResolution {
 	filtered := make([]ToolResolution, 0, len(tools))
 	for _, tool := range tools {
-		if !IsWorkspaceToolName(tool.Name) && !IsSandboxToolName(tool.Name) && !IsLSPToolName(tool.Name) && !IsWebToolName(tool.Name) && !IsBrowserToolName(tool.Name) && !IsArtifactToolName(tool.Name) && !IsAgentToolName(tool.Name) {
+		if tool.Name == ToolNameWebSearch || (!IsWorkspaceToolName(tool.Name) && !IsSandboxToolName(tool.Name) && !IsLSPToolName(tool.Name) && !IsWebToolName(tool.Name) && !IsBrowserToolName(tool.Name) && !IsArtifactToolName(tool.Name) && !IsAgentToolName(tool.Name) && !IsTodoToolName(tool.Name)) {
 			filtered = append(filtered, tool)
 		}
 	}
@@ -1359,7 +1466,7 @@ func validateBuiltInPersonaConfigs(configs []BuiltInPersonaConfig) error {
 		}
 		for _, name := range config.AllowedToolNames {
 			toolName := strings.TrimSpace(name)
-			if toolName != ToolNameCurrentTime && !IsWorkspaceToolName(toolName) && !IsSandboxToolName(toolName) && !IsLSPToolName(toolName) && !IsWebToolName(toolName) && !IsBrowserToolName(toolName) && !IsArtifactToolName(toolName) && !IsAgentToolName(toolName) && !IsMCPToolName(toolName) {
+			if toolName != ToolNameCurrentTime && !IsDiscoveryToolName(toolName) && !IsWorkspaceToolName(toolName) && !IsSandboxToolName(toolName) && !IsLSPToolName(toolName) && !IsWebToolName(toolName) && !IsBrowserToolName(toolName) && !IsArtifactToolName(toolName) && !IsAgentToolName(toolName) && !IsTodoToolName(toolName) && !IsMCPToolName(toolName) {
 				return NewError(CodeInvalidRequest, "Built-in persona references an unsupported tool.")
 			}
 		}
@@ -1755,7 +1862,12 @@ func (s *MemoryService) RecordToolCallRequest(_ context.Context, ident identity.
 	arguments := RedactEventMetadata(input.ArgumentsSummary)
 	call := ToolCall{ID: NewToolCallID(), ThreadID: run.ThreadID, RunID: run.ID, ToolCallID: input.ToolCallID, ToolName: input.ToolName, CandidateSchemaHash: input.CandidateSchemaHash, ArgumentsSummary: arguments, ApprovalStatus: input.ApprovalStatus, ExecutionStatus: input.ExecutionStatus, RequestedAt: now, UpdatedAt: now}
 	s.toolCalls[key] = call
-	run.Status = RunStatusBlockedOnToolApproval
+	autoApproved := call.ApprovalStatus == ToolCallApprovalApproved && call.ExecutionStatus == ToolCallExecutionNotStarted
+	if autoApproved {
+		run.Status = RunStatusQueued
+	} else {
+		run.Status = RunStatusBlockedOnToolApproval
+	}
 	run.UpdatedAt = now
 	s.runs[run.ID] = run
 	for id, job := range s.backgroundJobs {
@@ -1767,6 +1879,13 @@ func (s *MemoryService) RecordToolCallRequest(_ context.Context, ident identity.
 	}
 	metadata := toolCallEventMetadataForRun(s.runEvents[run.ID], call)
 	requested := s.appendRunEventLocked(run, RunEventCategoryProgress, EventToolCallRequested, "Tool call requested", nil, metadata, now)
+	if autoApproved {
+		jobID := NewBackgroundJobID()
+		jobMetadata := RedactEventMetadata(map[string]any{"source": string(run.Source), "job_id": jobID, "tool_call_id": call.ToolCallID, "resume_reason": "tool_call_auto_approved"})
+		s.backgroundJobs[jobID] = BackgroundJob{ID: jobID, RunID: run.ID, ThreadID: run.ThreadID, UserID: user.ID, Kind: BackgroundJobKindRunExecution, Status: BackgroundJobStatusQueued, Priority: 50, MaxAttempts: 3, ScheduledAt: now, Metadata: jobMetadata, CreatedAt: now, UpdatedAt: now}
+		approved := s.appendRunEventLocked(run, RunEventCategoryProgress, EventToolCallApproved, "Tool call auto-approved", nil, metadata, now)
+		return call, []RunEvent{requested, approved}, nil
+	}
 	required := s.appendRunEventLocked(run, RunEventCategoryProgress, EventToolCallApprovalRequired, "Tool approval required", nil, metadata, now)
 	return call, []RunEvent{requested, required}, nil
 }
@@ -2024,6 +2143,9 @@ func toolCallEventMetadata(call ToolCall) map[string]any {
 	} else if IsAgentToolName(call.ToolName) {
 		metadata["tool_source"] = string(ToolCatalogSourceBuiltin)
 		metadata["tool_group"] = string(ToolCatalogGroupAgent)
+	} else if IsTodoToolName(call.ToolName) {
+		metadata["tool_source"] = string(ToolCatalogSourceBuiltin)
+		metadata["tool_group"] = string(ToolCatalogGroupTodo)
 	} else {
 		metadata["tool_source"] = string(ToolCatalogSourceBuiltin)
 		metadata["tool_group"] = string(ToolCatalogGroupRuntime)

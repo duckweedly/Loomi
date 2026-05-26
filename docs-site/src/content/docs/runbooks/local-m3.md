@@ -19,7 +19,7 @@ READINESS_TIMEOUT_SECONDS=5
 VITE_LOOMI_API_BASE_URL=http://127.0.0.1:8080
 ```
 
-未设置 `VITE_LOOMI_API_BASE_URL` 时，web shell 使用 M1 mock data。
+未设置 `VITE_LOOMI_API_BASE_URL` 时，desktop dev 默认使用 `http://127.0.0.1:18080` 作为 renderer API base，不再把 `/v1` 请求打到 Vite renderer server。只有本地 API 使用其它端口时才需要显式覆盖。
 
 ## 启动数据库和 migration
 

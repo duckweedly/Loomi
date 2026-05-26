@@ -63,23 +63,50 @@ describe('Composer interactions', () => {
     expect(source).toContain('if (composerDisabled || !canSubmit || !content) return')
   })
 
-  test('renders persona selector with the active version label', () => {
+  test('does not render unused persona provider attachment or voice controls', () => {
     const html = renderToStaticMarkup(createElement(Composer, {
       threadSelected: true,
       run: undefined,
       messages: [],
-      personas: [
-        { id: 'persona-default', slug: 'loomi-default', name: 'Default', description: 'General Loomi persona', activeVersion: '2026-05-25.1', isDefault: true },
-      ],
-      selectedPersonaId: 'persona-default',
-      onSelectPersona: () => {},
       onSubmit: () => {},
       onStop: () => {},
       onRetry: () => {},
       onRegenerate: () => {},
     }))
 
-    expect(html).toContain('aria-label="Persona"')
-    expect(html).toContain('Default v2026-05-25.1')
+    expect(html).not.toContain('aria-label="Persona"')
+    expect(html).not.toContain('composer-model')
+    expect(html).not.toContain('lucide-mic')
+    expect(html).not.toContain('lucide-plus')
+  })
+
+  test('renders mode-specific placeholder and honest folder limitation state', () => {
+    const chatHtml = renderToStaticMarkup(createElement(Composer, {
+      mode: 'chat',
+      threadSelected: true,
+      run: null,
+      messages: [],
+      onSubmit: () => {},
+    }))
+    const workHtml = renderToStaticMarkup(createElement(Composer, {
+      mode: 'work',
+      threadSelected: true,
+      run: null,
+      messages: [],
+      dataSourceMode: 'mock',
+      workspaceFolderStatus: 'Default Home',
+      onSubmit: () => {},
+      onChooseWorkspaceFolder: () => {},
+    }))
+
+    expect(chatHtml).toContain('placeholder="Message Loomi"')
+    expect(chatHtml).not.toContain('No folder selected')
+    expect(chatHtml).not.toContain('Work tools limited')
+    expect(workHtml).toContain('placeholder="Describe the task for Loomi"')
+    expect(workHtml).not.toContain('No folder selected')
+    expect(workHtml).not.toContain('Work tools limited')
+    expect(workHtml).not.toContain('Mock demo mode')
+    expect(workHtml).toContain('选择目录')
+    expect(workHtml).toContain('Default Home')
   })
 })

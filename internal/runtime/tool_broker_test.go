@@ -68,8 +68,24 @@ func TestToolBrokerExecutesSandboxExecCommandThroughOneEntrypoint(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.ResultSummary["operation"] != "exec_command" || result.ResultSummary["scope"] != "bounded_read_only_command" || result.ResultSummary["stdout"] == "" {
+	if result.ResultSummary["operation"] != "exec_command" || result.ResultSummary["scope"] != "bounded_command" || result.ResultSummary["stdout"] == "" {
 		t.Fatalf("sandbox broker result = %+v", result)
+	}
+}
+
+func TestToolBrokerExecutesSandboxStartProcessThroughOneEntrypoint(t *testing.T) {
+	root := t.TempDir()
+	broker := ToolBroker{Executor: DefaultToolExecutor{SandboxExecutor: SandboxToolExecutor{Root: root, Store: NewSandboxProcessStore()}}}
+	call := productdata.ToolCall{ThreadID: "thr_1", RunID: "run_1", ToolCallID: "tc_sandbox_start", ToolName: productdata.ToolNameSandboxStartProcess, ArgumentsSummary: map[string]any{"argv": []any{"pwd"}}, ApprovalStatus: productdata.ToolCallApprovalApproved, ExecutionStatus: productdata.ToolCallExecutionExecuting}
+	catalog := []productdata.ToolCatalogEntry{{Name: productdata.ToolNameSandboxStartProcess, Enabled: true, ExecutionState: productdata.ToolExecutionStateExecutable, Source: productdata.ToolCatalogSourceBuiltin, Group: productdata.ToolCatalogGroupSandbox, RiskLevel: productdata.ToolRiskHigh}}
+	allowed := []productdata.ToolResolution{{Name: productdata.ToolNameSandboxStartProcess, ExecutionState: string(productdata.ToolExecutionStateExecutable), Source: string(productdata.ToolCatalogSourceBuiltin), Group: string(productdata.ToolCatalogGroupSandbox), RiskLevel: string(productdata.ToolRiskHigh)}}
+
+	result, err := broker.Execute(context.Background(), ToolInvocationFromCall(call, catalog, allowed))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ResultSummary["operation"] != "start_process" || result.ResultSummary["scope"] != "bounded_process" || result.ResultSummary["process_id"] == "" {
+		t.Fatalf("sandbox process broker result = %+v", result)
 	}
 }
 

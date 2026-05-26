@@ -33,6 +33,20 @@ func TestLSPReadOnlyToolsExecuteWithinFixtureRoot(t *testing.T) {
 	if refs["operation"] != "references" || refs["count"] != 2 {
 		t.Fatalf("references = %+v", refs)
 	}
+	definition, err := executor.Execute(context.Background(), ToolInvocation{ToolName: productdata.ToolNameLSPDefinition, ArgumentsSummary: map[string]any{"path": "src/main.go", "line": 5, "column": 30, "limit": 10}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if definition["operation"] != "definition" || definition["count"] != 1 || definition["name"] != "ToolBroker" {
+		t.Fatalf("definition = %+v", definition)
+	}
+	hover, err := executor.Execute(context.Background(), ToolInvocation{ToolName: productdata.ToolNameLSPHover, ArgumentsSummary: map[string]any{"path": "src/main.go", "line": 5, "column": 30}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hover["operation"] != "hover" || hover["name"] != "ToolBroker" || !strings.Contains(fmt.Sprint(hover["hover"]), "type ToolBroker") {
+		t.Fatalf("hover = %+v", hover)
+	}
 
 	diagnostics, err := executor.Execute(context.Background(), ToolInvocation{ToolName: productdata.ToolNameLSPDiagnostics, ArgumentsSummary: map[string]any{"path": "src/bad.go", "limit": 10}})
 	if err != nil {
@@ -78,6 +92,9 @@ func TestLSPReadOnlyToolsRejectInvalidArgumentsAndBoundResults(t *testing.T) {
 	}
 	if _, err := executor.Execute(context.Background(), ToolInvocation{ToolName: productdata.ToolNameLSPReferences, ArgumentsSummary: map[string]any{"path": "src/main.go"}}); err == nil {
 		t.Fatal("references missing position err = nil")
+	}
+	if _, err := executor.Execute(context.Background(), ToolInvocation{ToolName: productdata.ToolNameLSPDefinition, ArgumentsSummary: map[string]any{"path": "src/main.go", "line": 3}}); err == nil {
+		t.Fatal("definition missing position err = nil")
 	}
 	refs, err := executor.Execute(context.Background(), ToolInvocation{ToolName: productdata.ToolNameLSPReferences, ArgumentsSummary: map[string]any{"path": "src/main.go", "line": 3, "column": 6, "limit": 1}})
 	if err != nil {

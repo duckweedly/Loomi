@@ -36,7 +36,55 @@ Claude Code 项目内命令使用横线格式：
 
 `/speckit-implement` 按任务实现，并在必要时回到 spec 或 plan 修正前提。
 
-## 当前候选完成：M29 Multi-agent Runtime Foundation
+## 当前候选：Web Search Providers
+
+当前 Spec Kit 功能目录：
+
+```text
+specs/041-web-search-providers/
+```
+
+关键产物：
+
+- `spec.md`：定义 Chat/Work 可用的 read-only auto-approved `web.search`，支持 Tavily 和 Brave Search provider。
+- `plan.md`：确定复用 M26 WebToolExecutor、ToolBroker、worker continuation、RunRail；网页搜索配置放在 Settings > Web Search，Settings > Tools 保持只读 catalog，不新增 crawler/browser/social 搜索。
+- `tasks.md`：按 productdata/runtime/provider/worker/web/docs 验证拆分。
+
+状态：candidate。该轮只补真实 web search provider 能力；`web.fetch` 仍保持 Work-only，搜索结果只返回 bounded title/url/snippet safe summary。
+
+## 近期候选完成：UI-02 Real Usage Readiness
+
+当前 Spec Kit 功能目录：
+
+```text
+specs/040-real-usage-readiness/
+```
+
+关键产物：
+
+- `spec.md`：定义 Mock/Real 状态前置、Work folder 诚实受限态、WorkPlanView 任务面板、RunRail/ToolCallCard 人话工具标签、approval blocked 前置、Sidebar 精简入口和 Composer 模式文案。
+- `plan.md`：确定只复用现有 React/CSS 和已存在运行状态，不改 backend/runtime/provider/tool execution/database，不推进 M38。
+- `tasks.md`：按状态可见性、Work mode 真实态、工具事件可读性、Sidebar/Composer 基础使用和验证拆分。
+
+状态：UI-02 candidate。该轮只做真实使用态收口，不新增工具能力，不改变执行链路，不做像素级美化；RunRail/ToolCallCard 已统一使用安全预览，Chat mode 不显示 Work folder 限制态。
+
+## 近期候选完成：UI-01 Formal Interface Shell Redesign
+
+当前 Spec Kit 功能目录：
+
+```text
+specs/039-formal-interface-shell-redesign/
+```
+
+关键产物：
+
+- `spec.md`：定义浅色桌面壳、窄 sidebar、白色聊天画布、固定 composer、Chat/Work 保持可用，以及非目标。
+- `plan.md`：确定复用现有 React/CSS 结构，不改 backend/runtime/tool/provider/memory/database。
+- `tasks.md`：按整体壳、视觉 token、左侧栏、主内容布局、composer、Settings/Tools/RunRail compatibility 和 browser smoke 拆分。
+
+状态：第一轮 UI shell redesign candidate。该轮只让界面可正式打开测试，不包含像素级精修、Settings redesign、Tools redesign、RunRail redesign 或 M38/activity recorder。
+
+## 近期候选完成：M29 Multi-agent Runtime Foundation
 
 当前 Spec Kit 功能目录：
 
@@ -150,7 +198,7 @@ specs/029-workspace-read-tools/
 - `quickstart.md`：记录 backend smoke、UI smoke 和 required validation。
 - `tasks.md`：按 backend foundation、approved execution、安全边界、UI/docs/validation 拆分。
 
-状态：M21 candidate。Workspace tools 只在 Work mode RunContext 中启用；Chat mode 不扩大 workspace access。工具 root 来自 `LOOMI_WORKSPACE_ROOT` 或 repo root，拒绝 traversal、absolute escape、symlink escape 和敏感路径。浏览器 smoke 需在本轮 closeout 单独记录。M21 不包含 shell、write/edit、sandbox、browser automation、web search/fetch、artifact create 或多工具循环。
+状态：M21 candidate。Workspace tools 只在 Work mode RunContext 中启用；Chat mode 不扩大 workspace access。工具 root 来自 `LOOMI_WORKSPACE_ROOT`，未设置时本地桌面/dev 默认用户 Home；桌面端可由用户显式选择目录后切换运行时 root。路径边界继续拒绝 traversal、absolute escape、symlink escape 和敏感路径。浏览器 smoke 需在本轮 closeout 单独记录。M21 不包含 shell、write/edit、sandbox、browser automation、web search/fetch、artifact create 或多工具循环。
 
 ## 近期已完成：M20 Local Codex Execution Bridge
 

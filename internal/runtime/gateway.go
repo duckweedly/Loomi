@@ -94,7 +94,7 @@ func (g *Gateway) run(ctx context.Context, run productdata.Run, input GatewayRun
 		g.fail(ctx, run.ID, "invalid_request", "Model request context could not be loaded.")
 		return
 	}
-	g.streamProviderResponse(ctx, run, provider, ProviderRequest{ThreadID: input.ThreadID, MessageID: input.MessageID, Messages: messages, Model: selectedModel(input.Model, provider.Config().Model)}, "initial", true)
+	g.streamProviderResponse(ctx, run, provider, ProviderRequest{ThreadID: input.ThreadID, MessageID: input.MessageID, Messages: messages, Model: selectedModel(input.Model, provider.Config().Model), Tools: g.providerToolsForRun(ctx, run.ID)}, "initial", true)
 }
 
 func (g *Gateway) ContinueAfterToolResult(ctx context.Context, run productdata.Run, input GatewayContinuationInput) {
@@ -113,7 +113,7 @@ func (g *Gateway) ContinueAfterToolResult(ctx context.Context, run productdata.R
 		g.fail(ctx, run.ID, "tool_result_context_unavailable", "Tool result context could not be loaded.")
 		return
 	}
-	g.streamProviderResponse(ctx, run, provider, ProviderRequest{ThreadID: input.ThreadID, MessageID: input.MessageID, Messages: messages, Model: selectedModel(input.Model, provider.Config().Model)}, "continuation", false)
+	g.streamProviderResponse(ctx, run, provider, ProviderRequest{ThreadID: input.ThreadID, MessageID: input.MessageID, Messages: messages, Model: selectedModel(input.Model, provider.Config().Model), Tools: g.providerToolsForContinuation(ctx, run.ID)}, "continuation", false)
 }
 
 func (g *Gateway) streamProviderResponse(ctx context.Context, run productdata.Run, provider Provider, request ProviderRequest, modelPhase string, allowToolCalls bool) {
@@ -303,12 +303,21 @@ func (g *Gateway) recordToolCallRequest(ctx context.Context, run productdata.Run
 		if !allowed {
 			return false
 		}
-	} else if (productdata.IsWorkspaceToolName(event.ToolName) || productdata.IsSandboxToolName(event.ToolName) || productdata.IsLSPToolName(event.ToolName) || productdata.IsWebToolName(event.ToolName) || productdata.IsBrowserToolName(event.ToolName) || productdata.IsArtifactToolName(event.ToolName) || productdata.IsAgentToolName(event.ToolName)) && !g.scopedToolAllowedForRun(ctx, run.ID, event.ToolName) {
+	} else if (productdata.IsDiscoveryToolName(event.ToolName) || productdata.IsWorkspaceToolName(event.ToolName) || productdata.IsSandboxToolName(event.ToolName) || productdata.IsLSPToolName(event.ToolName) || productdata.IsWebToolName(event.ToolName) || productdata.IsBrowserToolName(event.ToolName) || productdata.IsArtifactToolName(event.ToolName) || productdata.IsAgentToolName(event.ToolName) || productdata.IsTodoToolName(event.ToolName)) && !g.scopedToolAllowedForRun(ctx, run.ID, event.ToolName) {
 		return false
 	}
-	_, events, err := g.Service.RecordToolCallRequest(ctx, identity.LocalDevIdentity(), run.ID, productdata.RecordToolCallRequestInput{ToolCallID: toolCallID, ToolName: event.ToolName, CandidateSchemaHash: candidateSchemaHash, ArgumentsSummary: arguments, ArgumentsHash: argumentsHash(arguments), ApprovalStatus: productdata.ToolCallApprovalRequired, ExecutionStatus: productdata.ToolCallExecutionBlocked})
+	approvalStatus := productdata.ToolCallApprovalRequired
+	executionStatus := productdata.ToolCallExecutionBlocked
+	if autoApproveToolCall(event.ToolName) {
+		approvalStatus = productdata.ToolCallApprovalApproved
+		executionStatus = productdata.ToolCallExecutionNotStarted
+	}
+	_, events, err := g.Service.RecordToolCallRequest(ctx, identity.LocalDevIdentity(), run.ID, productdata.RecordToolCallRequestInput{ToolCallID: toolCallID, ToolName: event.ToolName, CandidateSchemaHash: candidateSchemaHash, ArgumentsSummary: arguments, ArgumentsHash: argumentsHash(arguments), ApprovalStatus: approvalStatus, ExecutionStatus: executionStatus})
 	if err != nil {
 		return false
+	}
+	if todo, ok := appendWorkTodoSnapshot(ctx, g.Service, run, "runtime"); ok {
+		events = append(events, todo)
 	}
 	if g.Broadcaster != nil {
 		for _, recorded := range events {
@@ -316,6 +325,10 @@ func (g *Gateway) recordToolCallRequest(ctx context.Context, run productdata.Run
 		}
 	}
 	return true
+}
+
+func autoApproveToolCall(toolName string) bool {
+	return toolName == productdata.ToolNameWebSearch || productdata.IsDiscoveryToolName(toolName)
 }
 
 func (g *Gateway) canRequestContinuationTool(ctx context.Context, run productdata.Run, event ProviderEvent) bool {
@@ -362,7 +375,143 @@ func (g *Gateway) continuationToolLimitReached(ctx context.Context, run productd
 }
 
 func (g *Gateway) continuationToolNameSupported(toolName string) bool {
-	return productdata.IsWorkspaceToolName(toolName) || productdata.IsBrowserToolName(toolName) || productdata.IsArtifactToolName(toolName) || productdata.IsAgentToolName(toolName)
+	return productdata.IsDiscoveryToolName(toolName) ||
+		productdata.IsWorkspaceToolName(toolName) ||
+		productdata.IsSandboxToolName(toolName) ||
+		productdata.IsLSPToolName(toolName) ||
+		productdata.IsWebToolName(toolName) ||
+		productdata.IsBrowserToolName(toolName) ||
+		productdata.IsArtifactToolName(toolName) ||
+		productdata.IsAgentToolName(toolName) ||
+		productdata.IsTodoToolName(toolName)
+}
+
+func (g *Gateway) providerToolsForRun(ctx context.Context, runID string) []ProviderToolDefinition {
+	if g == nil || g.Service == nil {
+		return nil
+	}
+	events, err := g.Service.ListRunEvents(ctx, identity.LocalDevIdentity(), runID, 0)
+	if err != nil {
+		return nil
+	}
+	return providerToolsFromEvents(events)
+}
+
+func (g *Gateway) providerToolsForContinuation(ctx context.Context, runID string) []ProviderToolDefinition {
+	if g == nil || g.Service == nil {
+		return nil
+	}
+	events, err := g.Service.ListRunEvents(ctx, identity.LocalDevIdentity(), runID, 0)
+	if err != nil || acceptedToolCallCount(events) >= productdata.DefaultMaxBoundedToolCallsPerRun {
+		return nil
+	}
+	return providerToolsFromEvents(events)
+}
+
+func providerToolsFromEvents(events []productdata.RunEvent) []ProviderToolDefinition {
+	enabled := map[string]bool{}
+	ordered := []string{}
+	for _, event := range events {
+		for _, name := range metadataStringList(event.Metadata, "enabled_tools") {
+			if !enabled[name] {
+				ordered = append(ordered, name)
+			}
+			enabled[name] = true
+		}
+	}
+	tools := make([]ProviderToolDefinition, 0, len(ordered))
+	for _, name := range ordered {
+		tool, ok := builtinProviderToolDefinition(name)
+		if !ok {
+			continue
+		}
+		tools = append(tools, tool)
+	}
+	return tools
+}
+
+func builtinProviderToolDefinition(name string) (ProviderToolDefinition, bool) {
+	switch name {
+	case productdata.ToolNameLoadTools:
+		return providerTool(name, "Return safe descriptions for currently enabled Loomi tools by name or keyword.", map[string]any{"queries": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "maxItems": 5}, "names": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "maxItems": 20}, "limit": integerSchema(1, 30)}, []string{}), true
+	case productdata.ToolNameLoadSkill:
+		return providerTool(name, "Return a safe installed skill summary by name without loading the instruction body.", map[string]any{"name": stringSchema("Installed skill name or keyword."), "limit": integerSchema(1, 20)}, []string{"name"}), true
+	case productdata.ToolNameWorkspaceGlob:
+		return providerTool(name, "Find files under the workspace root.", map[string]any{"pattern": stringSchema("Glob pattern."), "path": stringSchema("Optional relative directory."), "limit": integerSchema(1, 500)}, []string{"pattern"}), true
+	case productdata.ToolNameWorkspaceGrep:
+		return providerTool(name, "Search text files under the workspace root.", map[string]any{"query": stringSchema("Search query."), "path": stringSchema("Optional relative directory."), "include": stringSchema("Optional file glob."), "case_sensitive": map[string]any{"type": "boolean"}, "limit": integerSchema(1, 500)}, []string{"query"}), true
+	case productdata.ToolNameWorkspaceRead:
+		return providerTool(name, "Read a bounded UTF-8 slice from one workspace file.", map[string]any{"path": stringSchema("Relative file path."), "offset": integerSchema(0, 1000000), "limit": integerSchema(1, 1000000), "max_bytes": integerSchema(1, 131072)}, []string{"path"}), true
+	case productdata.ToolNameWorkspaceWriteFile:
+		return providerTool(name, "Create a new bounded UTF-8 text file under the workspace root.", map[string]any{"path": stringSchema("Relative file path."), "content": stringSchema("File content."), "max_bytes": integerSchema(1, 131072)}, []string{"path", "content"}), true
+	case productdata.ToolNameWorkspaceEdit:
+		return providerTool(name, "Apply one bounded replacement in a workspace file after reading it.", map[string]any{"path": stringSchema("Relative file path."), "old_text": stringSchema("Existing text to replace exactly once."), "new_text": stringSchema("Replacement text."), "max_bytes": integerSchema(1, 131072)}, []string{"path", "old_text", "new_text"}), true
+	case productdata.ToolNameWorkspacePatchPreview:
+		return providerTool(name, "Preview one bounded replacement in a workspace file after reading it.", map[string]any{"path": stringSchema("Relative file path."), "old_text": stringSchema("Existing text to replace exactly once."), "new_text": stringSchema("Replacement text."), "max_bytes": integerSchema(1, 131072)}, []string{"path", "old_text", "new_text"}), true
+	case productdata.ToolNameWorkspacePatchApply:
+		return providerTool(name, "Apply one previously previewed bounded replacement in a workspace file.", map[string]any{"path": stringSchema("Relative file path."), "old_text": stringSchema("Existing text to replace exactly once."), "new_text": stringSchema("Replacement text."), "max_bytes": integerSchema(1, 131072)}, []string{"path", "old_text", "new_text"}), true
+	case productdata.ToolNameSandboxExecCommand:
+		return providerTool(name, "Run one approved argv-form read or validation command under the workspace root.", map[string]any{"argv": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "minItems": 1}, "cwd": stringSchema("Optional relative working directory."), "timeout_ms": integerSchema(1000, 30000), "max_output_bytes": integerSchema(1, 32768)}, []string{"argv"}), true
+	case productdata.ToolNameSandboxStartProcess:
+		return providerTool(name, "Start one approved argv-form read or validation process under the workspace root.", map[string]any{"argv": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "minItems": 1}, "cwd": stringSchema("Optional relative working directory."), "timeout_ms": integerSchema(1000, 120000), "max_output_bytes": integerSchema(1, 65536), "stdin": map[string]any{"type": "boolean"}}, []string{"argv"}), true
+	case productdata.ToolNameSandboxContinueProcess:
+		return providerTool(name, "Read current output/status for one run-scoped sandbox process, optionally writing bounded stdin.", map[string]any{"process_id": stringSchema("Sandbox process id returned by sandbox.start_process."), "cursor": integerSchema(0, 65536), "stdin_text": stringSchema("Optional bounded stdin text for stdin-enabled processes."), "input_seq": integerSchema(1, 1000000), "close_stdin": map[string]any{"type": "boolean"}}, []string{"process_id"}), true
+	case productdata.ToolNameSandboxTerminateProcess:
+		return providerTool(name, "Terminate one run-scoped sandbox process.", map[string]any{"process_id": stringSchema("Sandbox process id returned by sandbox.start_process.")}, []string{"process_id"}), true
+	case productdata.ToolNameLSPDiagnostics:
+		return providerTool(name, "Read bounded diagnostics for a workspace source file.", map[string]any{"path": stringSchema("Relative source file path."), "language": stringSchema("Optional language id."), "limit": integerSchema(1, 100)}, []string{"path"}), true
+	case productdata.ToolNameLSPSymbols:
+		return providerTool(name, "Read bounded symbol summaries for a workspace source file.", map[string]any{"path": stringSchema("Relative source file path."), "query": stringSchema("Optional symbol query."), "language": stringSchema("Optional language id."), "limit": integerSchema(1, 100)}, []string{"path"}), true
+	case productdata.ToolNameLSPReferences:
+		return providerTool(name, "Read bounded references for a source position.", map[string]any{"path": stringSchema("Relative source file path."), "line": integerSchema(1, 1000000), "column": integerSchema(1, 1000000), "include_declaration": map[string]any{"type": "boolean"}, "limit": integerSchema(1, 100)}, []string{"path", "line", "column"}), true
+	case productdata.ToolNameLSPDefinition:
+		return providerTool(name, "Find a bounded best-effort definition for a source position.", map[string]any{"path": stringSchema("Relative source file path."), "line": integerSchema(1, 1000000), "column": integerSchema(1, 1000000), "language": stringSchema("Optional language id."), "limit": integerSchema(1, 100)}, []string{"path", "line", "column"}), true
+	case productdata.ToolNameLSPHover:
+		return providerTool(name, "Read a bounded best-effort hover summary for a source position.", map[string]any{"path": stringSchema("Relative source file path."), "line": integerSchema(1, 1000000), "column": integerSchema(1, 1000000), "language": stringSchema("Optional language id.")}, []string{"path", "line", "column"}), true
+	case productdata.ToolNameWebSearch:
+		return WebSearchProviderToolDefinition(), true
+	case productdata.ToolNameWebFetch:
+		return providerTool(name, "Fetch one bounded public HTTP(S) URL and return a safe text summary.", map[string]any{"url": stringSchema("Public HTTP(S) URL."), "max_bytes": integerSchema(1, 131072), "timeout_ms": integerSchema(1000, 30000)}, []string{"url"}), true
+	case productdata.ToolNameBrowserOpen:
+		return providerTool(name, "Open one bounded public HTTP(S) page in a run-scoped browser session.", map[string]any{"url": stringSchema("Public HTTP(S) URL."), "max_bytes": integerSchema(1, 131072), "timeout_ms": integerSchema(1000, 30000)}, []string{"url"}), true
+	case productdata.ToolNameBrowserSnapshot:
+		return providerTool(name, "Return the current safe snapshot for a run-scoped browser session.", map[string]any{"session_id": stringSchema("Browser session id.")}, []string{"session_id"}), true
+	case productdata.ToolNameBrowserClickLink:
+		return providerTool(name, "Navigate one safe link from a run-scoped browser session.", map[string]any{"session_id": stringSchema("Browser session id."), "link_index": integerSchema(0, 100), "max_bytes": integerSchema(1, 131072), "timeout_ms": integerSchema(1000, 30000)}, []string{"session_id", "link_index"}), true
+	case productdata.ToolNameBrowserScreenshot:
+		return providerTool(name, "Return a bounded text screenshot summary for a run-scoped browser session.", map[string]any{"session_id": stringSchema("Browser session id.")}, []string{"session_id"}), true
+	case productdata.ToolNameBrowserType:
+		return providerTool(name, "Record bounded text into a discovered input target in a run-scoped browser session.", map[string]any{"session_id": stringSchema("Browser session id."), "target": stringSchema("Input target from browser snapshot."), "text": stringSchema("Text to type.")}, []string{"session_id", "target", "text"}), true
+	case productdata.ToolNameBrowserPress:
+		return providerTool(name, "Record one bounded key press in a run-scoped browser session.", map[string]any{"session_id": stringSchema("Browser session id."), "key": map[string]any{"type": "string", "enum": []string{"Enter", "Escape", "Tab", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"}}}, []string{"session_id", "key"}), true
+	case productdata.ToolNameTodoWrite:
+		itemSchema := map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"id": stringSchema("Stable todo id."), "title": stringSchema("Short todo title."), "status": map[string]any{"type": "string", "enum": []string{"pending", "running", "completed", "blocked", "failed"}}, "summary": stringSchema("Optional safe progress summary.")}, "required": []string{"id", "title", "status"}}
+		return providerTool(name, "Replace the current Work plan todo snapshot with bounded safe todo items.", map[string]any{"items": map[string]any{"type": "array", "items": itemSchema, "minItems": 1, "maxItems": productdata.MaxWorkTodoItems}}, []string{"items"}), true
+	default:
+		return ProviderToolDefinition{}, false
+	}
+}
+
+func providerTool(name string, description string, properties map[string]any, required []string) ProviderToolDefinition {
+	return ProviderToolDefinition{
+		Name:         name,
+		ProviderName: providerToolName(name),
+		Description:  description,
+		Parameters: map[string]any{
+			"type":                 "object",
+			"additionalProperties": false,
+			"properties":           properties,
+			"required":             required,
+		},
+	}
+}
+
+func stringSchema(description string) map[string]any {
+	return map[string]any{"type": "string", "description": description}
+}
+
+func integerSchema(min int, max int) map[string]any {
+	return map[string]any{"type": "integer", "minimum": min, "maximum": max}
 }
 
 func (g *Gateway) continuationToolCallIDExists(ctx context.Context, runID string, event ProviderEvent) bool {

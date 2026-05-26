@@ -58,3 +58,37 @@ func TestM25MCPServersHandlerReturnsSafeReadOnlyStatus(t *testing.T) {
 		t.Fatalf("servers = %+v", parsed.Servers)
 	}
 }
+
+func TestMCPServersHandlerSavesDiscoversAndDeletesConfig(t *testing.T) {
+	t.Setenv("LOOMI_MCP_SERVERS_JSON", "")
+	svc := productdata.NewMemoryService()
+	srv := NewServerWithProduct(config.Config{AppEnv: "local"}, fakeChecker{}, svc)
+
+	saveBody := `{"slug":"local-disabled","display_name":"Local Disabled","enabled":false,"transport":"stdio","command":"","args":["--secret=SECRET_CANARY_ARG"],"env":{"TOKEN":"SECRET_CANARY_ENV"},"timeout_ms":5000}`
+	save := requestJSON(t, srv, http.MethodPost, "/v1/mcp/servers", saveBody)
+	if save.Code != http.StatusOK {
+		t.Fatalf("save status = %d body=%s", save.Code, save.Body.String())
+	}
+	if body := save.Body.String(); !strings.Contains(body, `"server_slug":"local-disabled"`) || !strings.Contains(body, `"discovery_status":"disabled"`) {
+		t.Fatalf("save body missing saved disabled status: %s", body)
+	}
+	if body := save.Body.String(); strings.Contains(body, "SECRET_CANARY") || strings.Contains(body, `"command"`) || strings.Contains(body, `"env"`) {
+		t.Fatalf("save body leaked config: %s", body)
+	}
+
+	discover := requestJSON(t, srv, http.MethodPost, "/v1/mcp/servers/local-disabled/discover", "")
+	if discover.Code != http.StatusOK {
+		t.Fatalf("discover status = %d body=%s", discover.Code, discover.Body.String())
+	}
+	if body := discover.Body.String(); !strings.Contains(body, `"discovery_status":"disabled"`) || !strings.Contains(body, `"last_discovered_at"`) {
+		t.Fatalf("discover body missing disabled event: %s", body)
+	}
+
+	deleted := requestJSON(t, srv, http.MethodDelete, "/v1/mcp/servers/local-disabled", "")
+	if deleted.Code != http.StatusOK {
+		t.Fatalf("delete status = %d body=%s", deleted.Code, deleted.Body.String())
+	}
+	if strings.Contains(deleted.Body.String(), "local-disabled") {
+		t.Fatalf("delete body still contains server: %s", deleted.Body.String())
+	}
+}

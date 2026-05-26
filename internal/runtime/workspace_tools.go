@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"io"
 	"io/fs"
@@ -12,6 +13,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 	"unicode/utf8"
 
 	"github.com/sheridiany/loomi/internal/productdata"
@@ -28,12 +31,33 @@ const (
 )
 
 type WorkspaceToolExecutor struct {
-	Root string
+	Root    string
+	Tracker *WorkspaceReadTracker
 }
 
 type workspaceScope struct {
-	root string
+	root    string
+	tracker *WorkspaceReadTracker
 }
+
+type WorkspaceReadTracker struct {
+	mu       sync.Mutex
+	reads    map[string]workspaceReadRecord
+	previews map[string]workspacePatchPreviewRecord
+}
+
+type workspaceReadRecord struct {
+	modTime time.Time
+	size    int64
+}
+
+type workspacePatchPreviewRecord struct {
+	modTime   time.Time
+	size      int64
+	patchHash string
+}
+
+var defaultWorkspaceReadTracker = &WorkspaceReadTracker{}
 
 func WorkspaceToolDefinitions() []ToolDefinition {
 	return []ToolDefinition{
@@ -42,6 +66,8 @@ func WorkspaceToolDefinitions() []ToolDefinition {
 		{Name: productdata.ToolNameWorkspaceRead, ApprovalPolicy: ToolApprovalAlwaysRequired, SafetyClass: ToolSafetyNoSideEffectInternal, Source: ToolSourceInternal, ExecutionState: ToolExecutionAllowlisted},
 		{Name: productdata.ToolNameWorkspaceWriteFile, ApprovalPolicy: ToolApprovalAlwaysRequired, SafetyClass: ToolSafetyWorkspaceMutation, Source: ToolSourceInternal, ExecutionState: ToolExecutionAllowlisted},
 		{Name: productdata.ToolNameWorkspaceEdit, ApprovalPolicy: ToolApprovalAlwaysRequired, SafetyClass: ToolSafetyWorkspaceMutation, Source: ToolSourceInternal, ExecutionState: ToolExecutionAllowlisted},
+		{Name: productdata.ToolNameWorkspacePatchPreview, ApprovalPolicy: ToolApprovalAlwaysRequired, SafetyClass: ToolSafetyNoSideEffectInternal, Source: ToolSourceInternal, ExecutionState: ToolExecutionAllowlisted},
+		{Name: productdata.ToolNameWorkspacePatchApply, ApprovalPolicy: ToolApprovalAlwaysRequired, SafetyClass: ToolSafetyWorkspaceMutation, Source: ToolSourceInternal, ExecutionState: ToolExecutionAllowlisted},
 	}
 }
 
@@ -50,20 +76,32 @@ func (e WorkspaceToolExecutor) Execute(ctx context.Context, invocation ToolInvoc
 	if err != nil {
 		return nil, err
 	}
+	scope.tracker = e.tracker()
 	switch invocation.ToolName {
 	case productdata.ToolNameWorkspaceGlob:
 		return scope.glob(ctx, invocation.ArgumentsSummary)
 	case productdata.ToolNameWorkspaceGrep:
 		return scope.grep(ctx, invocation.ArgumentsSummary)
 	case productdata.ToolNameWorkspaceRead:
-		return scope.read(invocation.ArgumentsSummary)
+		return scope.read(invocation.RunID, invocation.ArgumentsSummary)
 	case productdata.ToolNameWorkspaceWriteFile:
 		return scope.writeFile(invocation.ArgumentsSummary)
 	case productdata.ToolNameWorkspaceEdit:
-		return scope.edit(invocation.ArgumentsSummary)
+		return scope.edit(invocation.RunID, invocation.ArgumentsSummary)
+	case productdata.ToolNameWorkspacePatchPreview:
+		return scope.patchPreview(invocation.RunID, invocation.ArgumentsSummary)
+	case productdata.ToolNameWorkspacePatchApply:
+		return scope.patchApply(invocation.RunID, invocation.ArgumentsSummary)
 	default:
 		return nil, errors.New("workspace tool is not supported")
 	}
+}
+
+func (e WorkspaceToolExecutor) tracker() *WorkspaceReadTracker {
+	if e.Tracker != nil {
+		return e.Tracker
+	}
+	return defaultWorkspaceReadTracker
 }
 
 func newWorkspaceScope(root string) (workspaceScope, error) {
@@ -97,6 +135,10 @@ func newWorkspaceScope(root string) (workspaceScope, error) {
 }
 
 func defaultWorkspaceRoot() (string, error) {
+	home, err := os.UserHomeDir()
+	if err == nil && strings.TrimSpace(home) != "" {
+		return home, nil
+	}
 	wd, err := os.Getwd()
 	if err != nil {
 		return "", err
@@ -272,7 +314,7 @@ func (s workspaceScope) grep(ctx context.Context, args map[string]any) (map[stri
 	return map[string]any{"tool": productdata.ToolNameWorkspaceGrep, "scope": "workspace", "matches": sortedStringMaps(matches), "match_count": len(matches), "limit": limit, "truncated": truncated}, nil
 }
 
-func (s workspaceScope) read(args map[string]any) (map[string]any, error) {
+func (s workspaceScope) read(runID string, args map[string]any) (map[string]any, error) {
 	relArg := strings.TrimSpace(stringArg(args, "path", ""))
 	if relArg == "" {
 		return nil, errors.New("workspace read path is required")
@@ -280,6 +322,10 @@ func (s workspaceScope) read(args map[string]any) (map[string]any, error) {
 	path, rel, err := s.resolveFile(relArg)
 	if err != nil {
 		return nil, err
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, errors.New("workspace file is unavailable")
 	}
 	offset := boundedInt(args, "offset", 0, 1<<30)
 	if offset < 0 {
@@ -317,6 +363,9 @@ func (s workspaceScope) read(args map[string]any) (map[string]any, error) {
 	valid := utf8.ValidString(content)
 	if !valid {
 		content = strings.ToValidUTF8(content, "")
+	}
+	if valid && s.tracker != nil {
+		s.tracker.Record(runID, s.trackingKey(rel), info.ModTime(), info.Size())
 	}
 	return map[string]any{"tool": productdata.ToolNameWorkspaceRead, "scope": "workspace", "path": rel, "content": content, "bytes_read": len([]byte(content)), "offset": offset, "limit": limit, "truncated": truncated, "utf8_valid": valid}, nil
 }
@@ -366,66 +415,371 @@ func (s workspaceScope) writeFile(args map[string]any) (map[string]any, error) {
 	}, nil
 }
 
-func (s workspaceScope) edit(args map[string]any) (map[string]any, error) {
+func (s workspaceScope) edit(runID string, args map[string]any) (map[string]any, error) {
+	prepared, err := s.prepareWorkspacePatch(runID, args, "edit")
+	if err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(prepared.path, []byte(prepared.updated), prepared.mode); err != nil {
+		return nil, errors.New("workspace file could not be written")
+	}
+	if s.tracker != nil {
+		s.tracker.Invalidate(runID, s.trackingKey(prepared.rel))
+	}
+	result := prepared.result(productdata.ToolNameWorkspaceEdit, "edit", true)
+	return result, nil
+}
+
+func (s workspaceScope) patchPreview(runID string, args map[string]any) (map[string]any, error) {
+	prepared, err := s.prepareWorkspacePatch(runID, args, "patch preview")
+	if err != nil {
+		return nil, err
+	}
+	if s.tracker != nil {
+		s.tracker.RecordPreview(runID, s.trackingKey(prepared.rel), prepared.modTime, prepared.size, prepared.patchHash)
+	}
+	result := prepared.result(productdata.ToolNameWorkspacePatchPreview, "patch_preview", false)
+	result["preview_id"] = prepared.patchHash
+	return result, nil
+}
+
+func (s workspaceScope) patchApply(runID string, args map[string]any) (map[string]any, error) {
+	prepared, err := s.prepareWorkspacePatch(runID, args, "patch apply")
+	if err != nil {
+		return nil, err
+	}
+	if s.tracker == nil || !s.tracker.CheckPreview(runID, s.trackingKey(prepared.rel), prepared.modTime, prepared.size, prepared.patchHash) {
+		return nil, errors.New("workspace patch apply requires a fresh patch preview")
+	}
+	if err := os.WriteFile(prepared.path, []byte(prepared.updated), prepared.mode); err != nil {
+		return nil, errors.New("workspace file could not be written")
+	}
+	if s.tracker != nil {
+		key := s.trackingKey(prepared.rel)
+		s.tracker.Invalidate(runID, key)
+		s.tracker.InvalidatePreview(runID, key)
+	}
+	result := prepared.result(productdata.ToolNameWorkspacePatchApply, "patch_apply", true)
+	result["preview_id"] = prepared.patchHash
+	return result, nil
+}
+
+type preparedWorkspacePatch struct {
+	path                       string
+	rel                        string
+	mode                       fs.FileMode
+	modTime                    time.Time
+	size                       int64
+	patchHash                  string
+	raw                        []byte
+	content                    string
+	updated                    string
+	diff                       string
+	snippet                    string
+	matchStrategy              string
+	lineEndingsPreserved       bool
+	indentationPreserved       bool
+	trailingWhitespaceStripped bool
+}
+
+func (s workspaceScope) prepareWorkspacePatch(runID string, args map[string]any, label string) (preparedWorkspacePatch, error) {
 	relArg := strings.TrimSpace(stringArg(args, "path", ""))
 	if relArg == "" {
-		return nil, errors.New("workspace edit path is required")
+		return preparedWorkspacePatch{}, errors.New("workspace " + label + " path is required")
 	}
 	oldText := stringArg(args, "old_text", "")
 	if oldText == "" {
-		return nil, errors.New("workspace edit old text is required")
+		return preparedWorkspacePatch{}, errors.New("workspace " + label + " old text is required")
 	}
 	newText := stringArg(args, "new_text", "")
 	if !utf8.ValidString(oldText) || strings.ContainsRune(oldText, 0) || !utf8.ValidString(newText) || strings.ContainsRune(newText, 0) {
-		return nil, errors.New("workspace edit text must be UTF-8 text")
+		return preparedWorkspacePatch{}, errors.New("workspace " + label + " text must be UTF-8 text")
 	}
 	maxBytes := boundedInt(args, "max_bytes", defaultWorkspaceWriteBytes, maxWorkspaceWriteBytes)
 	path, rel, err := s.resolveFile(relArg)
 	if err != nil {
-		return nil, err
+		return preparedWorkspacePatch{}, err
 	}
 	info, err := os.Stat(path)
 	if err != nil {
-		return nil, errors.New("workspace file is unavailable")
+		return preparedWorkspacePatch{}, errors.New("workspace file is unavailable")
 	}
 	if info.Size() > int64(maxWorkspaceWriteBytes) {
-		return nil, errors.New("workspace edit file is too large")
+		return preparedWorkspacePatch{}, errors.New("workspace " + label + " file is too large")
+	}
+	if s.tracker == nil || !s.tracker.CheckFresh(runID, s.trackingKey(rel), info.ModTime(), info.Size()) {
+		return preparedWorkspacePatch{}, errors.New("workspace " + label + " target must be read before editing")
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return nil, errors.New("workspace file could not be read")
+		return preparedWorkspacePatch{}, errors.New("workspace file could not be read")
 	}
 	if bytes.Contains(raw, []byte{0}) || !utf8.Valid(raw) {
-		return nil, errors.New("workspace edit target must be UTF-8 text")
+		return preparedWorkspacePatch{}, errors.New("workspace " + label + " target must be UTF-8 text")
 	}
 	content := string(raw)
-	count := strings.Count(content, oldText)
+	edit := prepareWorkspaceEdit(rel, content, oldText, newText)
+	count := strings.Count(edit.content, edit.oldText)
 	if count == 0 {
-		return nil, errors.New("workspace edit old text was not found")
+		return preparedWorkspacePatch{}, errors.New("workspace " + label + " old text was not found")
 	}
 	if count > 1 {
-		return nil, errors.New("workspace edit old text is not unique")
+		return preparedWorkspacePatch{}, errors.New("workspace " + label + " old text is not unique")
 	}
-	updated := strings.Replace(content, oldText, newText, 1)
+	updated := strings.Replace(edit.content, edit.oldText, edit.newText, 1)
+	resultNewText := edit.newText
+	trailingWhitespaceStripped := false
+	if edit.stripTrailingWhitespace {
+		stripped := stripWorkspaceEditTrailingWhitespace(updated)
+		trailingWhitespaceStripped = stripped != updated
+		updated = stripped
+		resultNewText = stripWorkspaceEditTrailingWhitespace(resultNewText)
+	}
+	if edit.preserveCRLF {
+		updated = strings.ReplaceAll(updated, "\n", "\r\n")
+	}
 	if len([]byte(updated)) > maxBytes {
-		return nil, errors.New("workspace edit result is too large")
+		return preparedWorkspacePatch{}, errors.New("workspace " + label + " result is too large")
 	}
-	if err := os.WriteFile(path, []byte(updated), info.Mode().Perm()); err != nil {
-		return nil, errors.New("workspace file could not be written")
-	}
-	return map[string]any{
-		"tool":              productdata.ToolNameWorkspaceEdit,
-		"scope":             "workspace",
-		"operation":         "edit",
-		"path":              rel,
-		"changed":           true,
-		"bytes_before":      len(raw),
-		"bytes_after":       len([]byte(updated)),
-		"line_count_before": countTextLines(content),
-		"line_count_after":  countTextLines(updated),
-		"truncated":         false,
-		"redaction_applied": false,
+	diff := workspaceEditDiff(rel, edit.oldText, resultNewText)
+	snippet := workspaceEditSnippet(strings.ReplaceAll(updated, "\r\n", "\n"), resultNewText)
+	return preparedWorkspacePatch{
+		path:                       path,
+		rel:                        rel,
+		mode:                       info.Mode().Perm(),
+		modTime:                    info.ModTime(),
+		size:                       info.Size(),
+		patchHash:                  workspacePatchHash(rel, edit.oldText, edit.newText, edit.content),
+		raw:                        raw,
+		content:                    content,
+		updated:                    updated,
+		diff:                       diff,
+		snippet:                    snippet,
+		matchStrategy:              edit.matchStrategy,
+		lineEndingsPreserved:       edit.preserveCRLF,
+		indentationPreserved:       edit.preserveIndentation,
+		trailingWhitespaceStripped: trailingWhitespaceStripped,
 	}, nil
+}
+
+func (p preparedWorkspacePatch) result(toolName string, operation string, changed bool) map[string]any {
+	return map[string]any{
+		"tool":                         toolName,
+		"scope":                        "workspace",
+		"operation":                    operation,
+		"path":                         p.rel,
+		"changed":                      changed,
+		"bytes_before":                 len(p.raw),
+		"bytes_after":                  len([]byte(p.updated)),
+		"line_count_before":            countTextLines(p.content),
+		"line_count_after":             countTextLines(p.updated),
+		"diff":                         p.diff,
+		"snippet":                      p.snippet,
+		"match_strategy":               p.matchStrategy,
+		"line_endings_preserved":       p.lineEndingsPreserved,
+		"indentation_preserved":        p.indentationPreserved,
+		"trailing_whitespace_stripped": p.trailingWhitespaceStripped,
+		"truncated":                    false,
+		"redaction_applied":            false,
+	}
+}
+
+func (s workspaceScope) trackingKey(rel string) string {
+	return s.root + "/" + filepath.ToSlash(filepath.Clean(rel))
+}
+
+func (t *WorkspaceReadTracker) Record(runID string, key string, modTime time.Time, size int64) {
+	if t == nil || strings.TrimSpace(key) == "" {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.reads == nil {
+		t.reads = map[string]workspaceReadRecord{}
+	}
+	t.reads[workspaceReadKey(runID, key)] = workspaceReadRecord{modTime: modTime, size: size}
+}
+
+func (t *WorkspaceReadTracker) CheckFresh(runID string, key string, modTime time.Time, size int64) bool {
+	if t == nil || strings.TrimSpace(key) == "" {
+		return false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	record, ok := t.reads[workspaceReadKey(runID, key)]
+	return ok && record.size == size && record.modTime.Equal(modTime)
+}
+
+func (t *WorkspaceReadTracker) Invalidate(runID string, key string) {
+	if t == nil || strings.TrimSpace(key) == "" {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	delete(t.reads, workspaceReadKey(runID, key))
+}
+
+func (t *WorkspaceReadTracker) RecordPreview(runID string, key string, modTime time.Time, size int64, patchHash string) {
+	if t == nil || strings.TrimSpace(key) == "" || strings.TrimSpace(patchHash) == "" {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.previews == nil {
+		t.previews = map[string]workspacePatchPreviewRecord{}
+	}
+	t.previews[workspaceReadKey(runID, key)] = workspacePatchPreviewRecord{modTime: modTime, size: size, patchHash: patchHash}
+}
+
+func (t *WorkspaceReadTracker) CheckPreview(runID string, key string, modTime time.Time, size int64, patchHash string) bool {
+	if t == nil || strings.TrimSpace(key) == "" || strings.TrimSpace(patchHash) == "" {
+		return false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	record, ok := t.previews[workspaceReadKey(runID, key)]
+	return ok && record.size == size && record.modTime.Equal(modTime) && record.patchHash == patchHash
+}
+
+func (t *WorkspaceReadTracker) InvalidatePreview(runID string, key string) {
+	if t == nil || strings.TrimSpace(key) == "" {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	delete(t.previews, workspaceReadKey(runID, key))
+}
+
+func workspaceReadKey(runID string, key string) string {
+	return strings.TrimSpace(runID) + "\x00" + key
+}
+
+func workspacePatchHash(path string, oldText string, newText string, content string) string {
+	sum := sha256.Sum256([]byte(path + "\x00" + oldText + "\x00" + newText + "\x00" + content))
+	return "patch_" + shortHex(sum[:])
+}
+
+func shortHex(data []byte) string {
+	const hex = "0123456789abcdef"
+	if len(data) > 8 {
+		data = data[:8]
+	}
+	var b strings.Builder
+	b.Grow(len(data) * 2)
+	for _, value := range data {
+		b.WriteByte(hex[value>>4])
+		b.WriteByte(hex[value&0x0f])
+	}
+	return b.String()
+}
+
+type preparedWorkspaceEdit struct {
+	content                 string
+	oldText                 string
+	newText                 string
+	matchStrategy           string
+	preserveCRLF            bool
+	preserveIndentation     bool
+	stripTrailingWhitespace bool
+}
+
+func prepareWorkspaceEdit(path string, content string, oldText string, newText string) preparedWorkspaceEdit {
+	preserveCRLF := strings.Contains(content, "\r\n")
+	normalizedContent := strings.ReplaceAll(content, "\r\n", "\n")
+	normalizedOldText := strings.ReplaceAll(oldText, "\r\n", "\n")
+	normalizedNewText := strings.ReplaceAll(newText, "\r\n", "\n")
+	matchStrategy := "exact"
+	if normalizedContent != content || normalizedOldText != oldText {
+		matchStrategy = "normalized_line_endings"
+	}
+	indentedNewText, preserveIndentation := workspaceEditApplyIndentation(normalizedOldText, normalizedNewText)
+	return preparedWorkspaceEdit{
+		content:                 normalizedContent,
+		oldText:                 normalizedOldText,
+		newText:                 indentedNewText,
+		matchStrategy:           matchStrategy,
+		preserveCRLF:            preserveCRLF,
+		preserveIndentation:     preserveIndentation,
+		stripTrailingWhitespace: shouldStripWorkspaceEditTrailingWhitespace(path),
+	}
+}
+
+func workspaceEditApplyIndentation(oldText string, newText string) (string, bool) {
+	indent := workspaceEditFirstLineIndent(oldText)
+	if indent == "" || !strings.Contains(newText, "\n") {
+		return newText, false
+	}
+	lines := strings.Split(newText, "\n")
+	changed := false
+	for i, line := range lines {
+		if line == "" || strings.HasPrefix(line, indent) {
+			continue
+		}
+		lines[i] = indent + line
+		changed = true
+	}
+	if !changed {
+		return newText, false
+	}
+	return strings.Join(lines, "\n"), true
+}
+
+func workspaceEditFirstLineIndent(text string) string {
+	for _, line := range strings.Split(text, "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		return line[:len(line)-len(strings.TrimLeft(line, " \t"))]
+	}
+	return ""
+}
+
+func shouldStripWorkspaceEditTrailingWhitespace(path string) bool {
+	ext := strings.ToLower(filepath.Ext(path))
+	return ext != ".md" && ext != ".mdx"
+}
+
+func stripWorkspaceEditTrailingWhitespace(content string) string {
+	lines := strings.Split(content, "\n")
+	for i, line := range lines {
+		lines[i] = strings.TrimRight(line, " \t")
+	}
+	return strings.Join(lines, "\n")
+}
+
+func workspaceEditDiff(path string, oldText string, newText string) string {
+	oldLines := strings.Split(strings.TrimSuffix(oldText, "\n"), "\n")
+	newLines := strings.Split(strings.TrimSuffix(newText, "\n"), "\n")
+	var b strings.Builder
+	b.WriteString("--- " + path + "\n")
+	b.WriteString("+++ " + path + "\n")
+	for _, line := range oldLines {
+		b.WriteString("-" + line + "\n")
+	}
+	for _, line := range newLines {
+		b.WriteString("+" + line + "\n")
+	}
+	return b.String()
+}
+
+func workspaceEditSnippet(content string, newText string) string {
+	index := strings.Index(content, newText)
+	if index < 0 {
+		return ""
+	}
+	start := strings.LastIndex(content[:index], "\n")
+	if start < 0 {
+		start = 0
+	} else {
+		start++
+	}
+	end := strings.Index(content[index+len(newText):], "\n")
+	if end < 0 {
+		end = len(content)
+	} else {
+		end = index + len(newText) + end
+	}
+	return content[start:end]
 }
 
 func (s workspaceScope) resolveDir(relArg string) (string, string, error) {

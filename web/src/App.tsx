@@ -1,6 +1,6 @@
-import { type CSSProperties, type PointerEvent } from 'react'
+import { type CSSProperties, type PointerEvent, useCallback } from 'react'
 import { ConfigProvider, ThemeProvider } from '@lobehub/ui'
-import { AlertCircle, PanelLeft, PanelRight, Search } from 'lucide-react'
+import { AlertCircle, PanelLeft, PanelRight, SquarePen } from 'lucide-react'
 import { motion } from 'motion/react'
 import { ChatCanvas } from './components/ChatCanvas'
 import { RunTimeline } from './components/RunTimeline'
@@ -29,6 +29,9 @@ export default function App() {
     capabilitySignals,
     selectedRuntimeScript,
     personas,
+    installedSkills,
+    skillsLoading,
+    skillsError,
     selectedPersonaId,
     selectRuntimeScript,
     setSelectedPersonaId,
@@ -45,6 +48,12 @@ export default function App() {
     regenerateRun,
     providerCapabilities,
     toolCatalog,
+    webSearchConfig,
+    webSearchSaveResult,
+    workspaceRootConfig,
+    workspaceRootSaveResult,
+    mcpServers,
+    mcpActionResult,
     localProviderDetections,
     localProviderDetectionError,
     providerCheckResults,
@@ -66,6 +75,11 @@ export default function App() {
     enableLocalProvider,
     disableLocalProvider,
     saveProvider,
+    saveWebSearchKeys,
+    chooseWorkspaceFolder,
+    saveMCPServer,
+    deleteMCPServer,
+    discoverMCPServer,
     setMemorySearchQuery,
     updateMemoryFilters,
     openMemoryDetail,
@@ -114,6 +128,15 @@ export default function App() {
     window.addEventListener('pointerup', handlePointerUp)
   }
 
+  const selectMode = useCallback((mode: 'chat' | 'work') => {
+    const threadId = threads.find((thread) => thread.mode === mode)?.id
+    if (threadId) {
+      selectThread(threadId)
+      return
+    }
+    void createThread(mode)
+  }, [createThread, selectThread, threads])
+
   return (
     <ConfigProvider motion={motion}>
       <ThemeProvider
@@ -123,7 +146,7 @@ export default function App() {
           neutralColor: 'slate',
         }}
       >
-        <div className="app-shell" data-theme={shell.theme}>
+        <div className="app-shell" data-runtime={document.documentElement.dataset.runtime} data-theme={shell.theme}>
           <main className={workspaceClass} style={workspaceStyle}>
             {!shell.sidebarCollapsed && (
               <aside className="sidebar-shell glass-panel">
@@ -131,22 +154,21 @@ export default function App() {
                   <button className="titlebar-button" aria-label={dictionary.app.collapseSidebar} onClick={() => shell.setSidebarCollapsed(true)}>
                     <PanelLeft size={15} strokeWidth={1.7} />
                   </button>
-                  <button className="titlebar-button" aria-label={dictionary.app.search}>
-                    <Search size={14} strokeWidth={1.65} />
-                  </button>
                 </div>
                 <ThreadSidebar
                   collapsed={shell.sidebarCollapsed}
                   threads={visibleThreads}
                   selectedThreadId={selectedThreadId}
                   selectedMode={selectedMode}
+                  modeCopy={{ chat: dictionary.app.chat, work: dictionary.app.work }}
                   theme={shell.theme}
                   loading={loading}
                   error={error}
                   copy={dictionary.sidebar}
                   onRefresh={() => void refresh()}
                   onSelectThread={selectThread}
-                  onCreateThread={() => void createThread()}
+                  onSelectMode={selectMode}
+                  onCreateThread={() => void createThread(selectedMode)}
                   onRenameThread={(threadId, title) => void renameThread(threadId, title)}
                   onArchiveThread={(threadId) => void archiveThread(threadId)}
                   onToggleTheme={shell.toggleTheme}
@@ -159,30 +181,19 @@ export default function App() {
               <header className="main-titlebar">
                 <div className="titlebar-left">
                   {shell.sidebarCollapsed && (
-                    <button className="titlebar-button" aria-label={dictionary.app.openSidebar} onClick={() => shell.setSidebarCollapsed(false)}>
-                      <PanelRight size={15} strokeWidth={1.7} />
-                    </button>
+                    <>
+                      <button className="titlebar-button" aria-label={dictionary.app.openSidebar} onClick={() => shell.setSidebarCollapsed(false)}>
+                        <PanelRight size={15} strokeWidth={1.7} />
+                      </button>
+                      <button className="titlebar-button titlebar-create-thread" aria-label={selectedMode === 'work' ? dictionary.sidebar.newWork : dictionary.sidebar.newChat} onClick={() => void createThread(selectedMode)}>
+                        <SquarePen size={15} strokeWidth={1.7} />
+                      </button>
+                    </>
                   )}
                 </div>
-                <div className="titlebar-center mode-tabs">
-                  <button
-                    className={selectedThread?.mode === 'chat' ? 'selected' : undefined}
-                    onClick={() => {
-                      const threadId = threads.find((thread) => thread.mode === 'chat')?.id
-                      if (threadId) selectThread(threadId)
-                    }}
-                  >
-                    {dictionary.app.chat}
-                  </button>
-                  <button
-                    className={selectedThread?.mode === 'work' ? 'selected' : undefined}
-                    onClick={() => {
-                      const threadId = threads.find((thread) => thread.mode === 'work')?.id
-                      if (threadId) selectThread(threadId)
-                    }}
-                  >
-                    {dictionary.app.work}
-                  </button>
+                <div className="titlebar-center main-thread-title">
+                  <span className="titlebar-brand-icon" aria-hidden="true" />
+                  <span>{selectedThread?.title ?? 'Loomi'}</span>
                 </div>
                 <div className="titlebar-right">
                   <button
@@ -206,14 +217,23 @@ export default function App() {
                   locale={shell.locale}
                   selectedCategoryId={shell.settingsCategoryId}
                   defaultWorkspaceMode={shell.defaultWorkspaceMode}
-                  selectedRuntimeScript={selectedRuntimeScript}
-                  dataSourceMode={dataSourceMode}
+                  theme={shell.theme}
                   backendCapability={backendCapability}
                   streamState={streamState}
                   selectedThreadTitle={selectedThread?.title}
                   selectedRunStatus={run?.status}
                   providerCapabilities={providerCapabilities}
+                  workspaceRootConfig={workspaceRootConfig}
+                  workspaceRootSaveResult={workspaceRootSaveResult}
+                  personas={personas}
+                  installedSkills={installedSkills}
+                  skillsLoading={skillsLoading}
+                  skillsError={skillsError}
                   toolCatalog={toolCatalog}
+                  webSearchConfig={webSearchConfig}
+                  webSearchSaveResult={webSearchSaveResult}
+                  mcpServers={mcpServers}
+                  mcpActionResult={mcpActionResult}
                   localProviderDetections={localProviderDetections}
                   localProviderDetectionError={localProviderDetectionError}
                   memoryEntries={memoryEntries}
@@ -234,12 +254,18 @@ export default function App() {
                   onSelectLocale={shell.setLocale}
                   onSelectCategory={shell.setSettingsCategory}
                   onSelectDefaultWorkspaceMode={shell.setDefaultWorkspaceMode}
-                  onSelectRuntimeScript={selectRuntimeScript}
+                  onSelectTheme={(theme) => {
+                    if (theme !== shell.theme) shell.toggleTheme()
+                  }}
                   onProviderDraftSettingsChange={shell.setProviderDraftSettings}
                   onSaveProvider={(settings) => {
                     void saveProvider({ baseUrl: settings.baseUrl, model: settings.model, apiKey: settings.apiKey })
                     shell.setProviderDraftSettings({ ...settings, apiKey: '', apiKeySet: true })
                   }}
+                  onSaveWebSearchKeys={(input) => void saveWebSearchKeys(input)}
+                  onSaveMCPServer={(input) => void saveMCPServer(input)}
+                  onDeleteMCPServer={(slug) => void deleteMCPServer(slug)}
+                  onDiscoverMCPServer={(slug) => void discoverMCPServer(slug)}
                   onCheckProvider={(providerId) => void checkProvider(providerId)}
                   onDetectLocalProviders={() => void detectLocalProviders()}
                   onEnableLocalProvider={(providerId) => void enableLocalProvider(providerId)}
@@ -271,6 +297,7 @@ export default function App() {
                   selectedPersonaId={selectedPersonaId}
                   onSelectPersona={setSelectedPersonaId}
                   onOpenProviderSettings={() => shell.openSettings('providers')}
+                  onChooseWorkspaceFolder={() => void chooseWorkspaceFolder()}
                   onSendMessage={(content) => void sendMessage(content)}
                   onStopRun={() => void stopRun()}
                   onApproveToolCall={(toolCall) => approveToolCall(toolCall)}
@@ -288,7 +315,6 @@ export default function App() {
               rightToolsOpen={!shell.settingsOpen && shell.rightPanelOpen}
               selectedPanelId={shell.selectedRightPanelId}
               onSelectPanel={shell.openRightPanel}
-              onOpenArtifact={shell.openArtifact}
               onStopRun={() => void stopRun()}
               selectedRuntimeScript={selectedRuntimeScript}
               capabilityStatus={capabilityStatus}

@@ -6,8 +6,24 @@ describe('ThreadSidebar layout CSS', () => {
   test('allocates a dedicated grid column for the archive action', () => {
     const css = readFileSync(resolve(import.meta.dir, '../styles.css'), 'utf8')
 
-    expect(css).toContain('grid-template-columns: minmax(0, 1fr) 24px;')
-    expect(css).toContain('grid-template-columns: 10px minmax(0, 1fr);')
+    expect(css).toContain('grid-template-columns: 10px minmax(0, 1fr) 24px;')
+    expect(css).toContain('position: absolute;')
+    expect(css).toContain('right: 4px;')
+    expect(css).toContain('.thread-row.selected > .thread-action')
+    expect(css).toContain('.thread-rename-form')
+    expect(css).toContain('.thread-rename-form input')
+    expect(css).toContain('.thread-list {\n  display: flex;\n  min-height: 0;\n  flex-direction: column;\n  gap: 3px;\n  overflow: visible;')
+    expect(css).toContain('.thread-list-section {\n  display: flex;\n  min-height: 0;\n  flex: 1 1 auto;\n  flex-direction: column;\n  overflow: visible;')
     expect(css).toContain('.thread-row > .thread-action')
+    expect(css).toContain(".thread-row > .thread-action[aria-expanded='true']")
+    expect(css).toContain('width: 136px;')
+    expect(css).toContain('font-size: 12px;')
+  })
+
+  test('aligns electron titlebar icons with the native window controls', () => {
+    const css = readFileSync(resolve(import.meta.dir, '../styles.css'), 'utf8')
+
+    expect(css).toContain(".app-shell[data-runtime='electron'] .titlebar-button")
+    expect(css).toContain('transform: translateY(-3px);')
   })
 })

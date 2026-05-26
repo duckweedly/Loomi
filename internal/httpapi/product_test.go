@@ -6,12 +6,15 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/sheridiany/loomi/internal/config"
 	"github.com/sheridiany/loomi/internal/identity"
 	"github.com/sheridiany/loomi/internal/productdata"
+	productruntime "github.com/sheridiany/loomi/internal/runtime"
 )
 
 func TestGetMeReturnsLocalUser(t *testing.T) {
@@ -88,6 +91,29 @@ func TestPersonaHandlersListBuiltInPersonasAndThreadSelection(t *testing.T) {
 	}
 }
 
+func TestSkillHandlerListsInstalledSkills(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	writeHTTPAPISkill(t, home+"/.codex/skills/review/SKILL.md", "---\nname: review\ndescription: Review code.\n---\nSECRET_CANARY")
+	writeHTTPAPISkill(t, workspace+"/.agents/skills/project-skill/SKILL.md", "# project-skill\n\nProject skill.")
+	srv := NewServerWithProduct(config.Config{AppEnv: "local"}, fakeChecker{}, productdata.NewMemoryService())
+	srv.skillDiscoveryInput = productruntime.SkillDiscoveryInput{HomeDir: home, WorkspaceDir: workspace}
+
+	list := requestJSON(t, srv, http.MethodGet, "/v1/skills", "")
+	if list.Code != http.StatusOK {
+		t.Fatalf("list status=%d body=%s", list.Code, list.Body.String())
+	}
+	body := list.Body.String()
+	for _, expected := range []string{`"name":"review"`, `"source":"codex"`, `"name":"project-skill"`, `"source":"project"`} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("body missing %q: %s", expected, body)
+		}
+	}
+	if strings.Contains(body, "SECRET_CANARY") {
+		t.Fatalf("body leaked skill body: %s", body)
+	}
+}
+
 func TestThreadPersonaHandlersRejectUnknownPersona(t *testing.T) {
 	srv := NewServerWithProduct(config.Config{AppEnv: "local"}, fakeChecker{}, productdata.NewMemoryService())
 	create := requestJSON(t, srv, http.MethodPost, "/v1/threads", `{"title":"Thread","mode":"chat","persona_id":"persona_unknown"}`)
@@ -106,6 +132,16 @@ func TestThreadPersonaHandlersRejectUnknownPersona(t *testing.T) {
 	}
 	if !strings.Contains(patch.Body.String(), "invalid_request") || strings.Contains(strings.ToLower(patch.Body.String()), "foreign key") || strings.Contains(strings.ToLower(patch.Body.String()), "sql") {
 		t.Fatalf("patch body leaked details: %s", patch.Body.String())
+	}
+}
+
+func writeHTTPAPISkill(t *testing.T, path string, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }
 

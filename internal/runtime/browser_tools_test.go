@@ -16,7 +16,7 @@ func TestBrowserOpenSnapshotAndClickLink(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = w.Write([]byte(`<html><title>Home</title><body>Home page <a href="/docs">Docs</a><a href="file:///etc/passwd">Blocked</a></body></html>`))
+		_, _ = w.Write([]byte(`<html><title>Home</title><body>Home page <input name="q" placeholder="Search"><a href="/docs">Docs</a><a href="file:///etc/passwd">Blocked</a></body></html>`))
 	})
 	mux.HandleFunc("/docs", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -42,6 +42,10 @@ func TestBrowserOpenSnapshotAndClickLink(t *testing.T) {
 	if !ok || len(links) != 2 || links[0]["text"] != "Docs" || links[1]["blocked"] != true {
 		t.Fatalf("links = %#v", open["links"])
 	}
+	inputs, ok := open["inputs"].([]map[string]any)
+	if !ok || len(inputs) != 1 || inputs[0]["target"] != "q" {
+		t.Fatalf("inputs = %#v", open["inputs"])
+	}
 
 	snapshot, err := executor.Execute(context.Background(), ToolInvocation{RunID: "run_browser", ToolCallID: "tc_snapshot", ToolName: productdata.ToolNameBrowserSnapshot, ArgumentsSummary: map[string]any{"session_id": sessionID}})
 	if err != nil {
@@ -49,6 +53,27 @@ func TestBrowserOpenSnapshotAndClickLink(t *testing.T) {
 	}
 	if snapshot["operation"] != "snapshot" || snapshot["session_id"] != sessionID || snapshot["title"] != "Home" {
 		t.Fatalf("snapshot = %+v", snapshot)
+	}
+	screenshot, err := executor.Execute(context.Background(), ToolInvocation{RunID: "run_browser", ToolCallID: "tc_screenshot", ToolName: productdata.ToolNameBrowserScreenshot, ArgumentsSummary: map[string]any{"session_id": sessionID}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if screenshot["operation"] != "screenshot" || screenshot["format"] != "text" || !strings.Contains(fmt.Sprint(screenshot["screenshot_text"]), "Home page") {
+		t.Fatalf("screenshot = %+v", screenshot)
+	}
+	typed, err := executor.Execute(context.Background(), ToolInvocation{RunID: "run_browser", ToolCallID: "tc_type", ToolName: productdata.ToolNameBrowserType, ArgumentsSummary: map[string]any{"session_id": sessionID, "target": "q", "text": "loomi"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if typed["operation"] != "type" || typed["target"] != "q" || typed["form_value_count"] != 1 {
+		t.Fatalf("typed = %+v", typed)
+	}
+	pressed, err := executor.Execute(context.Background(), ToolInvocation{RunID: "run_browser", ToolCallID: "tc_press", ToolName: productdata.ToolNameBrowserPress, ArgumentsSummary: map[string]any{"session_id": sessionID, "key": "Enter"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pressed["operation"] != "press" || pressed["key"] != "Enter" || pressed["submitted"] != true {
+		t.Fatalf("pressed = %+v", pressed)
 	}
 
 	click, err := executor.Execute(context.Background(), ToolInvocation{RunID: "run_browser", ToolCallID: "tc_click", ToolName: productdata.ToolNameBrowserClickLink, ArgumentsSummary: map[string]any{"session_id": sessionID, "link_index": 0}})
@@ -83,6 +108,9 @@ func TestBrowserRejectsUnsafeTargetsAndUnknownSessions(t *testing.T) {
 	if _, err := executor.Execute(context.Background(), ToolInvocation{RunID: "run_browser", ToolName: productdata.ToolNameBrowserClickLink, ArgumentsSummary: map[string]any{"session_id": "missing", "link_index": 0}}); err == nil {
 		t.Fatal("click unknown session err = nil")
 	}
+	if _, err := executor.Execute(context.Background(), ToolInvocation{RunID: "run_browser", ToolName: productdata.ToolNameBrowserScreenshot, ArgumentsSummary: map[string]any{"session_id": "missing"}}); err == nil {
+		t.Fatal("screenshot unknown session err = nil")
+	}
 }
 
 func TestBrowserBoundsSnapshotAndRejectsBlockedLink(t *testing.T) {
@@ -102,5 +130,11 @@ func TestBrowserBoundsSnapshotAndRejectsBlockedLink(t *testing.T) {
 	sessionID := open["session_id"].(string)
 	if _, err := executor.Execute(context.Background(), ToolInvocation{RunID: "run_browser", ToolCallID: "tc_click", ToolName: productdata.ToolNameBrowserClickLink, ArgumentsSummary: map[string]any{"session_id": sessionID, "link_index": 0}}); err == nil {
 		t.Fatal("blocked link click err = nil")
+	}
+	if _, err := executor.Execute(context.Background(), ToolInvocation{RunID: "run_browser", ToolCallID: "tc_type", ToolName: productdata.ToolNameBrowserType, ArgumentsSummary: map[string]any{"session_id": sessionID, "target": "missing", "text": "x"}}); err == nil {
+		t.Fatal("missing input type err = nil")
+	}
+	if _, err := executor.Execute(context.Background(), ToolInvocation{RunID: "run_browser", ToolCallID: "tc_press", ToolName: productdata.ToolNameBrowserPress, ArgumentsSummary: map[string]any{"session_id": sessionID, "key": "Meta+R"}}); err == nil {
+		t.Fatal("unsafe key press err = nil")
 	}
 }

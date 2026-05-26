@@ -3,10 +3,14 @@ package runtime
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"io"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -16,35 +20,81 @@ import (
 const (
 	defaultSandboxExecTimeoutMS = 5_000
 	maxSandboxExecTimeoutMS     = 30_000
+	defaultSandboxProcessMS     = 60_000
+	maxSandboxProcessMS         = 120_000
 	defaultSandboxOutputBytes   = 16 * 1024
 	maxSandboxOutputBytes       = 64 * 1024
 )
 
 type SandboxToolExecutor struct {
-	Root string
+	Root  string
+	Store *SandboxProcessStore
 }
 
 func SandboxToolDefinitions() []ToolDefinition {
 	return []ToolDefinition{
 		{Name: productdata.ToolNameSandboxExecCommand, ApprovalPolicy: ToolApprovalAlwaysRequired, SafetyClass: ToolSafetySandboxCommand, Source: ToolSourceInternal, ExecutionState: ToolExecutionAllowlisted},
+		{Name: productdata.ToolNameSandboxStartProcess, ApprovalPolicy: ToolApprovalAlwaysRequired, SafetyClass: ToolSafetySandboxCommand, Source: ToolSourceInternal, ExecutionState: ToolExecutionAllowlisted},
+		{Name: productdata.ToolNameSandboxContinueProcess, ApprovalPolicy: ToolApprovalAlwaysRequired, SafetyClass: ToolSafetySandboxCommand, Source: ToolSourceInternal, ExecutionState: ToolExecutionAllowlisted},
+		{Name: productdata.ToolNameSandboxTerminateProcess, ApprovalPolicy: ToolApprovalAlwaysRequired, SafetyClass: ToolSafetySandboxCommand, Source: ToolSourceInternal, ExecutionState: ToolExecutionAllowlisted},
 	}
 }
 
 type boundedOutput struct {
+	mu    sync.Mutex
 	buf   bytes.Buffer
 	limit int
 	total int
 }
 
+type SandboxProcessStore struct {
+	mu        sync.Mutex
+	processes map[string]*sandboxProcess
+}
+
+type sandboxProcess struct {
+	mu         sync.Mutex
+	runID      string
+	processID  string
+	argv       []string
+	cwd        string
+	cancel     context.CancelFunc
+	command    *exec.Cmd
+	stdin      io.WriteCloser
+	stdinOpen  bool
+	inputSeq   int
+	stdout     *boundedOutput
+	stderr     *boundedOutput
+	done       chan struct{}
+	err        error
+	exitCode   int
+	timedOut   bool
+	terminated bool
+}
+
+func NewSandboxProcessStore() *SandboxProcessStore {
+	return &SandboxProcessStore{processes: map[string]*sandboxProcess{}}
+}
+
+var defaultSandboxProcessStore = NewSandboxProcessStore()
+
 func (e SandboxToolExecutor) Execute(ctx context.Context, invocation ToolInvocation) (map[string]any, error) {
-	if invocation.ToolName != productdata.ToolNameSandboxExecCommand {
-		return nil, errors.New("sandbox tool is not supported")
-	}
 	scope, err := newWorkspaceScope(e.Root)
 	if err != nil {
 		return nil, err
 	}
-	return scope.execCommand(ctx, invocation.ArgumentsSummary)
+	switch invocation.ToolName {
+	case productdata.ToolNameSandboxExecCommand:
+		return scope.execCommand(ctx, invocation.ArgumentsSummary)
+	case productdata.ToolNameSandboxStartProcess:
+		return e.store().start(ctx, scope, invocation)
+	case productdata.ToolNameSandboxContinueProcess:
+		return e.store().continueProcess(scope, invocation)
+	case productdata.ToolNameSandboxTerminateProcess:
+		return e.store().terminateProcess(scope, invocation)
+	default:
+		return nil, errors.New("sandbox tool is not supported")
+	}
 }
 
 func (s workspaceScope) execCommand(ctx context.Context, args map[string]any) (map[string]any, error) {
@@ -95,7 +145,7 @@ func (s workspaceScope) execCommand(ctx context.Context, args map[string]any) (m
 	}
 	return map[string]any{
 		"tool":              productdata.ToolNameSandboxExecCommand,
-		"scope":             "bounded_read_only_command",
+		"scope":             "bounded_command",
 		"operation":         "exec_command",
 		"argv":              append([]string(nil), argv...),
 		"cwd":               cwdRel,
@@ -109,6 +159,244 @@ func (s workspaceScope) execCommand(ctx context.Context, args map[string]any) (m
 		"stderr_truncated":  stderr.Truncated(),
 		"redaction_applied": false,
 	}, nil
+}
+
+func (s *SandboxProcessStore) start(ctx context.Context, scope workspaceScope, invocation ToolInvocation) (map[string]any, error) {
+	if s == nil {
+		return nil, errors.New("sandbox process store is unavailable")
+	}
+	args := invocation.ArgumentsSummary
+	for key := range args {
+		if key != "argv" && key != "cwd" && key != "timeout_ms" && key != "max_output_bytes" && key != "stdin" {
+			return nil, errors.New("sandbox process argument is not supported")
+		}
+	}
+	argv, err := sandboxArgv(args["argv"])
+	if err != nil {
+		return nil, err
+	}
+	stdinEnabled := boolArg(args, "stdin", false)
+	if !allowedSandboxProcessCommand(argv, stdinEnabled) {
+		return nil, errors.New("sandbox process command is not allowed")
+	}
+	cwdArg := strings.TrimSpace(stringArg(args, "cwd", "."))
+	if cwdArg == "" {
+		cwdArg = "."
+	}
+	cwdPath, cwdRel, err := scope.resolveDir(cwdArg)
+	if err != nil {
+		return nil, err
+	}
+	timeoutMS := boundedInt(args, "timeout_ms", defaultSandboxProcessMS, maxSandboxProcessMS)
+	outputLimit := boundedInt(args, "max_output_bytes", defaultSandboxOutputBytes, maxSandboxOutputBytes)
+	runCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutMS)*time.Millisecond)
+	command := exec.CommandContext(runCtx, argv[0], argv[1:]...)
+	command.Dir = cwdPath
+	stdoutPipe, err := command.StdoutPipe()
+	if err != nil {
+		cancel()
+		return nil, errors.New("sandbox process stdout could not be created")
+	}
+	stderrPipe, err := command.StderrPipe()
+	if err != nil {
+		cancel()
+		return nil, errors.New("sandbox process stderr could not be created")
+	}
+	var stdinPipe io.WriteCloser
+	if stdinEnabled {
+		stdinPipe, err = command.StdinPipe()
+		if err != nil {
+			cancel()
+			return nil, errors.New("sandbox process stdin could not be created")
+		}
+	}
+	processID := sandboxProcessID(invocation.RunID, invocation.ToolCallID, argv)
+	process := &sandboxProcess{
+		runID:     invocation.RunID,
+		processID: processID,
+		argv:      append([]string(nil), argv...),
+		cwd:       cwdRel,
+		cancel:    cancel,
+		command:   command,
+		stdin:     stdinPipe,
+		stdinOpen: stdinEnabled,
+		stdout:    &boundedOutput{limit: outputLimit},
+		stderr:    &boundedOutput{limit: outputLimit},
+		done:      make(chan struct{}),
+		exitCode:  -1,
+	}
+	if err := command.Start(); err != nil {
+		cancel()
+		return nil, errors.New("sandbox process could not be started")
+	}
+	go func() { _, _ = io.Copy(process.stdout, stdoutPipe) }()
+	go func() { _, _ = io.Copy(process.stderr, stderrPipe) }()
+	go func() {
+		err := command.Wait()
+		process.mu.Lock()
+		process.err = err
+		process.timedOut = runCtx.Err() == context.DeadlineExceeded
+		if command.ProcessState != nil {
+			process.exitCode = command.ProcessState.ExitCode()
+		}
+		cancel()
+		close(process.done)
+		process.mu.Unlock()
+	}()
+	s.mu.Lock()
+	if s.processes == nil {
+		s.processes = map[string]*sandboxProcess{}
+	}
+	s.processes[processID] = process
+	s.mu.Unlock()
+	return process.result(productdata.ToolNameSandboxStartProcess, "start_process", scope.root, 0), nil
+}
+
+func (s *SandboxProcessStore) continueProcess(scope workspaceScope, invocation ToolInvocation) (map[string]any, error) {
+	for key := range invocation.ArgumentsSummary {
+		if key != "process_id" && key != "cursor" && key != "stdin_text" && key != "input_seq" && key != "close_stdin" {
+			return nil, errors.New("sandbox process argument is not supported")
+		}
+	}
+	if value, ok := invocation.ArgumentsSummary["stdin_text"]; ok {
+		if _, ok := value.(string); !ok {
+			return nil, errors.New("sandbox process stdin_text is invalid")
+		}
+	}
+	if value, ok := invocation.ArgumentsSummary["close_stdin"]; ok {
+		if _, ok := value.(bool); !ok {
+			return nil, errors.New("sandbox process close_stdin is invalid")
+		}
+	}
+	process, err := s.get(invocation.RunID, invocation.ArgumentsSummary)
+	if err != nil {
+		return nil, err
+	}
+	if err := process.applyInput(invocation.ArgumentsSummary); err != nil {
+		return nil, err
+	}
+	cursor := boundedInt(invocation.ArgumentsSummary, "cursor", 0, maxSandboxOutputBytes)
+	return process.result(productdata.ToolNameSandboxContinueProcess, "continue_process", scope.root, cursor), nil
+}
+
+func (s *SandboxProcessStore) terminateProcess(scope workspaceScope, invocation ToolInvocation) (map[string]any, error) {
+	for key := range invocation.ArgumentsSummary {
+		if key != "process_id" {
+			return nil, errors.New("sandbox process argument is not supported")
+		}
+	}
+	process, err := s.get(invocation.RunID, invocation.ArgumentsSummary)
+	if err != nil {
+		return nil, err
+	}
+	process.cancel()
+	process.mu.Lock()
+	process.terminated = true
+	process.mu.Unlock()
+	select {
+	case <-process.done:
+	case <-time.After(2 * time.Second):
+		if process.command.Process != nil {
+			_ = process.command.Process.Kill()
+		}
+		<-process.done
+	}
+	return process.result(productdata.ToolNameSandboxTerminateProcess, "terminate_process", scope.root, 0), nil
+}
+
+func (s *SandboxProcessStore) get(runID string, args map[string]any) (*sandboxProcess, error) {
+	if s == nil {
+		return nil, errors.New("sandbox process store is unavailable")
+	}
+	processID := strings.TrimSpace(stringArg(args, "process_id", ""))
+	if processID == "" {
+		return nil, errors.New("sandbox process id is required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	process, ok := s.processes[processID]
+	if !ok || process.runID != runID {
+		return nil, errors.New("sandbox process is unavailable")
+	}
+	return process, nil
+}
+
+func (p *sandboxProcess) applyInput(args map[string]any) error {
+	stdinText, hasStdinText := args["stdin_text"].(string)
+	closeStdin := boolArg(args, "close_stdin", false)
+	inputSeq := boundedInt(args, "input_seq", 0, 1_000_000)
+	if hasStdinText && inputSeq <= 0 {
+		return errors.New("sandbox process input_seq is required for stdin_text")
+	}
+	p.mu.Lock()
+	stdin := p.stdin
+	stdinOpen := p.stdinOpen
+	if hasStdinText {
+		if stdin == nil || !stdinOpen {
+			p.mu.Unlock()
+			return errors.New("sandbox process stdin is not open")
+		}
+		if inputSeq <= p.inputSeq {
+			p.mu.Unlock()
+			return errors.New("sandbox process input_seq must increase")
+		}
+		p.inputSeq = inputSeq
+	}
+	if closeStdin && stdinOpen {
+		p.stdinOpen = false
+	}
+	p.mu.Unlock()
+	if hasStdinText {
+		if _, err := io.WriteString(stdin, stdinText); err != nil {
+			return errors.New("sandbox process stdin could not be written")
+		}
+	}
+	if closeStdin && stdin != nil {
+		_ = stdin.Close()
+	}
+	return nil
+}
+
+func (p *sandboxProcess) result(toolName string, operation string, root string, cursor int) map[string]any {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	status := "running"
+	select {
+	case <-p.done:
+		status = "exited"
+	default:
+	}
+	if p.terminated {
+		status = "terminated"
+	}
+	stdout := p.stdout.StringFrom(cursor)
+	nextCursor := p.stdout.Stored()
+	return map[string]any{
+		"tool":              toolName,
+		"scope":             "bounded_process",
+		"operation":         operation,
+		"process_id":        p.processID,
+		"argv":              append([]string(nil), p.argv...),
+		"cwd":               p.cwd,
+		"status":            status,
+		"exit_code":         p.exitCode,
+		"timed_out":         p.timedOut,
+		"stdout":            sandboxOutputPreview(stdout, root),
+		"stderr":            sandboxOutputPreview(p.stderr.String(), root),
+		"stdout_bytes":      p.stdout.Total(),
+		"stderr_bytes":      p.stderr.Total(),
+		"stdout_truncated":  p.stdout.Truncated(),
+		"stderr_truncated":  p.stderr.Truncated(),
+		"next_cursor":       nextCursor,
+		"stdin_open":        p.stdinOpen,
+		"input_seq":         p.inputSeq,
+		"redaction_applied": false,
+	}
+}
+
+func sandboxProcessID(runID string, toolCallID string, argv []string) string {
+	sum := sha256.Sum256([]byte(runID + "\x00" + toolCallID + "\x00" + strings.Join(argv, "\x00")))
+	return "sp_" + hex.EncodeToString(sum[:8])
 }
 
 func sandboxArgv(value any) ([]string, error) {
@@ -154,24 +442,192 @@ func allowedReadOnlyCommand(argv []string) bool {
 	case "pwd":
 		return len(argv) == 1
 	case "ls":
-		return len(argv) == 1 || (len(argv) == 2 && argv[1] == ".")
+		return len(argv) == 1 || (len(argv) == 2 && sandboxPathArgAllowed(argv[1]))
+	case "cat", "wc":
+		return len(argv) >= 2 && sandboxPathArgsAllowed(argv[1:])
+	case "head", "tail":
+		return sandboxHeadTailArgsAllowed(argv[1:])
+	case "sed":
+		return sandboxSedArgsAllowed(argv[1:])
+	case "rg":
+		return sandboxRGArgsAllowed(argv[1:])
 	case "git":
 		return gitReadOnlyArgsAllowed(argv[1:])
+	case "go":
+		return sandboxGoArgsAllowed(argv[1:])
+	case "bun":
+		return sandboxJSValidationArgsAllowed(argv[1:])
+	case "npm", "pnpm":
+		return sandboxPackageValidationArgsAllowed(argv[1:])
 	default:
 		return false
 	}
 }
 
+func allowedSandboxProcessCommand(argv []string, stdinEnabled bool) bool {
+	if stdinEnabled && len(argv) == 1 && strings.ToLower(filepath.Base(strings.TrimSpace(argv[0]))) == "cat" {
+		return true
+	}
+	return allowedReadOnlyCommand(argv)
+}
+
 func gitReadOnlyArgsAllowed(args []string) bool {
-	if len(args) != 1 {
+	if len(args) == 0 {
 		return false
 	}
 	switch args[0] {
-	case "status":
+	case "status", "diff", "log", "show":
 		return true
 	default:
 		return false
 	}
+}
+
+func sandboxPathArgsAllowed(args []string) bool {
+	for _, arg := range args {
+		if !sandboxPathArgAllowed(arg) {
+			return false
+		}
+	}
+	return true
+}
+
+func sandboxPathArgAllowed(arg string) bool {
+	arg = strings.TrimSpace(arg)
+	if arg == "" {
+		return false
+	}
+	if strings.HasPrefix(arg, "-") {
+		return false
+	}
+	rel, err := cleanWorkspaceRelativePath(arg)
+	if err != nil {
+		return false
+	}
+	return rel == "." || !isSensitiveWorkspacePath(rel)
+}
+
+func sandboxHeadTailArgsAllowed(args []string) bool {
+	if len(args) == 0 {
+		return false
+	}
+	paths := []string{}
+	for i := 0; i < len(args); i++ {
+		arg := strings.TrimSpace(args[i])
+		if arg == "-n" {
+			i++
+			if i >= len(args) || strings.TrimSpace(args[i]) == "" || strings.HasPrefix(strings.TrimSpace(args[i]), "-") {
+				return false
+			}
+			continue
+		}
+		paths = append(paths, arg)
+	}
+	return len(paths) > 0 && sandboxPathArgsAllowed(paths)
+}
+
+func sandboxSedArgsAllowed(args []string) bool {
+	if len(args) != 3 || args[0] != "-n" {
+		return false
+	}
+	script := strings.TrimSpace(args[1])
+	if script == "" || strings.ContainsAny(script, "we") {
+		return false
+	}
+	if !strings.HasSuffix(script, "p") {
+		return false
+	}
+	return sandboxPathArgAllowed(args[2])
+}
+
+func sandboxRGArgsAllowed(args []string) bool {
+	if len(args) == 0 {
+		return false
+	}
+	for _, arg := range args {
+		arg = strings.TrimSpace(arg)
+		if arg == "" {
+			return false
+		}
+		if arg == "-u" || arg == "-uu" || arg == "-uuu" || arg == "--hidden" || arg == "--no-ignore" {
+			return false
+		}
+		if strings.HasPrefix(arg, "../") || filepath.IsAbs(arg) || isSensitiveWorkspacePath(filepath.ToSlash(filepath.Clean(arg))) {
+			return false
+		}
+	}
+	return true
+}
+
+func sandboxGoArgsAllowed(args []string) bool {
+	if len(args) == 0 || args[0] != "test" {
+		return false
+	}
+	for _, arg := range args[1:] {
+		arg = strings.TrimSpace(arg)
+		if arg == "" {
+			return false
+		}
+		if arg == "-o" || strings.HasPrefix(arg, "-o=") || arg == "-coverprofile" || strings.HasPrefix(arg, "-coverprofile=") {
+			return false
+		}
+		if !strings.HasPrefix(arg, "-") && arg != "./..." && !sandboxPathArgAllowed(arg) {
+			return false
+		}
+	}
+	return true
+}
+
+func sandboxJSValidationArgsAllowed(args []string) bool {
+	if len(args) == 0 {
+		return false
+	}
+	if args[0] == "test" {
+		return sandboxOptionalPathArgsAllowed(args[1:])
+	}
+	if args[0] != "run" {
+		return false
+	}
+	rest := args[1:]
+	if len(rest) >= 3 && rest[0] == "--cwd" {
+		if !sandboxPathArgAllowed(rest[1]) {
+			return false
+		}
+		rest = rest[2:]
+	}
+	if len(rest) == 0 {
+		return false
+	}
+	if rest[0] != "build" && rest[0] != "test" {
+		return false
+	}
+	return sandboxOptionalPathArgsAllowed(rest[1:])
+}
+
+func sandboxPackageValidationArgsAllowed(args []string) bool {
+	if len(args) == 0 {
+		return false
+	}
+	if args[0] == "test" {
+		return sandboxOptionalPathArgsAllowed(args[1:])
+	}
+	if len(args) >= 2 && args[0] == "run" && (args[1] == "build" || args[1] == "test") {
+		return sandboxOptionalPathArgsAllowed(args[2:])
+	}
+	return false
+}
+
+func sandboxOptionalPathArgsAllowed(args []string) bool {
+	for _, arg := range args {
+		arg = strings.TrimSpace(arg)
+		if arg == "" {
+			return false
+		}
+		if !strings.HasPrefix(arg, "-") && !sandboxPathArgAllowed(arg) {
+			return false
+		}
+	}
+	return true
 }
 
 func sandboxOutputPreview(content string, root string) string {
@@ -184,6 +640,8 @@ func sandboxOutputPreview(content string, root string) string {
 }
 
 func (w *boundedOutput) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	written := len(p)
 	w.total += len(p)
 	remaining := w.limit - w.buf.Len()
@@ -197,9 +655,44 @@ func (w *boundedOutput) Write(p []byte) (int, error) {
 }
 
 func (w *boundedOutput) String() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	return w.buf.String()
 }
 
+func (w *boundedOutput) StringFrom(offset int) string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if offset <= 0 {
+		return w.buf.String()
+	}
+	if offset >= w.buf.Len() {
+		return ""
+	}
+	return string(w.buf.Bytes()[offset:])
+}
+
+func (w *boundedOutput) Stored() int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.buf.Len()
+}
+
 func (w *boundedOutput) Truncated() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	return w.total > w.limit
+}
+
+func (w *boundedOutput) Total() int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.total
+}
+
+func (e SandboxToolExecutor) store() *SandboxProcessStore {
+	if e.Store != nil {
+		return e.Store
+	}
+	return defaultSandboxProcessStore
 }

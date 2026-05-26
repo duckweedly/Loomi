@@ -21,6 +21,7 @@ This entry records the M14 Spec Kit, UX/API contract, blocker foundation, US1 Se
 - Added grounded search/filter controls for `scope_type`, `scope_id`, `source_thread_id`, `source_run_id`, `source_type`, `include_tombstoned`, and `limit`.
 - Added a safe detail panel that shows title, summary, scope/source metadata, status, timestamps, and redaction markers only.
 - Added delete confirmation so the delete API is not called from a single accidental click.
+- Refined the product UI so advanced filters are collapsed by default, routine snapshot events are folded into a system note, and history rows use human-readable labels instead of raw event names and ids.
 - Thread-scoped detail/delete calls reuse the entry scope/source context; missing context becomes a safe UI error instead of leaking the target id.
 - List/detail/delete errors clear or avoid stale success-looking data, so API failures are visible.
 

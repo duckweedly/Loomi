@@ -38,7 +38,11 @@ func TestM23WorkspaceMutationToolsSmoke(t *testing.T) {
 		t.Fatalf("edit result=%+v edited=%q", editResult, string(edited))
 	}
 	assertBodyExcludes(t, editEvents, "m23 edit events", root, "fixture-secret", ".env", "secrets/token")
-	assertBodyExcludes(t, editEvents, "m23 edit event arguments", "second")
+	for _, expected := range []string{`"diff"`, "-second", "+changed"} {
+		if !strings.Contains(editEvents, expected) {
+			t.Fatalf("edit events missing %s: %s", expected, editEvents)
+		}
+	}
 }
 
 func runM23WorkspaceMutationTool(t *testing.T, root string, toolName string, toolCallID string, args map[string]any) (map[string]any, string) {
@@ -74,6 +78,11 @@ func runM23WorkspaceMutationTool(t *testing.T, root string, toolName string, too
 	runRes := requestJSON(t, srv, http.MethodPost, "/v1/threads/"+threadID+"/runs", `{"message_id":"`+messageID+`","source":"model_gateway","provider_id":"custom","model":"model"}`)
 	assertStatus(t, runRes.Code, http.StatusAccepted, runRes.Body.String())
 	runID := decodeStringField(t, runRes.Body.Bytes(), "run", "id")
+	if toolName == productdata.ToolNameWorkspaceEdit {
+		if _, err := (productruntime.WorkspaceToolExecutor{Root: root}).Execute(context.Background(), productruntime.ToolInvocation{RunID: runID, ToolName: productdata.ToolNameWorkspaceRead, ArgumentsSummary: map[string]any{"path": args["path"]}}); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	if ok, err := worker.ProcessOne(context.Background()); err != nil || !ok {
 		t.Fatalf("first ProcessOne ok=%v err=%v", ok, err)

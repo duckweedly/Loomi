@@ -19,6 +19,20 @@ func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
 }
 
+func TestWebSearchDefinitionDoesNotRequireManualApproval(t *testing.T) {
+	defs := WebToolDefinitions()
+	for _, def := range defs {
+		if def.Name != productdata.ToolNameWebSearch {
+			continue
+		}
+		if def.ApprovalPolicy != ToolApprovalNotRequired || def.SafetyClass != ToolSafetyPublicNetworkRead {
+			t.Fatalf("web search definition = %+v", def)
+		}
+		return
+	}
+	t.Fatal("web.search definition missing")
+}
+
 func TestWebFetchExecutesBoundedTextFetch(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -114,5 +128,91 @@ func TestWebFetchRejectsBlockedRedirectBeforeReadingBody(t *testing.T) {
 	_, err := executor.Execute(context.Background(), ToolInvocation{ToolName: productdata.ToolNameWebFetch, ArgumentsSummary: map[string]any{"url": "https://example.com"}})
 	if err == nil {
 		t.Fatal("redirect to blocked host err = nil")
+	}
+}
+
+func TestWebSearchExecutesTavilyWithSafeSummary(t *testing.T) {
+	var auth string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth = r.Header.Get("Authorization")
+		if r.Method != http.MethodPost || r.URL.Path != "/search" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"query":"latest ai news","results":[{"title":"AI News","url":"https://example.com/ai","content":"fresh public snippet","score":0.9,"raw_content":"secret raw body"}]}`))
+	}))
+	defer server.Close()
+	executor := WebToolExecutor{TavilyAPIKey: "tvly-secret", TavilyEndpoint: server.URL + "/search"}
+
+	result, err := executor.Execute(context.Background(), ToolInvocation{ToolName: productdata.ToolNameWebSearch, ArgumentsSummary: map[string]any{"query": "latest ai news", "provider": "tavily", "limit": 3}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if auth != "Bearer tvly-secret" {
+		t.Fatalf("Authorization = %q", auth)
+	}
+	if result["operation"] != "search" || result["provider"] != "tavily" || result["scope"] != "web" || result["result_count"] != 1 {
+		t.Fatalf("search result = %+v", result)
+	}
+	if strings.Contains(fmt.Sprint(result), "tvly-secret") || strings.Contains(fmt.Sprint(result), "secret raw body") {
+		t.Fatalf("search result leaked sensitive data: %+v", result)
+	}
+}
+
+func TestWebSearchExecutesBraveWithSafeSummary(t *testing.T) {
+	var token string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		token = r.Header.Get("X-Subscription-Token")
+		if r.Method != http.MethodGet || r.URL.Path != "/res/v1/web/search" || r.URL.Query().Get("q") != "latest ai news" || r.URL.Query().Get("count") != "2" {
+			t.Fatalf("request = %s %s?%s", r.Method, r.URL.Path, r.URL.RawQuery)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"type":"search","web":{"results":[{"title":"Brave AI","url":"https://example.com/brave","description":"brave public snippet"}]}}`))
+	}))
+	defer server.Close()
+	executor := WebToolExecutor{BraveAPIKey: "brave-secret", BraveEndpoint: server.URL + "/res/v1/web/search"}
+
+	result, err := executor.Execute(context.Background(), ToolInvocation{ToolName: productdata.ToolNameWebSearch, ArgumentsSummary: map[string]any{"query": "latest ai news", "provider": "brave", "limit": 2}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if token != "brave-secret" {
+		t.Fatalf("X-Subscription-Token = %q", token)
+	}
+	if result["operation"] != "search" || result["provider"] != "brave" || result["result_count"] != 1 {
+		t.Fatalf("search result = %+v", result)
+	}
+	if strings.Contains(fmt.Sprint(result), "brave-secret") {
+		t.Fatalf("search result leaked token: %+v", result)
+	}
+}
+
+func TestWebSearchRejectsMissingProviderKey(t *testing.T) {
+	t.Setenv("LOOMI_TAVILY_API_KEY", "")
+	t.Setenv("LOOMI_BRAVE_SEARCH_API_KEY", "")
+	executor := WebToolExecutor{}
+	_, err := executor.Execute(context.Background(), ToolInvocation{ToolName: productdata.ToolNameWebSearch, ArgumentsSummary: map[string]any{"query": "news", "provider": "tavily"}})
+	if err == nil {
+		t.Fatal("missing tavily key err = nil")
+	}
+}
+
+func TestWebSearchUsesProcessEnvKeyWhenExecutorWasStartedWithoutKey(t *testing.T) {
+	t.Setenv("LOOMI_TAVILY_API_KEY", "tvly-env")
+	var auth string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"results":[{"title":"Env result","url":"https://example.com","content":"env snippet"}]}`))
+	}))
+	defer server.Close()
+	executor := WebToolExecutor{TavilyEndpoint: server.URL + "/search"}
+
+	result, err := executor.Execute(context.Background(), ToolInvocation{ToolName: productdata.ToolNameWebSearch, ArgumentsSummary: map[string]any{"query": "env"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if auth != "Bearer tvly-env" || result["provider"] != "tavily" {
+		t.Fatalf("auth=%q result=%v", auth, result)
 	}
 }

@@ -34,6 +34,8 @@ func LSPToolDefinitions() []ToolDefinition {
 		{Name: productdata.ToolNameLSPDiagnostics, ApprovalPolicy: ToolApprovalAlwaysRequired, SafetyClass: ToolSafetyNoSideEffectInternal, Source: ToolSourceInternal, ExecutionState: ToolExecutionAllowlisted},
 		{Name: productdata.ToolNameLSPSymbols, ApprovalPolicy: ToolApprovalAlwaysRequired, SafetyClass: ToolSafetyNoSideEffectInternal, Source: ToolSourceInternal, ExecutionState: ToolExecutionAllowlisted},
 		{Name: productdata.ToolNameLSPReferences, ApprovalPolicy: ToolApprovalAlwaysRequired, SafetyClass: ToolSafetyNoSideEffectInternal, Source: ToolSourceInternal, ExecutionState: ToolExecutionAllowlisted},
+		{Name: productdata.ToolNameLSPDefinition, ApprovalPolicy: ToolApprovalAlwaysRequired, SafetyClass: ToolSafetyNoSideEffectInternal, Source: ToolSourceInternal, ExecutionState: ToolExecutionAllowlisted},
+		{Name: productdata.ToolNameLSPHover, ApprovalPolicy: ToolApprovalAlwaysRequired, SafetyClass: ToolSafetyNoSideEffectInternal, Source: ToolSourceInternal, ExecutionState: ToolExecutionAllowlisted},
 	}
 }
 
@@ -49,6 +51,10 @@ func (e LSPToolExecutor) Execute(ctx context.Context, invocation ToolInvocation)
 		return scope.lspReferences(ctx, invocation.ArgumentsSummary)
 	case productdata.ToolNameLSPDiagnostics:
 		return scope.lspDiagnostics(invocation.ArgumentsSummary)
+	case productdata.ToolNameLSPDefinition:
+		return scope.lspDefinition(ctx, invocation.ArgumentsSummary)
+	case productdata.ToolNameLSPHover:
+		return scope.lspHover(ctx, invocation.ArgumentsSummary)
 	default:
 		return nil, errors.New("lsp tool is not supported")
 	}
@@ -161,6 +167,55 @@ func (s workspaceScope) lspReferences(ctx context.Context, args map[string]any) 
 	return map[string]any{"tool": productdata.ToolNameLSPReferences, "scope": "lsp", "operation": "references", "path": rel, "name": token, "items": items, "count": len(items), "limit": limit, "truncated": truncated, "redaction_applied": false}, nil
 }
 
+func (s workspaceScope) lspDefinition(ctx context.Context, args map[string]any) (map[string]any, error) {
+	if err := validateLSPRuntimeArguments(productdata.ToolNameLSPDefinition, args); err != nil {
+		return nil, err
+	}
+	_, rel, content, err := s.readLSPFile(args)
+	if err != nil {
+		return nil, err
+	}
+	line := boundedInt(args, "line", 0, 1<<30)
+	column := boundedInt(args, "column", 0, 1<<30)
+	token := lspTokenAt(content, line, column)
+	if token == "" {
+		return nil, errors.New("lsp definition position has no symbol")
+	}
+	limit := boundedInt(args, "limit", defaultLSPResultLimit, maxLSPResultLimit)
+	items, truncated, err := s.findLSPDefinitions(ctx, token, limit)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"tool": productdata.ToolNameLSPDefinition, "scope": "lsp", "operation": "definition", "path": rel, "name": token, "items": items, "count": len(items), "limit": limit, "truncated": truncated, "redaction_applied": false}, nil
+}
+
+func (s workspaceScope) lspHover(ctx context.Context, args map[string]any) (map[string]any, error) {
+	if err := validateLSPRuntimeArguments(productdata.ToolNameLSPHover, args); err != nil {
+		return nil, err
+	}
+	_, rel, content, err := s.readLSPFile(args)
+	if err != nil {
+		return nil, err
+	}
+	line := boundedInt(args, "line", 0, 1<<30)
+	column := boundedInt(args, "column", 0, 1<<30)
+	token := lspTokenAt(content, line, column)
+	if token == "" {
+		return nil, errors.New("lsp hover position has no symbol")
+	}
+	definitions, _, err := s.findLSPDefinitions(ctx, token, 1)
+	if err != nil {
+		return nil, err
+	}
+	hover := map[string]any{"name": token, "path": rel, "line": line, "column": column}
+	if len(definitions) > 0 {
+		for key, value := range definitions[0] {
+			hover[key] = value
+		}
+	}
+	return map[string]any{"tool": productdata.ToolNameLSPHover, "scope": "lsp", "operation": "hover", "path": rel, "name": token, "hover": hover, "redaction_applied": false}, nil
+}
+
 func (s workspaceScope) lspDiagnostics(args map[string]any) (map[string]any, error) {
 	if err := validateLSPRuntimeArguments(productdata.ToolNameLSPDiagnostics, args); err != nil {
 		return nil, err
@@ -188,10 +243,60 @@ func validateLSPRuntimeArguments(toolName string, args map[string]any) error {
 	if strings.TrimSpace(stringArg(args, "path", "")) == "" {
 		return errors.New("lsp path is required")
 	}
-	if toolName == productdata.ToolNameLSPReferences && (boundedInt(args, "line", 0, 1<<30) <= 0 || boundedInt(args, "column", 0, 1<<30) <= 0) {
-		return errors.New("lsp reference position is required")
+	if (toolName == productdata.ToolNameLSPReferences || toolName == productdata.ToolNameLSPDefinition || toolName == productdata.ToolNameLSPHover) && (boundedInt(args, "line", 0, 1<<30) <= 0 || boundedInt(args, "column", 0, 1<<30) <= 0) {
+		return errors.New("lsp position is required")
 	}
 	return nil
+}
+
+func (s workspaceScope) findLSPDefinitions(ctx context.Context, token string, limit int) ([]map[string]any, bool, error) {
+	items := make([]map[string]any, 0)
+	truncated := false
+	err := filepath.WalkDir(s.root, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return nil
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		candidateRel, err := s.relative(path)
+		if err != nil {
+			return nil
+		}
+		if candidateRel != "." && isSensitiveWorkspacePath(candidateRel) {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if entry.IsDir() || !isLSPTextPath(candidateRel) {
+			return nil
+		}
+		filePath, resolvedRel, err := s.resolveFile(candidateRel)
+		if err != nil {
+			return nil
+		}
+		fileContent, err := readLSPTextFile(filePath)
+		if err != nil {
+			return nil
+		}
+		for lineNumber, candidateLine := range strings.Split(fileContent, "\n") {
+			match := lspSymbolPattern.FindStringSubmatch(candidateLine)
+			if len(match) != 3 || match[2] != token {
+				continue
+			}
+			if len(items) >= limit {
+				truncated = true
+				return filepath.SkipAll
+			}
+			items = append(items, map[string]any{"name": token, "kind": match[1], "path": resolvedRel, "line": lineNumber + 1, "column": strings.Index(candidateLine, token) + 1, "preview": safeLineExcerpt(candidateLine)})
+		}
+		return nil
+	})
+	if err != nil && err != filepath.SkipAll {
+		return nil, false, err
+	}
+	return items, truncated, nil
 }
 
 func (s workspaceScope) readLSPFile(args map[string]any) (string, string, string, error) {

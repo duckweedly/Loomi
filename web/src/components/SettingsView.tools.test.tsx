@@ -6,7 +6,7 @@ describe('SettingsView tools catalog', () => {
   test('mock catalog includes every M21 workspace read tool', async () => {
     const api = await import('../mockApiClient')
     const tools = await api.mockApiClient.listToolCatalog()
-    const workspaceTools = tools.filter((tool) => tool.group === 'workspace' && tool.safeMetadata?.read_only === true)
+    const workspaceTools = tools.filter((tool) => tool.name === 'workspace.glob' || tool.name === 'workspace.grep' || tool.name === 'workspace.read')
 
     expect(workspaceTools.map((tool) => tool.name).sort()).toEqual(['workspace.glob', 'workspace.grep', 'workspace.read'])
     for (const tool of workspaceTools) {
@@ -19,16 +19,32 @@ describe('SettingsView tools catalog', () => {
   test('mock catalog includes M23 workspace mutation tools as write-capable high-risk entries', async () => {
     const api = await import('../mockApiClient')
     const tools = await api.mockApiClient.listToolCatalog()
-    const mutationTools = tools.filter((tool) => tool.name === 'workspace.write_file' || tool.name === 'workspace.edit')
+    const mutationTools = tools.filter((tool) => tool.name === 'workspace.write_file' || tool.name === 'workspace.edit' || tool.name === 'workspace.patch_preview' || tool.name === 'workspace.patch_apply')
 
-    expect(mutationTools.map((tool) => tool.name).sort()).toEqual(['workspace.edit', 'workspace.write_file'])
+    expect(mutationTools.map((tool) => tool.name).sort()).toEqual(['workspace.edit', 'workspace.patch_apply', 'workspace.patch_preview', 'workspace.write_file'])
     for (const tool of mutationTools) {
       expect(tool.group).toBe('workspace')
       expect(tool.riskLevel).toBe('high')
       expect(tool.approvalPolicy).toBe('always_required')
-      expect(tool.safeMetadata?.read_only).toBe(false)
-      expect(tool.safeMetadata?.write_capable).toBe(true)
+      expect(tool.safeMetadata?.read_only).toBe(tool.name === 'workspace.patch_preview')
+      expect(tool.safeMetadata?.write_capable).toBe(tool.name !== 'workspace.patch_preview')
       expect(tool.safeMetadata?.scope).toBe('workspace')
+      if (tool.name === 'workspace.edit') {
+        expect(tool.safeMetadata?.requires_read_before_edit).toBe(true)
+        expect(tool.safeMetadata?.returns_diff).toBe(true)
+        expect(tool.safeMetadata?.normalizes_line_endings).toBe(true)
+        expect(tool.safeMetadata?.preserves_indentation).toBe(true)
+        expect(tool.safeMetadata?.strips_trailing_whitespace_except_markdown).toBe(true)
+      }
+      if (tool.name === 'workspace.patch_preview') {
+        expect(tool.safeMetadata?.requires_read_before_preview).toBe(true)
+        expect(tool.safeMetadata?.preview_only).toBe(true)
+        expect(tool.safeMetadata?.returns_diff).toBe(true)
+      }
+      if (tool.name === 'workspace.patch_apply') {
+        expect(tool.safeMetadata?.requires_patch_preview).toBe(true)
+        expect(tool.safeMetadata?.returns_diff).toBe(true)
+      }
       expect(`${tool.displayName} ${tool.description} ${JSON.stringify(tool.safeMetadata)}`).not.toContain('/Users/')
     }
   })
@@ -42,9 +58,9 @@ describe('SettingsView tools catalog', () => {
     expect(tool?.group).toBe('sandbox')
     expect(tool?.riskLevel).toBe('high')
     expect(tool?.approvalPolicy).toBe('always_required')
-    expect(tool?.safeMetadata?.scope).toBe('bounded_read_only_command')
+    expect(tool?.safeMetadata?.scope).toBe('bounded_command')
     expect(tool?.safeMetadata?.exec_capable).toBe(true)
-    expect(tool?.safeMetadata?.read_only).toBe(true)
+    expect(tool?.safeMetadata?.validation_capable).toBe(true)
     expect(tool?.safeMetadata?.isolated_sandbox).toBe(false)
     expect(tool?.safeMetadata?.argv_only).toBe(true)
     expect(`${tool?.displayName} ${tool?.description} ${JSON.stringify(tool?.safeMetadata)}`).not.toContain('/Users/')
@@ -81,6 +97,25 @@ describe('SettingsView tools catalog', () => {
     expect(tool?.safeMetadata?.scope).toBe('web')
     expect(tool?.safeMetadata?.read_only).toBe(true)
     expect(tool?.safeMetadata?.network_access).toBe('public_http_only')
+    expect(`${tool?.displayName} ${tool?.description} ${JSON.stringify(tool?.safeMetadata)}`).not.toContain('/Users/')
+  })
+
+  test('mock catalog includes web search as Brave/Tavily read-only network tool', async () => {
+    const api = await import('../mockApiClient')
+    const tools = await api.mockApiClient.listToolCatalog()
+    const tool = tools.find((item) => item.name === 'web.search')
+
+    expect(tool).toBeDefined()
+    expect(tool?.source).toBe('builtin')
+    expect(tool?.group).toBe('web')
+    expect(tool?.riskLevel).toBe('medium')
+    expect(tool?.approvalPolicy).toBe('always_required')
+    expect(tool?.executionState).toBe('executable')
+    expect(tool?.safeMetadata?.scope).toBe('web')
+    expect(tool?.safeMetadata?.read_only).toBe(true)
+    expect(tool?.safeMetadata?.network_access).toBe('search_provider_api')
+    expect(tool?.safeMetadata?.providers).toEqual(['tavily', 'brave'])
+    expect(`${tool?.displayName} ${tool?.description} ${JSON.stringify(tool?.safeMetadata)}`).not.toContain('tvly-')
     expect(`${tool?.displayName} ${tool?.description} ${JSON.stringify(tool?.safeMetadata)}`).not.toContain('/Users/')
   })
 
@@ -149,7 +184,7 @@ describe('SettingsView tools catalog', () => {
     expect(source).toContain('tool.source')
     expect(source).toContain('tool.group')
     expect(source).toContain('read-only')
-    expect(source).toContain('toolScopeLabel(tool)')
+    expect(source).toContain('toolScopeLabel(tool, locale)')
     expect(source).toContain('tool.safeMetadata?.scope')
     expect(source).toContain('non-executable')
     expect(source).toContain('coordination-only')
@@ -166,7 +201,7 @@ describe('SettingsView tools catalog', () => {
     expect(source).toContain('tool.executionState')
     expect(source).not.toContain('raw_args')
     expect(source).not.toContain('raw_result')
-    const toolsPanelSource = source.slice(source.indexOf('function ToolsPanel'), source.indexOf('function PlaceholderPanel'))
+    const toolsPanelSource = source.slice(source.indexOf('function ToolsPanel'), source.indexOf('function WebSearchPanel'))
     expect(toolsPanelSource).not.toContain('secret')
   })
 
@@ -221,9 +256,50 @@ describe('SettingsView tools catalog', () => {
     expect(html).toContain('workspace.read')
     expect(html).toContain('workspace.glob')
     expect(html).toContain('workspace.grep')
-    expect(html).toContain('workspace scope')
+    expect(html).toContain('工作区范围')
     expect(html).not.toContain('/Users/')
     expect(html).not.toContain('.ssh')
+  })
+
+  test('renders web search as a dedicated settings menu instead of Tools configuration', () => {
+    const webTools: ToolCatalogItem[] = [{
+      name: 'web.search',
+      displayName: 'Web search',
+      description: 'Search the public web.',
+      source: 'builtin',
+      group: 'web',
+      riskLevel: 'medium',
+      approvalPolicy: 'always_required',
+      enabled: true,
+      executionState: 'executable',
+      safeMetadata: { read_only: true, scope: 'web', network_access: 'search_provider_api', providers: ['tavily', 'brave'], example_key: 'tvly-secret' },
+    }, {
+      name: 'web.fetch',
+      displayName: 'Web fetch',
+      description: 'Fetch a public URL.',
+      source: 'builtin',
+      group: 'web',
+      riskLevel: 'medium',
+      approvalPolicy: 'always_required',
+      enabled: true,
+      executionState: 'executable',
+      safeMetadata: { read_only: true, scope: 'web', network_access: 'public_http_only' },
+    }]
+
+    const webSearchHtml = renderToStaticMarkup(<SettingsView {...baseSettingsProps()} selectedCategoryId="web-search" toolCatalog={webTools} />)
+    const toolsHtml = renderToStaticMarkup(<SettingsView {...baseSettingsProps()} selectedCategoryId="tools" toolCatalog={webTools} />)
+
+    expect(webSearchHtml).toContain('网页搜索')
+    expect(webSearchHtml).toContain('Tavily Key')
+    expect(webSearchHtml).toContain('Brave Search')
+    expect(webSearchHtml).toContain('web.search')
+    expect(webSearchHtml).toContain('已可用')
+    expect(webSearchHtml).toContain('已保存的 key 不显示。')
+    expect(webSearchHtml).not.toContain('tvly-secret')
+
+    expect(toolsHtml).toContain('web.fetch')
+    expect(toolsHtml).not.toContain('web.search')
+    expect(toolsHtml).not.toContain('Tavily')
   })
 })
 
@@ -232,14 +308,15 @@ function baseSettingsProps(): Parameters<typeof SettingsView>[0] {
     locale: 'zh',
     selectedCategoryId: 'tools',
     defaultWorkspaceMode: 'work',
-    selectedRuntimeScript: 'success',
-    dataSourceMode: 'mock',
+    theme: 'light',
     backendCapability: 'available',
     streamState: 'closed',
     selectedThreadTitle: 'M21 smoke',
     selectedRunStatus: 'completed',
     providerCapabilities: [],
     toolCatalog: [],
+    webSearchConfig: { hasTavilyKey: true, hasBraveKey: false, enabled: true },
+    webSearchSaveResult: { status: 'idle' },
     localProviderDetections: [],
     memoryEntries: [],
     memoryQuery: '',
@@ -255,9 +332,10 @@ function baseSettingsProps(): Parameters<typeof SettingsView>[0] {
     onSelectLocale: () => {},
     onSelectCategory: () => {},
     onSelectDefaultWorkspaceMode: () => {},
-    onSelectRuntimeScript: () => {},
+    onSelectTheme: () => {},
     onProviderDraftSettingsChange: () => {},
     onSaveProvider: () => {},
+    onSaveWebSearchKeys: () => {},
     onCheckProvider: () => {},
     onDetectLocalProviders: () => {},
     onEnableLocalProvider: () => {},

@@ -14,8 +14,8 @@ describe('SettingsView navigation contract', () => {
   })
 
   test('groups categories into primary, Agent Core, and management sections', () => {
-    expect(getSettingsCategoriesByGroup('primary').map((category) => category.label)).toEqual(['General', 'Appearance'])
-    expect(getSettingsCategoriesByGroup('agent_core').map((category) => category.label)).toEqual(['Providers', 'Connectors', 'Plugins', 'Skill', 'MCP', 'Notebook', 'Memory', 'Activity Recorder', 'Context'])
-    expect(getSettingsCategoriesByGroup('management').map((category) => category.label)).toEqual(['Safety', 'Tools', 'Routes', 'About', 'Advanced'])
+    expect(getSettingsCategoriesByGroup('primary').map((category) => category.label)).toEqual(['General'])
+    expect(getSettingsCategoriesByGroup('agent_core').map((category) => category.label)).toEqual(['Providers', 'Web Search', 'Skill', 'MCP', 'Memory'])
+    expect(getSettingsCategoriesByGroup('management').map((category) => category.label)).toEqual(['Tools', 'About'])
   })
 })

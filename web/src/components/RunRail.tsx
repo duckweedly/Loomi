@@ -1,17 +1,16 @@
 import { useState } from 'react'
-import { Check, ChevronDown, FileText, Folder, Globe2, Minus } from 'lucide-react'
+import { Check, ChevronDown, Minus } from 'lucide-react'
 import type { Run, RuntimeScriptId } from '../domain'
 import type { Locale } from '../i18n'
 import { getDictionary } from '../i18n'
 import type { BackendCapabilityStatus } from '../runtime/backendCapabilityStatus'
 import { getBackendCapabilityCopy } from '../runtime/backendCapabilityStatus'
-import { groupRuntimeEvents } from '../runtime/runtimeEventGroups'
+import { buildToolEventPreview, redactPreviewText } from '../runtime/toolPreview'
 import { AgentStateMotion } from './AgentStateMotion'
 
 type Props = {
   run: Run | null
   open: boolean
-  onOpenArtifact: () => void
   onStopRun?: () => void
   selectedRuntimeScript?: RuntimeScriptId
   capabilityStatus?: BackendCapabilityStatus
@@ -33,8 +32,87 @@ function getEventMark(event: Run['events'][number], index: number) {
   return <Check size={11} />
 }
 
-function isWorkspaceMutationTool(toolName: unknown) {
-  return toolName === 'workspace.write_file' || toolName === 'workspace.edit'
+const railCopy = {
+  zh: {
+    title: '进度',
+    recent: '最近活动',
+    noEvents: '暂无活动',
+    scenario: '场景',
+    success: '成功',
+    fail: '失败',
+    stopRun: '停止运行',
+    runCreated: '已创建运行',
+    runCompleted: '运行完成',
+    runFailed: '运行失败',
+    runStopped: '运行已停止',
+    runCancelled: '运行已取消',
+    modelUsage: '模型用量',
+    modelStarted: '模型开始响应',
+    modelCompleted: '模型响应完成',
+    messageCompleted: '回复完成',
+    initialModelPhase: '初始模型响应',
+    continuationModelPhase: '继续模型响应',
+    providerFailure: 'Provider 异常',
+    toolBlocked: '等待工具确认',
+    detailsRecorded: '详情已记录',
+    tokens: (parts: string[]) => parts.join(' / '),
+  },
+  en: {
+    title: 'Progress',
+    recent: 'Recent activity',
+    noEvents: 'No activity yet',
+    scenario: 'Scenario',
+    success: 'Success',
+    fail: 'Fail',
+    stopRun: 'Stop run',
+    runCreated: 'Run created',
+    runCompleted: 'Run completed',
+    runFailed: 'Run failed',
+    runStopped: 'Run stopped',
+    runCancelled: 'Run cancelled',
+    modelUsage: 'Model usage',
+    modelStarted: 'Model started',
+    modelCompleted: 'Model completed',
+    messageCompleted: 'Message',
+    initialModelPhase: 'Initial model phase',
+    continuationModelPhase: 'Continuation model phase',
+    providerFailure: 'Provider failure',
+    toolBlocked: 'Waiting for tool confirmation',
+    detailsRecorded: 'Details recorded',
+    tokens: (parts: string[]) => parts.join(' / '),
+  },
+}
+
+function compactDetail(detail: string) {
+  const redacted = redactPreviewText(detail).replace(/\s+/g, ' ').trim()
+  if (!redacted) return ''
+  if (/(^|[\s,])[\w.-]*_id\s*:/i.test(redacted) || /\b(runId|threadId|messageId|personaId|providerId)\b/i.test(redacted)) return ''
+  if (/[a-z]+_[0-9a-f]{8,}/i.test(redacted)) return ''
+  return redacted.length > 96 ? `${redacted.slice(0, 93)}...` : redacted
+}
+
+function statusTitle(event: Run['events'][number], locale: Locale) {
+  const copy = getDictionary(locale).runtime.workerJob
+  const labels: Partial<Record<Run['status'], string>> = {
+    pending: copy.statusQueued,
+    queued: copy.statusQueued,
+    running: copy.running,
+    retrying: copy.statusRetrying,
+    recovering: copy.statusRecovering,
+    completed: copy.statusCompleted,
+    failed: copy.statusFailed,
+    stopped: copy.statusCancelled,
+    cancelled: copy.statusCancelled,
+  }
+  return labels[event.status] ?? event.status
+}
+
+function getToolEventDetail(event: Run['events'][number], loopCopy: string, locale: Locale) {
+  return buildToolEventPreview(event, loopCopy, locale).primary
+}
+
+function getToolEventMetadataDetail(event: Run['events'][number], loopCopy: string, locale: Locale) {
+  return buildToolEventPreview(event, loopCopy, locale).details
 }
 
 function getEventDetail(event: Run['events'][number], locale: Locale) {
@@ -61,6 +139,7 @@ function getEventDetail(event: Run['events'][number], locale: Locale) {
     cancellation: workerCopy.cancellationRequested,
     'run.cancelled': workerCopy.cancellationRequested,
     worker_diagnostics: workerCopy.diagnostics,
+    'worker.claimed': workerCopy.jobClaimed,
   }
   const modelPhase = event.metadata?.model_phase === 'continuation'
     ? 'Continuation model phase'
@@ -74,67 +153,117 @@ function getEventDetail(event: Run['events'][number], locale: Locale) {
       ? `Loop ${loopIndex}/${loopMax}`
       : `Loop ${loopIndex}`
     : ''
-  const isWorkspaceTool = event.metadata?.tool_group === 'workspace'
-    || (typeof event.metadata?.tool_name === 'string' && event.metadata.tool_name.startsWith('workspace.'))
-  const isSandboxTool = event.metadata?.tool_group === 'sandbox'
-    || (typeof event.metadata?.tool_name === 'string' && event.metadata.tool_name.startsWith('sandbox.'))
-  const isLSPTool = event.metadata?.tool_group === 'lsp'
-    || (typeof event.metadata?.tool_name === 'string' && event.metadata.tool_name.startsWith('lsp.'))
-  const isWebTool = event.metadata?.tool_group === 'web'
-    || (typeof event.metadata?.tool_name === 'string' && event.metadata.tool_name.startsWith('web.'))
-  const isBrowserTool = event.metadata?.tool_group === 'browser'
-    || (typeof event.metadata?.tool_name === 'string' && event.metadata.tool_name.startsWith('browser.'))
-  const isArtifactTool = event.metadata?.tool_group === 'artifact'
-    || (typeof event.metadata?.tool_name === 'string' && event.metadata.tool_name.startsWith('artifact.'))
-  const isAgentTool = event.metadata?.tool_group === 'agent'
-    || (typeof event.metadata?.tool_name === 'string' && event.metadata.tool_name.startsWith('agent.'))
-  const workspaceToolLabel = isWorkspaceMutationTool(event.metadata?.tool_name)
-    ? 'Workspace mutation tool · high risk · write-capable'
-    : 'Workspace tool'
-  const sandboxToolLabel = event.metadata?.tool_name === 'sandbox.exec_command'
-    ? 'Sandbox exec tool · high risk · exec-capable'
-    : 'Sandbox tool'
-  const webToolLabel = event.metadata?.tool_name === 'web.fetch'
-    ? 'Web fetch tool · medium risk · public HTTP only'
-    : 'Web tool'
-  const browserToolLabel = isBrowserTool
-    ? 'Browser automation tool · medium risk · public HTTP only'
-    : ''
-  const artifactToolLabel = isArtifactTool
-    ? 'Artifact runtime tool · medium risk · non-executable'
-    : ''
-  const agentToolLabel = isAgentTool
-    ? 'Agent coordination tool · medium risk · no autonomous execution'
-    : ''
+  const humanToolDetail = event.type.startsWith('tool.call.') ? getToolEventDetail(event, loopCopy, locale) : ''
   const detail = modelPhase
-    ? `${modelPhase} · ${event.detail}`
-    : event.type.startsWith('tool.call.') && isWorkspaceTool
-      ? [workspaceToolLabel, loopCopy, event.detail].filter(Boolean).join(' · ')
-    : event.type.startsWith('tool.call.') && isSandboxTool
-      ? [sandboxToolLabel, loopCopy, event.detail].filter(Boolean).join(' · ')
-    : event.type.startsWith('tool.call.') && isLSPTool
-      ? ['LSP read-only tool · low risk · workspace-scoped', loopCopy, event.detail].filter(Boolean).join(' · ')
-    : event.type.startsWith('tool.call.') && isWebTool
-      ? [webToolLabel, loopCopy, event.detail].filter(Boolean).join(' · ')
-    : event.type.startsWith('tool.call.') && isBrowserTool
-      ? [browserToolLabel, loopCopy, event.detail].filter(Boolean).join(' · ')
-    : event.type.startsWith('tool.call.') && isArtifactTool
-      ? [artifactToolLabel, loopCopy, event.detail].filter(Boolean).join(' · ')
-    : event.type.startsWith('tool.call.') && isAgentTool
-      ? [agentToolLabel, loopCopy, event.detail].filter(Boolean).join(' · ')
+    ? `${modelPhase} · ${redactPreviewText(event.detail)}`
+    : humanToolDetail
+      ? humanToolDetail
     : event.type === 'error.provider_error' || event.type === 'error.provider_timeout' || event.type === 'error.provider_rate_limited'
-    ? `Provider failure · ${event.detail}`
+    ? `Provider failure · ${redactPreviewText(event.detail)}`
     : event.type === 'progress.tool_call_blocked'
-      ? `Tool request blocked · ${event.detail}`
+      ? `Tool request blocked · ${redactPreviewText(event.detail)}`
       : eventLabels[event.type]
-        ? `${eventLabels[event.type]} · ${event.detail}`
+        ? `${eventLabels[event.type]} · ${redactPreviewText(event.detail)}`
         : event.type.includes('worker') || event.type.includes('job')
-          ? `${workerCopy.unknownWorkerEvent} · ${event.type} · ${event.detail}`
-          : event.detail
+          ? `${workerCopy.unknownWorkerEvent} · ${event.type} · ${redactPreviewText(event.detail)}`
+          : redactPreviewText(event.detail)
   return usageParts.length > 0 ? `${detail} · ${usageParts.join(' / ')}` : detail
 }
 
-export function RunRail({ run, open, onOpenArtifact, onStopRun, selectedRuntimeScript = 'success', capabilityStatus, locale = 'en', onSelectRuntimeScript }: Props) {
+function getEventSecondaryDetail(event: Run['events'][number], locale: Locale) {
+  if (!event.type.startsWith('tool.call.')) return ''
+  const loopIndex = typeof event.metadata?.loop_index === 'number' ? event.metadata.loop_index : undefined
+  const loopMax = typeof event.metadata?.loop_max === 'number' ? event.metadata.loop_max : undefined
+  const loopCopy = loopIndex !== undefined
+    ? loopMax !== undefined
+      ? `Loop ${loopIndex}/${loopMax}`
+      : `Loop ${loopIndex}`
+    : ''
+  return getToolEventMetadataDetail(event, loopCopy, locale)
+}
+
+function getEventView(event: Run['events'][number], locale: Locale) {
+  const copy = railCopy[locale]
+  const workerCopy = getDictionary(locale).runtime.workerJob
+  const usage = event.usage
+  const usageParts = usage ? [
+    usage.inputTokens !== undefined ? `${usage.inputTokens} in` : null,
+    usage.outputTokens !== undefined ? `${usage.outputTokens} out` : null,
+    usage.totalTokens !== undefined ? `${usage.totalTokens} total` : null,
+  ].filter((part): part is string => Boolean(part)) : []
+  const workerLabels: Record<string, string> = {
+    job_claimed: workerCopy.jobClaimed,
+    'job.claimed': workerCopy.jobClaimed,
+    lease_renewed: workerCopy.leaseRenewed,
+    'worker.lease_renewed': workerCopy.leaseRenewed,
+    job_recovering: workerCopy.jobRecovering,
+    'job.recovering': workerCopy.jobRecovering,
+    job_retry_scheduled: workerCopy.retryScheduled,
+    'job.retry_scheduled': workerCopy.retryScheduled,
+    job_attempt_failed: workerCopy.attemptFailed,
+    'job.attempt_failed': workerCopy.attemptFailed,
+    job_retry_exhausted: workerCopy.retryExhausted,
+    'job.retry_exhausted': workerCopy.retryExhausted,
+    cancellation: workerCopy.cancellationRequested,
+    'run.cancelled': copy.runCancelled,
+    worker_diagnostics: workerCopy.diagnostics,
+    'worker.claimed': workerCopy.jobClaimed,
+  }
+
+  if (event.type.startsWith('tool.call.')) {
+    return {
+      title: getEventDetail(event, locale),
+      detail: getEventSecondaryDetail(event, locale),
+      debug: event.type,
+    }
+  }
+  if (event.type === 'run.created') return { title: copy.runCreated, detail: statusTitle(event, locale), debug: event.type }
+  if (event.type === 'run.completed') return { title: copy.runCompleted, detail: compactDetail(event.detail), debug: event.type }
+  if (event.type === 'run.stopped') return { title: copy.runStopped, detail: compactDetail(event.detail), debug: event.type }
+  if (event.type === 'run.cancelled') return { title: copy.runCancelled, detail: compactDetail(event.detail), debug: event.type }
+  if (event.status === 'failed' || event.severity === 'error') return { title: copy.runFailed, detail: compactDetail(event.detail), debug: event.type }
+  if (event.type === 'model.usage') return { title: copy.modelUsage, detail: usageParts.length > 0 ? copy.tokens(usageParts) : compactDetail(event.detail), debug: event.type }
+  if (event.type.startsWith('model.') || event.type.startsWith('message.') || event.type.startsWith('assistant.')) {
+    const title = event.metadata?.model_phase === 'initial'
+      ? copy.initialModelPhase
+      : event.metadata?.model_phase === 'continuation'
+        ? copy.continuationModelPhase
+        : event.type.includes('completed') || event.type.includes('message.completed')
+          ? copy.messageCompleted
+          : copy.modelStarted
+    return { title, detail: compactDetail(event.detail), debug: event.type }
+  }
+  if (event.type === 'error.provider_error' || event.type === 'error.provider_timeout' || event.type === 'error.provider_rate_limited' || event.type.includes('provider')) {
+    return { title: copy.providerFailure, detail: compactDetail(event.detail), debug: event.type }
+  }
+  if (event.type === 'progress.tool_call_blocked') return { title: copy.toolBlocked, detail: compactDetail(event.detail), debug: event.type }
+  if (workerLabels[event.type]) return { title: workerLabels[event.type], detail: compactDetail(event.detail), debug: event.type }
+  if (event.type.includes('worker') || event.type.includes('job') || event.type.includes('pipeline')) {
+    return { title: workerCopy.unknownWorkerEvent, detail: compactDetail(event.detail), debug: event.type }
+  }
+
+  return {
+    title: event.label && event.label !== event.type ? event.label : copy.detailsRecorded,
+    detail: compactDetail(event.detail),
+    debug: event.type,
+  }
+}
+
+function isRecentActivityEvent(event: Run['events'][number]) {
+  if (event.type.startsWith('tool.call.')) return true
+  if (event.type === 'run.completed' || event.type === 'run.failed' || event.type === 'run.stopped' || event.type === 'run.cancelled') return true
+  if (event.type === 'model.output.completed' || event.type === 'message.completed') return true
+  if (event.status === 'failed' || event.severity === 'error') return true
+  return false
+}
+
+function displayEventTime(value: string, locale: Locale) {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return date.toLocaleTimeString(locale === 'zh' ? 'zh-CN' : 'en-US', { hour: '2-digit', minute: '2-digit' })
+}
+
+export function RunRail({ run, open, onStopRun, selectedRuntimeScript = 'success', capabilityStatus, locale = 'en', onSelectRuntimeScript }: Props) {
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set())
   const toggleSection = (section: string) => {
     setCollapsedSections((current) => {
@@ -145,73 +274,47 @@ export function RunRail({ run, open, onOpenArtifact, onStopRun, selectedRuntimeS
     })
   }
 
-  const eventGroups = groupRuntimeEvents(run?.events ?? [], locale)
   const capabilityCopy = capabilityStatus ? getBackendCapabilityCopy(capabilityStatus, locale) : null
+  const copy = railCopy[locale]
+  const recentEvents = (run?.events ?? []).filter(isRecentActivityEvent).slice(-5).reverse()
 
   return (
     <aside className={open ? 'floating-rail open' : 'floating-rail'}>
       <section className={collapsedSections.has('progress') ? 'rail-card progress-card collapsed' : 'rail-card progress-card'}>
         <button className="rail-card-head" onClick={() => toggleSection('progress')}>
-          <h2>Progress</h2>
+          <h2>{copy.title}</h2>
           <ChevronDown size={18} />
         </button>
         <div className="rail-card-body progress-list">
-          <AgentStateMotion run={run} compact />
+          <AgentStateMotion run={run} compact locale={locale} />
           {onSelectRuntimeScript && (
             <div className="runtime-script-switch compact" aria-label="Mock runtime script">
-              <span>Scenario</span>
-              <button className={selectedRuntimeScript === 'success' ? 'selected' : undefined} onClick={() => onSelectRuntimeScript('success')}>Success</button>
-              <button className={selectedRuntimeScript === 'failure' ? 'selected' : undefined} onClick={() => onSelectRuntimeScript('failure')}>Fail</button>
+              <span>{copy.scenario}</span>
+              <button className={selectedRuntimeScript === 'success' ? 'selected' : undefined} onClick={() => onSelectRuntimeScript('success')}>{copy.success}</button>
+              <button className={selectedRuntimeScript === 'failure' ? 'selected' : undefined} onClick={() => onSelectRuntimeScript('failure')}>{copy.fail}</button>
             </div>
           )}
           {capabilityCopy && <div className={`capability-rail ${capabilityStatus}`}><strong>{capabilityCopy.title}</strong><span>{capabilityCopy.detail}</span></div>}
-          {(run?.status === 'queued' || run?.status === 'running' || run?.status === 'retrying' || run?.status === 'recovering' || run?.status === 'blocked_on_tool_approval') && onStopRun && <button className="runtime-stop-button ghost" onClick={onStopRun}>Stop run</button>}
-          {eventGroups.map((group) => (
-            <section key={group.id} className={`runtime-event-group ${group.id}`}>
-              <h3>{group.title}</h3>
-              {group.events.length === 0 ? <p className="runtime-event-empty">No events yet</p> : group.events.map((event, index) => (
+          {(run?.status === 'queued' || run?.status === 'running' || run?.status === 'retrying' || run?.status === 'recovering' || run?.status === 'blocked_on_tool_approval') && onStopRun && <button className="runtime-stop-button ghost" onClick={onStopRun}>{copy.stopRun}</button>}
+          <section className="runtime-event-group recent">
+            <h3>{copy.recent}</h3>
+            {recentEvents.length === 0 ? <p className="runtime-event-empty">{copy.noEvents}</p> : recentEvents.map((event, index) => {
+              const eventView = getEventView(event, locale)
+              return (
                 <div key={event.id} className={getEventClassName(event)}>
-                  <span className="progress-mark">{getEventMark(event, index)}</span>
-                  <span>{getEventDetail(event, locale)}</span>
-                  <small>{event.time}</small>
+                  <span className="progress-mark">{getEventMark(event, recentEvents.length - index - 1)}</span>
+                  <span className="progress-copy">
+                    <strong>{eventView.title}</strong>
+                    {eventView.detail && <small>{eventView.detail}</small>}
+                  </span>
+                  <small>{displayEventTime(event.time, locale)}</small>
                 </div>
-              ))}
-            </section>
-          ))}
+              )
+            })}
+          </section>
         </div>
       </section>
 
-      <section className={collapsedSections.has('files') ? 'rail-card files-card collapsed' : 'rail-card files-card'}>
-        <button className="rail-card-head" onClick={() => toggleSection('files')}>
-          <h2>Loomi</h2>
-          <div className="rail-card-actions">
-            <Folder size={17} />
-            <ChevronDown size={18} />
-          </div>
-        </button>
-        <div className="rail-card-body file-list">
-          {['Instructions · CLAUDE.md', 'compose.yaml', 'tasks.md', 'data-model.md', 'spec.md', 'plan.md'].map((file) => (
-            <div className="file-row" key={file}>
-              <span className="file-icon"><FileText size={16} /></span>
-              <span>{file}</span>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      <section className={collapsedSections.has('context') ? 'rail-card context-card collapsed' : 'rail-card context-card'}>
-        <button className="rail-card-head" onClick={() => toggleSection('context')}>
-          <h2>Context</h2>
-          <ChevronDown size={18} />
-        </button>
-        <div className="rail-card-body">
-        <span className="rail-card-kicker">Connectors</span>
-        <button className="file-row context-row" onClick={onOpenArtifact}>
-          <span className="file-icon"><Globe2 size={16} /></span>
-          <span>Web search</span>
-        </button>
-        </div>
-      </section>
     </aside>
   )
 }

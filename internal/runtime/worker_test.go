@@ -2,10 +2,12 @@ package runtime
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -559,6 +561,9 @@ func TestWorkerExecutesApprovedWorkspaceEditAndContinuesModel(t *testing.T) {
 	if _, _, err := svc.RecordToolCallRequest(context.Background(), ident, run.ID, productdata.RecordToolCallRequestInput{ToolCallID: "tc_edit_1", ToolName: productdata.ToolNameWorkspaceEdit, ArgumentsSummary: map[string]any{"path": "notes.txt", "old_text": "beta\n", "new_text": "gamma\n"}, ArgumentsHash: "hash_edit_1", ApprovalStatus: productdata.ToolCallApprovalRequired, ExecutionStatus: productdata.ToolCallExecutionBlocked}); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := (WorkspaceToolExecutor{Root: root}).Execute(context.Background(), ToolInvocation{RunID: run.ID, ToolName: productdata.ToolNameWorkspaceRead, ArgumentsSummary: map[string]any{"path": "notes.txt"}}); err != nil {
+		t.Fatal(err)
+	}
 	before, err := os.ReadFile(filepath.Join(root, "notes.txt"))
 	if err != nil {
 		t.Fatal(err)
@@ -658,7 +663,7 @@ func TestWorkerExecutesApprovedSandboxExecCommandAndContinuesModel(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if call.ExecutionStatus != productdata.ToolCallExecutionSucceeded || call.ResultSummary["operation"] != "exec_command" || call.ResultSummary["scope"] != "bounded_read_only_command" || call.ResultSummary["exit_code"] != 0 {
+	if call.ExecutionStatus != productdata.ToolCallExecutionSucceeded || call.ResultSummary["operation"] != "exec_command" || call.ResultSummary["scope"] != "bounded_command" || call.ResultSummary["exit_code"] != 0 {
 		t.Fatalf("call = %+v", call)
 	}
 	got, err := svc.GetRun(context.Background(), ident, run.ID)
@@ -814,6 +819,64 @@ func TestWorkerExecutesApprovedWebFetchAndContinuesModel(t *testing.T) {
 		t.Fatalf("run = %+v", got)
 	}
 	if len(provider.request.Messages) != 3 || provider.request.Messages[1].Role != ProviderMessageRoleAssistantToolCall || provider.request.Messages[2].Role != ProviderMessageRoleToolResult {
+		t.Fatalf("continuation request = %+v", provider.request.Messages)
+	}
+}
+
+func TestWorkerExecutesApprovedWebSearchAndContinuesModel(t *testing.T) {
+	searchServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer tvly-secret" {
+			t.Fatalf("Authorization = %q", r.Header.Get("Authorization"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"results":[{"title":"Current AI News","url":"https://example.com/news","content":"public result snippet"}]}`))
+	}))
+	defer searchServer.Close()
+	svc := productdata.NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	if _, err := svc.SyncBuiltInPersonas(context.Background(), ident, productdata.BuiltInPersonas()); err != nil {
+		t.Fatal(err)
+	}
+	thread, err := svc.CreateThread(context.Background(), ident, productdata.CreateThreadInput{Title: "Search", Mode: productdata.ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _, err := svc.CreateMessage(context.Background(), ident, thread.ID, productdata.CreateMessageInput{Content: "search latest ai news"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, productdata.StartRunInput{Source: productdata.RunSourceModelGateway, MessageID: message.ID, ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.RecordToolCallRequest(context.Background(), ident, run.ID, productdata.RecordToolCallRequestInput{ToolCallID: "tc_search_1", ToolName: productdata.ToolNameWebSearch, ArgumentsSummary: map[string]any{"query": "latest ai news", "provider": "tavily", "limit": 2}, ArgumentsHash: "hash_search_1", ApprovalStatus: productdata.ToolCallApprovalRequired, ExecutionStatus: productdata.ToolCallExecutionBlocked}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.ApproveToolCall(context.Background(), ident, thread.ID, run.ID, "tc_search_1"); err != nil {
+		t.Fatal(err)
+	}
+	provider := &capturingProvider{config: ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: "https://example.test/v1", APIKey: "key", Model: "model", Enabled: true}, events: []ProviderEvent{{Type: ProviderEventCompleted, Text: "Found current news."}}}
+	worker := NewWorker(svc, nil, QueuedRunRouter{Gateway: NewGateway(svc, nil, []Provider{provider}), WebExecutor: WebToolExecutor{TavilyAPIKey: "tvly-secret", TavilyEndpoint: searchServer.URL}})
+	worker.WorkerID = "worker_web_search"
+
+	ok, err := worker.ProcessOne(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("ProcessOne() ok = false")
+	}
+	call, err := svc.GetToolCall(context.Background(), ident, thread.ID, run.ID, "tc_search_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if call.ExecutionStatus != productdata.ToolCallExecutionSucceeded || call.ResultSummary["operation"] != "search" || call.ResultSummary["provider"] != "tavily" || call.ResultSummary["result_count"] != 1 {
+		t.Fatalf("call = %+v", call)
+	}
+	if strings.Contains(fmt.Sprint(call.ResultSummary), "tvly-secret") {
+		t.Fatalf("result leaked key: %+v", call.ResultSummary)
+	}
+	if len(provider.request.Messages) != 3 || provider.request.Messages[1].ToolName != productdata.ToolNameWebSearch || provider.request.Messages[2].Role != ProviderMessageRoleToolResult {
 		t.Fatalf("continuation request = %+v", provider.request.Messages)
 	}
 }
@@ -986,6 +1049,79 @@ func TestWorkerExecutesApprovedAgentSpawnAndContinuesModel(t *testing.T) {
 	}
 	if len(tasks) != 1 || tasks[0].Role != "reviewer" || tasks[0].Status != productdata.AgentTaskStatusSpawned {
 		t.Fatalf("tasks = %+v", tasks)
+	}
+	got, err := svc.GetRun(context.Background(), ident, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != productdata.RunStatusCompleted {
+		t.Fatalf("run = %+v", got)
+	}
+	if len(provider.request.Messages) != 3 || provider.request.Messages[1].Role != ProviderMessageRoleAssistantToolCall || provider.request.Messages[2].Role != ProviderMessageRoleToolResult {
+		t.Fatalf("continuation request = %+v", provider.request.Messages)
+	}
+}
+
+func TestWorkerExecutesApprovedTodoWriteAndContinuesModel(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	if _, err := svc.SyncBuiltInPersonas(context.Background(), ident, productdata.BuiltInPersonas()); err != nil {
+		t.Fatal(err)
+	}
+	thread, err := svc.CreateThread(context.Background(), ident, productdata.CreateThreadInput{Title: "Todo write", Mode: productdata.ThreadModeWork})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _, err := svc.CreateMessage(context.Background(), ident, thread.ID, productdata.CreateMessageInput{Content: "update plan"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, productdata.StartRunInput{Source: productdata.RunSourceModelGateway, MessageID: message.ID, ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	items := []any{map[string]any{"id": "todo-1", "title": "Review patch", "status": "running", "summary": "Check tests"}}
+	if _, _, err := svc.RecordToolCallRequest(context.Background(), ident, run.ID, productdata.RecordToolCallRequestInput{ToolCallID: "tc_todo_1", ToolName: productdata.ToolNameTodoWrite, ArgumentsSummary: map[string]any{"items": items}, ArgumentsHash: "hash_todo_1", ApprovalStatus: productdata.ToolCallApprovalRequired, ExecutionStatus: productdata.ToolCallExecutionBlocked}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.ApproveToolCall(context.Background(), ident, thread.ID, run.ID, "tc_todo_1"); err != nil {
+		t.Fatal(err)
+	}
+	provider := &capturingProvider{config: ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: "https://example.test/v1", APIKey: "key", Model: "model", Enabled: true}, events: []ProviderEvent{{Type: ProviderEventCompleted, Text: "Updated the plan."}}}
+	worker := NewWorker(svc, nil, QueuedRunRouter{Gateway: NewGateway(svc, nil, []Provider{provider})})
+	worker.WorkerID = "worker_todo_write"
+
+	ok, err := worker.ProcessOne(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("ProcessOne() ok = false")
+	}
+	call, err := svc.GetToolCall(context.Background(), ident, thread.ID, run.ID, "tc_todo_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if call.ExecutionStatus != productdata.ToolCallExecutionSucceeded || call.ResultSummary["operation"] != "todo_write" {
+		t.Fatalf("call = %+v", call)
+	}
+	events, err := svc.ListRunEvents(context.Background(), ident, run.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var todoEvent productdata.RunEvent
+	for _, event := range events {
+		if event.Type == productdata.EventWorkTodoUpdated {
+			todoEvent = event
+		}
+	}
+	if todoEvent.Type == "" || todoEvent.Metadata["updated_by"] != "provider" {
+		t.Fatalf("todo events = %+v", events)
+	}
+	todoItems := todoEvent.Metadata["todo_items"].([]any)
+	todo := todoItems[0].(map[string]any)
+	if todo["title"] != "Review patch" || todo["status"] != "running" {
+		t.Fatalf("todo = %+v", todo)
 	}
 	got, err := svc.GetRun(context.Background(), ident, run.ID)
 	if err != nil {

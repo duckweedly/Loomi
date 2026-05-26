@@ -1,9 +1,12 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -40,6 +43,36 @@ type saveModelProviderRequest struct {
 	BaseURL string `json:"base_url"`
 	Model   string `json:"model"`
 	APIKey  string `json:"api_key"`
+}
+
+type webSearchConfigRequest struct {
+	TavilyAPIKey string `json:"tavily_api_key"`
+	BraveAPIKey  string `json:"brave_api_key"`
+}
+
+type webSearchConfig struct {
+	HasTavilyKey bool `json:"has_tavily_key"`
+	HasBraveKey  bool `json:"has_brave_key"`
+	Enabled      bool `json:"enabled"`
+}
+
+type webSearchConfigResponse struct {
+	Config    webSearchConfig `json:"config"`
+	RequestID string          `json:"request_id"`
+}
+
+type workspaceRootConfig struct {
+	Configured  bool   `json:"configured"`
+	DisplayName string `json:"display_name"`
+}
+
+type workspaceRootResponse struct {
+	Config    workspaceRootConfig `json:"config"`
+	RequestID string              `json:"request_id"`
+}
+
+type workspaceRootRequest struct {
+	Path string `json:"path"`
 }
 
 type modelProviderSaveResponse struct {
@@ -91,6 +124,114 @@ func (s *Server) handleLocalProviderDetections(w http.ResponseWriter, r *http.Re
 		input = productruntime.LocalProviderDetectionInputFromProcess()
 	}
 	writeJSON(w, http.StatusOK, localProviderDetectionResponse{Providers: productruntime.DetectLocalProviders(input), RequestID: diagnostics.NewRequestID()})
+}
+
+func (s *Server) handleWebSearchConfig(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		writeJSON(w, http.StatusOK, webSearchConfigResponse{Config: s.webSearchConfig(), RequestID: diagnostics.NewRequestID()})
+	case http.MethodPost:
+		var req webSearchConfigRequest
+		if err := decodeJSONRequest(r, &req); err != nil {
+			writeAPIError(w, productdata.NewError(productdata.CodeInvalidRequest, "Invalid JSON request."))
+			return
+		}
+		tavily := strings.TrimSpace(req.TavilyAPIKey)
+		brave := strings.TrimSpace(req.BraveAPIKey)
+		if tavily == "" && brave == "" && !s.webSearchConfig().Enabled {
+			writeAPIError(w, productdata.NewError(productdata.CodeInvalidRequest, "At least one web search API key is required."))
+			return
+		}
+		if store, ok := s.product.(productdata.ModelProviderConfigStore); ok {
+			saved, err := store.SaveWebSearchConfig(r.Context(), identity.LocalDevIdentity(), productdata.WebSearchConfig{TavilyAPIKey: tavily, BraveAPIKey: brave})
+			if err != nil {
+				writeAPIError(w, err)
+				return
+			}
+			tavily = saved.TavilyAPIKey
+			brave = saved.BraveAPIKey
+		}
+		s.providerMu.Lock()
+		if tavily != "" {
+			s.cfg.TavilyAPIKey = tavily
+			_ = os.Setenv("LOOMI_TAVILY_API_KEY", tavily)
+		}
+		if brave != "" {
+			s.cfg.BraveSearchAPIKey = brave
+			_ = os.Setenv("LOOMI_BRAVE_SEARCH_API_KEY", brave)
+		}
+		s.providerMu.Unlock()
+		writeJSON(w, http.StatusOK, webSearchConfigResponse{Config: s.webSearchConfig(), RequestID: diagnostics.NewRequestID()})
+	default:
+		writeMethodNotAllowed(w, "GET, POST")
+	}
+}
+
+func (s *Server) handleWorkspaceRoot(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		writeJSON(w, http.StatusOK, workspaceRootResponse{Config: currentWorkspaceRootConfig(), RequestID: diagnostics.NewRequestID()})
+	case http.MethodPost:
+		var req workspaceRootRequest
+		if err := decodeJSONRequest(r, &req); err != nil {
+			writeAPIError(w, productdata.NewError(productdata.CodeInvalidRequest, "Invalid JSON request."))
+			return
+		}
+		root := strings.TrimSpace(req.Path)
+		if root == "" || !filepath.IsAbs(root) {
+			writeAPIError(w, productdata.NewError(productdata.CodeInvalidRequest, "Workspace folder must be an absolute path."))
+			return
+		}
+		real, err := filepath.EvalSymlinks(root)
+		if err != nil {
+			writeAPIError(w, productdata.NewError(productdata.CodeInvalidRequest, "Workspace folder is unavailable."))
+			return
+		}
+		info, err := os.Stat(real)
+		if err != nil || !info.IsDir() {
+			writeAPIError(w, productdata.NewError(productdata.CodeInvalidRequest, "Workspace folder is unavailable."))
+			return
+		}
+		if err := os.Setenv("LOOMI_WORKSPACE_ROOT", real); err != nil {
+			writeAPIError(w, productdata.NewError(productdata.CodeInternalError, "Workspace folder could not be saved."))
+			return
+		}
+		writeJSON(w, http.StatusOK, workspaceRootResponse{Config: currentWorkspaceRootConfig(), RequestID: diagnostics.NewRequestID()})
+	default:
+		writeMethodNotAllowed(w, "GET, POST")
+	}
+}
+
+func currentWorkspaceRootConfig() workspaceRootConfig {
+	root := strings.TrimSpace(os.Getenv("LOOMI_WORKSPACE_ROOT"))
+	if root == "" {
+		return workspaceRootConfig{Configured: false, DisplayName: "Home"}
+	}
+	name := filepath.Base(root)
+	if name == "." || name == string(filepath.Separator) || name == "" {
+		name = "Selected folder"
+	}
+	return workspaceRootConfig{Configured: true, DisplayName: name}
+}
+
+func (s *Server) webSearchConfig() webSearchConfig {
+	s.providerMu.RLock()
+	tavily := strings.TrimSpace(s.cfg.TavilyAPIKey) != ""
+	brave := strings.TrimSpace(s.cfg.BraveSearchAPIKey) != ""
+	s.providerMu.RUnlock()
+	if store, ok := s.product.(productdata.ModelProviderConfigStore); ok {
+		if saved, err := store.GetWebSearchConfig(context.Background(), identity.LocalDevIdentity()); err == nil {
+			tavily = tavily || strings.TrimSpace(saved.TavilyAPIKey) != ""
+			brave = brave || strings.TrimSpace(saved.BraveAPIKey) != ""
+		}
+	}
+	if !tavily {
+		tavily = strings.TrimSpace(os.Getenv("LOOMI_TAVILY_API_KEY")) != ""
+	}
+	if !brave {
+		brave = strings.TrimSpace(os.Getenv("LOOMI_BRAVE_SEARCH_API_KEY")) != ""
+	}
+	return webSearchConfig{HasTavilyKey: tavily, HasBraveKey: brave, Enabled: tavily || brave}
 }
 
 func (s *Server) handleLocalProviderDetectionByID(w http.ResponseWriter, r *http.Request) {
@@ -180,6 +321,14 @@ func (s *Server) handleModelProviderSave(w http.ResponseWriter, r *http.Request)
 		writeAPIError(w, productdata.NewError(productdata.CodeProviderMisconfigured, capability.Message))
 		return
 	}
+	if store, ok := s.product.(productdata.ModelProviderConfigStore); ok {
+		saved, err := store.SaveModelProviderConfig(r.Context(), identity.LocalDevIdentity(), productdata.ModelProviderConfig{ID: provider.ID, Family: string(provider.Family), BaseURL: provider.BaseURL, APIKey: provider.APIKey, Model: provider.Model, Enabled: provider.Enabled})
+		if err != nil {
+			writeAPIError(w, err)
+			return
+		}
+		provider = providerConfigFromProduct(saved)
+	}
 	provider = s.saveProviderConfig(provider)
 	writeJSON(w, http.StatusOK, modelProviderSaveResponse{Provider: provider.Capability(), RequestID: diagnostics.NewRequestID()})
 }
@@ -198,6 +347,10 @@ func (s *Server) saveProviderConfig(provider productruntime.ProviderConfig) prod
 	}
 	s.providers = append(s.providers, provider)
 	return provider
+}
+
+func providerConfigFromProduct(provider productdata.ModelProviderConfig) productruntime.ProviderConfig {
+	return productruntime.ProviderConfig{ID: provider.ID, Family: productruntime.ProviderFamily(provider.Family), BaseURL: provider.BaseURL, APIKey: provider.APIKey, Model: provider.Model, Enabled: provider.Enabled}
 }
 
 func (s *Server) handleModelProviderCheck(w http.ResponseWriter, r *http.Request) {

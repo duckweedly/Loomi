@@ -6,8 +6,9 @@ description: Development log for M25 MCP status and LSP read-only tools.
 ## Completed
 
 - Added `GET /v1/mcp/servers` safe read-only MCP server status.
+- Added saved local stdio MCP config, delete, and connection-test discovery endpoints.
 - Added Settings > MCP status rendering and Settings > Tools LSP catalog visibility.
-- Added builtin `lsp.diagnostics`, `lsp.symbols`, and `lsp.references`.
+- Added builtin `lsp.diagnostics`, `lsp.symbols`, `lsp.references`, `lsp.definition`, and `lsp.hover`.
 - Routed LSP tools through RunContext, approval, ToolBroker, worker execution, and provider continuation.
 - Added Chat-mode rejection, unsafe path rejection, invalid argument rejection, stopped/denied no-exec tests, and HTTP approve-execute-final smoke.
 - Added RunRail LSP lifecycle labeling.
@@ -28,4 +29,4 @@ git diff --check
 
 ## Limits
 
-LSP behavior is deterministic and lightweight. It does not launch language servers, install dependencies, call package managers, or expose host paths. MCP management remains read-only.
+LSP behavior is deterministic and lightweight. It does not launch language servers, install dependencies, call package managers, or expose host paths. Definition and hover are best-effort scans over bounded workspace text files until a later real language-server slice. MCP management supports local stdio config only; remote MCP/OAuth and marketplace install remain out of scope.

@@ -28,6 +28,16 @@ description: Catalog, event, and result contracts for M21 workspace.glob, worksp
 
 The API never returns the local absolute workspace root.
 
+## Workspace Root
+
+`GET /v1/workspace/root` returns only safe state:
+
+```json
+{ "config": { "configured": false, "display_name": "Home" } }
+```
+
+`POST /v1/workspace/root` accepts an absolute folder path chosen by the local desktop shell and updates the process runtime root for subsequent workspace tool calls. The response still returns only `configured` and `display_name`; it does not echo the absolute path.
+
 ## Tool Arguments
 
 `workspace.glob`:

@@ -18,6 +18,7 @@ func SafeToolCatalogFromEvents(events []RunEvent) []ToolCatalogEntry {
 
 func toolCatalogFromEvents(events []RunEvent, mcpExecutionState ToolExecutionState) []ToolCatalogEntry {
 	entries := []ToolCatalogEntry{builtinCurrentTimeCatalogEntry()}
+	entries = append(entries, builtinDiscoveryCatalogEntries()...)
 	entries = append(entries, builtinWorkspaceCatalogEntries()...)
 	entries = append(entries, builtinSandboxCatalogEntries()...)
 	entries = append(entries, builtinLSPCatalogEntries()...)
@@ -25,6 +26,7 @@ func toolCatalogFromEvents(events []RunEvent, mcpExecutionState ToolExecutionSta
 	entries = append(entries, builtinBrowserCatalogEntries()...)
 	entries = append(entries, builtinArtifactCatalogEntries()...)
 	entries = append(entries, builtinAgentCatalogEntries()...)
+	entries = append(entries, builtinTodoCatalogEntries()...)
 	byName := map[string]ToolCatalogEntry{}
 	for _, entry := range entries {
 		byName[entry.Name] = entry
@@ -74,6 +76,46 @@ func toolCatalogFromEvents(events []RunEvent, mcpExecutionState ToolExecutionSta
 	return entries
 }
 
+func builtinDiscoveryCatalogEntries() []ToolCatalogEntry {
+	return []ToolCatalogEntry{
+		{
+			Name:           ToolNameLoadTools,
+			DisplayName:    "Load tools",
+			Description:    "Return safe descriptions for enabled runtime tools by exact name or keyword.",
+			Source:         ToolCatalogSourceBuiltin,
+			Group:          ToolCatalogGroupDiscovery,
+			RiskLevel:      ToolRiskLow,
+			ApprovalPolicy: ToolApprovalReadOnly,
+			Enabled:        true,
+			ExecutionState: ToolExecutionStateExecutable,
+			SafeMetadata: map[string]any{
+				"arguments":             []string{"queries", "names", "limit"},
+				"read_only":             true,
+				"scope":                 "runtime_catalog",
+				"dynamic_schema_loader": false,
+			},
+		},
+		{
+			Name:           ToolNameLoadSkill,
+			DisplayName:    "Load skill",
+			Description:    "Return a safe installed skill summary by name.",
+			Source:         ToolCatalogSourceBuiltin,
+			Group:          ToolCatalogGroupDiscovery,
+			RiskLevel:      ToolRiskLow,
+			ApprovalPolicy: ToolApprovalReadOnly,
+			Enabled:        true,
+			ExecutionState: ToolExecutionStateExecutable,
+			SafeMetadata: map[string]any{
+				"arguments":           []string{"name", "limit"},
+				"read_only":           true,
+				"scope":               "skill_manifest",
+				"returns_skill_body":  false,
+				"executes_skill_code": false,
+			},
+		},
+	}
+}
+
 func builtinCurrentTimeCatalogEntry() ToolCatalogEntry {
 	return ToolCatalogEntry{
 		Name:            ToolNameCurrentTime,
@@ -97,6 +139,8 @@ func builtinWorkspaceCatalogEntries() []ToolCatalogEntry {
 		builtinWorkspaceReadCatalogEntry(ToolNameWorkspaceRead, "Workspace read", "Read a bounded UTF-8 text slice from one workspace file.", []string{"path", "offset", "limit", "max_bytes"}),
 		builtinWorkspaceMutationCatalogEntry(ToolNameWorkspaceWriteFile, "Workspace write file", "Create a bounded UTF-8 text file under the configured workspace root.", []string{"path", "content", "max_bytes"}),
 		builtinWorkspaceMutationCatalogEntry(ToolNameWorkspaceEdit, "Workspace edit", "Apply one bounded exact text replacement inside a workspace file.", []string{"path", "old_text", "new_text", "max_bytes"}),
+		builtinWorkspaceMutationCatalogEntry(ToolNameWorkspacePatchPreview, "Workspace patch preview", "Preview one bounded exact text replacement before applying it.", []string{"path", "old_text", "new_text", "max_bytes"}),
+		builtinWorkspaceMutationCatalogEntry(ToolNameWorkspacePatchApply, "Workspace patch apply", "Apply one previously previewed bounded text replacement.", []string{"path", "old_text", "new_text", "max_bytes"}),
 	}
 }
 
@@ -120,6 +164,36 @@ func builtinWorkspaceReadCatalogEntry(name string, displayName string, descripti
 }
 
 func builtinWorkspaceMutationCatalogEntry(name string, displayName string, description string, arguments []string) ToolCatalogEntry {
+	metadata := map[string]any{
+		"arguments":     append([]string(nil), arguments...),
+		"read_only":     false,
+		"scope":         "workspace",
+		"write_capable": true,
+	}
+	if name == ToolNameWorkspaceEdit {
+		metadata["requires_read_before_edit"] = true
+		metadata["returns_diff"] = true
+		metadata["normalizes_line_endings"] = true
+		metadata["preserves_indentation"] = true
+		metadata["strips_trailing_whitespace_except_markdown"] = true
+	}
+	if name == ToolNameWorkspacePatchPreview {
+		metadata["read_only"] = true
+		metadata["write_capable"] = false
+		metadata["requires_read_before_preview"] = true
+		metadata["returns_diff"] = true
+		metadata["preview_only"] = true
+		metadata["normalizes_line_endings"] = true
+		metadata["preserves_indentation"] = true
+		metadata["strips_trailing_whitespace_except_markdown"] = true
+	}
+	if name == ToolNameWorkspacePatchApply {
+		metadata["requires_patch_preview"] = true
+		metadata["returns_diff"] = true
+		metadata["normalizes_line_endings"] = true
+		metadata["preserves_indentation"] = true
+		metadata["strips_trailing_whitespace_except_markdown"] = true
+	}
 	return ToolCatalogEntry{
 		Name:           name,
 		DisplayName:    displayName,
@@ -130,36 +204,41 @@ func builtinWorkspaceMutationCatalogEntry(name string, displayName string, descr
 		ApprovalPolicy: ToolApprovalAlwaysRequired,
 		Enabled:        true,
 		ExecutionState: ToolExecutionStateExecutable,
-		SafeMetadata: map[string]any{
-			"arguments":     append([]string(nil), arguments...),
-			"read_only":     false,
-			"scope":         "workspace",
-			"write_capable": true,
-		},
+		SafeMetadata:   metadata,
 	}
 }
 
 func builtinSandboxCatalogEntries() []ToolCatalogEntry {
 	return []ToolCatalogEntry{
-		{
-			Name:           ToolNameSandboxExecCommand,
-			DisplayName:    "Bounded read-only command",
-			Description:    "Run one approved read-only argv-form command under the configured workspace root. This is not an isolated sandbox.",
-			Source:         ToolCatalogSourceBuiltin,
-			Group:          ToolCatalogGroupSandbox,
-			RiskLevel:      ToolRiskHigh,
-			ApprovalPolicy: ToolApprovalAlwaysRequired,
-			Enabled:        true,
-			ExecutionState: ToolExecutionStateExecutable,
-			SafeMetadata: map[string]any{
-				"allowed_commands": []string{"pwd", "ls", "git status"},
-				"arguments":        []string{"argv", "cwd", "timeout_ms", "max_output_bytes"},
-				"argv_only":        true,
-				"exec_capable":     true,
-				"read_only":        true,
-				"isolated_sandbox": false,
-				"scope":            "bounded_read_only_command",
-			},
+		builtinSandboxCatalogEntry(ToolNameSandboxExecCommand, "Bounded read-only command", "Run one approved argv-form read or validation command under the configured workspace root.", []string{"argv", "cwd", "timeout_ms", "max_output_bytes"}, "bounded_command"),
+		builtinSandboxCatalogEntry(ToolNameSandboxStartProcess, "Sandbox start process", "Start one approved argv-form read or validation process under the configured workspace root.", []string{"argv", "cwd", "timeout_ms", "max_output_bytes", "stdin"}, "bounded_process"),
+		builtinSandboxCatalogEntry(ToolNameSandboxContinueProcess, "Sandbox continue process", "Read current output/status for one run-scoped sandbox process and optionally write bounded stdin.", []string{"process_id", "cursor", "stdin_text", "input_seq", "close_stdin"}, "bounded_process"),
+		builtinSandboxCatalogEntry(ToolNameSandboxTerminateProcess, "Sandbox terminate process", "Terminate one run-scoped sandbox process.", []string{"process_id"}, "bounded_process"),
+	}
+}
+
+func builtinSandboxCatalogEntry(name string, displayName string, description string, arguments []string, scope string) ToolCatalogEntry {
+	return ToolCatalogEntry{
+		Name:           name,
+		DisplayName:    displayName,
+		Description:    description + " This is not an isolated sandbox.",
+		Source:         ToolCatalogSourceBuiltin,
+		Group:          ToolCatalogGroupSandbox,
+		RiskLevel:      ToolRiskHigh,
+		ApprovalPolicy: ToolApprovalAlwaysRequired,
+		Enabled:        true,
+		ExecutionState: ToolExecutionStateExecutable,
+		SafeMetadata: map[string]any{
+			"allowed_commands":   []string{"pwd", "ls", "cat", "head", "tail", "sed -n", "wc", "rg", "git status", "git diff", "git log", "git show", "go test", "bun test", "bun run build", "npm test", "npm run build", "pnpm test", "pnpm run build"},
+			"arguments":          append([]string(nil), arguments...),
+			"argv_only":          true,
+			"exec_capable":       true,
+			"read_only":          false,
+			"cursor_capable":     name == ToolNameSandboxContinueProcess,
+			"stdin_capable":      name == ToolNameSandboxStartProcess || name == ToolNameSandboxContinueProcess,
+			"validation_capable": true,
+			"isolated_sandbox":   false,
+			"scope":              scope,
 		},
 	}
 }
@@ -169,6 +248,8 @@ func builtinLSPCatalogEntries() []ToolCatalogEntry {
 		builtinLSPCatalogEntry(ToolNameLSPDiagnostics, "LSP diagnostics", "Read bounded diagnostics for a workspace source file.", []string{"path", "language", "limit"}),
 		builtinLSPCatalogEntry(ToolNameLSPSymbols, "LSP symbols", "Read bounded symbol summaries for a workspace source file.", []string{"path", "query", "language", "limit"}),
 		builtinLSPCatalogEntry(ToolNameLSPReferences, "LSP references", "Read bounded workspace references for a source position.", []string{"path", "line", "column", "include_declaration", "limit"}),
+		builtinLSPCatalogEntry(ToolNameLSPDefinition, "LSP definition", "Find a bounded best-effort definition for a source position.", []string{"path", "line", "column", "language", "limit"}),
+		builtinLSPCatalogEntry(ToolNameLSPHover, "LSP hover", "Read a bounded best-effort hover summary for a source position.", []string{"path", "line", "column", "language"}),
 	}
 }
 
@@ -192,23 +273,43 @@ func builtinLSPCatalogEntry(name string, displayName string, description string,
 }
 
 func builtinWebCatalogEntries() []ToolCatalogEntry {
-	return []ToolCatalogEntry{{
-		Name:           ToolNameWebFetch,
-		DisplayName:    "Web fetch",
-		Description:    "Fetch one bounded public HTTP(S) URL and return a safe text summary.",
-		Source:         ToolCatalogSourceBuiltin,
-		Group:          ToolCatalogGroupWeb,
-		RiskLevel:      ToolRiskMedium,
-		ApprovalPolicy: ToolApprovalAlwaysRequired,
-		Enabled:        true,
-		ExecutionState: ToolExecutionStateExecutable,
-		SafeMetadata: map[string]any{
-			"arguments":      []string{"url", "max_bytes", "timeout_ms"},
-			"network_access": "public_http_only",
-			"read_only":      true,
-			"scope":          "web",
+	return []ToolCatalogEntry{
+		{
+			Name:           ToolNameWebFetch,
+			DisplayName:    "Web fetch",
+			Description:    "Fetch one bounded public HTTP(S) URL and return a safe text summary.",
+			Source:         ToolCatalogSourceBuiltin,
+			Group:          ToolCatalogGroupWeb,
+			RiskLevel:      ToolRiskMedium,
+			ApprovalPolicy: ToolApprovalAlwaysRequired,
+			Enabled:        true,
+			ExecutionState: ToolExecutionStateExecutable,
+			SafeMetadata: map[string]any{
+				"arguments":      []string{"url", "max_bytes", "timeout_ms"},
+				"network_access": "public_http_only",
+				"read_only":      true,
+				"scope":          "web",
+			},
 		},
-	}}
+		{
+			Name:           ToolNameWebSearch,
+			DisplayName:    "Web search",
+			Description:    "Search the public web through a configured Brave or Tavily provider and return bounded safe results.",
+			Source:         ToolCatalogSourceBuiltin,
+			Group:          ToolCatalogGroupWeb,
+			RiskLevel:      ToolRiskMedium,
+			ApprovalPolicy: ToolApprovalReadOnly,
+			Enabled:        true,
+			ExecutionState: ToolExecutionStateExecutable,
+			SafeMetadata: map[string]any{
+				"arguments":      []string{"query", "provider", "limit", "timeout_ms"},
+				"network_access": "search_provider_api",
+				"providers":      []string{"tavily", "brave"},
+				"read_only":      true,
+				"scope":          "web",
+			},
+		},
+	}
 }
 
 func builtinBrowserCatalogEntries() []ToolCatalogEntry {
@@ -216,6 +317,9 @@ func builtinBrowserCatalogEntries() []ToolCatalogEntry {
 		builtinBrowserCatalogEntry(ToolNameBrowserOpen, "Browser open", "Open one bounded public HTTP(S) page in a run-scoped browser session.", []string{"url", "max_bytes", "timeout_ms"}),
 		builtinBrowserCatalogEntry(ToolNameBrowserSnapshot, "Browser snapshot", "Return the current safe snapshot for a run-scoped browser session.", []string{"session_id"}),
 		builtinBrowserCatalogEntry(ToolNameBrowserClickLink, "Browser click link", "Navigate one safe link from a run-scoped browser session.", []string{"session_id", "link_index", "max_bytes", "timeout_ms"}),
+		builtinBrowserCatalogEntry(ToolNameBrowserScreenshot, "Browser screenshot", "Return a bounded text screenshot summary for a run-scoped browser session.", []string{"session_id"}),
+		builtinBrowserCatalogEntry(ToolNameBrowserType, "Browser type", "Record bounded text into a discovered input target in a run-scoped browser session.", []string{"session_id", "target", "text"}),
+		builtinBrowserCatalogEntry(ToolNameBrowserPress, "Browser press", "Record one bounded key press in a run-scoped browser session.", []string{"session_id", "key"}),
 	}
 }
 
@@ -232,7 +336,9 @@ func builtinBrowserCatalogEntry(name string, displayName string, description str
 		ExecutionState: ToolExecutionStateExecutable,
 		SafeMetadata: map[string]any{
 			"arguments":      append([]string(nil), arguments...),
+			"javascript":     false,
 			"network_access": "public_http_only",
+			"read_only":      name != ToolNameBrowserType && name != ToolNameBrowserPress,
 			"scope":          "browser",
 			"stateful":       true,
 		},
@@ -294,6 +400,27 @@ func builtinAgentCatalogEntry(name string, displayName string, description strin
 			"scope":                "agent",
 		},
 	}
+}
+
+func builtinTodoCatalogEntries() []ToolCatalogEntry {
+	return []ToolCatalogEntry{{
+		Name:           ToolNameTodoWrite,
+		DisplayName:    "Todo write",
+		Description:    "Replace the current Work-mode todo snapshot with bounded safe todo items.",
+		Source:         ToolCatalogSourceBuiltin,
+		Group:          ToolCatalogGroupTodo,
+		RiskLevel:      ToolRiskLow,
+		ApprovalPolicy: ToolApprovalAlwaysRequired,
+		Enabled:        true,
+		ExecutionState: ToolExecutionStateExecutable,
+		SafeMetadata: map[string]any{
+			"arguments":       []string{"items"},
+			"read_only":       false,
+			"scope":           "work_todo",
+			"max_items":       MaxWorkTodoItems,
+			"updates_plan_ui": true,
+		},
+	}}
 }
 
 func inputSchemaHash(schema map[string]any) string {

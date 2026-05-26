@@ -1,4 +1,5 @@
 import { CheckSquare, Code2, Files, GitCompare, Play, SquareTerminal, type LucideIcon } from 'lucide-react'
+import type { Locale } from './i18n'
 
 export type RightPanelItemId = 'preview' | 'diff' | 'terminal' | 'files' | 'background-tasks' | 'plan'
 
@@ -59,3 +60,40 @@ export const rightPanelItems: RightPanelItem[] = [
     Icon: CheckSquare,
   },
 ]
+
+export function getRightPanelItemCopy(item: RightPanelItem, locale: Locale) {
+  if (locale === 'en') return item
+  const copy: Record<RightPanelItemId, Pick<RightPanelItem, 'label' | 'title' | 'description'>> = {
+    preview: {
+      label: '预览',
+      title: '预览',
+      description: '浏览器和产物预览会显示在这里。',
+    },
+    diff: {
+      label: '变更',
+      title: '变更',
+      description: '代码变更和审阅界面会显示在这里。',
+    },
+    terminal: {
+      label: '终端',
+      title: '终端',
+      description: '运行时接好后，Shell 会话会显示在这里。',
+    },
+    files: {
+      label: '文件',
+      title: '文件',
+      description: '工作区文件导航会显示在这里。',
+    },
+    'background-tasks': {
+      label: '后台任务',
+      title: '后台任务',
+      description: '长任务和 Agent 任务会显示在这里。',
+    },
+    plan: {
+      label: '计划',
+      title: '计划',
+      description: '计划状态和步骤进度会显示在这里。',
+    },
+  }
+  return { ...item, ...copy[item.id] }
+}

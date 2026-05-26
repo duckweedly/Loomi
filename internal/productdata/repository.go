@@ -21,8 +21,159 @@ func NewPostgresRepository(pool *pgxpool.Pool) *PostgresRepository {
 	return &PostgresRepository{Pool: pool}
 }
 
+type modelProviderConfigScanner interface {
+	Scan(dest ...any) error
+}
+
+type webSearchConfigScanner interface {
+	Scan(dest ...any) error
+}
+
+type mcpServerConfigScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanModelProviderConfig(row modelProviderConfigScanner) (ModelProviderConfig, error) {
+	var provider ModelProviderConfig
+	err := row.Scan(&provider.ID, &provider.UserID, &provider.Family, &provider.BaseURL, &provider.APIKey, &provider.Model, &provider.Enabled)
+	return provider, err
+}
+
+func scanWebSearchConfig(row webSearchConfigScanner) (WebSearchConfig, error) {
+	var config WebSearchConfig
+	err := row.Scan(&config.UserID, &config.TavilyAPIKey, &config.BraveAPIKey)
+	return config, err
+}
+
+func scanMCPServerConfig(row mcpServerConfigScanner) (MCPServerConfigRecord, error) {
+	var record MCPServerConfigRecord
+	var argsRaw []byte
+	var envRaw []byte
+	if err := row.Scan(&record.UserID, &record.Slug, &record.DisplayName, &record.Enabled, &record.Transport, &record.Command, &argsRaw, &envRaw, &record.TimeoutMS); err != nil {
+		return MCPServerConfigRecord{}, err
+	}
+	_ = json.Unmarshal(argsRaw, &record.Args)
+	_ = json.Unmarshal(envRaw, &record.Env)
+	if record.Args == nil {
+		record.Args = []string{}
+	}
+	if record.Env == nil {
+		record.Env = map[string]string{}
+	}
+	return record, nil
+}
+
 func (r *PostgresRepository) CurrentIdentity(ctx context.Context, ident identity.LocalIdentity) (User, error) {
 	return r.ensureUser(ctx, ident)
+}
+
+func (r *PostgresRepository) SaveModelProviderConfig(ctx context.Context, ident identity.LocalIdentity, input ModelProviderConfig) (ModelProviderConfig, error) {
+	user, err := r.ensureUser(ctx, ident)
+	if err != nil {
+		return ModelProviderConfig{}, err
+	}
+	provider := normalizeModelProviderConfig(input)
+	if provider.ID == "" || provider.Model == "" || provider.APIKey == "" {
+		return ModelProviderConfig{}, NewError(CodeProviderMisconfigured, "Provider configuration is incomplete.")
+	}
+	provider.UserID = user.ID
+	row := r.Pool.QueryRow(ctx, `insert into model_provider_configs (id, user_id, family, base_url, api_key, model, enabled) values ($1, $2, $3, $4, $5, $6, $7) on conflict (user_id, id) do update set family=excluded.family, base_url=excluded.base_url, api_key=excluded.api_key, model=excluded.model, enabled=excluded.enabled, updated_at=now() returning id, user_id, family, base_url, api_key, model, enabled`, provider.ID, provider.UserID, provider.Family, provider.BaseURL, provider.APIKey, provider.Model, provider.Enabled)
+	return scanModelProviderConfig(row)
+}
+
+func (r *PostgresRepository) ListModelProviderConfigs(ctx context.Context, ident identity.LocalIdentity) ([]ModelProviderConfig, error) {
+	user, err := r.ensureUser(ctx, ident)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := r.Pool.Query(ctx, `select id, user_id, family, base_url, api_key, model, enabled from model_provider_configs where user_id=$1 order by id asc`, user.ID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	providers := []ModelProviderConfig{}
+	for rows.Next() {
+		provider, err := scanModelProviderConfig(rows)
+		if err != nil {
+			return nil, err
+		}
+		providers = append(providers, provider)
+	}
+	return providers, rows.Err()
+}
+
+func (r *PostgresRepository) SaveWebSearchConfig(ctx context.Context, ident identity.LocalIdentity, input WebSearchConfig) (WebSearchConfig, error) {
+	user, err := r.ensureUser(ctx, ident)
+	if err != nil {
+		return WebSearchConfig{}, err
+	}
+	next := normalizeWebSearchConfig(input)
+	row := r.Pool.QueryRow(ctx, `insert into web_search_configs (user_id, tavily_api_key, brave_api_key) values ($1, $2, $3) on conflict (user_id) do update set tavily_api_key=case when excluded.tavily_api_key<>'' then excluded.tavily_api_key else web_search_configs.tavily_api_key end, brave_api_key=case when excluded.brave_api_key<>'' then excluded.brave_api_key else web_search_configs.brave_api_key end, updated_at=now() returning user_id, tavily_api_key, brave_api_key`, user.ID, next.TavilyAPIKey, next.BraveAPIKey)
+	return scanWebSearchConfig(row)
+}
+
+func (r *PostgresRepository) GetWebSearchConfig(ctx context.Context, ident identity.LocalIdentity) (WebSearchConfig, error) {
+	user, err := r.ensureUser(ctx, ident)
+	if err != nil {
+		return WebSearchConfig{}, err
+	}
+	config, err := scanWebSearchConfig(r.Pool.QueryRow(ctx, `select user_id, tavily_api_key, brave_api_key from web_search_configs where user_id=$1`, user.ID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return WebSearchConfig{UserID: user.ID}, nil
+	}
+	return config, err
+}
+
+func (r *PostgresRepository) SaveMCPServerConfig(ctx context.Context, ident identity.LocalIdentity, input MCPServerConfigRecord) (MCPServerConfigRecord, error) {
+	user, err := r.ensureUser(ctx, ident)
+	if err != nil {
+		return MCPServerConfigRecord{}, err
+	}
+	record := normalizeMCPServerConfigRecord(input)
+	if record.Slug == "" {
+		return MCPServerConfigRecord{}, NewError(CodeInvalidRequest, "MCP server slug is required.")
+	}
+	record.UserID = user.ID
+	argsRaw, err := json.Marshal(record.Args)
+	if err != nil {
+		return MCPServerConfigRecord{}, err
+	}
+	envRaw, err := json.Marshal(record.Env)
+	if err != nil {
+		return MCPServerConfigRecord{}, err
+	}
+	row := r.Pool.QueryRow(ctx, `insert into mcp_server_configs (user_id, slug, display_name, enabled, transport, command, args_json, env_json, timeout_ms) values ($1,$2,$3,$4,$5,$6,$7,$8,$9) on conflict (user_id, slug) do update set display_name=excluded.display_name, enabled=excluded.enabled, transport=excluded.transport, command=excluded.command, args_json=excluded.args_json, env_json=excluded.env_json, timeout_ms=excluded.timeout_ms, updated_at=now() returning user_id, slug, display_name, enabled, transport, command, args_json, env_json, timeout_ms`, record.UserID, record.Slug, record.DisplayName, record.Enabled, record.Transport, record.Command, argsRaw, envRaw, record.TimeoutMS)
+	return scanMCPServerConfig(row)
+}
+
+func (r *PostgresRepository) ListMCPServerConfigs(ctx context.Context, ident identity.LocalIdentity) ([]MCPServerConfigRecord, error) {
+	user, err := r.ensureUser(ctx, ident)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := r.Pool.Query(ctx, `select user_id, slug, display_name, enabled, transport, command, args_json, env_json, timeout_ms from mcp_server_configs where user_id=$1 order by slug asc`, user.ID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	records := []MCPServerConfigRecord{}
+	for rows.Next() {
+		record, err := scanMCPServerConfig(rows)
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, record)
+	}
+	return records, rows.Err()
+}
+
+func (r *PostgresRepository) DeleteMCPServerConfig(ctx context.Context, ident identity.LocalIdentity, slug string) error {
+	user, err := r.ensureUser(ctx, ident)
+	if err != nil {
+		return err
+	}
+	_, err = r.Pool.Exec(ctx, `delete from mcp_server_configs where user_id=$1 and slug=$2`, user.ID, strings.TrimSpace(slug))
+	return err
 }
 
 func (r *PostgresRepository) CreateThread(ctx context.Context, ident identity.LocalIdentity, input CreateThreadInput) (Thread, error) {
@@ -1094,7 +1245,12 @@ func (r *PostgresRepository) RecordToolCallRequest(ctx context.Context, ident id
 	if err != nil {
 		return ToolCall{}, nil, err
 	}
-	run.Status = RunStatusBlockedOnToolApproval
+	autoApproved := call.ApprovalStatus == ToolCallApprovalApproved && call.ExecutionStatus == ToolCallExecutionNotStarted
+	if autoApproved {
+		run.Status = RunStatusQueued
+	} else {
+		run.Status = RunStatusBlockedOnToolApproval
+	}
 	if _, err := tx.Exec(ctx, `update runs set status=$1, updated_at=now() where id=$2 and user_id=$3`, run.Status, run.ID, user.ID); err != nil {
 		return ToolCall{}, nil, err
 	}
@@ -1108,6 +1264,18 @@ func (r *PostgresRepository) RecordToolCallRequest(ctx context.Context, ident id
 	requested, err := insertRunEvent(ctx, tx, run, RunEventCategoryProgress, EventToolCallRequested, "Tool call requested", nil, metadata)
 	if err != nil {
 		return ToolCall{}, nil, err
+	}
+	if autoApproved {
+		jobID := NewBackgroundJobID()
+		jobMetadata := RedactEventMetadata(map[string]any{"source": string(run.Source), "job_id": jobID, "tool_call_id": call.ToolCallID, "resume_reason": "tool_call_auto_approved"})
+		if _, err := tx.Exec(ctx, `insert into background_jobs (id, run_id, thread_id, user_id, kind, status, priority, max_attempts, scheduled_at, metadata) values ($1, $2, $3, $4, $5, 'queued', 50, 3, now(), $6)`, jobID, run.ID, run.ThreadID, user.ID, BackgroundJobKindRunExecution, mustJSON(jobMetadata)); err != nil {
+			return ToolCall{}, nil, err
+		}
+		approved, err := insertRunEvent(ctx, tx, run, RunEventCategoryProgress, EventToolCallApproved, "Tool call auto-approved", nil, metadata)
+		if err != nil {
+			return ToolCall{}, nil, err
+		}
+		return call, []RunEvent{requested, approved}, tx.Commit(ctx)
 	}
 	required, err := insertRunEvent(ctx, tx, run, RunEventCategoryProgress, EventToolCallApprovalRequired, "Tool approval required", nil, metadata)
 	if err != nil {

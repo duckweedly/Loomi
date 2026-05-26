@@ -13,7 +13,6 @@ type Props = {
   rightToolsOpen: boolean
   selectedPanelId: RightPanelItemId
   onSelectPanel: (panelId: RightPanelItemId) => void
-  onOpenArtifact: () => void
   onStopRun?: () => void
   selectedRuntimeScript?: RuntimeScriptId
   capabilityStatus?: BackendCapabilityStatus
@@ -29,7 +28,6 @@ export function RunTimeline({
   rightToolsOpen,
   selectedPanelId,
   onSelectPanel,
-  onOpenArtifact,
   onStopRun,
   selectedRuntimeScript,
   capabilityStatus,
@@ -41,8 +39,8 @@ export function RunTimeline({
 
   return (
     <>
-      <RunRail run={run} open={runDetailsOpen} onOpenArtifact={onOpenArtifact} onStopRun={onStopRun} selectedRuntimeScript={selectedRuntimeScript} capabilityStatus={capabilityStatus} locale={locale} onSelectRuntimeScript={onSelectRuntimeScript} />
-      <RightPanelMenu open={rightPanelMenuOpen} selectedPanelId={selectedPanelId} onSelectPanel={onSelectPanel} />
+      <RunRail run={selectedThreadRun} open={runDetailsOpen} onStopRun={onStopRun} selectedRuntimeScript={selectedRuntimeScript} capabilityStatus={capabilityStatus} locale={locale} onSelectRuntimeScript={onSelectRuntimeScript} />
+      <RightPanelMenu open={rightPanelMenuOpen} selectedPanelId={selectedPanelId} onSelectPanel={onSelectPanel} locale={locale} />
       <RightToolDrawer open={rightToolsOpen} selectedPanelId={selectedPanelId} run={selectedThreadRun} locale={locale} />
     </>
   )

@@ -20,13 +20,12 @@ describe('RunRail tool continuation runtime states', () => {
         ],
       },
       open: true,
-      onOpenArtifact: () => {},
     }))
 
-    expect(html).toContain('Initial model phase')
-    expect(html).toContain('Tool call succeeded')
-    expect(html).toContain('Continuation model phase')
+    expect(html).toContain('Get current time completed')
     expect(html).toContain('Run completed')
+    expect(html).not.toContain('Initial model phase')
+    expect(html).not.toContain('Continuation model phase')
   })
 
   test('shows M9 pipeline foundation stage rows', () => {
@@ -45,13 +44,13 @@ describe('RunRail tool continuation runtime states', () => {
         ],
       },
       open: true,
-      onOpenArtifact: () => {},
     }))
 
-    expect(html).toContain('prepare_context')
-    expect(html).toContain('resolve_tools')
-    expect(html).toContain('invoke_runtime')
-    expect(html).toContain('finalize')
+    expect(html).toContain('No activity yet')
+    expect(html).not.toContain('prepare_context')
+    expect(html).not.toContain('resolve_tools')
+    expect(html).not.toContain('invoke_runtime')
+    expect(html).not.toContain('finalize')
   })
 
   test('shows safe persona summary without prompt text', () => {
@@ -77,11 +76,11 @@ describe('RunRail tool continuation runtime states', () => {
         ],
       },
       open: true,
-      onOpenArtifact: () => {},
     }))
 
-    expect(html).toContain('persona_name: Default')
-    expect(html).toContain('persona_version: 2026-05-25.1')
+    expect(html).toContain('No activity yet')
+    expect(html).not.toContain('persona_name: Default')
+    expect(html).not.toContain('persona_version: 2026-05-25.1')
     expect(html).not.toContain('system_prompt')
     expect(html).not.toContain('You are')
   })
@@ -104,14 +103,12 @@ describe('RunRail tool continuation runtime states', () => {
         ],
       },
       open: true,
-      onOpenArtifact: () => {},
     }))
 
-    expect(html).toContain('Workspace tool')
-    expect(html).toContain('Tool approval required')
-    expect(html).toContain('Tool call executing')
-    expect(html).toContain('Tool call succeeded')
-    expect(html).toContain('Tool call failed')
+    expect(html).toContain('Read project files running')
+    expect(html).toContain('Read project files waiting for approval')
+    expect(html).toContain('Read project files completed')
+    expect(html).toContain('Read project files failed')
   })
 
   test('shows workspace mutation risk and write-capable lifecycle states without raw content', () => {
@@ -128,16 +125,34 @@ describe('RunRail tool continuation runtime states', () => {
         ],
       },
       open: true,
-      onOpenArtifact: () => {},
     }))
 
-    expect(html).toContain('Workspace mutation tool')
-    expect(html).toContain('high risk')
-    expect(html).toContain('write-capable')
-    expect(html).toContain('Tool approval required')
-    expect(html).toContain('Tool call succeeded')
+    expect(html).toContain('Change workspace files waiting for approval')
+    expect(html).toContain('Change workspace files completed')
     expect(html).not.toContain('created\\n')
     expect(html).not.toContain('/tmp/')
+  })
+
+  test('shows todo write lifecycle as work plan update without unsafe text', () => {
+    const html = renderToStaticMarkup(createElement(RunRail, {
+      run: {
+        id: 'run-a',
+        threadId: 'thread-a',
+        status: 'completed',
+        model: 'Model gateway',
+        context: 'model_gateway',
+        events: [
+          { id: 'evt-required', sequence: 1, type: 'tool.call.approval_required', label: 'tool', detail: 'Tool approval required', time: 'Now', status: 'blocked_on_tool_approval', group: 'tool-call', metadata: { tool_group: 'todo', tool_name: 'todo.write', arguments_summary: { items: [{ title: 'Review patch', status: 'running' }] } } },
+          { id: 'evt-succeeded', sequence: 2, type: 'tool.call.succeeded', label: 'tool', detail: 'Tool call succeeded', time: 'Now', status: 'completed', group: 'tool-call', metadata: { tool_group: 'todo', tool_name: 'todo.write', result_summary: { operation: 'todo_write', todo_items: [{ title: 'Run bash /tmp/secret', status: 'running' }] } } },
+        ],
+      },
+      open: true,
+    }))
+
+    expect(html).toContain('Update work plan waiting for approval')
+    expect(html).toContain('Update work plan completed')
+    expect(html).toContain('[redacted]')
+    expect(html).not.toContain('/tmp/secret')
   })
 
   test('shows sandbox exec risk and exec-capable lifecycle states without host paths or secrets', () => {
@@ -154,14 +169,10 @@ describe('RunRail tool continuation runtime states', () => {
         ],
       },
       open: true,
-      onOpenArtifact: () => {},
     }))
 
-    expect(html).toContain('Sandbox exec tool')
-    expect(html).toContain('high risk')
-    expect(html).toContain('exec-capable')
-    expect(html).toContain('Tool approval required')
-    expect(html).toContain('Tool call succeeded')
+    expect(html).toContain('Run sandbox command waiting for approval')
+    expect(html).toContain('Run sandbox command completed')
     expect(html).not.toContain('/tmp/')
     expect(html).not.toContain('TOKEN')
   })
@@ -180,14 +191,10 @@ describe('RunRail tool continuation runtime states', () => {
         ],
       },
       open: true,
-      onOpenArtifact: () => {},
     }))
 
-    expect(html).toContain('LSP read-only tool')
-    expect(html).toContain('low risk')
-    expect(html).toContain('workspace-scoped')
-    expect(html).toContain('Tool approval required')
-    expect(html).toContain('Tool call succeeded')
+    expect(html).toContain('Analyze code waiting for approval')
+    expect(html).toContain('Analyze code completed')
     expect(html).not.toContain('id_ed25519')
     expect(html).not.toContain('SECRET')
   })
@@ -206,17 +213,37 @@ describe('RunRail tool continuation runtime states', () => {
         ],
       },
       open: true,
-      onOpenArtifact: () => {},
     }))
 
-    expect(html).toContain('Web fetch tool')
-    expect(html).toContain('medium risk')
-    expect(html).toContain('public HTTP only')
-    expect(html).toContain('Tool approval required')
-    expect(html).toContain('Tool call succeeded')
+    expect(html).toContain('Visit web page waiting for approval')
+    expect(html).toContain('Visit web page completed')
     expect(html).not.toContain('Set-Cookie')
     expect(html).not.toContain('Authorization')
     expect(html).not.toContain('sk-secret')
+  })
+
+  test('shows web search lifecycle without provider secrets or raw bodies', () => {
+    const html = renderToStaticMarkup(createElement(RunRail, {
+      run: {
+        id: 'run-a',
+        threadId: 'thread-a',
+        status: 'completed',
+        model: 'Model gateway',
+        context: 'model_gateway',
+        events: [
+          { id: 'evt-required', sequence: 1, type: 'tool.call.approval_required', label: 'tool', detail: 'Tool approval required', time: 'Now', status: 'blocked_on_tool_approval', group: 'tool-call', metadata: { tool_group: 'web', tool_name: 'web.search', arguments_summary: { query: 'latest ai news', provider: 'tavily', api_key: 'tvly-secret' } } },
+          { id: 'evt-succeeded', sequence: 2, type: 'tool.call.succeeded', label: 'tool', detail: 'Tool call succeeded', time: 'Now', status: 'completed', group: 'tool-call', metadata: { tool_group: 'web', tool_name: 'web.search', result_summary: { operation: 'search', provider: 'tavily', result_count: 1, items: [{ title: 'AI News', url: 'https://example.com/news', snippet: 'public snippet', raw_body: 'secret raw body' }] } } },
+        ],
+      },
+      open: true,
+    }))
+
+    expect(html).toContain('Search web waiting for approval')
+    expect(html).toContain('Search web completed')
+    expect(html).toContain('latest ai news')
+    expect(html).toContain('AI News')
+    expect(html).not.toContain('tvly-secret')
+    expect(html).not.toContain('secret raw body')
   })
 
   test('shows browser automation lifecycle states without raw HTML or cookies', () => {
@@ -234,15 +261,13 @@ describe('RunRail tool continuation runtime states', () => {
         ],
       },
       open: true,
-      onOpenArtifact: () => {},
     }))
 
-    expect(html).toContain('Browser automation tool')
-    expect(html).toContain('medium risk')
-    expect(html).toContain('public HTTP only')
-    expect(html).toContain('browser.open waiting for approval')
-    expect(html).toContain('browser.click_link completed')
-    expect(html).toContain('browser.snapshot completed')
+    expect(html).toContain('Use browser waiting for approval')
+    expect(html).toContain('Use browser completed')
+    expect(html).not.toContain('browser.open')
+    expect(html).not.toContain('browser.click_link')
+    expect(html).not.toContain('browser.snapshot')
     expect(html).not.toContain('<html')
     expect(html).not.toContain('Set-Cookie')
     expect(html).not.toContain('Authorization')
@@ -264,15 +289,13 @@ describe('RunRail tool continuation runtime states', () => {
         ],
       },
       open: true,
-      onOpenArtifact: () => {},
     }))
 
-    expect(html).toContain('Artifact runtime tool')
-    expect(html).toContain('medium risk')
-    expect(html).toContain('non-executable')
-    expect(html).toContain('artifact.create_text waiting for approval')
-    expect(html).toContain('artifact.list completed')
-    expect(html).toContain('artifact.read completed')
+    expect(html).toContain('Handle artifact waiting for approval')
+    expect(html).toContain('Handle artifact completed')
+    expect(html).not.toContain('artifact.create_text')
+    expect(html).not.toContain('artifact.list')
+    expect(html).not.toContain('artifact.read')
     expect(html).not.toContain('raw_result')
     expect(html).not.toContain('sk-secret')
   })
@@ -292,15 +315,13 @@ describe('RunRail tool continuation runtime states', () => {
         ],
       },
       open: true,
-      onOpenArtifact: () => {},
     }))
 
-    expect(html).toContain('Agent coordination tool')
-    expect(html).toContain('medium risk')
-    expect(html).toContain('no autonomous execution')
-    expect(html).toContain('agent.spawn waiting for approval')
-    expect(html).toContain('agent.list completed')
-    expect(html).toContain('agent.complete completed')
+    expect(html).toContain('Coordinate subtasks waiting for approval')
+    expect(html).toContain('Coordinate subtasks completed')
+    expect(html).not.toContain('agent.spawn')
+    expect(html).not.toContain('agent.list')
+    expect(html).not.toContain('agent.complete')
     expect(html).not.toContain('raw_result')
     expect(html).not.toContain('sk-secret')
   })
@@ -321,14 +342,13 @@ describe('RunRail tool continuation runtime states', () => {
         ],
       },
       open: true,
-      onOpenArtifact: () => {},
       onStopRun: () => {},
     }))
 
     expect(html).toContain('Loop 1/3')
-    expect(html).toContain('Continuation model phase')
     expect(html).toContain('Tool loop limit reached')
     expect(html).toContain('Run stopped')
     expect(html).toContain('Stop run')
+    expect(html).not.toContain('Continuation model phase')
   })
 })

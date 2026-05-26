@@ -91,6 +91,7 @@ func TestHTTPProviderPreservesOpenAIToolArgumentsAsMetadata(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"id\":\"tc_1\",\"function\":{\"name\":\"runtime.get_current_time\",\"arguments\":\"{\\\"timezone\\\":\\\"Asia/Shanghai\\\"}\"}}]}}]}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
 	}))
 	defer server.Close()
 	provider := NewHTTPProvider(ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: server.URL + "/v1", APIKey: "secret-key", Model: "gpt-5.5", Enabled: true}, server.Client())
@@ -102,6 +103,30 @@ func TestHTTPProviderPreservesOpenAIToolArgumentsAsMetadata(t *testing.T) {
 	}
 	arguments, ok := events[0].Metadata["arguments_summary"].(map[string]any)
 	if !ok || arguments["timezone"] != "Asia/Shanghai" {
+		t.Fatalf("metadata = %+v", events[0].Metadata)
+	}
+}
+
+func TestHTTPProviderAccumulatesOpenAIToolArgumentsAcrossChunks(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"tc_search\",\"function\":{\"name\":\"web_search\",\"arguments\":\"{\\\"que\"}}]}}]}\n\n"))
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"ry\\\":\\\"今天最新 AI\\\"}\"}}]}}]}\n\n"))
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n"))
+	}))
+	defer server.Close()
+	provider := NewHTTPProvider(ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: server.URL + "/v1", APIKey: "secret-key", Model: "gpt-5.5", Enabled: true}, server.Client())
+
+	events := collectProviderEventsForRequest(t, provider, ProviderRequest{ThreadID: "thr_1", MessageID: "msg_1", Model: "gpt-5.5", Messages: []ProviderMessage{{Role: "user", Content: "search latest ai"}}, Tools: []ProviderToolDefinition{WebSearchProviderToolDefinition()}})
+
+	if len(events) != 1 || events[0].Type != ProviderEventToolCall || events[0].ToolName != "web.search" {
+		t.Fatalf("events = %+v", events)
+	}
+	if events[0].Metadata["tool_call_id"] != "tc_search" {
+		t.Fatalf("metadata = %+v", events[0].Metadata)
+	}
+	arguments, ok := events[0].Metadata["arguments_summary"].(map[string]any)
+	if !ok || arguments["query"] != "今天最新 AI" {
 		t.Fatalf("metadata = %+v", events[0].Metadata)
 	}
 }
@@ -144,6 +169,35 @@ func TestHTTPProviderSerializesOpenAIToolResultContinuation(t *testing.T) {
 	tool := body.Messages[2]
 	if tool["role"] != "tool" || tool["tool_call_id"] != "tc_1" || tool["content"] == "" {
 		t.Fatalf("tool result message = %+v", tool)
+	}
+}
+
+func TestHTTPProviderSendsEnabledWebSearchToolSchema(t *testing.T) {
+	var body struct {
+		Tools []map[string]any `json:"tools"`
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"done\"}}]}\n\n"))
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n"))
+	}))
+	defer server.Close()
+	provider := NewHTTPProvider(ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: server.URL + "/v1", APIKey: "secret-key", Model: "gpt-5.5", Enabled: true}, server.Client())
+
+	events := collectProviderEventsForRequest(t, provider, ProviderRequest{ThreadID: "thr_1", MessageID: "msg_1", Model: "gpt-5.5", Messages: []ProviderMessage{{Role: "user", Content: "search latest news"}}, Tools: []ProviderToolDefinition{WebSearchProviderToolDefinition()}})
+
+	if len(events) != 2 || events[1].Type != ProviderEventCompleted {
+		t.Fatalf("events = %+v", events)
+	}
+	if len(body.Tools) != 1 || body.Tools[0]["type"] != "function" {
+		t.Fatalf("tools = %+v", body.Tools)
+	}
+	function, ok := body.Tools[0]["function"].(map[string]any)
+	if !ok || function["name"] != "web_search" {
+		t.Fatalf("function tool = %+v", body.Tools[0])
 	}
 }
 

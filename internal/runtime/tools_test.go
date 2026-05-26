@@ -43,28 +43,44 @@ func TestCurrentTimeToolExecutesSafeResult(t *testing.T) {
 }
 
 func TestToolDefinitionsForPersonaIntersectAllowlist(t *testing.T) {
-	tools := ToolResolutionsForPersona([]string{productdata.ToolNameCurrentTime, productdata.ToolNameWorkspaceRead, productdata.ToolNameSandboxExecCommand, "runtime.shell"})
-	if len(tools) != 3 || tools[0].Name != productdata.ToolNameCurrentTime || tools[1].Name != productdata.ToolNameWorkspaceRead || tools[2].Name != productdata.ToolNameSandboxExecCommand {
+	tools := ToolResolutionsForPersona([]string{productdata.ToolNameLoadTools, productdata.ToolNameCurrentTime, productdata.ToolNameWorkspaceRead, productdata.ToolNameSandboxExecCommand, "runtime.shell"})
+	if len(tools) != 4 || tools[0].Name != productdata.ToolNameLoadTools || tools[1].Name != productdata.ToolNameCurrentTime || tools[2].Name != productdata.ToolNameWorkspaceRead || tools[3].Name != productdata.ToolNameSandboxExecCommand {
 		t.Fatalf("tools = %+v", tools)
 	}
-	if tools[1].Group != string(productdata.ToolCatalogGroupWorkspace) || tools[1].ExecutionState != string(productdata.ToolExecutionStateExecutable) {
-		t.Fatalf("workspace resolution = %+v", tools[1])
+	if tools[0].Group != string(productdata.ToolCatalogGroupDiscovery) || tools[0].ApprovalPolicy != string(ToolApprovalNotRequired) {
+		t.Fatalf("discovery resolution = %+v", tools[0])
 	}
-	if tools[2].Group != string(productdata.ToolCatalogGroupSandbox) || tools[2].RiskLevel != string(productdata.ToolRiskHigh) || tools[2].ExecutionState != string(productdata.ToolExecutionStateExecutable) {
-		t.Fatalf("sandbox resolution = %+v", tools[2])
+	if tools[2].Group != string(productdata.ToolCatalogGroupWorkspace) || tools[2].ExecutionState != string(productdata.ToolExecutionStateExecutable) {
+		t.Fatalf("workspace resolution = %+v", tools[2])
+	}
+	if tools[3].Group != string(productdata.ToolCatalogGroupSandbox) || tools[3].RiskLevel != string(productdata.ToolRiskHigh) || tools[3].ExecutionState != string(productdata.ToolExecutionStateExecutable) {
+		t.Fatalf("sandbox resolution = %+v", tools[3])
+	}
+}
+
+func TestToolResolutionsMarkWebSearchAsNoApproval(t *testing.T) {
+	tools := ToolResolutionsForPersona([]string{productdata.ToolNameWebSearch, productdata.ToolNameWebFetch})
+	if len(tools) != 2 {
+		t.Fatalf("tools = %+v", tools)
+	}
+	if tools[0].Name != productdata.ToolNameWebSearch || tools[0].ApprovalPolicy != string(ToolApprovalNotRequired) {
+		t.Fatalf("web search resolution = %+v", tools[0])
+	}
+	if tools[1].Name != productdata.ToolNameWebFetch || tools[1].ApprovalPolicy != string(ToolApprovalAlwaysRequired) {
+		t.Fatalf("web fetch resolution = %+v", tools[1])
 	}
 }
 
 func TestWorkspaceToolDefinitionsSeparateReadAndMutationRisk(t *testing.T) {
 	defs := WorkspaceToolDefinitions()
-	if len(defs) != 5 {
+	if len(defs) != 7 {
 		t.Fatalf("defs = %+v", defs)
 	}
 	for _, def := range defs {
 		if !productdata.IsWorkspaceToolName(def.Name) || def.ApprovalPolicy != ToolApprovalAlwaysRequired {
 			t.Fatalf("workspace definition = %+v", def)
 		}
-		if def.Name == productdata.ToolNameWorkspaceWriteFile || def.Name == productdata.ToolNameWorkspaceEdit {
+		if def.Name == productdata.ToolNameWorkspaceWriteFile || def.Name == productdata.ToolNameWorkspaceEdit || def.Name == productdata.ToolNameWorkspacePatchApply {
 			if def.SafetyClass != ToolSafetyWorkspaceMutation {
 				t.Fatalf("workspace mutation definition = %+v", def)
 			}
@@ -78,10 +94,12 @@ func TestWorkspaceToolDefinitionsSeparateReadAndMutationRisk(t *testing.T) {
 
 func TestSandboxToolDefinitionsAreHighRisk(t *testing.T) {
 	defs := SandboxToolDefinitions()
-	if len(defs) != 1 || defs[0].Name != productdata.ToolNameSandboxExecCommand {
+	if len(defs) != 4 || defs[0].Name != productdata.ToolNameSandboxExecCommand || defs[1].Name != productdata.ToolNameSandboxStartProcess || defs[2].Name != productdata.ToolNameSandboxContinueProcess || defs[3].Name != productdata.ToolNameSandboxTerminateProcess {
 		t.Fatalf("defs = %+v", defs)
 	}
-	if defs[0].ApprovalPolicy != ToolApprovalAlwaysRequired || defs[0].SafetyClass != ToolSafetySandboxCommand || defs[0].ExecutionState != ToolExecutionAllowlisted {
-		t.Fatalf("sandbox definition = %+v", defs[0])
+	for _, def := range defs {
+		if def.ApprovalPolicy != ToolApprovalAlwaysRequired || def.SafetyClass != ToolSafetySandboxCommand || def.ExecutionState != ToolExecutionAllowlisted {
+			t.Fatalf("sandbox definition = %+v", def)
+		}
 	}
 }

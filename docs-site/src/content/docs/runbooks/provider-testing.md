@@ -3,7 +3,7 @@ title: Provider Testing Runbook
 description: Local M6.5 path for provider readiness, real model messages, worker jobs, and timeline observation.
 ---
 
-Use this runbook to validate the real local testing path without persisting provider secrets in Settings.
+Use this runbook to validate the real local testing path. Settings > Providers can persist one local OpenAI-compatible provider in the product data store; API responses never echo the key.
 
 ## Configure provider env
 
@@ -14,7 +14,7 @@ Start the API with the provider environment variables required by the selected p
 - API key through environment variable
 - base URL when the provider does not use a default endpoint
 
-Do not commit `.env` files with secrets. Do not expect Settings local draft fields to affect backend model calls.
+Do not commit `.env` files with secrets. Settings > Providers can save one local OpenAI-compatible provider into the product data store and reload it after API restart. If the provider was saved before the persistence migration existed, re-enter the key once.
 
 ## Start the API
 
@@ -38,11 +38,11 @@ Open Settings > Providers.
 
 Expected:
 
-- Provider Test Console title is visible
-- configured provider rows show id, family, model, base URL, status, and message when available
-- Test connection enters checking and then connected or failed
+- the provider management toolbar shows search plus All/Enabled/Local/Cloud filters
+- configured provider cards show safe display name, route or base URL, Local/Read-only badges when relevant, and no secrets
+- Add provider opens the modal, the provider type menu opens, and Save uses the local provider save path
+- Test connection enters checking and then connected or failed for configured providers
 - failed messages do not display API keys or bearer tokens
-- Local draft copy says draft fields are browser-session-only and do not affect real calls
 
 ## Send a real message
 

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, nativeImage } = require('electron')
+const { app, BrowserWindow, dialog, ipcMain, nativeImage } = require('electron')
 const path = require('node:path')
 
 const startUrl = process.env.ELECTRON_START_URL
@@ -40,6 +40,16 @@ app.whenReady().then(() => {
   }
 
   createWindow()
+
+  ipcMain.handle('loomi:select-workspace-folder', async () => {
+    const window = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0]
+    const result = await dialog.showOpenDialog(window, {
+      properties: ['openDirectory'],
+      title: '选择 Loomi 可访问的目录',
+    })
+    if (result.canceled || result.filePaths.length === 0) return { canceled: true }
+    return { canceled: false, path: result.filePaths[0] }
+  })
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

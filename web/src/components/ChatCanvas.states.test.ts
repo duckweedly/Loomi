@@ -37,13 +37,12 @@ describe('ChatCanvas state copy', () => {
 
     expect(source).toContain('assistantDraft')
     expect(source).toContain('draft.content')
-    expect(source).toContain('pending')
     expect(source).toContain('streaming')
     expect(source).toContain('failed')
     expect(source).toContain('stopped')
     expect(source).toContain('recovering')
     expect(source).not.toContain("draft.status === 'completed') return null")
-    expect(source).not.toContain('message.runId !== run.id')
+    expect(source).toContain('visibleRunForTranscript')
     expect(source).toContain("status === 'failed'")
     expect(source).toContain('draft.content || draftFallback')
   })
@@ -143,7 +142,7 @@ describe('ChatCanvas state copy', () => {
     expect(completedHtml).toContain('Regenerate')
   })
 
-  test('renders capability status chip and detail without implying fake model thinking', () => {
+  test('does not render the old runtime capability header', () => {
     const mockHtml = renderToStaticMarkup(createElement(ChatCanvas, {
       sidebarCollapsed: false,
       thread: { id: 'thread-a', title: 'Thread A', project: 'Loomi', mode: 'chat', updatedAt: 'Now', lifecycleStatus: 'active', runStatus: 'completed' },
@@ -171,11 +170,110 @@ describe('ChatCanvas state copy', () => {
       locale: 'en',
     }))
 
-    expect(mockHtml).toContain('Mock')
-    expect(mockHtml).toContain('not real model output')
-    expect(disconnectedHtml).toContain('Stream disconnected')
-    expect(disconnectedHtml).toContain('event stream disconnected')
+    expect(mockHtml).not.toContain('Mock demo mode')
+    expect(mockHtml).not.toContain('not real model output')
+    expect(disconnectedHtml).not.toContain('Stream disconnected')
+    expect(disconnectedHtml).not.toContain('event stream disconnected')
     expect(disconnectedHtml).not.toContain('model is thinking')
+  })
+
+  test('renders basic markdown in assistant messages', () => {
+    const html = renderToStaticMarkup(createElement(ChatCanvas, {
+      sidebarCollapsed: false,
+      thread: { id: 'thread-a', title: 'Thread A', project: 'Loomi', mode: 'chat', updatedAt: 'Now', lifecycleStatus: 'active', runStatus: 'completed' },
+      messages: [{ id: 'msg-a', threadId: 'thread-a', role: 'assistant', content: '# Title\n- item\n\n**bold** and `code`', createdAt: 'Now' }],
+      run: null,
+      loading: false,
+      error: null,
+      dataSourceMode: 'real_api',
+      streamState: 'closed',
+      providerCapabilities: [{ id: 'custom', family: 'openai_compatible' as const, model: 'gpt-5.5', status: 'available' as const }],
+      onSendMessage: () => {},
+      onStopRun: () => {},
+      locale: 'en',
+    }))
+
+    expect(html).toContain('<h1>Title</h1>')
+    expect(html).toContain('<li>item</li>')
+    expect(html).toContain('<strong>bold</strong>')
+    expect(html).toContain('<code>code</code>')
+  })
+
+  test('renders markdown tables in assistant messages', () => {
+    const html = renderToStaticMarkup(createElement(ChatCanvas, {
+      sidebarCollapsed: false,
+      thread: { id: 'thread-a', title: 'Thread A', project: 'Loomi', mode: 'chat', updatedAt: 'Now', lifecycleStatus: 'active', runStatus: 'completed' },
+      messages: [{
+        id: 'msg-table',
+        threadId: 'thread-a',
+        role: 'assistant',
+        content: '| 序号 | 新闻 | 链接 |\n|---|---|---|\n| 1 | Reuters AI News | https://example.com |\n| 2 | LLM News Today | https://example.com/llm |',
+        createdAt: '2026-05-26T08:30:00Z',
+      }],
+      run: null,
+      loading: false,
+      error: null,
+      dataSourceMode: 'real_api',
+      streamState: 'closed',
+      providerCapabilities: [{ id: 'custom', family: 'openai_compatible' as const, model: 'gpt-5.5', status: 'available' as const }],
+      onSendMessage: () => {},
+      onStopRun: () => {},
+      locale: 'zh',
+    }))
+
+    expect(html).toContain('<table>')
+    expect(html).toContain('<th>序号</th>')
+    expect(html).toContain('<td>Reuters AI News</td>')
+    expect(html).toContain('<td>https://example.com</td>')
+    expect(html).not.toContain('| 序号 | 新闻 | 链接 |')
+  })
+
+  test('does not leak stale active tool approval into a newer completed chat turn', () => {
+    const html = renderToStaticMarkup(createElement(ChatCanvas, {
+      sidebarCollapsed: false,
+      thread: { id: 'thread-a', title: 'Thread A', project: 'Loomi', mode: 'chat', updatedAt: 'Now', lifecycleStatus: 'active', runStatus: 'blocked_on_tool_approval' },
+      messages: [
+        { id: 'msg-old-user', threadId: 'thread-a', role: 'user', content: 'Sketch a small agent profile surface.', createdAt: '2026-05-25T08:00:00Z' },
+        { id: 'msg-old-assistant', threadId: 'thread-a', role: 'assistant', content: 'Use a compact profile card later.', createdAt: '2026-05-25T08:00:01Z', runId: 'run-old' },
+        { id: 'msg-new-user', threadId: 'thread-a', role: 'user', content: '你好呀', createdAt: '2026-05-26T09:19:00Z' },
+        { id: 'msg-new-assistant', threadId: 'thread-a', role: 'assistant', content: '正在整理答案。', createdAt: '2026-05-26T09:19:01Z', runId: 'run-new' },
+      ],
+      run: {
+        id: 'run-old',
+        threadId: 'thread-a',
+        status: 'blocked_on_tool_approval',
+        model: 'Model gateway',
+        context: 'model_gateway',
+        events: [{ id: 'evt-old', runId: 'run-old', threadId: 'thread-a', type: 'tool.call.approval_required', label: 'Tool approval required', detail: 'waiting', time: '2026-05-25T08:00:00Z', status: 'blocked_on_tool_approval' }],
+        toolCalls: [{
+          id: 'tc-old',
+          toolCallId: 'tc-old',
+          name: 'agent.spawn',
+          status: 'approval_required',
+          approvalStatus: 'required',
+          executionStatus: 'blocked',
+          summary: 'Coordinate agent task',
+          input: '',
+          output: '',
+        }],
+      },
+      loading: false,
+      error: null,
+      dataSourceMode: 'real_api',
+      streamState: 'closed',
+      providerCapabilities: [{ id: 'local_codex', family: 'openai_compatible', model: 'gpt-5.5', status: 'available', executionState: 'supported' }],
+      onSendMessage: () => {},
+      onStopRun: () => {},
+      locale: 'zh',
+    }))
+
+    expect(html).toContain('你好呀')
+    expect(html).toContain('正在整理答案。')
+    expect(html).not.toContain('等待你确认')
+    expect(html).not.toContain('协调子任务')
+    expect(html).not.toContain('允许')
+    expect(html).not.toContain('拒绝')
+    expect(html).not.toContain('<textarea class="composer-input" disabled=""')
   })
 })
 
@@ -221,8 +319,7 @@ describe('ChatCanvas provider unavailable warning', () => {
     }))
 
     expect(html).toContain('Model provider is not configured or unavailable')
-    expect(html).toContain('Open Settings')
-    expect(html).toContain('Provider unavailable')
+    expect(html).toContain('Provider Settings')
     expect(html).not.toContain('Generating')
     expect(html).toContain('<textarea')
     expect(html).toContain('<textarea class="composer-input" disabled=""')
@@ -248,7 +345,7 @@ describe('ChatCanvas provider unavailable warning', () => {
     }))
 
     expect(html).toContain('模型 Provider 未配置或不可用')
-    expect(html).toContain('打开设置')
+    expect(html).toContain('Provider Settings')
   })
 
   test('keeps guidance when only enabled local provider execution is unsupported', () => {
@@ -269,7 +366,6 @@ describe('ChatCanvas provider unavailable warning', () => {
     }))
 
     expect(html).toContain('Local Codex is enabled but execution is not supported yet')
-    expect(html).toContain('Provider unavailable')
     expect(html).toContain('<textarea class="composer-input" disabled=""')
   })
 

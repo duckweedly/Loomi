@@ -35,6 +35,7 @@ type ToolBroker struct {
 }
 
 type DefaultToolExecutor struct {
+	DiscoveryExecutor DiscoveryToolExecutor
 	MCPExecutor       MCPToolExecutor
 	WorkspaceExecutor WorkspaceToolExecutor
 	SandboxExecutor   SandboxToolExecutor
@@ -97,6 +98,13 @@ func (b ToolBroker) Execute(ctx context.Context, invocation ToolInvocation) (Too
 }
 
 func (e DefaultToolExecutor) ExecuteTool(ctx context.Context, invocation ToolInvocation) (ToolResult, error) {
+	if productdata.IsDiscoveryToolName(invocation.ToolName) {
+		result, err := e.DiscoveryExecutor.Execute(ctx, invocation)
+		if err != nil {
+			return ToolResult{}, err
+		}
+		return ToolResult{ToolName: invocation.ToolName, ToolCallID: invocation.ToolCallID, ResultSummary: result}, nil
+	}
 	if productdata.IsMCPToolName(invocation.ToolName) {
 		if e.MCPExecutor == nil {
 			return ToolResult{}, errors.New("mcp executor is unavailable")
@@ -160,6 +168,13 @@ func (e DefaultToolExecutor) ExecuteTool(ctx context.Context, invocation ToolInv
 	}
 	if productdata.IsAgentToolName(invocation.ToolName) {
 		result, err := e.AgentExecutor.Execute(ctx, invocation)
+		if err != nil {
+			return ToolResult{}, err
+		}
+		return ToolResult{ToolName: invocation.ToolName, ToolCallID: invocation.ToolCallID, ResultSummary: result}, nil
+	}
+	if productdata.IsTodoToolName(invocation.ToolName) {
+		result, err := ExecuteTodoWrite(invocation)
 		if err != nil {
 			return ToolResult{}, err
 		}

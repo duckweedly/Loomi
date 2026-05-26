@@ -59,6 +59,17 @@ export type ToolCatalogItem = {
   safeMetadata?: Record<string, unknown>
 }
 
+export type WebSearchConfig = {
+  hasTavilyKey: boolean
+  hasBraveKey: boolean
+  enabled: boolean
+}
+
+export type WorkspaceRootConfig = {
+  configured: boolean
+  displayName: string
+}
+
 export type MCPServerStatus = {
   serverSafeId: string
   serverSlug: string
@@ -72,6 +83,17 @@ export type MCPServerStatus = {
   executionMode: 'disabled' | 'approval_gated' | string
   redactedErrorCode?: string
   lastDiscoveredAt?: string
+}
+
+export type MCPServerConfigInput = {
+  slug: string
+  displayName: string
+  enabled: boolean
+  transport: 'stdio'
+  command: string
+  args: string[]
+  env: Record<string, string>
+  timeoutMs: number
 }
 
 export type MemoryEntry = {
@@ -124,6 +146,17 @@ export type Persona = {
   description: string
   activeVersion: string
   isDefault: boolean
+}
+
+export type InstalledSkill = {
+  id: string
+  name: string
+  description: string
+  source: 'project' | 'codex' | 'claude_code' | 'agents' | 'plugin_cache' | string
+  sourceLabel: string
+  package?: string
+  path: string
+  installed: boolean
 }
 
 export type ChatCanvasState =
@@ -189,6 +222,7 @@ export type WorkArtifactReference = {
 
 export type WorkProgressEvent = {
   id: string
+  title?: string
   type: string
   detail: string
   time: string

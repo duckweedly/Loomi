@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { apiClient, executionAdapter } from './apiClient'
 import { setMockRuntimeScript } from './mockApiClient'
-import type { BackendCapabilityState, LocalProviderDetection, MCPServerStatus, MemoryAuditItem, MemoryEntry, MemoryFilters, Message, Persona, ProviderCapability, Run, RunEvent, RuntimeEvent, RuntimeScriptId, StaleEventGuard, StreamState, Thread, ThreadRuntimeState, ToolCall, ToolCatalogItem } from './domain'
+import type { BackendCapabilityState, InstalledSkill, LocalProviderDetection, MCPServerConfigInput, MCPServerStatus, MemoryAuditItem, MemoryEntry, MemoryFilters, Message, Persona, ProviderCapability, Run, RunEvent, RuntimeEvent, RuntimeScriptId, StaleEventGuard, StreamState, Thread, ThreadRuntimeState, ToolCall, ToolCatalogItem, WebSearchConfig, WorkspaceRootConfig } from './domain'
 import { isRuntimeActive, isRuntimeTerminal } from './runtime/executionAdapter'
 import { deriveCapabilitySignalFromEvent } from './runtime/backendCapabilityStatus'
 import { applyRealRunEvent, mapRealRuntimeCapabilitySignal } from './runtime/realExecutionAdapter'
@@ -262,6 +262,16 @@ function memoryContextForEntry(entry: MemoryEntry): MemoryFilters {
   return context
 }
 
+type DesktopFolderSelection = { canceled?: boolean; path?: string }
+
+declare global {
+  interface Window {
+    loomiDesktop?: {
+      selectWorkspaceFolder?: () => Promise<DesktopFolderSelection>
+    }
+  }
+}
+
 export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat') {
   const [threads, setThreads] = useState<Thread[]>([])
   const [selectedThreadId, setSelectedThreadId] = useState('thread-brief')
@@ -275,10 +285,18 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
   const [selectedRuntimeScript, setSelectedRuntimeScript] = useState<RuntimeScriptId>('success')
   const [providerCapabilities, setProviderCapabilities] = useState<ProviderCapability[]>([])
   const [toolCatalog, setToolCatalog] = useState<ToolCatalogItem[]>([])
+  const [webSearchConfig, setWebSearchConfig] = useState<WebSearchConfig | null>(null)
+  const [webSearchSaveResult, setWebSearchSaveResult] = useState<ProviderSaveResult>({ status: 'idle' })
+  const [workspaceRootConfig, setWorkspaceRootConfig] = useState<WorkspaceRootConfig | null>(null)
+  const [workspaceRootSaveResult, setWorkspaceRootSaveResult] = useState<ProviderSaveResult>({ status: 'idle' })
   const [mcpServers, setMCPServers] = useState<MCPServerStatus[]>([])
+  const [mcpActionResult, setMCPActionResult] = useState<ProviderSaveResult>({ status: 'idle' })
   const [localProviderDetections, setLocalProviderDetections] = useState<LocalProviderDetection[]>([])
   const [localProviderDetectionError, setLocalProviderDetectionError] = useState<string | null>(null)
   const [personas, setPersonas] = useState<Persona[]>([])
+  const [installedSkills, setInstalledSkills] = useState<InstalledSkill[]>([])
+  const [skillsLoading, setSkillsLoading] = useState(false)
+  const [skillsError, setSkillsError] = useState<string | null>(null)
   const [selectedPersonaId, setSelectedPersonaId] = useState('')
   const [providerCheckResults, setProviderCheckResults] = useState<Record<string, ProviderCheckResult>>({})
   const [providerSaveResult, setProviderSaveResult] = useState<ProviderSaveResult>({ status: 'idle' })
@@ -349,11 +367,49 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
       .then((providers) => {
         if (!cancelled) setProviderCapabilities(providers.map(redactProviderCapabilityMessage))
       })
-      .catch(() => {
-        if (!cancelled) setProviderCapabilities([])
+      .catch((err) => {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : 'Provider list request failed')
+          setCapabilitySignals((current) => ({ ...current, ...mapRealRuntimeCapabilitySignal(err) }))
+        }
       })
     return () => {
       cancelled = true
+    }
+  }, [])
+
+  const saveMCPServer = useCallback(async (input: MCPServerConfigInput) => {
+    if (!apiClient.saveMCPServer) return
+    setMCPActionResult({ status: 'saving' })
+    try {
+      const server = await apiClient.saveMCPServer(input)
+      setMCPServers((current) => [...current.filter((item) => item.serverSlug !== server.serverSlug), server].sort((a, b) => a.serverSlug.localeCompare(b.serverSlug)))
+      setMCPActionResult({ status: 'success', message: 'Saved' })
+    } catch (err) {
+      setMCPActionResult({ status: 'failed', message: err instanceof Error ? redactProviderCheckMessage(err.message) : 'MCP save failed' })
+    }
+  }, [])
+
+  const deleteMCPServer = useCallback(async (slug: string) => {
+    if (!apiClient.deleteMCPServer) return
+    setMCPActionResult({ status: 'saving' })
+    try {
+      setMCPServers(await apiClient.deleteMCPServer(slug))
+      setMCPActionResult({ status: 'success', message: 'Deleted' })
+    } catch (err) {
+      setMCPActionResult({ status: 'failed', message: err instanceof Error ? redactProviderCheckMessage(err.message) : 'MCP delete failed' })
+    }
+  }, [])
+
+  const discoverMCPServer = useCallback(async (slug: string) => {
+    if (!apiClient.discoverMCPServer) return
+    setMCPActionResult({ status: 'saving' })
+    try {
+      const server = await apiClient.discoverMCPServer(slug)
+      setMCPServers((current) => current.map((item) => (item.serverSlug === slug ? server : item)))
+      setMCPActionResult({ status: server.discoveryStatus === 'succeeded' ? 'success' : 'failed', message: server.discoveryStatus })
+    } catch (err) {
+      setMCPActionResult({ status: 'failed', message: err instanceof Error ? redactProviderCheckMessage(err.message) : 'MCP discovery failed' })
     }
   }, [])
 
@@ -440,6 +496,42 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
   }, [])
 
   useEffect(() => {
+    if (!apiClient.getWebSearchConfig) {
+      setWebSearchConfig(null)
+      return
+    }
+    let cancelled = false
+    apiClient.getWebSearchConfig()
+      .then((config) => {
+        if (!cancelled) setWebSearchConfig(config)
+      })
+      .catch(() => {
+        if (!cancelled) setWebSearchConfig(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!apiClient.getWorkspaceRoot) {
+      setWorkspaceRootConfig(null)
+      return
+    }
+    let cancelled = false
+    apiClient.getWorkspaceRoot()
+      .then((config) => {
+        if (!cancelled) setWorkspaceRootConfig(config)
+      })
+      .catch(() => {
+        if (!cancelled) setWorkspaceRootConfig(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
     if (!apiClient.listPersonas) {
       setPersonas([])
       setSelectedPersonaId('')
@@ -457,6 +549,33 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
           setPersonas([])
           setSelectedPersonaId('')
         }
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!apiClient.listSkills) {
+      setInstalledSkills([])
+      setSkillsError(null)
+      return
+    }
+    let cancelled = false
+    setSkillsLoading(true)
+    setSkillsError(null)
+    apiClient.listSkills()
+      .then((items) => {
+        if (!cancelled) setInstalledSkills(items)
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setInstalledSkills([])
+          setSkillsError(err instanceof Error ? err.message : 'Skills failed to load')
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setSkillsLoading(false)
       })
     return () => {
       cancelled = true
@@ -666,11 +785,11 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
     }
   }, [selectedPersonaId, selectedThreadId])
 
-  const createThread = useCallback(async () => {
+  const createThread = useCallback(async (mode: Thread['mode'] = defaultWorkspaceMode) => {
     if (!apiClient.createThread) return
     setError(null)
     try {
-      const thread = await apiClient.createThread(createNextThreadTitle(threads), defaultWorkspaceMode)
+      const thread = await apiClient.createThread(createNextThreadTitle(threads), mode)
       setSelectedThreadId(thread.id)
       await refresh(thread.id)
     } catch (err) {
@@ -828,6 +947,44 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
     }
   }, [])
 
+  const saveWebSearchKeys = useCallback(async (input: { tavilyApiKey?: string; braveApiKey?: string }) => {
+    if (!apiClient.saveWebSearchKeys) return
+    setWebSearchSaveResult({ status: 'saving' })
+    try {
+      const config = await apiClient.saveWebSearchKeys(input)
+      setWebSearchConfig(config)
+      setWebSearchSaveResult({ status: config.enabled ? 'success' : 'failed', message: config.enabled ? 'Saved' : 'At least one key is required' })
+    } catch (err) {
+      setWebSearchSaveResult({ status: 'failed', message: redactProviderCheckMessage(err instanceof Error ? err.message : 'Web search save failed') })
+    }
+  }, [])
+
+  const chooseWorkspaceFolder = useCallback(async () => {
+    if (!apiClient.saveWorkspaceRoot) {
+      setWorkspaceRootSaveResult({ status: 'failed', message: 'Workspace folder endpoint unavailable' })
+      return
+    }
+    const picker = window.loomiDesktop?.selectWorkspaceFolder
+    if (!picker) {
+      setWorkspaceRootSaveResult({ status: 'failed', message: '请在桌面端选择目录' })
+      return
+    }
+    setWorkspaceRootSaveResult({ status: 'saving' })
+    try {
+      const selected = await picker()
+      if (selected.canceled || !selected.path) {
+        setWorkspaceRootSaveResult({ status: 'idle' })
+        return
+      }
+      const config = await apiClient.saveWorkspaceRoot({ path: selected.path })
+      setWorkspaceRootConfig(config)
+      setWorkspaceRootSaveResult({ status: 'success', message: `已授权 ${config.displayName}` })
+      setError(null)
+    } catch (err) {
+      setWorkspaceRootSaveResult({ status: 'failed', message: err instanceof Error ? err.message : 'Workspace folder save failed' })
+    }
+  }, [])
+
   return {
     threads,
     selectedThread,
@@ -844,10 +1001,18 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
     selectedRuntimeScript,
     providerCapabilities,
     toolCatalog,
+    webSearchConfig,
+    webSearchSaveResult,
+    workspaceRootConfig,
+    workspaceRootSaveResult,
     mcpServers,
+    mcpActionResult,
     localProviderDetections,
     localProviderDetectionError,
     personas,
+    installedSkills,
+    skillsLoading,
+    skillsError,
     selectedPersonaId,
     providerCheckResults,
     providerSaveResult,
@@ -870,6 +1035,11 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
     enableLocalProvider,
     disableLocalProvider,
     saveProvider,
+    saveWebSearchKeys,
+    chooseWorkspaceFolder,
+    saveMCPServer,
+    deleteMCPServer,
+    discoverMCPServer,
     setMemorySearchQuery,
     updateMemoryFilters,
     openMemoryDetail,

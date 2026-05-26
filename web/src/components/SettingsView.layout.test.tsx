@@ -25,7 +25,9 @@ describe('SettingsView layout contract', () => {
   test('providers settings expose a saved local provider action without draft-only copy', async () => {
     const text = await source
 
-    expect(text).toContain('provider-save-button')
+    expect(text).toContain('provider-save-modal-button')
+    expect(text).toContain('provider-add-button')
+    expect(text).toContain('provider-filter-tabs')
     expect(text).toContain('onSaveProvider')
     expect(text).not.toContain('不会保存')
     expect(text).not.toContain('not saved')

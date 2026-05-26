@@ -24,6 +24,8 @@ const (
 )
 
 var browserLinkPattern = regexp.MustCompile(`(?is)<a\s+[^>]*href\s*=\s*["']([^"']+)["'][^>]*>(.*?)</a>`)
+var browserInputPattern = regexp.MustCompile(`(?is)<(?:input|textarea)\s+([^>]*)>`)
+var browserAttrPattern = regexp.MustCompile(`(?is)(name|id|placeholder|type|aria-label)\s*=\s*["']([^"']*)["']`)
 
 type BrowserToolExecutor struct {
 	Store             *BrowserSessionStore
@@ -47,6 +49,9 @@ type browserSession struct {
 	Title       string
 	TextExcerpt string
 	Links       []map[string]any
+	Inputs      []map[string]any
+	FormValues  map[string]string
+	LastKey     string
 	BytesRead   int
 	ByteLimit   int
 	Truncated   bool
@@ -62,6 +67,9 @@ func BrowserToolDefinitions() []ToolDefinition {
 		{Name: productdata.ToolNameBrowserOpen, ApprovalPolicy: ToolApprovalAlwaysRequired, SafetyClass: ToolSafetyPublicNetworkRead, Source: ToolSourceInternal, ExecutionState: ToolExecutionAllowlisted},
 		{Name: productdata.ToolNameBrowserSnapshot, ApprovalPolicy: ToolApprovalAlwaysRequired, SafetyClass: ToolSafetyPublicNetworkRead, Source: ToolSourceInternal, ExecutionState: ToolExecutionAllowlisted},
 		{Name: productdata.ToolNameBrowserClickLink, ApprovalPolicy: ToolApprovalAlwaysRequired, SafetyClass: ToolSafetyPublicNetworkRead, Source: ToolSourceInternal, ExecutionState: ToolExecutionAllowlisted},
+		{Name: productdata.ToolNameBrowserScreenshot, ApprovalPolicy: ToolApprovalAlwaysRequired, SafetyClass: ToolSafetyPublicNetworkRead, Source: ToolSourceInternal, ExecutionState: ToolExecutionAllowlisted},
+		{Name: productdata.ToolNameBrowserType, ApprovalPolicy: ToolApprovalAlwaysRequired, SafetyClass: ToolSafetyPublicNetworkRead, Source: ToolSourceInternal, ExecutionState: ToolExecutionAllowlisted},
+		{Name: productdata.ToolNameBrowserPress, ApprovalPolicy: ToolApprovalAlwaysRequired, SafetyClass: ToolSafetyPublicNetworkRead, Source: ToolSourceInternal, ExecutionState: ToolExecutionAllowlisted},
 	}
 }
 
@@ -73,6 +81,12 @@ func (e BrowserToolExecutor) Execute(ctx context.Context, invocation ToolInvocat
 		return e.snapshot(invocation)
 	case productdata.ToolNameBrowserClickLink:
 		return e.clickLink(ctx, invocation)
+	case productdata.ToolNameBrowserScreenshot:
+		return e.screenshot(invocation)
+	case productdata.ToolNameBrowserType:
+		return e.typeText(invocation)
+	case productdata.ToolNameBrowserPress:
+		return e.press(invocation)
 	default:
 		return nil, errors.New("browser tool is not supported")
 	}
@@ -99,6 +113,61 @@ func (e BrowserToolExecutor) snapshot(invocation ToolInvocation) (map[string]any
 		return nil, errors.New("browser session is unavailable")
 	}
 	return browserSessionResult(productdata.ToolNameBrowserSnapshot, "snapshot", session, ""), nil
+}
+
+func (e BrowserToolExecutor) screenshot(invocation ToolInvocation) (map[string]any, error) {
+	sessionID := strings.TrimSpace(stringArg(invocation.ArgumentsSummary, "session_id", ""))
+	session, ok := e.store().get(invocation.RunID, sessionID)
+	if !ok {
+		return nil, errors.New("browser session is unavailable")
+	}
+	result := browserSessionResult(productdata.ToolNameBrowserScreenshot, "screenshot", session, "")
+	result["format"] = "text"
+	result["screenshot_text"] = boundedWebExcerpt(strings.TrimSpace(session.Title + "\n" + session.TextExcerpt))
+	return result, nil
+}
+
+func (e BrowserToolExecutor) typeText(invocation ToolInvocation) (map[string]any, error) {
+	sessionID := strings.TrimSpace(stringArg(invocation.ArgumentsSummary, "session_id", ""))
+	session, ok := e.store().get(invocation.RunID, sessionID)
+	if !ok {
+		return nil, errors.New("browser session is unavailable")
+	}
+	target := strings.TrimSpace(stringArg(invocation.ArgumentsSummary, "target", ""))
+	text := boundedWebExcerpt(stringArg(invocation.ArgumentsSummary, "text", ""))
+	if target == "" || text == "" {
+		return nil, errors.New("browser type target and text are required")
+	}
+	if !browserInputTargetAllowed(session, target) {
+		return nil, errors.New("browser input target is unavailable")
+	}
+	if session.FormValues == nil {
+		session.FormValues = map[string]string{}
+	}
+	session.FormValues[target] = text
+	e.store().save(session)
+	result := browserSessionResult(productdata.ToolNameBrowserType, "type", session, "")
+	result["target"] = target
+	result["text_length"] = len([]rune(text))
+	return result, nil
+}
+
+func (e BrowserToolExecutor) press(invocation ToolInvocation) (map[string]any, error) {
+	sessionID := strings.TrimSpace(stringArg(invocation.ArgumentsSummary, "session_id", ""))
+	session, ok := e.store().get(invocation.RunID, sessionID)
+	if !ok {
+		return nil, errors.New("browser session is unavailable")
+	}
+	key := strings.TrimSpace(stringArg(invocation.ArgumentsSummary, "key", ""))
+	if !browserKeyAllowed(key) {
+		return nil, errors.New("browser key is not allowed")
+	}
+	session.LastKey = key
+	e.store().save(session)
+	result := browserSessionResult(productdata.ToolNameBrowserPress, "press", session, "")
+	result["key"] = key
+	result["submitted"] = key == "Enter"
+	return result, nil
 }
 
 func (e BrowserToolExecutor) clickLink(ctx context.Context, invocation ToolInvocation) (map[string]any, error) {
@@ -164,10 +233,12 @@ func (e BrowserToolExecutor) navigate(ctx context.Context, invocation ToolInvoca
 	text := strings.ToValidUTF8(string(raw), "")
 	title := ""
 	links := []map[string]any{}
+	inputs := []map[string]any{}
 	if isTextLikeContentType(contentType) {
 		if strings.Contains(contentType, "html") {
 			title = extractHTMLTitle(text)
 			links = e.extractLinks(ctx, resp.Request.URL, text)
+			inputs = extractBrowserInputs(text)
 			text = htmlTagPattern.ReplaceAllString(text, " ")
 		}
 		text = boundedWebExcerpt(htmlWhitespacePattern.ReplaceAllString(strings.TrimSpace(text), " "))
@@ -185,6 +256,8 @@ func (e BrowserToolExecutor) navigate(ctx context.Context, invocation ToolInvoca
 		Title:       title,
 		TextExcerpt: text,
 		Links:       links,
+		Inputs:      inputs,
+		FormValues:  map[string]string{},
 		BytesRead:   min(len(raw), maxBytes),
 		ByteLimit:   maxBytes,
 		Truncated:   truncated,
@@ -262,6 +335,7 @@ func browserSessionResult(toolName string, operation string, session browserSess
 		"content_type":      session.ContentType,
 		"final_url":         session.FinalURL,
 		"links":             session.Links,
+		"inputs":            session.Inputs,
 		"operation":         operation,
 		"redaction_applied": false,
 		"scope":             "browser",
@@ -273,10 +347,71 @@ func browserSessionResult(toolName string, operation string, session browserSess
 		"truncated":         session.Truncated,
 		"url":               session.URL,
 	}
+	if len(session.FormValues) > 0 {
+		result["form_value_count"] = len(session.FormValues)
+	}
+	if session.LastKey != "" {
+		result["last_key"] = session.LastKey
+	}
 	if previousURL != "" {
 		result["previous_url"] = previousURL
 	}
 	return result
+}
+
+func extractBrowserInputs(document string) []map[string]any {
+	matches := browserInputPattern.FindAllStringSubmatch(document, -1)
+	inputs := make([]map[string]any, 0, min(len(matches), 20))
+	for _, match := range matches {
+		attrs := map[string]string{}
+		for _, attr := range browserAttrPattern.FindAllStringSubmatch(match[1], -1) {
+			if len(attr) == 3 {
+				attrs[strings.ToLower(attr[1])] = html.UnescapeString(strings.TrimSpace(attr[2]))
+			}
+		}
+		target := attrs["name"]
+		if target == "" {
+			target = attrs["id"]
+		}
+		if target == "" {
+			target = attrs["placeholder"]
+		}
+		if target == "" {
+			target = attrs["aria-label"]
+		}
+		if strings.TrimSpace(target) == "" {
+			continue
+		}
+		inputs = append(inputs, map[string]any{"index": len(inputs), "target": boundedWebExcerpt(target), "type": boundedWebExcerpt(attrs["type"]), "label": boundedWebExcerpt(firstBrowserNonEmpty(attrs["aria-label"], attrs["placeholder"], target))})
+	}
+	return inputs
+}
+
+func browserInputTargetAllowed(session browserSession, target string) bool {
+	for _, input := range session.Inputs {
+		if value, _ := input["target"].(string); value == target {
+			return true
+		}
+	}
+	return false
+}
+
+func browserKeyAllowed(key string) bool {
+	switch key {
+	case "Enter", "Escape", "Tab", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight":
+		return true
+	default:
+		return false
+	}
+}
+
+func firstBrowserNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func browserSessionID(runID string, toolCallID string, rawURL string) string {

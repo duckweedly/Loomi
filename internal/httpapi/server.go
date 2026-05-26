@@ -8,6 +8,7 @@ import (
 
 	"github.com/sheridiany/loomi/internal/config"
 	"github.com/sheridiany/loomi/internal/db"
+	"github.com/sheridiany/loomi/internal/identity"
 	"github.com/sheridiany/loomi/internal/productdata"
 	productruntime "github.com/sheridiany/loomi/internal/runtime"
 )
@@ -33,7 +34,9 @@ type Server struct {
 	providerMu                  sync.RWMutex
 	providers                   []productruntime.ProviderConfig
 	localProviderDetectionInput productruntime.LocalProviderDetectionInput
+	skillDiscoveryInput         productruntime.SkillDiscoveryInput
 	localProviderEnablements    map[string]productruntime.LocalProviderCapability
+	mcpDiscoveryEvents          []productdata.RunEvent
 	mux                         *http.ServeMux
 }
 
@@ -51,7 +54,8 @@ func NewServerWithRuntime(cfg config.Config, checker db.Checker, product product
 }
 
 func NewServerWithRuntimes(cfg config.Config, checker db.Checker, product productdata.Service, broadcaster *productruntime.Broadcaster, runner RuntimeRunner, gatewayRunner GatewayRunner) *Server {
-	s := &Server{cfg: cfg, checker: checker, product: product, broadcaster: broadcaster, runner: runner, gatewayRunner: gatewayRunner, providers: productruntime.ProviderConfigsFromConfig(cfg), localProviderEnablements: map[string]productruntime.LocalProviderCapability{}, mux: http.NewServeMux()}
+	providers := append(productruntime.ProviderConfigsFromConfig(cfg), savedProviderConfigs(product)...)
+	s := &Server{cfg: cfg, checker: checker, product: product, broadcaster: broadcaster, runner: runner, gatewayRunner: gatewayRunner, providers: providers, skillDiscoveryInput: productruntime.DefaultSkillDiscoveryInput(), localProviderEnablements: map[string]productruntime.LocalProviderCapability{}, mux: http.NewServeMux()}
 	s.mux.HandleFunc("GET /healthz", s.handleHealthz)
 	s.mux.HandleFunc("GET /readyz", s.handleReadyz)
 	s.mux.HandleFunc("GET /v1/me", s.handleCurrentIdentity)
@@ -61,14 +65,34 @@ func NewServerWithRuntimes(cfg config.Config, checker db.Checker, product produc
 	s.mux.HandleFunc("POST /v1/model-providers/check", s.handleModelProviderCheck)
 	s.mux.HandleFunc("GET /v1/local-provider-detections", s.handleLocalProviderDetections)
 	s.mux.HandleFunc("/v1/local-provider-detections/", s.handleLocalProviderDetectionByID)
+	s.mux.HandleFunc("/v1/skills", s.handleSkills)
 	s.mux.HandleFunc("/v1/tools/catalog", s.handleToolsCatalog)
+	s.mux.HandleFunc("/v1/web-search/config", s.handleWebSearchConfig)
+	s.mux.HandleFunc("/v1/workspace/root", s.handleWorkspaceRoot)
 	s.mux.HandleFunc("/v1/mcp/servers", s.handleMCPServers)
+	s.mux.HandleFunc("/v1/mcp/servers/", s.handleMCPServerBySlug)
 	s.mux.HandleFunc("/v1/memory", s.handleMemory)
 	s.mux.HandleFunc("/v1/memory/", s.handleMemoryByID)
 	s.mux.HandleFunc("/v1/threads", s.handleThreads)
 	s.mux.HandleFunc("/v1/threads/", s.handleThreadByID)
 	s.mux.HandleFunc("/v1/runs/", s.handleRunByID)
 	return s
+}
+
+func savedProviderConfigs(product productdata.Service) []productruntime.ProviderConfig {
+	store, ok := product.(productdata.ModelProviderConfigStore)
+	if !ok {
+		return nil
+	}
+	saved, err := store.ListModelProviderConfigs(context.Background(), identity.LocalDevIdentity())
+	if err != nil {
+		return nil
+	}
+	providers := make([]productruntime.ProviderConfig, 0, len(saved))
+	for _, provider := range saved {
+		providers = append(providers, productruntime.ProviderConfig{ID: provider.ID, Family: productruntime.ProviderFamily(provider.Family), BaseURL: provider.BaseURL, APIKey: provider.APIKey, Model: provider.Model, Enabled: provider.Enabled})
+	}
+	return providers
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {

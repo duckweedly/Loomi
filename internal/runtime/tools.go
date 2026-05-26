@@ -40,9 +40,13 @@ func CurrentTimeToolDefinition() ToolDefinition {
 func ToolResolutionsForPersona(allowedToolNames []string) []productdata.ToolResolution {
 	resolutions := make([]productdata.ToolResolution, 0, len(allowedToolNames))
 	for _, name := range allowedToolNames {
+		if productdata.IsDiscoveryToolName(name) {
+			resolutions = append(resolutions, productdata.ToolResolution{Name: name, ApprovalPolicy: string(ToolApprovalNotRequired), ExecutionState: string(productdata.ToolExecutionStateExecutable), Source: string(productdata.ToolCatalogSourceBuiltin), Group: string(productdata.ToolCatalogGroupDiscovery), RiskLevel: string(productdata.ToolRiskLow)})
+			continue
+		}
 		if productdata.IsWorkspaceToolName(name) {
 			riskLevel := productdata.ToolRiskLow
-			if name == productdata.ToolNameWorkspaceWriteFile || name == productdata.ToolNameWorkspaceEdit {
+			if name == productdata.ToolNameWorkspaceWriteFile || name == productdata.ToolNameWorkspaceEdit || name == productdata.ToolNameWorkspacePatchPreview || name == productdata.ToolNameWorkspacePatchApply {
 				riskLevel = productdata.ToolRiskHigh
 			}
 			resolutions = append(resolutions, productdata.ToolResolution{Name: name, ApprovalPolicy: string(ToolApprovalAlwaysRequired), ExecutionState: string(productdata.ToolExecutionStateExecutable), Source: string(productdata.ToolCatalogSourceBuiltin), Group: string(productdata.ToolCatalogGroupWorkspace), RiskLevel: string(riskLevel)})
@@ -57,7 +61,11 @@ func ToolResolutionsForPersona(allowedToolNames []string) []productdata.ToolReso
 			continue
 		}
 		if productdata.IsWebToolName(name) {
-			resolutions = append(resolutions, productdata.ToolResolution{Name: name, ApprovalPolicy: string(ToolApprovalAlwaysRequired), ExecutionState: string(productdata.ToolExecutionStateExecutable), Source: string(productdata.ToolCatalogSourceBuiltin), Group: string(productdata.ToolCatalogGroupWeb), RiskLevel: string(productdata.ToolRiskMedium)})
+			approvalPolicy := string(ToolApprovalAlwaysRequired)
+			if name == productdata.ToolNameWebSearch {
+				approvalPolicy = string(ToolApprovalNotRequired)
+			}
+			resolutions = append(resolutions, productdata.ToolResolution{Name: name, ApprovalPolicy: approvalPolicy, ExecutionState: string(productdata.ToolExecutionStateExecutable), Source: string(productdata.ToolCatalogSourceBuiltin), Group: string(productdata.ToolCatalogGroupWeb), RiskLevel: string(productdata.ToolRiskMedium)})
 			continue
 		}
 		if productdata.IsBrowserToolName(name) {

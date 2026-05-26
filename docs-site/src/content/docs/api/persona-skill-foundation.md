@@ -3,7 +3,7 @@ title: Persona Skill Foundation API
 description: M10 persona list, thread selection, run override, and safe event metadata contracts.
 ---
 
-M10 exposes enough API surface for the frontend to list personas and start a run with a selected persona. Persona prompt text is never returned through these read APIs.
+M10 exposes enough API surface for the frontend to list personas, list locally installed skill manifests, and start a run with a selected persona. Persona prompt text and skill instruction bodies are never returned through these read APIs.
 
 ## `GET /v1/personas`
 
@@ -25,6 +25,29 @@ Returns active persona summaries:
 ```
 
 The response excludes system prompt text, model route internals, budget details, and raw skill configuration.
+
+## `GET /v1/skills`
+
+Returns local installed skill summaries discovered from known read-only roots such as project `.agents/skills`, user Codex skills, Claude Code skills, and plugin skill caches:
+
+```json
+{
+  "skills": [
+    {
+      "id": "codex:...",
+      "name": "skill-creator",
+      "description": "Guide for creating effective skills.",
+      "source": "codex",
+      "source_label": "Codex",
+      "package": "",
+      "path": "/Users/.../.codex/skills/.system/skill-creator/SKILL.md",
+      "installed": true
+    }
+  ]
+}
+```
+
+The endpoint reads only `SKILL.md` metadata from fixed local roots. It does not execute skills, install packages, mutate plugin state, or return full instruction bodies.
 
 ## Thread Persona
 
@@ -76,4 +99,4 @@ Pipeline `prepare_context` metadata may include safe persona fields:
 }
 ```
 
-Prompt text, provider credentials, raw tool payloads, hidden local state, and future skill internals must not appear in ordinary event history or SSE.
+Prompt text, provider credentials, raw tool payloads, hidden local state, skill instruction bodies, and future skill internals must not appear in ordinary event history or SSE.

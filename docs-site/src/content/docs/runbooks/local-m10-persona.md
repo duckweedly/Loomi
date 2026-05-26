@@ -8,6 +8,7 @@ description: Local validation checklist for Persona/Skill foundation.
 This runbook validates the M10 minimal slice:
 
 - built-in persona syncs into product data
+- installed local `SKILL.md` manifests are discoverable through the read-only API
 - thread/run can choose or inherit a persona
 - RunContext stores a durable persona snapshot/version
 - Timeline/debug show only safe persona summary
@@ -37,6 +38,18 @@ Expected:
 - at least one default persona
 - `slug` and `active_version` are present
 - no system prompt text appears
+
+Check installed skill discovery:
+
+```bash
+curl -s http://127.0.0.1:8080/v1/skills
+```
+
+Expected:
+
+- project, Codex, Claude Code, or plugin `SKILL.md` manifests appear when installed locally
+- each item includes `name`, `source`, `source_label`, `path`, and `installed`
+- full skill instruction bodies do not appear
 
 Create or update a thread with a persona id, then create a model-gateway run with either inherited persona or `persona_id` override.
 

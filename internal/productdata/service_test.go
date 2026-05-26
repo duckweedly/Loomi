@@ -434,7 +434,7 @@ func TestWorkModeScopedToolsOnlyEnabledForWorkModeRunContext(t *testing.T) {
 		Description:      "Default persona",
 		SystemPrompt:     "prompt",
 		ModelRoute:       PersonaModelRoute{ProviderID: "custom", Model: "model"},
-		AllowedToolNames: []string{ToolNameCurrentTime, ToolNameWorkspaceGlob, ToolNameWorkspaceGrep, ToolNameWorkspaceRead, ToolNameWorkspaceWriteFile, ToolNameWorkspaceEdit, ToolNameSandboxExecCommand, ToolNameLSPDiagnostics, ToolNameLSPSymbols, ToolNameLSPReferences, ToolNameWebFetch, ToolNameBrowserOpen, ToolNameBrowserSnapshot, ToolNameBrowserClickLink, ToolNameArtifactCreateText, ToolNameArtifactRead, ToolNameArtifactList, ToolNameAgentSpawn, ToolNameAgentList, ToolNameAgentComplete},
+		AllowedToolNames: []string{ToolNameCurrentTime, ToolNameWorkspaceGlob, ToolNameWorkspaceGrep, ToolNameWorkspaceRead, ToolNameWorkspaceWriteFile, ToolNameWorkspaceEdit, ToolNameWorkspacePatchPreview, ToolNameWorkspacePatchApply, ToolNameSandboxExecCommand, ToolNameSandboxStartProcess, ToolNameSandboxContinueProcess, ToolNameSandboxTerminateProcess, ToolNameLSPDiagnostics, ToolNameLSPSymbols, ToolNameLSPReferences, ToolNameLSPDefinition, ToolNameLSPHover, ToolNameWebFetch, ToolNameBrowserOpen, ToolNameBrowserSnapshot, ToolNameBrowserClickLink, ToolNameBrowserScreenshot, ToolNameBrowserType, ToolNameBrowserPress, ToolNameArtifactCreateText, ToolNameArtifactRead, ToolNameArtifactList, ToolNameAgentSpawn, ToolNameAgentList, ToolNameAgentComplete, ToolNameTodoWrite},
 		ReasoningMode:    "balanced",
 		BudgetSummary:    "budget",
 		Version:          "1",
@@ -463,16 +463,19 @@ func TestWorkModeScopedToolsOnlyEnabledForWorkModeRunContext(t *testing.T) {
 		}
 		hasWorkspaceRead := catalogResolutionByName(ctxData.EnabledTools, ToolNameWorkspaceRead).Name != ""
 		hasWorkspaceWrite := catalogResolutionByName(ctxData.EnabledTools, ToolNameWorkspaceWriteFile).Name != ""
+		hasWorkspacePatchPreview := catalogResolutionByName(ctxData.EnabledTools, ToolNameWorkspacePatchPreview).Name != ""
+		hasWorkspacePatchApply := catalogResolutionByName(ctxData.EnabledTools, ToolNameWorkspacePatchApply).Name != ""
 		hasSandboxExec := catalogResolutionByName(ctxData.EnabledTools, ToolNameSandboxExecCommand).Name != ""
 		hasLSPSymbols := catalogResolutionByName(ctxData.EnabledTools, ToolNameLSPSymbols).Name != ""
 		hasWebFetch := catalogResolutionByName(ctxData.EnabledTools, ToolNameWebFetch).Name != ""
 		hasBrowserOpen := catalogResolutionByName(ctxData.EnabledTools, ToolNameBrowserOpen).Name != ""
 		hasArtifactCreate := catalogResolutionByName(ctxData.EnabledTools, ToolNameArtifactCreateText).Name != ""
 		hasAgentSpawn := catalogResolutionByName(ctxData.EnabledTools, ToolNameAgentSpawn).Name != ""
-		if mode == ThreadModeChat && (hasWorkspaceRead || hasWorkspaceWrite || hasSandboxExec || hasLSPSymbols || hasWebFetch || hasBrowserOpen || hasArtifactCreate || hasAgentSpawn) {
+		hasTodoWrite := catalogResolutionByName(ctxData.EnabledTools, ToolNameTodoWrite).Name != ""
+		if mode == ThreadModeChat && (hasWorkspaceRead || hasWorkspaceWrite || hasWorkspacePatchPreview || hasWorkspacePatchApply || hasSandboxExec || hasLSPSymbols || hasWebFetch || hasBrowserOpen || hasArtifactCreate || hasAgentSpawn || hasTodoWrite) {
 			t.Fatalf("chat enabled work-mode tools: %+v", ctxData.EnabledTools)
 		}
-		if mode == ThreadModeWork && (!hasWorkspaceRead || !hasWorkspaceWrite || !hasSandboxExec || !hasLSPSymbols || !hasWebFetch || !hasBrowserOpen || !hasArtifactCreate || !hasAgentSpawn) {
+		if mode == ThreadModeWork && (!hasWorkspaceRead || !hasWorkspaceWrite || !hasWorkspacePatchPreview || !hasWorkspacePatchApply || !hasSandboxExec || !hasLSPSymbols || !hasWebFetch || !hasBrowserOpen || !hasArtifactCreate || !hasAgentSpawn || !hasTodoWrite) {
 			t.Fatalf("work missing work-mode tools: %+v", ctxData.EnabledTools)
 		}
 	}

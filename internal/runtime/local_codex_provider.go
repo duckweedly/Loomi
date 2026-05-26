@@ -65,7 +65,7 @@ func buildLocalCodexResponsesRequest(ctx context.Context, snapshot LocalCodexCre
 		"model":               selectedModel(request.Model, snapshot.Model),
 		"instructions":        "",
 		"input":               localCodexResponsesInput(request.Messages),
-		"tools":               []any{},
+		"tools":               localCodexTools(request.Tools),
 		"tool_choice":         "auto",
 		"parallel_tool_calls": false,
 		"reasoning":           nil,
@@ -91,9 +91,43 @@ func buildLocalCodexResponsesRequest(ctx context.Context, snapshot LocalCodexCre
 	return httpRequest, nil
 }
 
+func localCodexTools(tools []ProviderToolDefinition) []map[string]any {
+	result := make([]map[string]any, 0, len(tools))
+	for _, tool := range tools {
+		if tool.ProviderName == "" || len(tool.Parameters) == 0 {
+			continue
+		}
+		result = append(result, map[string]any{
+			"type":        "function",
+			"name":        tool.ProviderName,
+			"description": tool.Description,
+			"parameters":  tool.Parameters,
+		})
+	}
+	return result
+}
+
 func localCodexResponsesInput(messages []ProviderMessage) []map[string]any {
 	items := make([]map[string]any, 0, len(messages))
 	for _, message := range messages {
+		if message.Role == ProviderMessageRoleAssistantToolCall {
+			arguments, _ := json.Marshal(message.ArgumentsSummary)
+			items = append(items, map[string]any{
+				"type":      "function_call",
+				"call_id":   message.ToolCallID,
+				"name":      providerToolName(message.ToolName),
+				"arguments": string(arguments),
+			})
+			continue
+		}
+		if message.Role == ProviderMessageRoleToolResult {
+			items = append(items, map[string]any{
+				"type":    "function_call_output",
+				"call_id": message.ToolCallID,
+				"output":  message.Content,
+			})
+			continue
+		}
 		role := strings.TrimSpace(message.Role)
 		if role != "assistant" {
 			role = "user"
@@ -151,8 +185,14 @@ func localCodexDispatchResponsesEvent(ctx context.Context, data string, ch chan<
 		return false
 	}
 	var event struct {
-		Type     string `json:"type"`
-		Delta    string `json:"delta"`
+		Type  string `json:"type"`
+		Delta string `json:"delta"`
+		Item  struct {
+			Type      string `json:"type"`
+			Name      string `json:"name"`
+			CallID    string `json:"call_id"`
+			Arguments string `json:"arguments"`
+		} `json:"item"`
 		Response struct {
 			Error struct {
 				Type string `json:"type"`
@@ -168,6 +208,18 @@ func localCodexDispatchResponsesEvent(ctx context.Context, data string, ch chan<
 	case "response.output_text.delta":
 		if event.Delta != "" {
 			_ = sendProviderEvent(ctx, ch, ProviderEvent{Type: ProviderEventTextDelta, Text: event.Delta})
+		}
+	case "response.output_item.done":
+		if event.Item.Type == "function_call" && event.Item.Name != "" {
+			metadata := map[string]any{}
+			if event.Item.CallID != "" {
+				metadata["tool_call_id"] = event.Item.CallID
+			}
+			if event.Item.Arguments != "" {
+				metadata["arguments_summary"] = parseToolArgumentsSummary(event.Item.Arguments)
+			}
+			_ = sendProviderEvent(ctx, ch, ProviderEvent{Type: ProviderEventToolCall, ToolName: internalProviderToolName(event.Item.Name), Metadata: metadata})
+			return true
 		}
 	case "response.completed":
 		_ = sendProviderEvent(ctx, ch, ProviderEvent{Type: ProviderEventCompleted})

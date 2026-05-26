@@ -22,7 +22,7 @@ go test ./internal/runtime -run 'TestWorkspaceReadTools|TestToolBrokerExecutesWo
 
 Expected backend evidence:
 
-1. Fixture root is set through `LOOMI_WORKSPACE_ROOT`.
+1. Fixture root is set through `LOOMI_WORKSPACE_ROOT`; when unset in local desktop/dev, the runtime defaults to the user's home directory.
 2. Work mode run requests `workspace.glob`, `workspace.grep`, or `workspace.read`.
 3. Run emits `tool_call_requested` and `tool_call_approval_required`.
 4. No filesystem content is returned before approval.
@@ -30,6 +30,7 @@ Expected backend evidence:
 6. Worker executes through ToolBroker and emits `tool_call_executing` then success or failure.
 7. Success triggers provider continuation and final assistant message.
 8. Sensitive paths and symlink escape fail without leaking fixture secret content.
+9. Desktop Work composer can choose a folder; the local API updates the runtime workspace root for subsequent tool calls.
 
 ## UI Check
 

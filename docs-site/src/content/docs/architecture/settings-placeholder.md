@@ -15,7 +15,7 @@ Settings is frontend state for this milestone. Working controls are limited to c
 
 Runtime, data source, stream, selected thread/run, and provider capability rows are read-only status views. They expose only frontend-safe state already available to the shell.
 
-Providers also has a current-session draft form for OpenAI-compatible gateway notes: Base URL, model ID, and masked API key presence. The key string is not retained in state; the UI keeps only whether a key was entered.
+Providers uses a management-list layout for redacted model providers: search, All/Enabled/Local/Cloud filters, read-only local provider cards, safe connection-test actions, and an Add provider dialog. The dialog submits the current OpenAI-compatible Base URL, model, and API key to the local API save path; the key string is cleared after save and is never echoed back into the interface.
 
 Provider secrets stay outside durable settings in M5.5. The settings UI must never render API keys, Authorization headers, raw provider payloads, raw provider errors, or secret-bearing URL fragments.
 
@@ -27,8 +27,12 @@ The mock runtime scenario control reuses the existing `selectRuntimeScript` path
 
 ## Categories
 
-The catalog groups Settings into Workspace, Agent Core, and Management sections. General is the primary working category. Providers is mixed: redacted capability status plus session-local draft inputs. About is mixed status/preview, and the remaining future platform categories are mock placeholders.
+The catalog groups Settings into Workspace, Agent Core, and Management sections. General is the primary working category. Providers is mixed: redacted capability status plus local provider save inputs. Skill is read-only: it lists Loomi personas and installed local `SKILL.md` manifests from Codex, Claude Code, project, and plugin roots. About is mixed status/preview. Placeholder-only categories are not exposed in the navigation.
 
 ## Placeholder areas
 
-Future platform areas such as durable provider management, connectors, plugins, skills, MCP, notebook, memory, activity recording, context, safety, tools, routes, about metadata, and advanced diagnostics are represented as mock or preview panels only. Placeholder controls are disabled and do not execute tools, call providers or connectors, write files, write backend state, or persist values as real settings.
+Plugin management is intentionally not exposed while it has no real backend slice. Settings should not show generic mock panels; each visible category needs a real read/control surface.
+
+Activity Recorder and Context are intentionally not exposed as standalone Settings navigation items while they are placeholder-only. Activity Recorder returns to Settings only when the opt-in, audit, redaction, list, and cleanup controls are implemented as a real surface. RunContext remains an execution trace/debug concern rather than a user-facing settings page.
+
+Safety, Routes, and Advanced are also intentionally not exposed while they are placeholder-only. Existing safety signals live in the concrete surfaces that use them: tool approval in Chat, tool policy in Settings > Tools, memory redaction/audit in Settings > Memory, provider state in Settings > Providers, and MCP state in Settings > MCP.

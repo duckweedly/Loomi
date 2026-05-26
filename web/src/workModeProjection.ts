@@ -1,4 +1,5 @@
 import type { Message, Run, RunEvent, Thread, WorkArtifactReference, WorkPlanProjection, WorkProgressEvent, WorkStep, WorkStepStatus, WorkTodoItem, WorkTodoSnapshot } from './domain'
+import { humanToolName } from './runtime/toolPreview'
 
 const SECRET_PATTERN = /(sk-[a-z0-9_-]{8,}|api[_-]?key|token|secret|authorization|bearer\s+[a-z0-9._-]+)/i
 const EXECUTION_KEY_PATTERN = /(path|file|command|shell|browser|filesystem|execute|url)/i
@@ -69,18 +70,9 @@ function stepFromMetadata(item: Record<string, unknown>, index: number): WorkSte
   }
 }
 
-function deriveSteps(messages: Message[], metadata: Record<string, unknown>[], run: Run | null): WorkStep[] {
+function deriveSteps(metadata: Record<string, unknown>[]): WorkStep[] {
   const metadataSteps = metadata.flatMap((item) => metadataList(item.work_steps ?? item.steps))
   if (metadataSteps.length) return metadataSteps.map(stepFromMetadata)
-
-  const userMessages = messages.filter((message) => message.role === 'user')
-  if (userMessages.length) {
-    return userMessages.slice(0, 4).map((message, index) => ({
-      id: `message-step-${message.id}`,
-      title: safeString(message.content, `Step ${index + 1}`),
-      status: index === userMessages.length - 1 && run && run.status !== 'completed' ? 'running' : 'completed',
-    }))
-  }
   return []
 }
 
@@ -145,7 +137,29 @@ function deriveArtifacts(thread: Thread, run: Run | null, metadata: Record<strin
 }
 
 function eventDetail(event: RunEvent) {
+  if (event.type.startsWith('tool.call.')) return eventTitle(event)
   return safeString(event.detail || event.content || event.type, event.type)
+}
+
+function eventTitle(event: RunEvent) {
+  if (event.type.startsWith('tool.call.')) {
+    const toolName = typeof event.metadata?.tool_name === 'string' ? event.metadata.tool_name : undefined
+    const state = event.type.endsWith('.approval_required')
+      ? '等待确认'
+      : event.type.endsWith('.succeeded')
+        ? '完成'
+        : event.type.endsWith('.failed')
+          ? '失败'
+          : '运行中'
+    return `${humanToolName(toolName, 'zh')} ${state}`
+  }
+  if (event.type === 'run.completed') return '运行完成'
+  if (event.type === 'run.failed') return '运行失败'
+  if (event.type.includes('artifact')) return '产物已更新'
+  if (event.type.includes('plan') || event.type.includes('todo')) return '计划已更新'
+  if (event.type.includes('assistant') || event.type.includes('message')) return '回复完成'
+  if (event.group === 'worker-job') return '任务进度已更新'
+  return '进度已更新'
 }
 
 function deriveRecentEvents(run: Run | null): WorkProgressEvent[] {
@@ -154,6 +168,7 @@ function deriveRecentEvents(run: Run | null): WorkProgressEvent[] {
     .slice(-6)
     .map((event) => ({
       id: event.id,
+      title: eventTitle(event),
       type: event.type,
       detail: eventDetail(event),
       time: event.time,
@@ -178,12 +193,13 @@ export function deriveWorkPlanProjection(thread: Thread | null, messages: Messag
   if (!thread || thread.mode !== 'work') return null
 
   const metadata = metadataFromEvents(run)
-  const goal = deriveGoal(thread, messages, metadata)
-  const steps = deriveSteps(messages, metadata, run)
+  const steps = deriveSteps(metadata)
   const todoSnapshot = deriveTodoSnapshot(run)
   const artifacts = deriveArtifacts(thread, run, metadata)
+  if (!steps.length && !todoSnapshot && !artifacts.length) return null
+
+  const goal = deriveGoal(thread, messages, metadata)
   const recentEvents = deriveRecentEvents(run)
-  const emptyReason = !messages.length && !run ? 'No work plan metadata yet.' : undefined
 
   return {
     goal,
@@ -193,6 +209,5 @@ export function deriveWorkPlanProjection(thread: Thread | null, messages: Messag
     statusDetail: statusDetail(run, recentEvents),
     artifacts,
     recentEvents,
-    emptyReason,
   }
 }

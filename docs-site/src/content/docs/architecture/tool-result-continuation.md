@@ -5,7 +5,7 @@ description: Minimal model continuation boundary after an approved tool result.
 
 Tool result continuation is the M7 slice after approval-gated tool execution. It lets Loomi take a redacted `tool_call_succeeded` result, feed it back to the configured model provider, and persist follow-up assistant output in the same run.
 
-The M22 loop foundation starts from the same continuation boundary. Continuation may request another enabled `workspace.*` read tool in Work mode, but every new tool call is persisted, blocks on approval, and re-enters the worker only after approval. Non-workspace tools and Chat-mode continuation still use the original single-tool boundary.
+The M22 loop foundation starts from the same continuation boundary. Continuation may request another enabled Work-mode tool after each terminal tool result, but every new tool call is persisted, blocks on approval, and re-enters the worker only after approval. Chat-mode continuation still uses the original narrower boundary.
 
 ## Context source
 
@@ -52,9 +52,11 @@ History-first SSE remains unchanged. The second model phase is just another orde
 
 ## Loop limit
 
-Continuation is bounded to three accepted tool calls per run for the M22 foundation. If the provider asks for a fourth continuation tool, Loomi records `tool_loop_limit_reached` and fails the run without recording or executing the extra call.
+Continuation is bounded to six accepted tool calls per run. If the provider asks for a seventh continuation tool, Loomi records `tool_loop_limit_reached` and fails the run without recording or executing the extra call.
 
-Only enabled `workspace.glob`, `workspace.grep`, and `workspace.read` calls can use the bounded continuation path. If the continuation provider asks for `runtime.get_current_time`, MCP, an unknown tool, or any tool outside the run's enabled tool snapshot, Loomi records `unsupported_tool_loop` and fails the run. This keeps the first loop slice read-only, approval-gated, and limited to Work-mode workspace context.
+Enabled workspace, bounded command, LSP, web, browser, artifact, and coordination tools can use the bounded continuation path. If the continuation provider asks for `runtime.get_current_time`, MCP, an unknown tool, or any tool outside the run's enabled tool snapshot, Loomi records `unsupported_tool_loop` and fails the run.
+
+Provider tool schemas are generated from the run's enabled builtin tool snapshot. Provider-facing function names use safe identifiers such as `workspace_read`, `workspace_edit`, `sandbox_exec_command`, `sandbox_start_process`, and `lsp_symbols`; inbound provider tool calls are mapped back to Loomi's internal dotted tool names before approval and execution.
 
 Provider tool call ids are single-use inside a run. If continuation repeats an already-requested `tool_call_id`, Loomi records `duplicate_tool_call_id` and fails the run without duplicating approval events or reusing a terminal projection.
 

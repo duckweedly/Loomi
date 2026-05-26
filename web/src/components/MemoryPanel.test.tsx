@@ -7,6 +7,7 @@ describe('MemoryPanel', () => {
     const html = renderToStaticMarkup(
       <MemoryPanel
         query=""
+        locale="zh"
         entries={[{
           id: 'mem_1',
           title: 'Preference',
@@ -24,14 +25,16 @@ describe('MemoryPanel', () => {
       />,
     )
 
+    expect(html).toContain('已保存记忆')
     expect(html).toContain('Prefers safe snapshots')
     expect(html).toContain('Delete Preference')
   })
 
-  test('renders grounded search filters and safe metadata only', () => {
+  test('keeps grounded filters collapsed until useful and renders safe metadata only', () => {
     const html = renderToStaticMarkup(
       <MemoryPanel
         query="preference"
+        locale="zh"
         filters={{ scopeType: 'thread', scopeId: 'thread_1', sourceThreadId: 'thread_1', sourceRunId: 'run_1', sourceType: 'run', includeTombstoned: true, limit: 10 }}
         entries={[{
           id: 'mem_1',
@@ -55,14 +58,14 @@ describe('MemoryPanel', () => {
       />,
     )
 
-    expect(html).toContain('Scope type')
-    expect(html).toContain('Scope id')
-    expect(html).toContain('Source thread')
-    expect(html).toContain('Source run')
-    expect(html).toContain('Source type')
-    expect(html).toContain('Include deleted')
-    expect(html).toContain('Limit')
-    expect(html).toContain('Redacted')
+    expect(html).toContain('范围')
+    expect(html).toContain('范围 ID')
+    expect(html).toContain('来源会话')
+    expect(html).toContain('来源运行')
+    expect(html).toContain('来源类型')
+    expect(html).toContain('包含已删除')
+    expect(html).toContain('数量')
+    expect(html).toContain('已脱敏')
     expect(html).not.toMatch(/raw content|Authorization|provider trace|tool output|\/Users\//i)
   })
 
@@ -86,6 +89,7 @@ describe('MemoryPanel', () => {
     const html = renderToStaticMarkup(
       <MemoryPanel
         query=""
+        locale="en"
         entries={[entry]}
         detailEntry={entry}
         pendingDeleteEntry={entry}
@@ -113,6 +117,7 @@ describe('MemoryPanel', () => {
     const html = renderToStaticMarkup(
       <MemoryPanel
         query="safe"
+        locale="en"
         error="Memory failed to load"
         entries={[{
           id: 'mem_1',
@@ -136,10 +141,11 @@ describe('MemoryPanel', () => {
     expect(html).not.toContain('Should not masquerade as success')
   })
 
-  test('renders real audit history event metadata', () => {
+  test('renders real audit history as product copy without raw ids', () => {
     const html = renderToStaticMarkup(
       <MemoryPanel
         query=""
+        locale="zh"
         entries={[]}
         auditItems={[{
           id: 'audit_1',
@@ -162,11 +168,12 @@ describe('MemoryPanel', () => {
       />,
     )
 
-    expect(html).toContain('Memory history')
-    expect(html).toContain('memory_write_approved')
-    expect(html).toContain('run_terminal')
-    expect(html).toContain('memprop_1')
-    expect(html).toContain('redacted')
+    expect(html).toContain('记忆历史')
+    expect(html).toContain('记忆已保存')
+    expect(html).toContain('已脱敏')
+    expect(html).not.toContain('memory_write_approved')
+    expect(html).not.toContain('run_terminal')
+    expect(html).not.toContain('memprop_1')
     expect(html).not.toContain('/Users/xuean')
     expect(html).not.toContain('provider trace')
     expect(html).not.toContain('stdout')
@@ -176,6 +183,7 @@ describe('MemoryPanel', () => {
     const html = renderToStaticMarkup(
       <MemoryPanel
         query=""
+        locale="en"
         entries={[]}
         auditItems={[]}
         auditError="Memory history endpoint unavailable"
@@ -196,6 +204,7 @@ describe('MemoryPanel', () => {
     const loadingHtml = renderToStaticMarkup(
       <MemoryPanel
         query=""
+        locale="en"
         loading
         entries={[]}
         onQueryChange={() => {}}
@@ -207,6 +216,7 @@ describe('MemoryPanel', () => {
     const emptyHtml = renderToStaticMarkup(
       <MemoryPanel
         query=""
+        locale="en"
         entries={[]}
         onQueryChange={() => {}}
         onFiltersChange={() => {}}
@@ -216,6 +226,35 @@ describe('MemoryPanel', () => {
     )
 
     expect(loadingHtml).toContain('Loading')
-    expect(emptyHtml).toContain('No memory entries')
+    expect(emptyHtml).toContain('No saved memories')
+  })
+
+  test('folds system snapshot audit events by default', () => {
+    const html = renderToStaticMarkup(
+      <MemoryPanel
+        query=""
+        locale="zh"
+        entries={[]}
+        auditItems={[{
+          id: 'audit_snapshot',
+          eventType: 'memory_snapshot_loaded',
+          threadId: 'thread_1',
+          runId: 'run_1',
+          status: 'empty',
+          sourceType: 'run',
+          redactionApplied: true,
+          occurredAt: '2026-05-25T00:00:02Z',
+          summary: 'snapshot loaded',
+        }]}
+        onQueryChange={() => {}}
+        onFiltersChange={() => {}}
+        onOpenDetail={() => {}}
+        onRequestDelete={() => {}}
+      />,
+    )
+
+    expect(html).toContain('运行时读取了记忆快照')
+    expect(html).toContain('系统快照事件已折叠')
+    expect(html).not.toContain('memory_snapshot_loaded')
   })
 })

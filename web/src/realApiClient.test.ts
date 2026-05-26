@@ -18,6 +18,99 @@ describe('createClientMessageID', () => {
   })
 })
 
+describe('real API response validation', () => {
+  test('desktop dev defaults to the local API port when no env is supplied', async () => {
+    const source = await Bun.file(new URL('./realApiClient.ts', import.meta.url)).text()
+
+    expect(source).toContain("import.meta.env.DEV ? 'http://127.0.0.1:18080'")
+    expect(source).toContain('configuredApiBaseUrl || devApiBaseUrl')
+  })
+
+  test('listThreads reports invalid API bodies without a raw null property crash', async () => {
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async () => new Response('null', { status: 200, headers: { 'Content-Type': 'application/json' } })) as typeof fetch
+    try {
+      let error: unknown
+      try {
+        await realApiClient.listThreads()
+      } catch (err) {
+        error = err
+      }
+
+      expect(error).toBeInstanceOf(Error)
+      expect((error as { code?: string }).code).toBe('invalid_response')
+      expect((error as Error).message).toBe('Thread list response was invalid.')
+      expect((error as Error).message).not.toContain('Cannot read')
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test('listModelProviders reports invalid API bodies without pretending providers are missing', async () => {
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async () => new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } })) as typeof fetch
+    try {
+      let error: unknown
+      try {
+        await realApiClient.listModelProviders?.()
+      } catch (err) {
+        error = err
+      }
+
+      expect(error).toBeInstanceOf(Error)
+      expect((error as { code?: string }).code).toBe('invalid_response')
+      expect((error as Error).message).toBe('Provider list response was invalid.')
+      expect((error as Error).message).not.toContain('providers')
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test('MCP config writes use safe management endpoints', async () => {
+    const originalFetch = globalThis.fetch
+    const requests: Array<{ url: string; init?: RequestInit }> = []
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      requests.push({ url: String(input), init })
+      if (String(input).endsWith('/discover')) {
+        return new Response(JSON.stringify({ server: apiMCPServer('succeeded') }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      }
+      if (init?.method === 'DELETE') {
+        return new Response(JSON.stringify({ servers: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      }
+      return new Response(JSON.stringify({ server: apiMCPServer('not_discovered') }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    }) as typeof fetch
+    try {
+      await realApiClient.saveMCPServer?.({ slug: 'local-smoke', displayName: 'Local Smoke', enabled: true, transport: 'stdio', command: '/bin/mcp', args: ['--safe'], env: { MODE: 'test' }, timeoutMs: 5000 })
+      await realApiClient.discoverMCPServer?.('local-smoke')
+      await realApiClient.deleteMCPServer?.('local-smoke')
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+
+    expect(requests.map((request) => request.url)).toEqual(['/v1/mcp/servers', '/v1/mcp/servers/local-smoke/discover', '/v1/mcp/servers/local-smoke'])
+    expect(requests[0].init?.method).toBe('POST')
+    expect(String(requests[0].init?.body)).toContain('"display_name":"Local Smoke"')
+    expect(String(requests[0].init?.body)).toContain('"timeout_ms":5000')
+    expect(requests[1].init?.method).toBe('POST')
+    expect(requests[2].init?.method).toBe('DELETE')
+  })
+})
+
+function apiMCPServer(discoveryStatus: string) {
+  return {
+    server_safe_id: 'mcp:local-smoke',
+    server_slug: 'local-smoke',
+    display_name: 'Local Smoke',
+    transport: 'stdio',
+    enabled: true,
+    config_source: 'local',
+    discovery_status: discoveryStatus,
+    candidate_count: discoveryStatus === 'succeeded' ? 1 : 0,
+    candidate_names: discoveryStatus === 'succeeded' ? ['mcp.local-smoke.echo'] : [],
+    execution_mode: discoveryStatus === 'succeeded' ? 'approval_gated' : 'disabled',
+  }
+}
+
 describe('M14 memory management mapping', () => {
   test('maps safe memory management fields without raw content', () => {
     const entry = mapApiMemoryEntry({
@@ -245,6 +338,32 @@ describe('M18.5 local provider detection mapping', () => {
     expect(requested[0].method).toBe('POST')
     expect(new URL(requested[1].url, 'http://loomi.local').pathname).toBe('/v1/local-provider-detections/local_codex/enable')
     expect(requested[1].method).toBe('DELETE')
+  })
+
+  test('calls workspace root endpoints for desktop folder authorization', async () => {
+    const originalFetch = globalThis.fetch
+    const requested: { url: string; method: string; body?: string }[] = []
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      requested.push({ url: String(input), method: init?.method ?? 'GET', body: init?.body?.toString() })
+      return new Response(JSON.stringify({
+        config: { configured: true, display_name: 'Downloads' },
+        request_id: 'req_workspace_root',
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    }) as typeof fetch
+    try {
+      const current = await realApiClient.getWorkspaceRoot?.()
+      const saved = await realApiClient.saveWorkspaceRoot?.({ path: '/Users/xuean/Downloads' })
+      expect(current?.displayName).toBe('Downloads')
+      expect(saved?.configured).toBe(true)
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+
+    expect(new URL(requested[0].url, 'http://loomi.local').pathname).toBe('/v1/workspace/root')
+    expect(requested[0].method).toBe('GET')
+    expect(new URL(requested[1].url, 'http://loomi.local').pathname).toBe('/v1/workspace/root')
+    expect(requested[1].method).toBe('POST')
+    expect(requested[1].body).toContain('/Users/xuean/Downloads')
   })
 })
 
@@ -651,6 +770,18 @@ describe('M4 run mapping', () => {
     return expect(source).resolves.toContain("source: 'model_gateway'")
   })
 
+  test('real sendMessage checks provider and active run before creating a user message', async () => {
+    const source = await Bun.file(new URL('./realApiClient.ts', import.meta.url)).text()
+    const providerCheck = source.indexOf('const provider = selectSendProvider(providers)')
+    const activeRunCheck = source.indexOf('const currentRun = await this.getThreadRun(threadId)')
+    const messageCreate = source.indexOf("requestJSON<{ message: ApiMessage }>(`/v1/threads/${threadId}/messages`")
+
+    expect(providerCheck).toBeGreaterThan(0)
+    expect(activeRunCheck).toBeGreaterThan(providerCheck)
+    expect(messageCreate).toBeGreaterThan(activeRunCheck)
+    expect(source).toContain('当前会话还有任务未结束，请先确认或停止当前任务。')
+  })
+
   test('real sendMessage prefers supported local codex over saved custom provider', () => {
     const provider = selectSendProvider([
       { id: 'custom', family: 'openai_compatible', model: 'gpt-5.5', status: 'available' },
@@ -743,11 +874,13 @@ describe('M4 run mapping', () => {
     expect(event.detail).not.toContain('You are')
   })
 
-  test('real client exposes persona list and sends persona_id when starting runs', () => {
+  test('real client exposes persona and installed skill list APIs', () => {
     const source = Bun.file(new URL('./realApiClient.ts', import.meta.url)).text()
 
     return source.then((text) => {
-      expect(text).toContain("requestJSON<{ personas: ApiPersona[] }>('/v1/personas')")
+      expect(text).toContain("requireArrayField<ApiPersona>(body, 'personas'")
+      expect(text).toContain("requireArrayField<ApiInstalledSkill>(body, 'skills'")
+      expect(text).toContain('source_label')
       expect(text).toContain('persona_id: input.personaId')
       expect(text).toContain('personaId')
     })

@@ -9,7 +9,7 @@ describe('RunTimeline runtime linkage', () => {
   test('feeds selected run events through RunRail', () => {
     const source = readFileSync(resolve(import.meta.dir, 'RunTimeline.tsx'), 'utf8')
 
-    expect(source).toContain('<RunRail run={run}')
+    expect(source).toContain('<RunRail run={selectedThreadRun}')
   })
 
   test('RunRail renders failed and stopped statuses without marking them done', () => {
@@ -43,7 +43,6 @@ describe('RunTimeline runtime linkage', () => {
       rightToolsOpen: false,
       selectedPanelId: 'activity',
       onSelectPanel: () => {},
-      onOpenArtifact: () => {},
       run: {
         id: 'run-a',
         threadId: 'thread-a',
@@ -56,8 +55,10 @@ describe('RunTimeline runtime linkage', () => {
       },
     }))
 
-    expect(html).toContain('Worker/job')
-    expect(html).toContain('stale_count: 1')
+    expect(html).toContain('Recent activity')
+    expect(html).toContain('No activity yet')
+    expect(html).not.toContain('Job recovering')
+    expect(html).not.toContain('stale_count: 1')
     expect(html).not.toContain('password')
     expect(html).not.toContain('token')
   })
@@ -70,7 +71,6 @@ describe('RunTimeline runtime linkage', () => {
       selectedPanelId: 'background-tasks',
       selectedThreadId: 'thread-b',
       onSelectPanel: () => {},
-      onOpenArtifact: () => {},
       run: {
         id: 'run-a',
         threadId: 'thread-a',
@@ -95,7 +95,6 @@ describe('RunTimeline runtime linkage', () => {
       rightToolsOpen: false,
       selectedPanelId: 'activity',
       onSelectPanel: () => {},
-      onOpenArtifact: () => {},
       run: {
         id: 'run-a',
         threadId: 'thread-a',
@@ -112,23 +111,22 @@ describe('RunTimeline runtime linkage', () => {
       },
     }))
 
-    expect(html).toContain('Run lifecycle')
-    expect(html).toContain('Model stream')
-    expect(html).toContain('Worker/job')
-    expect(html).toContain('Error')
-    expect(html).toContain('retrying')
-    expect(html).toContain('invoke runtime')
+    expect(html).toContain('Recent activity')
+    expect(html).toContain('Run failed')
     expect(html).toContain('stream failed')
+    expect(html).not.toContain('Run created')
+    expect(html).not.toContain('Model started')
+    expect(html).not.toContain('retrying')
+    expect(html).not.toContain('invoke runtime')
   })
 
   test('renders M9 pipeline foundation stage trace safely', () => {
     const html = renderToStaticMarkup(createElement(RunTimeline, {
       runDetailsOpen: true,
       rightPanelMenuOpen: false,
-      rightToolsOpen: true,
+      rightToolsOpen: false,
       selectedPanelId: 'background-tasks',
       onSelectPanel: () => {},
-      onOpenArtifact: () => {},
       run: {
         id: 'run-a',
         threadId: 'thread-a',
@@ -144,10 +142,7 @@ describe('RunTimeline runtime linkage', () => {
       },
     }))
 
-    expect(html).toContain('prepare_context')
-    expect(html).toContain('resolve_tools')
-    expect(html).toContain('invoke_runtime')
-    expect(html).toContain('finalize')
+    expect(html).toContain('No activity yet')
     expect(html).not.toContain('api_key')
     expect(html).not.toContain('secret')
   })
@@ -159,7 +154,6 @@ describe('RunTimeline runtime linkage', () => {
       rightToolsOpen: true,
       selectedPanelId: 'background-tasks',
       onSelectPanel: () => {},
-      onOpenArtifact: () => {},
       run: {
         id: 'run-a',
         threadId: 'thread-a',
@@ -173,9 +167,10 @@ describe('RunTimeline runtime linkage', () => {
       },
     }))
 
-    expect(html).toContain('MCP discovery succeeded')
-    expect(html).toContain('mcp.local-search.search')
-    expect(html).toContain('MCP execution disabled')
+    expect(html).toContain('No activity yet')
+    expect(html).not.toContain('MCP discovery succeeded')
+    expect(html).not.toContain('mcp.lo...')
+    expect(html).not.toContain('MCP execution disabled')
     expect(html).not.toContain('sk-live')
     expect(html).not.toContain('command_path')
     expect(html).not.toContain('stderr')
@@ -188,7 +183,6 @@ describe('RunTimeline runtime linkage', () => {
       rightToolsOpen: false,
       selectedPanelId: 'activity',
       onSelectPanel: () => {},
-      onOpenArtifact: () => {},
       run: {
         id: 'run-a',
         threadId: 'thread-a',
@@ -204,9 +198,9 @@ describe('RunTimeline runtime linkage', () => {
       },
     }))
 
-    expect(html).toContain('Initial model phase')
-    expect(html).toContain('Tool call succeeded')
-    expect(html).toContain('Continuation model phase')
+    expect(html).toContain('Get current time completed')
     expect(html).toContain('Run completed')
+    expect(html).not.toContain('Initial model phase')
+    expect(html).not.toContain('Continuation model phase')
   })
 })

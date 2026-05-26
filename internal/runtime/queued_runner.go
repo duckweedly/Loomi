@@ -125,6 +125,13 @@ func (r QueuedRunRouter) runApprovedTool(ctx context.Context, run productdata.Ru
 	if _, _, err = r.Gateway.Service.CompleteToolCallSuccess(ctx, identity.LocalDevIdentity(), run.ThreadID, run.ID, toolCallID, result.ResultSummary); err != nil {
 		return err
 	}
+	if result.ToolName == productdata.ToolNameTodoWrite {
+		if event, ok := appendProviderWorkTodoSnapshot(ctx, r.Gateway.Service, run, result.ResultSummary); ok && r.broadcaster() != nil {
+			r.broadcaster().Publish(event)
+		}
+	} else {
+		_, _ = appendWorkTodoSnapshot(ctx, r.Gateway.Service, run, "runtime")
+	}
 	input := r.gatewayContinuationInput(ctx, run, toolCallID)
 	if input.MessageID == "" || input.ProviderID == "" {
 		return productdata.NewError(productdata.CodeInvalidRequest, "Continuation context is missing.")

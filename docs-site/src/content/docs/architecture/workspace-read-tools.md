@@ -21,9 +21,9 @@ provider tool request
 
 ## Scope
 
-The workspace root is resolved from `LOOMI_WORKSPACE_ROOT` when set. Otherwise the backend walks upward from the process working directory to the repository `go.mod`.
+The workspace root is resolved from `LOOMI_WORKSPACE_ROOT` when set. Otherwise local desktop/dev runtime defaults to the user's home directory so common requests like `Downloads`, `Desktop`, and `Documents` can run without a prior folder picker.
 
-Tool calls cannot choose a new root. Arguments are normalized as relative workspace paths. Absolute paths, home expansion, `..` traversal, symlink escape, and paths outside the resolved root are rejected before content access.
+The desktop shell can update the runtime root after the user explicitly chooses a folder. Tool arguments are still normalized as relative workspace paths. Absolute paths, home expansion, `..` traversal, symlink escape, and paths outside the resolved root are rejected before content access.
 
 Sensitive paths are denied before opening files:
 

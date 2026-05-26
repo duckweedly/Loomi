@@ -1,9 +1,11 @@
 import type { ApiClient } from './apiClient'
-import type { LocalProviderDetection, MCPServerStatus, MemoryAuditItem, MemoryEntry, MemoryFilters, Message, Persona, ProviderCapability, ProviderFamily, Run, RunEvent, RunSource, RunStatus, Thread, ToolCall, ToolCatalogItem, WorkerQueueDiagnostics, WorkerQueueStatus, WorkerStatus } from './domain'
-import { isRuntimeTerminal } from './runtime/executionAdapter'
+import type { InstalledSkill, LocalProviderDetection, MCPServerConfigInput, MCPServerStatus, MemoryAuditItem, MemoryEntry, MemoryFilters, Message, Persona, ProviderCapability, ProviderFamily, Run, RunEvent, RunSource, RunStatus, Thread, ToolCall, ToolCatalogItem, WebSearchConfig, WorkerQueueDiagnostics, WorkerQueueStatus, WorkerStatus, WorkspaceRootConfig } from './domain'
+import { isRuntimeActive, isRuntimeTerminal } from './runtime/executionAdapter'
 import { applyRealRunEvent } from './runtime/realExecutionAdapter'
 
-const apiBaseUrl = (import.meta.env.VITE_LOOMI_API_BASE_URL ?? '').replace(/\/$/, '')
+const configuredApiBaseUrl = import.meta.env.VITE_LOOMI_API_BASE_URL ?? ''
+const devApiBaseUrl = import.meta.env.DEV ? 'http://127.0.0.1:18080' : ''
+const apiBaseUrl = (configuredApiBaseUrl || devApiBaseUrl).replace(/\/$/, '')
 
 export function hasRealApiBase() {
   return apiBaseUrl.length > 0
@@ -31,6 +33,17 @@ type ApiPersona = {
   description: string
   active_version: string
   is_default: boolean
+}
+
+type ApiInstalledSkill = {
+  id: string
+  name: string
+  description: string
+  source: InstalledSkill['source']
+  source_label: string
+  package?: string
+  path: string
+  installed: boolean
 }
 
 type ApiMessage = {
@@ -123,6 +136,17 @@ export type ApiToolCatalogItem = {
   safe_metadata?: Record<string, unknown> | null
 }
 
+export type ApiWebSearchConfig = {
+  has_tavily_key: boolean
+  has_brave_key: boolean
+  enabled: boolean
+}
+
+export type ApiWorkspaceRootConfig = {
+  configured: boolean
+  display_name: string
+}
+
 export type ApiMCPServerStatus = {
   server_safe_id: string
   server_slug: string
@@ -207,6 +231,13 @@ async function requestJSON<T>(path: string, init?: RequestInit): Promise<T> {
   return body as T
 }
 
+function requireArrayField<T>(body: unknown, field: string, message: string): T[] {
+  if (!body || typeof body !== 'object' || !Array.isArray((body as Record<string, unknown>)[field])) {
+    throw new ApiRequestError(message, 'invalid_response', 502)
+  }
+  return (body as Record<string, T[]>)[field]
+}
+
 function mapThread(thread: ApiThread): Thread {
   return {
     id: thread.id,
@@ -242,6 +273,19 @@ function mapPersona(persona: ApiPersona): Persona {
   }
 }
 
+function mapInstalledSkill(skill: ApiInstalledSkill): InstalledSkill {
+  return {
+    id: skill.id,
+    name: skill.name,
+    description: skill.description,
+    source: skill.source,
+    sourceLabel: skill.source_label,
+    package: skill.package,
+    path: skill.path,
+    installed: skill.installed,
+  }
+}
+
 function mapApiToolCatalogItem(tool: ApiToolCatalogItem): ToolCatalogItem {
   return {
     name: tool.name,
@@ -255,6 +299,21 @@ function mapApiToolCatalogItem(tool: ApiToolCatalogItem): ToolCatalogItem {
     enabled: tool.enabled,
     executionState: tool.execution_state,
     safeMetadata: tool.safe_metadata ?? undefined,
+  }
+}
+
+function mapApiWebSearchConfig(config: ApiWebSearchConfig): WebSearchConfig {
+  return {
+    hasTavilyKey: config.has_tavily_key,
+    hasBraveKey: config.has_brave_key,
+    enabled: config.enabled,
+  }
+}
+
+function mapApiWorkspaceRootConfig(config: ApiWorkspaceRootConfig): WorkspaceRootConfig {
+  return {
+    configured: config.configured,
+    displayName: config.display_name,
   }
 }
 
@@ -607,13 +666,13 @@ export const realApiClient: ApiClient = {
   mode: 'real_api',
 
   async listThreads() {
-    const body = await requestJSON<{ threads: ApiThread[] }>('/v1/threads')
-    return body.threads.map(mapThread)
+    const body = await requestJSON<unknown>('/v1/threads')
+    return requireArrayField<ApiThread>(body, 'threads', 'Thread list response was invalid.').map(mapThread)
   },
 
   async getThreadMessages(threadId: string) {
-    const body = await requestJSON<{ messages: ApiMessage[] }>(`/v1/threads/${threadId}/messages`)
-    return body.messages.map(mapMessage)
+    const body = await requestJSON<unknown>(`/v1/threads/${threadId}/messages`)
+    return requireArrayField<ApiMessage>(body, 'messages', 'Message list response was invalid.').map(mapMessage)
   },
 
   async getThreadRun(threadId: string) {
@@ -627,33 +686,82 @@ export const realApiClient: ApiClient = {
   },
 
   async getRunEvents(runId: string) {
-    const body = await requestJSON<{ events: ApiRunEvent[] }>(`/v1/runs/${runId}/events`)
-    return body.events.map(mapApiRunEvent)
+    const body = await requestJSON<unknown>(`/v1/runs/${runId}/events`)
+    return requireArrayField<ApiRunEvent>(body, 'events', 'Run event response was invalid.').map(mapApiRunEvent)
   },
 
   async listPersonas() {
-    const body = await requestJSON<{ personas: ApiPersona[] }>('/v1/personas')
-    return body.personas.map(mapPersona)
+    const body = await requestJSON<unknown>('/v1/personas')
+    return requireArrayField<ApiPersona>(body, 'personas', 'Persona list response was invalid.').map(mapPersona)
+  },
+
+  async listSkills() {
+    const body = await requestJSON<unknown>('/v1/skills')
+    return requireArrayField<ApiInstalledSkill>(body, 'skills', 'Skill list response was invalid.').map(mapInstalledSkill)
   },
 
   async listModelProviders() {
-    const body = await requestJSON<{ providers: ApiProviderCapability[] }>('/v1/model-providers')
-    return body.providers.map(mapApiProviderCapability)
+    const body = await requestJSON<unknown>('/v1/model-providers')
+    return requireArrayField<ApiProviderCapability>(body, 'providers', 'Provider list response was invalid.').map(mapApiProviderCapability)
   },
 
   async listToolCatalog() {
-    const body = await requestJSON<{ tools: ApiToolCatalogItem[] }>('/v1/tools/catalog')
-    return body.tools.map(mapApiToolCatalogItem)
+    const body = await requestJSON<unknown>('/v1/tools/catalog')
+    return requireArrayField<ApiToolCatalogItem>(body, 'tools', 'Tool catalog response was invalid.').map(mapApiToolCatalogItem)
+  },
+
+  async getWebSearchConfig() {
+    const body = await requestJSON<{ config: ApiWebSearchConfig }>('/v1/web-search/config')
+    return mapApiWebSearchConfig(body.config)
+  },
+
+  async saveWebSearchKeys(input: { tavilyApiKey?: string; braveApiKey?: string }) {
+    const body = await requestJSON<{ config: ApiWebSearchConfig }>('/v1/web-search/config', {
+      method: 'POST',
+      body: JSON.stringify({ tavily_api_key: input.tavilyApiKey ?? '', brave_api_key: input.braveApiKey ?? '' }),
+    })
+    return mapApiWebSearchConfig(body.config)
+  },
+
+  async getWorkspaceRoot() {
+    const body = await requestJSON<{ config: ApiWorkspaceRootConfig }>('/v1/workspace/root')
+    return mapApiWorkspaceRootConfig(body.config)
+  },
+
+  async saveWorkspaceRoot(input: { path: string }) {
+    const body = await requestJSON<{ config: ApiWorkspaceRootConfig }>('/v1/workspace/root', {
+      method: 'POST',
+      body: JSON.stringify({ path: input.path }),
+    })
+    return mapApiWorkspaceRootConfig(body.config)
   },
 
   async listMCPServers() {
-    const body = await requestJSON<{ servers: ApiMCPServerStatus[] }>('/v1/mcp/servers')
-    return body.servers.map(mapApiMCPServerStatus)
+    const body = await requestJSON<unknown>('/v1/mcp/servers')
+    return requireArrayField<ApiMCPServerStatus>(body, 'servers', 'MCP server response was invalid.').map(mapApiMCPServerStatus)
+  },
+
+  async saveMCPServer(input: MCPServerConfigInput) {
+    const body = await requestJSON<{ server: ApiMCPServerStatus }>('/v1/mcp/servers', {
+      method: 'POST',
+      body: JSON.stringify({ slug: input.slug, display_name: input.displayName, enabled: input.enabled, transport: input.transport, command: input.command, args: input.args, env: input.env, timeout_ms: input.timeoutMs }),
+    })
+    return mapApiMCPServerStatus(body.server)
+  },
+
+  async deleteMCPServer(slug: string) {
+    const body = await requestJSON<unknown>(`/v1/mcp/servers/${encodeURIComponent(slug)}`, { method: 'DELETE' })
+    return requireArrayField<ApiMCPServerStatus>(body, 'servers', 'MCP server response was invalid.').map(mapApiMCPServerStatus)
+  },
+
+  async discoverMCPServer(slug: string) {
+    const body = await requestJSON<{ server: ApiMCPServerStatus }>(`/v1/mcp/servers/${encodeURIComponent(slug)}/discover`, { method: 'POST' })
+    return mapApiMCPServerStatus(body.server)
   },
 
   async listLocalProviderDetections() {
-    const body = await requestJSON<{ providers: ApiLocalProviderDetection[] }>('/v1/local-provider-detections')
-    return body.providers.map(mapApiLocalProviderDetection)
+    const body = await requestJSON<unknown>('/v1/local-provider-detections')
+    return requireArrayField<ApiLocalProviderDetection>(body, 'providers', 'Local provider detection response was invalid.').map(mapApiLocalProviderDetection)
   },
 
   async enableLocalProvider(providerId: string) {
@@ -703,16 +811,16 @@ export const realApiClient: ApiClient = {
   },
 
   async listMemoryEntries(filters = {}) {
-    const body = await requestJSON<{ items: ApiMemoryEntry[] }>(`/v1/memory${memoryQueryString(filters)}`)
-    return body.items.map(mapApiMemoryEntry)
+    const body = await requestJSON<unknown>(`/v1/memory${memoryQueryString(filters)}`)
+    return requireArrayField<ApiMemoryEntry>(body, 'items', 'Memory list response was invalid.').map(mapApiMemoryEntry)
   },
 
   async searchMemory(query: string, filters = {}) {
-    const body = await requestJSON<{ items: ApiMemoryEntry[] }>('/v1/memory/search', {
+    const body = await requestJSON<unknown>('/v1/memory/search', {
       method: 'POST',
       body: JSON.stringify(memorySearchRequestBody(query, filters)),
     })
-    return body.items.map(mapApiMemoryEntry)
+    return requireArrayField<ApiMemoryEntry>(body, 'items', 'Memory search response was invalid.').map(mapApiMemoryEntry)
   },
 
   async getMemoryEntry(entryId: string, filters = {}) {
@@ -725,8 +833,8 @@ export const realApiClient: ApiClient = {
   },
 
   async listMemoryAudit(filters = {}) {
-    const body = await requestJSON<{ items: ApiMemoryAuditItem[] }>(`/v1/memory/audit${memoryQueryString(filters)}`)
-    return body.items.map(mapApiMemoryAuditItem)
+    const body = await requestJSON<unknown>(`/v1/memory/audit${memoryQueryString(filters)}`)
+    return requireArrayField<ApiMemoryAuditItem>(body, 'items', 'Memory audit response was invalid.').map(mapApiMemoryAuditItem)
   },
 
   async startRun(threadId: string, input: { messageId?: string; source?: RunSource; providerId?: string; model?: string; personaId?: string } = {}) {
@@ -784,15 +892,22 @@ export const realApiClient: ApiClient = {
   },
 
   async sendMessage(threadId: string, content: string, personaId?: string) {
+    const providers = await this.listModelProviders?.()
+    const provider = selectSendProvider(providers)
+    if (!provider) throw new ApiRequestError('Model provider is unavailable.', 'provider_unavailable', 503)
+    try {
+      const currentRun = await this.getThreadRun(threadId)
+      if (isRuntimeActive(currentRun.status)) throw new ApiRequestError('当前会话还有任务未结束，请先确认或停止当前任务。', 'active_run_exists', 409)
+    } catch (err) {
+      if (err instanceof ApiRequestError && err.code === 'active_run_exists') throw err
+      if (err instanceof ApiRequestError && err.status !== 404) throw err
+    }
     const created = await requestJSON<{ message: ApiMessage }>(`/v1/threads/${threadId}/messages`, {
       method: 'POST',
       body: JSON.stringify({ content, client_message_id: createClientMessageID() }),
     })
     let run: Run | undefined
     try {
-      const providers = await this.listModelProviders?.()
-      const provider = selectSendProvider(providers)
-      if (!provider) throw new ApiRequestError('Model provider is unavailable.', 'provider_unavailable', 503)
       run = await this.startRun?.(threadId, { messageId: created.message.id, source: 'model_gateway', providerId: provider.id, model: provider.model, personaId })
     } catch (err) {
       if (!(err instanceof ApiRequestError) || err.code !== 'active_run_exists') throw err

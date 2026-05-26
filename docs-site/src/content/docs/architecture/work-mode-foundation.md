@@ -28,6 +28,8 @@ Work Plan View 优先读取 run event metadata：
 
 M17 local seed 会写入 `work.plan.updated` progress event，并在 metadata 中带上 `m17_seed = m17-work-artifact`，用于重复运行时复用同一个 evidence event，避免重复可见证据。
 
+M22 runtime 会在 Work thread 的工具请求和工具成功执行后追加 durable `work.todo.updated` progress event。该事件由后端从已持久化的 tool-call lifecycle events 派生，包含安全的 `todo_items`、`updated_by = runtime` 和 redaction flag；Chat mode 不追加该 Work todo snapshot。
+
 ## UI 行为
 
 Work mode thread 的主区域先显示 Work Plan View，再显示原有 message history、assistant draft 和 tool approval controls。Chat mode 不挂载 Work Plan View。M16 中 Work mode composer 是只读禁用状态，避免把 plan/progress surface 误解成新的 Work execution runtime；已有 Chat run/runtime 仍只属于 Chat mode 路径。

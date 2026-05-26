@@ -122,6 +122,49 @@ func TestModelProviderHandlerSavesLocalCustomProvider(t *testing.T) {
 	if !strings.Contains(listed.Body.String(), "gpt-5.5") || strings.Contains(listed.Body.String(), "secret-key") {
 		t.Fatalf("listed body = %s", listed.Body.String())
 	}
+	restarted := NewServerWithProduct(config.Config{AppEnv: "local"}, fakeChecker{}, svc)
+	afterRestart := requestJSON(t, restarted, http.MethodGet, "/v1/model-providers", "")
+	if !strings.Contains(afterRestart.Body.String(), "gpt-5.5") || strings.Contains(afterRestart.Body.String(), "secret-key") {
+		t.Fatalf("after restart body = %s", afterRestart.Body.String())
+	}
+}
+
+func TestWebSearchConfigSavesOneOrBothKeysWithoutExposingSecrets(t *testing.T) {
+	t.Setenv("LOOMI_TAVILY_API_KEY", "")
+	t.Setenv("LOOMI_BRAVE_SEARCH_API_KEY", "")
+	srv := NewServerWithProduct(config.Config{AppEnv: "local"}, fakeChecker{}, productdata.NewMemoryService())
+
+	empty := requestJSON(t, srv, http.MethodGet, "/v1/web-search/config", "")
+	if empty.Code != http.StatusOK || !strings.Contains(empty.Body.String(), `"enabled":false`) {
+		t.Fatalf("empty status = %d body=%s", empty.Code, empty.Body.String())
+	}
+
+	saved := requestJSON(t, srv, http.MethodPost, "/v1/web-search/config", `{"tavily_api_key":"tvly-secret"}`)
+	if saved.Code != http.StatusOK {
+		t.Fatalf("save status = %d body=%s", saved.Code, saved.Body.String())
+	}
+	if !strings.Contains(saved.Body.String(), `"has_tavily_key":true`) || !strings.Contains(saved.Body.String(), `"has_brave_key":false`) || !strings.Contains(saved.Body.String(), `"enabled":true`) {
+		t.Fatalf("saved body = %s", saved.Body.String())
+	}
+	if strings.Contains(saved.Body.String(), "tvly-secret") {
+		t.Fatalf("secret leaked: %s", saved.Body.String())
+	}
+	if got := os.Getenv("LOOMI_TAVILY_API_KEY"); got != "tvly-secret" {
+		t.Fatalf("tavily env = %q", got)
+	}
+	restarted := NewServerWithProduct(config.Config{AppEnv: "local"}, fakeChecker{}, srv.product)
+	afterRestart := requestJSON(t, restarted, http.MethodGet, "/v1/web-search/config", "")
+	if !strings.Contains(afterRestart.Body.String(), `"has_tavily_key":true`) || strings.Contains(afterRestart.Body.String(), "tvly-secret") {
+		t.Fatalf("after restart body = %s", afterRestart.Body.String())
+	}
+
+	both := requestJSON(t, srv, http.MethodPost, "/v1/web-search/config", `{"brave_api_key":"brave-secret"}`)
+	if both.Code != http.StatusOK || !strings.Contains(both.Body.String(), `"has_tavily_key":true`) || !strings.Contains(both.Body.String(), `"has_brave_key":true`) {
+		t.Fatalf("both status = %d body=%s", both.Code, both.Body.String())
+	}
+	if strings.Contains(both.Body.String(), "brave-secret") {
+		t.Fatalf("secret leaked: %s", both.Body.String())
+	}
 }
 
 func TestModelProviderHandlersExposeUnavailableAndMisconfigured(t *testing.T) {

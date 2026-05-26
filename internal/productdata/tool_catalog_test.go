@@ -28,6 +28,23 @@ func TestToolCatalogIncludesBuiltinCurrentTime(t *testing.T) {
 	}
 }
 
+func TestToolCatalogIncludesDiscoveryTools(t *testing.T) {
+	svc := NewMemoryService()
+	tools, err := svc.ListToolCatalog(context.Background(), identity.LocalDevIdentity())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{ToolNameLoadTools, ToolNameLoadSkill} {
+		tool := catalogToolByName(tools, name)
+		if tool.Source != ToolCatalogSourceBuiltin || tool.Group != ToolCatalogGroupDiscovery || tool.RiskLevel != ToolRiskLow || tool.ApprovalPolicy != ToolApprovalReadOnly {
+			t.Fatalf("%s metadata = %+v", name, tool)
+		}
+		if !tool.Enabled || tool.ExecutionState != ToolExecutionStateExecutable || tool.SafeMetadata["read_only"] != true {
+			t.Fatalf("%s safe metadata = %+v", name, tool)
+		}
+	}
+}
+
 func TestToolCatalogIncludesWorkspaceReadOnlyTools(t *testing.T) {
 	svc := NewMemoryService()
 	tools, err := svc.ListToolCatalog(context.Background(), identity.LocalDevIdentity())
@@ -54,13 +71,28 @@ func TestToolCatalogIncludesWorkspaceMutationTools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{ToolNameWorkspaceWriteFile, ToolNameWorkspaceEdit} {
+	for _, name := range []string{ToolNameWorkspaceWriteFile, ToolNameWorkspaceEdit, ToolNameWorkspacePatchPreview, ToolNameWorkspacePatchApply} {
 		tool := catalogToolByName(tools, name)
 		if tool.Source != ToolCatalogSourceBuiltin || tool.Group != ToolCatalogGroupWorkspace || tool.RiskLevel != ToolRiskHigh || tool.ApprovalPolicy != ToolApprovalAlwaysRequired {
 			t.Fatalf("%s metadata = %+v", name, tool)
 		}
-		if !tool.Enabled || tool.ExecutionState != ToolExecutionStateExecutable || tool.SafeMetadata["scope"] != "workspace" || tool.SafeMetadata["read_only"] != false || tool.SafeMetadata["write_capable"] != true {
+		if !tool.Enabled || tool.ExecutionState != ToolExecutionStateExecutable || tool.SafeMetadata["scope"] != "workspace" {
 			t.Fatalf("%s safe metadata = %+v", name, tool)
+		}
+		if name == ToolNameWorkspacePatchPreview {
+			if tool.SafeMetadata["read_only"] != true || tool.SafeMetadata["write_capable"] != false || tool.SafeMetadata["requires_read_before_preview"] != true || tool.SafeMetadata["preview_only"] != true || tool.SafeMetadata["returns_diff"] != true {
+				t.Fatalf("%s preview metadata = %+v", name, tool)
+			}
+			continue
+		}
+		if tool.SafeMetadata["read_only"] != false || tool.SafeMetadata["write_capable"] != true {
+			t.Fatalf("%s mutation metadata = %+v", name, tool)
+		}
+		if name == ToolNameWorkspaceEdit && (tool.SafeMetadata["requires_read_before_edit"] != true || tool.SafeMetadata["returns_diff"] != true || tool.SafeMetadata["normalizes_line_endings"] != true || tool.SafeMetadata["preserves_indentation"] != true || tool.SafeMetadata["strips_trailing_whitespace_except_markdown"] != true) {
+			t.Fatalf("%s edit metadata = %+v", name, tool)
+		}
+		if name == ToolNameWorkspacePatchApply && (tool.SafeMetadata["requires_patch_preview"] != true || tool.SafeMetadata["returns_diff"] != true || tool.SafeMetadata["normalizes_line_endings"] != true || tool.SafeMetadata["preserves_indentation"] != true || tool.SafeMetadata["strips_trailing_whitespace_except_markdown"] != true) {
+			t.Fatalf("%s apply metadata = %+v", name, tool)
 		}
 		if strings.Contains(fmt.Sprint(tool), "/Users/") {
 			t.Fatalf("workspace mutation catalog leaked host path: %+v", tool)
@@ -74,15 +106,17 @@ func TestToolCatalogIncludesSandboxExecCommand(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tool := catalogToolByName(tools, ToolNameSandboxExecCommand)
-	if tool.Source != ToolCatalogSourceBuiltin || tool.Group != ToolCatalogGroupSandbox || tool.RiskLevel != ToolRiskHigh || tool.ApprovalPolicy != ToolApprovalAlwaysRequired {
-		t.Fatalf("sandbox exec metadata = %+v", tool)
-	}
-	if !tool.Enabled || tool.ExecutionState != ToolExecutionStateExecutable || tool.SafeMetadata["scope"] != "bounded_read_only_command" || tool.SafeMetadata["exec_capable"] != true || tool.SafeMetadata["argv_only"] != true || tool.SafeMetadata["read_only"] != true || tool.SafeMetadata["isolated_sandbox"] != false {
-		t.Fatalf("sandbox exec safe metadata = %+v", tool)
-	}
-	if strings.Contains(fmt.Sprint(tool), "/Users/") {
-		t.Fatalf("sandbox exec catalog leaked host path: %+v", tool)
+	for _, name := range []string{ToolNameSandboxExecCommand, ToolNameSandboxStartProcess, ToolNameSandboxContinueProcess, ToolNameSandboxTerminateProcess} {
+		tool := catalogToolByName(tools, name)
+		if tool.Source != ToolCatalogSourceBuiltin || tool.Group != ToolCatalogGroupSandbox || tool.RiskLevel != ToolRiskHigh || tool.ApprovalPolicy != ToolApprovalAlwaysRequired {
+			t.Fatalf("%s metadata = %+v", name, tool)
+		}
+		if !tool.Enabled || tool.ExecutionState != ToolExecutionStateExecutable || tool.SafeMetadata["exec_capable"] != true || tool.SafeMetadata["argv_only"] != true || tool.SafeMetadata["validation_capable"] != true || tool.SafeMetadata["isolated_sandbox"] != false {
+			t.Fatalf("%s safe metadata = %+v", name, tool)
+		}
+		if strings.Contains(fmt.Sprint(tool), "/Users/") {
+			t.Fatalf("%s catalog leaked host path: %+v", name, tool)
+		}
 	}
 }
 
@@ -92,7 +126,7 @@ func TestToolCatalogIncludesLSPReadOnlyTools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{ToolNameLSPDiagnostics, ToolNameLSPSymbols, ToolNameLSPReferences} {
+	for _, name := range []string{ToolNameLSPDiagnostics, ToolNameLSPSymbols, ToolNameLSPReferences, ToolNameLSPDefinition, ToolNameLSPHover} {
 		tool := catalogToolByName(tools, name)
 		if tool.Source != ToolCatalogSourceBuiltin || tool.Group != ToolCatalogGroupLSP || tool.RiskLevel != ToolRiskLow || tool.ApprovalPolicy != ToolApprovalAlwaysRequired {
 			t.Fatalf("%s metadata = %+v", name, tool)
@@ -124,13 +158,74 @@ func TestToolCatalogIncludesWebFetchTool(t *testing.T) {
 	}
 }
 
+func TestToolCatalogIncludesWebSearchTool(t *testing.T) {
+	svc := NewMemoryService()
+	tools, err := svc.ListToolCatalog(context.Background(), identity.LocalDevIdentity())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tool := catalogToolByName(tools, ToolNameWebSearch)
+	if tool.Source != ToolCatalogSourceBuiltin || tool.Group != ToolCatalogGroupWeb || tool.RiskLevel != ToolRiskMedium || tool.ApprovalPolicy != ToolApprovalReadOnly {
+		t.Fatalf("web search metadata = %+v", tool)
+	}
+	if !tool.Enabled || tool.ExecutionState != ToolExecutionStateExecutable || tool.SafeMetadata["scope"] != "web" || tool.SafeMetadata["read_only"] != true || tool.SafeMetadata["network_access"] != "search_provider_api" {
+		t.Fatalf("web search safe metadata = %+v", tool)
+	}
+	if strings.Contains(fmt.Sprint(tool), "/Users/") || strings.Contains(fmt.Sprint(tool), "tvly-") {
+		t.Fatalf("web search catalog leaked sensitive data: %+v", tool)
+	}
+}
+
+func TestWebSearchIsAvailableInChatRunContext(t *testing.T) {
+	svc := NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	if _, err := svc.SyncBuiltInPersonas(context.Background(), ident, []BuiltInPersonaConfig{{
+		Slug:             "default",
+		Name:             "Default",
+		Description:      "Default persona",
+		SystemPrompt:     "prompt",
+		ModelRoute:       PersonaModelRoute{ProviderID: "custom", Model: "model"},
+		AllowedToolNames: []string{ToolNameCurrentTime, ToolNameWebSearch, ToolNameWebFetch},
+		ReasoningMode:    "balanced",
+		BudgetSummary:    "budget",
+		Version:          "1",
+		IsDefault:        true,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	thread, err := svc.CreateThread(context.Background(), ident, CreateThreadInput{Title: "Chat search", Mode: ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.StartRun(context.Background(), ident, thread.ID, StartRunInput{}); err != nil {
+		t.Fatal(err)
+	}
+	job, _, ok, err := svc.ClaimBackgroundJob(context.Background(), ident, ClaimBackgroundJobInput{WorkerID: "worker_chat_search", LeaseSeconds: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("claim ok = false")
+	}
+	ctxData, err := svc.PrepareRunContext(context.Background(), ident, job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if catalogResolutionByName(ctxData.EnabledTools, ToolNameWebSearch).Name == "" {
+		t.Fatalf("chat run missing web.search: %+v", ctxData.EnabledTools)
+	}
+	if catalogResolutionByName(ctxData.EnabledTools, ToolNameWebFetch).Name != "" {
+		t.Fatalf("chat run should not enable web.fetch: %+v", ctxData.EnabledTools)
+	}
+}
+
 func TestToolCatalogIncludesBrowserAutomationTools(t *testing.T) {
 	svc := NewMemoryService()
 	tools, err := svc.ListToolCatalog(context.Background(), identity.LocalDevIdentity())
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{ToolNameBrowserOpen, ToolNameBrowserSnapshot, ToolNameBrowserClickLink} {
+	for _, name := range []string{ToolNameBrowserOpen, ToolNameBrowserSnapshot, ToolNameBrowserClickLink, ToolNameBrowserScreenshot, ToolNameBrowserType, ToolNameBrowserPress} {
 		tool := catalogToolByName(tools, name)
 		if tool.Source != ToolCatalogSourceBuiltin || tool.Group != ToolCatalogGroupBrowser || tool.RiskLevel != ToolRiskMedium || tool.ApprovalPolicy != ToolApprovalAlwaysRequired {
 			t.Fatalf("%s metadata = %+v", name, tool)
@@ -193,6 +288,21 @@ func TestToolCatalogIncludesAgentRuntimeTools(t *testing.T) {
 		if strings.Contains(fmt.Sprint(tool), "/Users/") {
 			t.Fatalf("agent catalog leaked host path: %+v", tool)
 		}
+	}
+}
+
+func TestToolCatalogIncludesTodoWriteTool(t *testing.T) {
+	svc := NewMemoryService()
+	tools, err := svc.ListToolCatalog(context.Background(), identity.LocalDevIdentity())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tool := catalogToolByName(tools, ToolNameTodoWrite)
+	if tool.Source != ToolCatalogSourceBuiltin || tool.Group != ToolCatalogGroupTodo || tool.RiskLevel != ToolRiskLow || tool.ApprovalPolicy != ToolApprovalAlwaysRequired {
+		t.Fatalf("todo.write metadata = %+v", tool)
+	}
+	if !tool.Enabled || tool.ExecutionState != ToolExecutionStateExecutable || tool.SafeMetadata["scope"] != "work_todo" || tool.SafeMetadata["updates_plan_ui"] != true || tool.SafeMetadata["read_only"] != false {
+		t.Fatalf("todo.write safe metadata = %+v", tool)
 	}
 }
 

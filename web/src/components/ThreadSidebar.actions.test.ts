@@ -16,19 +16,32 @@ describe('ThreadSidebar action menu items', () => {
     })
   })
 
-  test('does not render a duplicate create button beside the Threads label', () => {
+  test('renders one explicit thread create icon beside the Threads label', () => {
     const source = readFileSync(resolve(import.meta.dir, 'ThreadSidebar.tsx'), 'utf8')
 
     expect(source).toContain('<span>{copy.threads}</span>')
-    expect(source).not.toContain('aria-label="Create thread"')
+    expect(source).toContain('className="thread-create-button"')
+    expect(source).toContain('aria-label={copy.newChat}')
+    expect(source).toContain('onClick={onCreateThread}')
+    expect(source).toContain('MessageSquarePlus')
   })
 
-  test('keeps archive as a sibling button instead of a button-like element inside the row selector', () => {
+  test('keeps rename and delete in a sibling row menu instead of the row selector', () => {
     const source = readFileSync(resolve(import.meta.dir, 'ThreadSidebar.tsx'), 'utf8')
 
-    expect(source).toContain('className="thread-row"')
+    expect(source).toContain("className={thread.id === selectedThreadId ? 'thread-row selected' : 'thread-row'}")
     expect(source).toContain('className={thread.id === selectedThreadId ? \'thread-card selected\' : \'thread-card\'}')
-    expect(source).toContain('<button className="thread-action"')
+    expect(source).toContain('className="thread-action"')
+    expect(source).toContain('aria-label={copy.threadActions}')
+    expect(source).toContain('className="thread-menu"')
+    expect(source).toContain('renameThread(thread)')
+    expect(source).not.toContain('window.prompt')
+    expect(source).toContain('editingThreadId === thread.id')
+    expect(source).toContain('className={thread.id === selectedThreadId ? \'thread-rename-form selected\' : \'thread-rename-form\'}')
+    expect(source).toContain('submitRename(thread)')
+    expect(source).toContain('deleteThread(thread)')
+    expect(source).toContain('Pencil')
+    expect(source).toContain('Trash2')
     expect(source).not.toContain('role="button" aria-label={copy.archiveThread}')
   })
 })
@@ -41,21 +54,65 @@ describe('ThreadSidebar loading and retry states', () => {
       threads: [],
       selectedThreadId: 'thread-a',
       selectedMode: 'chat',
+      modeCopy: { chat: 'Chat', work: 'Work' },
       theme: 'dark',
       loading: true,
       error: 'load failed',
       copy: getDictionary('en').sidebar,
       onRefresh: () => {},
       onSelectThread: () => {},
+      onSelectMode: () => {},
       onCreateThread: () => {},
       onRenameThread: () => {},
       onArchiveThread: () => {},
       onToggleTheme: () => {},
+      onOpenSettings: () => {},
     }))
 
     expect(html).toContain('Loading threads')
     expect(html).toContain('load failed')
     expect(html).toContain('Retry')
     expect(html).toContain('No chat threads')
+  })
+
+  test('keeps settings as the only fixed sidebar footer action', () => {
+    const source = readFileSync(resolve(import.meta.dir, 'ThreadSidebar.tsx'), 'utf8')
+
+    expect(source).not.toContain('sidebar-search-field')
+    expect(source).toContain('className="sidebar-footer"')
+    expect(source).toContain('className="sidebar-settings-button"')
+    expect(source).toContain('createSidebarFooterItems')
+    expect(source).not.toContain('sidebar-bottom-actions')
+    expect(source).not.toContain('sidebar-search-button')
+  })
+
+  test('gives run dots readable status text', () => {
+    const source = readFileSync(resolve(import.meta.dir, 'ThreadSidebar.tsx'), 'utf8')
+
+    expect(source).toContain('runStatusCopy')
+    expect(source).toContain('aria-label={runStatusCopy[thread.runStatus]}')
+  })
+
+  test('does not render the old bottom create action surface', () => {
+    const chatHtml = renderToStaticMarkup(createElement(ThreadSidebar, {
+      collapsed: false,
+      threads: [],
+      selectedThreadId: 'thread-a',
+      selectedMode: 'chat',
+      modeCopy: { chat: 'Chat', work: 'Work' },
+      theme: 'dark',
+      copy: getDictionary('en').sidebar,
+      onRefresh: () => {},
+      onSelectThread: () => {},
+      onSelectMode: () => {},
+      onCreateThread: () => {},
+      onRenameThread: () => {},
+      onArchiveThread: () => {},
+      onToggleTheme: () => {},
+      onOpenSettings: () => {},
+    }))
+
+    expect(chatHtml).not.toContain('sidebar-bottom-actions')
+    expect(chatHtml).toContain('aria-label="New Chat"')
   })
 })

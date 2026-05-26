@@ -2,29 +2,43 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { SettingsView } from './SettingsView'
 
 describe('SettingsView MCP management', () => {
-  test('renders read-only MCP server status without raw config or secrets', () => {
+  test('renders editable MCP server status without raw saved config or secrets', () => {
     const html = renderToStaticMarkup(<SettingsView {...baseSettingsProps()} />)
 
+    expect(html).toContain('本地 stdio MCP')
+    expect(html).toContain('保存配置')
+    expect(html).toContain('连接测试')
     expect(html).toContain('Local Smoke')
     expect(html).toContain('local-smoke')
     expect(html).toContain('stdio')
     expect(html).toContain('succeeded')
     expect(html).toContain('mcp.local-smoke.echo')
     expect(html).toContain('approval_gated')
+    expect(html).not.toContain('未来 MCP')
+    expect(html).not.toContain('Mock only')
     expect(html).not.toContain('/Users/')
     expect(html).not.toContain('SECRET_CANARY')
-    expect(html).not.toContain('command')
-    expect(html).not.toContain('env')
+  })
+
+  test('wires save, discover, and delete actions', () => {
+    const calls: string[] = []
+    const html = renderToStaticMarkup(<SettingsView {...baseSettingsProps({
+      onSaveMCPServer: (input) => calls.push(`save:${input.slug}`),
+      onDiscoverMCPServer: (slug) => calls.push(`discover:${slug}`),
+      onDeleteMCPServer: (slug) => calls.push(`delete:${slug}`),
+    })} />)
+
+    expect(html).toContain('data-testid="mcp-settings"')
+    expect(calls).toEqual([])
   })
 })
 
-function baseSettingsProps(): Parameters<typeof SettingsView>[0] {
+function baseSettingsProps(overrides: Partial<Parameters<typeof SettingsView>[0]> = {}): Parameters<typeof SettingsView>[0] {
   return {
     locale: 'zh',
     selectedCategoryId: 'mcp',
     defaultWorkspaceMode: 'work',
-    selectedRuntimeScript: 'success',
-    dataSourceMode: 'mock',
+    theme: 'light',
     backendCapability: 'available',
     streamState: 'closed',
     selectedThreadTitle: 'M25 smoke',
@@ -58,7 +72,7 @@ function baseSettingsProps(): Parameters<typeof SettingsView>[0] {
     onSelectLocale: () => {},
     onSelectCategory: () => {},
     onSelectDefaultWorkspaceMode: () => {},
-    onSelectRuntimeScript: () => {},
+    onSelectTheme: () => {},
     onProviderDraftSettingsChange: () => {},
     onSaveProvider: () => {},
     onCheckProvider: () => {},
@@ -73,5 +87,6 @@ function baseSettingsProps(): Parameters<typeof SettingsView>[0] {
     onCancelDeleteMemoryEntry: () => {},
     onConfirmDeleteMemoryEntry: () => {},
     onBack: () => {},
+    ...overrides,
   }
 }

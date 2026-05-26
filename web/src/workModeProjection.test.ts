@@ -163,7 +163,7 @@ describe('deriveWorkPlanProjection', () => {
       ],
     }
 
-    expect(deriveWorkPlanProjection(workThread, messages, initialRun)?.status).toBe('running')
+    expect(deriveWorkPlanProjection(workThread, messages, initialRun)).toBeNull()
     const projection = deriveWorkPlanProjection(workThread, messages, replayedRun)
     expect(projection?.status).toBe('completed')
     expect(projection?.statusDetail).toBe('Step started')

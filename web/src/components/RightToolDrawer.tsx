@@ -2,7 +2,7 @@ import { Terminal } from 'lucide-react'
 import type { Run } from '../domain'
 import type { Locale } from '../i18n'
 import { getDictionary } from '../i18n'
-import { rightPanelItems, type RightPanelItemId } from '../rightPanelItems'
+import { getRightPanelItemCopy, rightPanelItems, type RightPanelItemId } from '../rightPanelItems'
 
 type Props = {
   open: boolean
@@ -118,6 +118,7 @@ function BackgroundTasksPanel({ run, Icon, locale }: { run?: Run | null; Icon: R
 
 export function RightToolDrawer({ open, selectedPanelId, run, locale = 'en' }: Props) {
   const selectedPanel = rightPanelItems.find((item) => item.id === selectedPanelId) ?? rightPanelItems[0]
+  const selectedPanelCopy = getRightPanelItemCopy(selectedPanel, locale)
   const SelectedIcon = selectedPanel.Icon
   const isPreview = selectedPanel.id === 'preview'
   const isBackgroundTasks = selectedPanel.id === 'background-tasks'
@@ -126,8 +127,8 @@ export function RightToolDrawer({ open, selectedPanelId, run, locale = 'en' }: P
     <aside className={open ? 'right-tool-drawer open' : 'right-tool-drawer'}>
       <div className="right-panel-head">
         <div>
-          <strong>{selectedPanel.title}</strong>
-          <span>{isPreview ? 'Artifact' : isBackgroundTasks ? getDictionary(locale).runtime.workerJob.readOnlyObserver : 'Placeholder'}</span>
+          <strong>{selectedPanelCopy.title}</strong>
+          <span>{isPreview ? (locale === 'zh' ? '产物' : 'Artifact') : isBackgroundTasks ? getDictionary(locale).runtime.workerJob.readOnlyObserver : (locale === 'zh' ? '预留面板' : 'Placeholder')}</span>
         </div>
       </div>
       {isPreview ? (
@@ -139,9 +140,9 @@ export function RightToolDrawer({ open, selectedPanelId, run, locale = 'en' }: P
           <div className="right-panel-empty-icon">
             <SelectedIcon size={24} strokeWidth={1.7} />
           </div>
-          <strong>{selectedPanel.title}</strong>
-          <p>{selectedPanel.description}</p>
-          <span>Coming soon</span>
+          <strong>{selectedPanelCopy.title}</strong>
+          <p>{selectedPanelCopy.description}</p>
+          <span>{locale === 'zh' ? '即将接入' : 'Coming soon'}</span>
         </div>
       )}
     </aside>

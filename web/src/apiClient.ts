@@ -1,6 +1,5 @@
-import type { LocalProviderDetection, MCPServerStatus, MemoryAuditItem, MemoryEntry, MemoryFilters, Message, Persona, ProviderCapability, Run, Thread, ToolCall, ToolCatalogItem, WorkerQueueDiagnostics } from './domain'
-import { mockApiClient } from './mockApiClient'
-import { hasRealApiBase, realApiClient } from './realApiClient'
+import type { InstalledSkill, LocalProviderDetection, MCPServerConfigInput, MCPServerStatus, MemoryAuditItem, MemoryEntry, MemoryFilters, Message, Persona, ProviderCapability, Run, Thread, ToolCall, ToolCatalogItem, WebSearchConfig, WorkerQueueDiagnostics, WorkspaceRootConfig } from './domain'
+import { realApiClient } from './realApiClient'
 import type { ExecutionAdapter } from './runtime/executionAdapter'
 import { mockExecutionAdapter } from './runtime/mockExecutionAdapter'
 import { realExecutionAdapter } from './runtime/realExecutionAdapter'
@@ -12,9 +11,17 @@ export type ApiClient = {
   getThreadRun(threadId: string): Promise<Run>
   getRunEvents(runId: string): Promise<Run['events']>
   listPersonas?(): Promise<Persona[]>
+  listSkills?(): Promise<InstalledSkill[]>
   listModelProviders?(): Promise<ProviderCapability[]>
   listToolCatalog?(): Promise<ToolCatalogItem[]>
+  getWebSearchConfig?(): Promise<WebSearchConfig>
+  saveWebSearchKeys?(input: { tavilyApiKey?: string; braveApiKey?: string }): Promise<WebSearchConfig>
+  getWorkspaceRoot?(): Promise<WorkspaceRootConfig>
+  saveWorkspaceRoot?(input: { path: string }): Promise<WorkspaceRootConfig>
   listMCPServers?(): Promise<MCPServerStatus[]>
+  saveMCPServer?(input: MCPServerConfigInput): Promise<MCPServerStatus>
+  deleteMCPServer?(slug: string): Promise<MCPServerStatus[]>
+  discoverMCPServer?(slug: string): Promise<MCPServerStatus>
   listLocalProviderDetections?(): Promise<LocalProviderDetection[]>
   enableLocalProvider?(providerId: string): Promise<ProviderCapability>
   disableLocalProvider?(providerId: string): Promise<ProviderCapability>
@@ -43,8 +50,8 @@ export function selectExecutionAdapter(realApiMode: boolean): ExecutionAdapter {
 }
 
 export function createExecutionAdapter(): ExecutionAdapter {
-  return selectExecutionAdapter(hasRealApiBase())
+  return realExecutionAdapter
 }
 
-export const apiClient: ApiClient = hasRealApiBase() ? realApiClient : mockApiClient
+export const apiClient: ApiClient = realApiClient
 export const executionAdapter = createExecutionAdapter()

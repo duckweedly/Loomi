@@ -109,6 +109,20 @@ func TestLoadModelProviderConfiguration(t *testing.T) {
 	}
 }
 
+func TestLoadSearchProviderKeys(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://loomi:secret@127.0.0.1:55432/loomi?sslmode=disable")
+	t.Setenv("LOOMI_TAVILY_API_KEY", "tvly-test")
+	t.Setenv("LOOMI_BRAVE_SEARCH_API_KEY", "brave-test")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.TavilyAPIKey != "tvly-test" || cfg.BraveSearchAPIKey != "brave-test" {
+		t.Fatalf("search keys not loaded: %+v", cfg)
+	}
+}
+
 func TestRedactedDatabaseURL(t *testing.T) {
 	cfg := Config{DatabaseURL: "postgres://loomi:secret@127.0.0.1:55432/loomi?sslmode=disable"}
 	got := cfg.RedactedDatabaseURL()

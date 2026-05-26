@@ -10,9 +10,11 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 
 	"github.com/sheridiany/loomi/internal/config"
+	"github.com/sheridiany/loomi/internal/productdata"
 )
 
 type ProviderFamily string
@@ -73,6 +75,14 @@ type ProviderRequest struct {
 	MessageID string
 	Messages  []ProviderMessage
 	Model     string
+	Tools     []ProviderToolDefinition
+}
+
+type ProviderToolDefinition struct {
+	Name         string
+	ProviderName string
+	Description  string
+	Parameters   map[string]any
 }
 
 const (
@@ -209,7 +219,7 @@ func (p *HTTPProvider) buildAnthropicRequest(ctx context.Context, request Provid
 }
 
 func (p *HTTPProvider) buildOpenAICompatibleRequest(ctx context.Context, request ProviderRequest) (*http.Request, error) {
-	body := openAIRequestBody{Model: selectedModel(request.Model, p.providerConfig.Model), Stream: true, Messages: openAIMessages(request.Messages)}
+	body := openAIRequestBody{Model: selectedModel(request.Model, p.providerConfig.Model), Stream: true, Messages: openAIMessages(request.Messages), Tools: openAITools(request.Tools)}
 	if len(body.Messages) == 0 {
 		return nil, errors.New("Provider request messages are required.")
 	}
@@ -310,12 +320,27 @@ func parseProviderSSE(ctx context.Context, family ProviderFamily, body io.Reader
 	var eventName string
 	var dataLines []string
 	terminal := false
+	openAIState := openAIStreamAccumulator{}
 	dispatch := func() {
 		if len(dataLines) == 0 {
 			eventName = ""
 			return
 		}
-		if dispatchProviderEvent(ctx, family, eventName, strings.Join(dataLines, "\n"), ch) {
+		data := strings.Join(dataLines, "\n")
+		if (family == ProviderFamilyOpenAI || family == ProviderFamilyOpenAICompatible) && data == "[DONE]" {
+			if openAIState.flushToolCall(ctx, ch) {
+				terminal = true
+			} else {
+				_ = sendProviderEvent(ctx, ch, ProviderEvent{Type: ProviderEventCompleted})
+				terminal = true
+			}
+			eventName = ""
+			dataLines = nil
+			return
+		}
+		if (family == ProviderFamilyOpenAI || family == ProviderFamilyOpenAICompatible) && openAIState.dispatch(ctx, data, ch) {
+			terminal = true
+		} else if family != ProviderFamilyOpenAI && family != ProviderFamilyOpenAICompatible && dispatchProviderEvent(ctx, family, eventName, data, ch) {
 			terminal = true
 		}
 		eventName = ""
@@ -363,6 +388,19 @@ func dispatchProviderEvent(ctx context.Context, family ProviderFamily, eventName
 	}
 }
 
+type openAIStreamAccumulator struct {
+	toolCalls      map[int]*openAIToolCallAccumulator
+	functionName   string
+	functionArgs   strings.Builder
+	functionCallID string
+}
+
+type openAIToolCallAccumulator struct {
+	ID   string
+	Name string
+	Args strings.Builder
+}
+
 func dispatchAnthropicEvent(ctx context.Context, eventName string, data string, ch chan<- ProviderEvent) bool {
 	var event anthropicStreamEvent
 	if err := json.Unmarshal([]byte(data), &event); err != nil {
@@ -392,7 +430,7 @@ func dispatchAnthropicEvent(ctx context.Context, eventName string, data string, 
 	return false
 }
 
-func dispatchOpenAIEvent(ctx context.Context, data string, ch chan<- ProviderEvent) bool {
+func (s *openAIStreamAccumulator) dispatch(ctx context.Context, data string, ch chan<- ProviderEvent) bool {
 	var event openAIStreamEvent
 	if err := json.Unmarshal([]byte(data), &event); err != nil {
 		_ = sendProviderEvent(ctx, ch, ProviderEvent{Type: ProviderEventError, ErrorCode: "parse_error", Message: "Provider stream could not be parsed."})
@@ -411,28 +449,80 @@ func dispatchOpenAIEvent(ctx context.Context, data string, ch chan<- ProviderEve
 			return true
 		}
 		for _, toolCall := range choice.Delta.ToolCalls {
+			if s.toolCalls == nil {
+				s.toolCalls = map[int]*openAIToolCallAccumulator{}
+			}
+			acc := s.toolCalls[toolCall.Index]
+			if acc == nil {
+				acc = &openAIToolCallAccumulator{}
+				s.toolCalls[toolCall.Index] = acc
+			}
+			if toolCall.ID != "" {
+				acc.ID = toolCall.ID
+			}
 			if toolCall.Function.Name != "" {
-				metadata := map[string]any{}
-				if toolCall.ID != "" {
-					metadata["tool_call_id"] = toolCall.ID
-				}
-				if toolCall.Function.Arguments != "" {
-					metadata["arguments_summary"] = parseToolArgumentsSummary(toolCall.Function.Arguments)
-				}
-				_ = sendProviderEvent(ctx, ch, ProviderEvent{Type: ProviderEventToolCall, ToolName: toolCall.Function.Name, Metadata: metadata})
+				acc.Name = toolCall.Function.Name
+			}
+			if toolCall.Function.Arguments != "" {
+				acc.Args.WriteString(toolCall.Function.Arguments)
 			}
 		}
 		if choice.Delta.FunctionCall.Name != "" {
-			metadata := map[string]any{}
-			if choice.Delta.FunctionCall.Arguments != "" {
-				metadata["arguments_summary"] = parseToolArgumentsSummary(choice.Delta.FunctionCall.Arguments)
-			}
-			_ = sendProviderEvent(ctx, ch, ProviderEvent{Type: ProviderEventToolCall, ToolName: choice.Delta.FunctionCall.Name, Metadata: metadata})
+			s.functionName = choice.Delta.FunctionCall.Name
+		}
+		if choice.Delta.FunctionCall.Arguments != "" {
+			s.functionArgs.WriteString(choice.Delta.FunctionCall.Arguments)
+		}
+		if choice.FinishReason == "tool_calls" || choice.FinishReason == "function_call" {
+			return s.flushToolCall(ctx, ch)
 		}
 		if choice.FinishReason == "stop" || choice.FinishReason == "length" {
+			_ = s.flushToolCall(ctx, ch)
 			_ = sendProviderEvent(ctx, ch, ProviderEvent{Type: ProviderEventCompleted, FinishInfo: choice.FinishReason})
 			return true
 		}
+	}
+	return false
+}
+
+func dispatchOpenAIEvent(ctx context.Context, data string, ch chan<- ProviderEvent) bool {
+	state := openAIStreamAccumulator{}
+	return state.dispatch(ctx, data, ch)
+}
+
+func (s *openAIStreamAccumulator) flushToolCall(ctx context.Context, ch chan<- ProviderEvent) bool {
+	if s.toolCalls != nil {
+		indexes := make([]int, 0, len(s.toolCalls))
+		for index := range s.toolCalls {
+			indexes = append(indexes, index)
+		}
+		sort.Ints(indexes)
+		for _, index := range indexes {
+			acc := s.toolCalls[index]
+			if acc == nil || acc.Name == "" {
+				continue
+			}
+			metadata := map[string]any{}
+			if acc.ID != "" {
+				metadata["tool_call_id"] = acc.ID
+			}
+			if args := acc.Args.String(); args != "" {
+				metadata["arguments_summary"] = parseToolArgumentsSummary(args)
+			}
+			_ = sendProviderEvent(ctx, ch, ProviderEvent{Type: ProviderEventToolCall, ToolName: internalProviderToolName(acc.Name), Metadata: metadata})
+			delete(s.toolCalls, index)
+			return true
+		}
+	}
+	if s.functionName != "" {
+		metadata := map[string]any{}
+		if args := s.functionArgs.String(); args != "" {
+			metadata["arguments_summary"] = parseToolArgumentsSummary(args)
+		}
+		_ = sendProviderEvent(ctx, ch, ProviderEvent{Type: ProviderEventToolCall, ToolName: internalProviderToolName(s.functionName), Metadata: metadata})
+		s.functionName = ""
+		s.functionArgs.Reset()
+		return true
 	}
 	return false
 }
@@ -443,6 +533,67 @@ func parseToolArgumentsSummary(raw string) map[string]any {
 		return map[string]any{"_invalid_json": true}
 	}
 	return arguments
+}
+
+func internalProviderToolName(name string) string {
+	switch strings.TrimSpace(name) {
+	case "tool_load_tools":
+		return productdata.ToolNameLoadTools
+	case "skill_load_skill":
+		return productdata.ToolNameLoadSkill
+	case "web_search":
+		return "web.search"
+	case "workspace_glob":
+		return productdata.ToolNameWorkspaceGlob
+	case "workspace_grep":
+		return productdata.ToolNameWorkspaceGrep
+	case "workspace_read":
+		return productdata.ToolNameWorkspaceRead
+	case "workspace_write_file":
+		return productdata.ToolNameWorkspaceWriteFile
+	case "workspace_edit":
+		return productdata.ToolNameWorkspaceEdit
+	case "workspace_patch_preview":
+		return productdata.ToolNameWorkspacePatchPreview
+	case "workspace_patch_apply":
+		return productdata.ToolNameWorkspacePatchApply
+	case "sandbox_exec_command":
+		return productdata.ToolNameSandboxExecCommand
+	case "sandbox_start_process":
+		return productdata.ToolNameSandboxStartProcess
+	case "sandbox_continue_process":
+		return productdata.ToolNameSandboxContinueProcess
+	case "sandbox_terminate_process":
+		return productdata.ToolNameSandboxTerminateProcess
+	case "lsp_diagnostics":
+		return productdata.ToolNameLSPDiagnostics
+	case "lsp_symbols":
+		return productdata.ToolNameLSPSymbols
+	case "lsp_references":
+		return productdata.ToolNameLSPReferences
+	case "lsp_definition":
+		return productdata.ToolNameLSPDefinition
+	case "lsp_hover":
+		return productdata.ToolNameLSPHover
+	case "web_fetch":
+		return productdata.ToolNameWebFetch
+	case "browser_open":
+		return productdata.ToolNameBrowserOpen
+	case "browser_snapshot":
+		return productdata.ToolNameBrowserSnapshot
+	case "browser_click_link":
+		return productdata.ToolNameBrowserClickLink
+	case "browser_screenshot":
+		return productdata.ToolNameBrowserScreenshot
+	case "browser_type":
+		return productdata.ToolNameBrowserType
+	case "browser_press":
+		return productdata.ToolNameBrowserPress
+	case "todo_write":
+		return productdata.ToolNameTodoWrite
+	default:
+		return name
+	}
 }
 
 func dispatchGeminiEvent(ctx context.Context, data string, ch chan<- ProviderEvent) bool {
@@ -645,9 +796,10 @@ func anthropicMessages(messages []ProviderMessage) []anthropicMessage {
 }
 
 type openAIRequestBody struct {
-	Model    string          `json:"model"`
-	Stream   bool            `json:"stream"`
-	Messages []openAIMessage `json:"messages"`
+	Model    string           `json:"model"`
+	Stream   bool             `json:"stream"`
+	Messages []openAIMessage  `json:"messages"`
+	Tools    []openAIToolSpec `json:"tools,omitempty"`
 }
 
 type openAIMessage struct {
@@ -668,12 +820,23 @@ type openAIToolFunction struct {
 	Arguments string `json:"arguments"`
 }
 
+type openAIToolSpec struct {
+	Type     string               `json:"type"`
+	Function openAIToolDefinition `json:"function"`
+}
+
+type openAIToolDefinition struct {
+	Name        string         `json:"name"`
+	Description string         `json:"description"`
+	Parameters  map[string]any `json:"parameters"`
+}
+
 func openAIMessages(messages []ProviderMessage) []openAIMessage {
 	result := make([]openAIMessage, 0, len(messages))
 	for _, message := range messages {
 		if message.Role == ProviderMessageRoleAssistantToolCall {
 			arguments, _ := json.Marshal(message.ArgumentsSummary)
-			result = append(result, openAIMessage{Role: "assistant", ToolCalls: []openAIToolCall{{ID: message.ToolCallID, Type: "function", Function: openAIToolFunction{Name: message.ToolName, Arguments: string(arguments)}}}})
+			result = append(result, openAIMessage{Role: "assistant", ToolCalls: []openAIToolCall{{ID: message.ToolCallID, Type: "function", Function: openAIToolFunction{Name: providerToolName(message.ToolName), Arguments: string(arguments)}}}})
 			continue
 		}
 		if message.Role == ProviderMessageRoleToolResult {
@@ -689,6 +852,78 @@ func openAIMessages(messages []ProviderMessage) []openAIMessage {
 		result = append(result, openAIMessage{Role: role, Content: &content})
 	}
 	return result
+}
+
+func openAITools(tools []ProviderToolDefinition) []openAIToolSpec {
+	result := make([]openAIToolSpec, 0, len(tools))
+	for _, tool := range tools {
+		if tool.ProviderName == "" || len(tool.Parameters) == 0 {
+			continue
+		}
+		result = append(result, openAIToolSpec{Type: "function", Function: openAIToolDefinition{Name: tool.ProviderName, Description: tool.Description, Parameters: tool.Parameters}})
+	}
+	return result
+}
+
+func providerToolName(name string) string {
+	switch strings.TrimSpace(name) {
+	case productdata.ToolNameLoadTools:
+		return "tool_load_tools"
+	case productdata.ToolNameLoadSkill:
+		return "skill_load_skill"
+	case "web.search":
+		return "web_search"
+	case productdata.ToolNameWorkspaceGlob:
+		return "workspace_glob"
+	case productdata.ToolNameWorkspaceGrep:
+		return "workspace_grep"
+	case productdata.ToolNameWorkspaceRead:
+		return "workspace_read"
+	case productdata.ToolNameWorkspaceWriteFile:
+		return "workspace_write_file"
+	case productdata.ToolNameWorkspaceEdit:
+		return "workspace_edit"
+	case productdata.ToolNameWorkspacePatchPreview:
+		return "workspace_patch_preview"
+	case productdata.ToolNameWorkspacePatchApply:
+		return "workspace_patch_apply"
+	case productdata.ToolNameSandboxExecCommand:
+		return "sandbox_exec_command"
+	case productdata.ToolNameSandboxStartProcess:
+		return "sandbox_start_process"
+	case productdata.ToolNameSandboxContinueProcess:
+		return "sandbox_continue_process"
+	case productdata.ToolNameSandboxTerminateProcess:
+		return "sandbox_terminate_process"
+	case productdata.ToolNameLSPDiagnostics:
+		return "lsp_diagnostics"
+	case productdata.ToolNameLSPSymbols:
+		return "lsp_symbols"
+	case productdata.ToolNameLSPReferences:
+		return "lsp_references"
+	case productdata.ToolNameLSPDefinition:
+		return "lsp_definition"
+	case productdata.ToolNameLSPHover:
+		return "lsp_hover"
+	case productdata.ToolNameWebFetch:
+		return "web_fetch"
+	case productdata.ToolNameBrowserOpen:
+		return "browser_open"
+	case productdata.ToolNameBrowserSnapshot:
+		return "browser_snapshot"
+	case productdata.ToolNameBrowserClickLink:
+		return "browser_click_link"
+	case productdata.ToolNameBrowserScreenshot:
+		return "browser_screenshot"
+	case productdata.ToolNameBrowserType:
+		return "browser_type"
+	case productdata.ToolNameBrowserPress:
+		return "browser_press"
+	case productdata.ToolNameTodoWrite:
+		return "todo_write"
+	default:
+		return name
+	}
 }
 
 type geminiRequestBody struct {
@@ -743,6 +978,7 @@ type openAIStreamEvent struct {
 				Arguments string `json:"arguments"`
 			} `json:"function_call"`
 			ToolCalls []struct {
+				Index    int    `json:"index"`
 				ID       string `json:"id"`
 				Function struct {
 					Name      string `json:"name"`
