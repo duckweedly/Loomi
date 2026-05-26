@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { apiClient, executionAdapter } from './apiClient'
 import { setMockRuntimeScript } from './mockApiClient'
-import type { BackendCapabilityState, LocalProviderDetection, MemoryAuditItem, MemoryEntry, MemoryFilters, Message, Persona, ProviderCapability, Run, RunEvent, RuntimeEvent, RuntimeScriptId, StaleEventGuard, StreamState, Thread, ThreadRuntimeState, ToolCall, ToolCatalogItem } from './domain'
+import type { BackendCapabilityState, LocalProviderDetection, MCPServerStatus, MemoryAuditItem, MemoryEntry, MemoryFilters, Message, Persona, ProviderCapability, Run, RunEvent, RuntimeEvent, RuntimeScriptId, StaleEventGuard, StreamState, Thread, ThreadRuntimeState, ToolCall, ToolCatalogItem } from './domain'
 import { isRuntimeActive, isRuntimeTerminal } from './runtime/executionAdapter'
 import { deriveCapabilitySignalFromEvent } from './runtime/backendCapabilityStatus'
 import { applyRealRunEvent, mapRealRuntimeCapabilitySignal } from './runtime/realExecutionAdapter'
@@ -275,6 +275,7 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
   const [selectedRuntimeScript, setSelectedRuntimeScript] = useState<RuntimeScriptId>('success')
   const [providerCapabilities, setProviderCapabilities] = useState<ProviderCapability[]>([])
   const [toolCatalog, setToolCatalog] = useState<ToolCatalogItem[]>([])
+  const [mcpServers, setMCPServers] = useState<MCPServerStatus[]>([])
   const [localProviderDetections, setLocalProviderDetections] = useState<LocalProviderDetection[]>([])
   const [localProviderDetectionError, setLocalProviderDetectionError] = useState<string | null>(null)
   const [personas, setPersonas] = useState<Persona[]>([])
@@ -350,6 +351,24 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
       })
       .catch(() => {
         if (!cancelled) setProviderCapabilities([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!apiClient.listMCPServers) {
+      setMCPServers([])
+      return
+    }
+    let cancelled = false
+    apiClient.listMCPServers()
+      .then((servers) => {
+        if (!cancelled) setMCPServers(servers)
+      })
+      .catch(() => {
+        if (!cancelled) setMCPServers([])
       })
     return () => {
       cancelled = true
@@ -564,6 +583,25 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
       })
       return
     }
+    let cancelled = false
+    const activeRunID = run.id
+    const reconcileActiveRun = async () => {
+      const threadId = selectedThreadIdRef.current
+      if (!threadId) return
+      try {
+        const [nextMessages, nextRun] = await Promise.all([apiClient.getThreadMessages(threadId), apiClient.getThreadRun(threadId)])
+        if (cancelled || !nextRun || nextRun.id !== activeRunID) return
+        setMessages(nextMessages)
+        setRun(nextRun)
+        runRef.current = nextRun
+        if (!shouldBlockRuntimeSubmit(nextRun)) {
+          setCapabilitySignals((current) => ({ ...current, streamDisconnected: false }))
+          setStreamState((current) => (current === 'closed' ? current : 'closed'))
+        }
+      } catch {
+        if (!cancelled) setCapabilitySignals((current) => ({ ...current, streamDisconnected: true }))
+      }
+    }
     setStreamState((current) => (current === 'connecting' ? current : 'connecting'))
     const afterSequence = getMaxRunEventSequence(run.events, 0)
     const unsubscribe = apiClient.subscribeRunEvents(
@@ -585,9 +623,21 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
       () => {
         setCapabilitySignals((current) => ({ ...current, streamDisconnected: true }))
         setStreamState((current) => (current === 'recoverable_error' ? current : 'recoverable_error'))
+        void reconcileActiveRun()
+      },
+      () => {
+        setStreamState((current) => (current === 'closed' ? current : 'closed'))
+        void reconcileActiveRun()
       },
     )
-    return unsubscribe
+    const reconcileInterval = window.setInterval(() => {
+      void reconcileActiveRun()
+    }, 2500)
+    return () => {
+      cancelled = true
+      window.clearInterval(reconcileInterval)
+      unsubscribe()
+    }
   }, [run?.id, run?.status])
 
   const selectThread = useCallback((threadId: string) => {
@@ -794,6 +844,7 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
     selectedRuntimeScript,
     providerCapabilities,
     toolCatalog,
+    mcpServers,
     localProviderDetections,
     localProviderDetectionError,
     personas,

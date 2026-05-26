@@ -47,6 +47,111 @@ describe('deriveWorkPlanProjection', () => {
     expect(deriveWorkPlanProjection(chatThread, [], run)).toBeNull()
   })
 
+  test('replays the latest safe todo snapshot from run event metadata', () => {
+    const run: Run = {
+      id: 'run-work',
+      threadId: workThread.id,
+      status: 'running',
+      model: 'Mock',
+      context: 'local_simulated',
+      events: [
+        {
+          id: 'evt-todo-1',
+          type: 'work.todo.updated',
+          label: 'Todo',
+          detail: 'Todo proposed',
+          time: '10:00',
+          status: 'running',
+          metadata: {
+            todo_items: [
+              { id: 'todo-1', title: 'Find candidate files', status: 'running' },
+              { id: 'todo-2', title: 'Read selected file', status: 'pending' },
+            ],
+            updated_by: 'provider',
+            redaction_applied: false,
+          },
+        },
+        {
+          id: 'evt-todo-2',
+          type: 'work.todo.updated',
+          label: 'Todo',
+          detail: 'Todo advanced',
+          time: '10:01',
+          status: 'running',
+          metadata: {
+            todo_items: [
+              { id: 'todo-1', title: 'Find candidate files', status: 'completed' },
+              { id: 'todo-2', title: 'Read selected file', status: 'running', summary: 'Reading safe metadata only' },
+            ],
+            updated_by: 'runtime',
+            redaction_applied: false,
+          },
+        },
+      ],
+    }
+
+    const projection = deriveWorkPlanProjection(workThread, messages, run)
+
+    expect(projection?.todoSnapshot).toMatchObject({
+      updatedBy: 'runtime',
+      updatedAtEventId: 'evt-todo-2',
+      redactionApplied: false,
+    })
+    expect(projection?.todoSnapshot?.items.map((item) => `${item.title}:${item.status}`)).toEqual(['Find candidate files:completed', 'Read selected file:running'])
+    expect(projection?.todoSnapshot?.items[1].summary).toBe('Reading safe metadata only')
+  })
+
+  test('keeps todo snapshots work-only and strips unsafe todo metadata', () => {
+    const run: Run = {
+      id: 'run-work',
+      threadId: workThread.id,
+      status: 'running',
+      model: 'Mock',
+      context: 'local_simulated',
+      events: [{
+        id: 'evt-todo-secret',
+        type: 'work.todo.updated',
+        label: 'Todo',
+        detail: 'Todo updated with unsafe metadata',
+        time: '10:00',
+        status: 'running',
+        metadata: {
+          todo_items: [{
+            id: 'todo-secret',
+            title: 'Open /Users/xuean/private.md with sk-super-secret-token',
+            status: 'running',
+            summary: 'Run curl https://example.test/private',
+            command: 'bash /tmp/run.sh',
+            file_path: '/Users/xuean/private.md',
+          }],
+          updated_by: 'provider',
+          redaction_applied: false,
+          browser_url: 'https://example.test/private',
+        },
+      }],
+    }
+
+    expect(deriveWorkPlanProjection(chatThread, [], { ...run, threadId: chatThread.id })).toBeNull()
+
+    const projection = deriveWorkPlanProjection(workThread, messages, run)
+    const serialized = JSON.stringify(projection?.todoSnapshot)
+
+    expect(serialized).not.toContain('sk-super-secret-token')
+    expect(serialized).not.toContain('/Users/xuean/private.md')
+    expect(serialized).not.toContain('bash /tmp/run.sh')
+    expect(serialized).not.toContain('https://example.test/private')
+    expect(serialized).not.toContain('command')
+    expect(serialized).not.toContain('file_path')
+    expect(projection?.todoSnapshot?.items[0]).toMatchObject({
+      id: '[redacted]',
+      title: '[redacted]',
+      status: 'running',
+      summary: '[redacted]',
+      redactionApplied: true,
+    })
+    expect(projection?.todoSnapshot?.redactionApplied).toBe(true)
+  })
+
   test('event replay drives current progress without a separate queue', () => {
     const initialRun: Run = { id: 'run-work', threadId: workThread.id, status: 'running', model: 'Mock', context: 'local_simulated', events: [] }
     const replayedRun: Run = {

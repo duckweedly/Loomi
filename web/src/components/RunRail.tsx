@@ -33,6 +33,10 @@ function getEventMark(event: Run['events'][number], index: number) {
   return <Check size={11} />
 }
 
+function isWorkspaceMutationTool(toolName: unknown) {
+  return toolName === 'workspace.write_file' || toolName === 'workspace.edit'
+}
+
 function getEventDetail(event: Run['events'][number], locale: Locale) {
   const workerCopy = getDictionary(locale).runtime.workerJob
   const usage = event.usage
@@ -63,8 +67,61 @@ function getEventDetail(event: Run['events'][number], locale: Locale) {
     : event.metadata?.model_phase === 'initial'
       ? 'Initial model phase'
       : ''
+  const loopIndex = typeof event.metadata?.loop_index === 'number' ? event.metadata.loop_index : undefined
+  const loopMax = typeof event.metadata?.loop_max === 'number' ? event.metadata.loop_max : undefined
+  const loopCopy = loopIndex !== undefined
+    ? loopMax !== undefined
+      ? `Loop ${loopIndex}/${loopMax}`
+      : `Loop ${loopIndex}`
+    : ''
+  const isWorkspaceTool = event.metadata?.tool_group === 'workspace'
+    || (typeof event.metadata?.tool_name === 'string' && event.metadata.tool_name.startsWith('workspace.'))
+  const isSandboxTool = event.metadata?.tool_group === 'sandbox'
+    || (typeof event.metadata?.tool_name === 'string' && event.metadata.tool_name.startsWith('sandbox.'))
+  const isLSPTool = event.metadata?.tool_group === 'lsp'
+    || (typeof event.metadata?.tool_name === 'string' && event.metadata.tool_name.startsWith('lsp.'))
+  const isWebTool = event.metadata?.tool_group === 'web'
+    || (typeof event.metadata?.tool_name === 'string' && event.metadata.tool_name.startsWith('web.'))
+  const isBrowserTool = event.metadata?.tool_group === 'browser'
+    || (typeof event.metadata?.tool_name === 'string' && event.metadata.tool_name.startsWith('browser.'))
+  const isArtifactTool = event.metadata?.tool_group === 'artifact'
+    || (typeof event.metadata?.tool_name === 'string' && event.metadata.tool_name.startsWith('artifact.'))
+  const isAgentTool = event.metadata?.tool_group === 'agent'
+    || (typeof event.metadata?.tool_name === 'string' && event.metadata.tool_name.startsWith('agent.'))
+  const workspaceToolLabel = isWorkspaceMutationTool(event.metadata?.tool_name)
+    ? 'Workspace mutation tool · high risk · write-capable'
+    : 'Workspace tool'
+  const sandboxToolLabel = event.metadata?.tool_name === 'sandbox.exec_command'
+    ? 'Sandbox exec tool · high risk · exec-capable'
+    : 'Sandbox tool'
+  const webToolLabel = event.metadata?.tool_name === 'web.fetch'
+    ? 'Web fetch tool · medium risk · public HTTP only'
+    : 'Web tool'
+  const browserToolLabel = isBrowserTool
+    ? 'Browser automation tool · medium risk · public HTTP only'
+    : ''
+  const artifactToolLabel = isArtifactTool
+    ? 'Artifact runtime tool · medium risk · non-executable'
+    : ''
+  const agentToolLabel = isAgentTool
+    ? 'Agent coordination tool · medium risk · no autonomous execution'
+    : ''
   const detail = modelPhase
     ? `${modelPhase} · ${event.detail}`
+    : event.type.startsWith('tool.call.') && isWorkspaceTool
+      ? [workspaceToolLabel, loopCopy, event.detail].filter(Boolean).join(' · ')
+    : event.type.startsWith('tool.call.') && isSandboxTool
+      ? [sandboxToolLabel, loopCopy, event.detail].filter(Boolean).join(' · ')
+    : event.type.startsWith('tool.call.') && isLSPTool
+      ? ['LSP read-only tool · low risk · workspace-scoped', loopCopy, event.detail].filter(Boolean).join(' · ')
+    : event.type.startsWith('tool.call.') && isWebTool
+      ? [webToolLabel, loopCopy, event.detail].filter(Boolean).join(' · ')
+    : event.type.startsWith('tool.call.') && isBrowserTool
+      ? [browserToolLabel, loopCopy, event.detail].filter(Boolean).join(' · ')
+    : event.type.startsWith('tool.call.') && isArtifactTool
+      ? [artifactToolLabel, loopCopy, event.detail].filter(Boolean).join(' · ')
+    : event.type.startsWith('tool.call.') && isAgentTool
+      ? [agentToolLabel, loopCopy, event.detail].filter(Boolean).join(' · ')
     : event.type === 'error.provider_error' || event.type === 'error.provider_timeout' || event.type === 'error.provider_rate_limited'
     ? `Provider failure · ${event.detail}`
     : event.type === 'progress.tool_call_blocked'
@@ -108,7 +165,7 @@ export function RunRail({ run, open, onOpenArtifact, onStopRun, selectedRuntimeS
             </div>
           )}
           {capabilityCopy && <div className={`capability-rail ${capabilityStatus}`}><strong>{capabilityCopy.title}</strong><span>{capabilityCopy.detail}</span></div>}
-          {(run?.status === 'queued' || run?.status === 'running' || run?.status === 'retrying' || run?.status === 'recovering') && onStopRun && <button className="runtime-stop-button ghost" onClick={onStopRun}>Stop run</button>}
+          {(run?.status === 'queued' || run?.status === 'running' || run?.status === 'retrying' || run?.status === 'recovering' || run?.status === 'blocked_on_tool_approval') && onStopRun && <button className="runtime-stop-button ghost" onClick={onStopRun}>Stop run</button>}
           {eventGroups.map((group) => (
             <section key={group.id} className={`runtime-event-group ${group.id}`}>
               <h3>{group.title}</h3>

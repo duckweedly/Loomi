@@ -160,8 +160,18 @@ func (g *Gateway) streamProviderResponse(ctx context.Context, run productdata.Ru
 			return
 		case ProviderEventToolCall:
 			if !allowToolCalls {
-				g.fail(ctx, run.ID, "unsupported_tool_loop", "Additional tool calls are not supported in this run.")
-				return
+				if g.continuationToolCallIDExists(ctx, run.ID, event) {
+					g.fail(ctx, run.ID, "duplicate_tool_call_id", "Tool call id was already used in this run.")
+					return
+				}
+				if g.continuationToolLimitReached(ctx, run, event) {
+					g.failWithMetadata(ctx, run.ID, "tool_loop_limit_reached", "Tool loop limit reached.", map[string]any{"loop_count": productdata.DefaultMaxBoundedToolCallsPerRun, "max_tool_calls": productdata.DefaultMaxBoundedToolCallsPerRun})
+					return
+				}
+				if !g.canRequestContinuationTool(ctx, run, event) {
+					g.fail(ctx, run.ID, "unsupported_tool_loop", "Additional tool calls are not supported in this run.")
+					return
+				}
 			}
 			if !g.recordToolCallRequest(ctx, run, event) {
 				g.fail(ctx, run.ID, "tool_call_rejected", "Tool request could not be accepted.")
@@ -293,6 +303,8 @@ func (g *Gateway) recordToolCallRequest(ctx context.Context, run productdata.Run
 		if !allowed {
 			return false
 		}
+	} else if (productdata.IsWorkspaceToolName(event.ToolName) || productdata.IsSandboxToolName(event.ToolName) || productdata.IsLSPToolName(event.ToolName) || productdata.IsWebToolName(event.ToolName) || productdata.IsBrowserToolName(event.ToolName) || productdata.IsArtifactToolName(event.ToolName) || productdata.IsAgentToolName(event.ToolName)) && !g.scopedToolAllowedForRun(ctx, run.ID, event.ToolName) {
+		return false
 	}
 	_, events, err := g.Service.RecordToolCallRequest(ctx, identity.LocalDevIdentity(), run.ID, productdata.RecordToolCallRequestInput{ToolCallID: toolCallID, ToolName: event.ToolName, CandidateSchemaHash: candidateSchemaHash, ArgumentsSummary: arguments, ArgumentsHash: argumentsHash(arguments), ApprovalStatus: productdata.ToolCallApprovalRequired, ExecutionStatus: productdata.ToolCallExecutionBlocked})
 	if err != nil {
@@ -304,6 +316,92 @@ func (g *Gateway) recordToolCallRequest(ctx context.Context, run productdata.Run
 		}
 	}
 	return true
+}
+
+func (g *Gateway) canRequestContinuationTool(ctx context.Context, run productdata.Run, event ProviderEvent) bool {
+	if event.ToolName == "" || !g.continuationToolNameSupported(event.ToolName) {
+		return false
+	}
+	if !g.scopedToolAllowedForRun(ctx, run.ID, event.ToolName) {
+		return false
+	}
+	events, err := g.Service.ListRunEvents(ctx, identity.LocalDevIdentity(), run.ID, 0)
+	if err != nil {
+		return false
+	}
+	return acceptedToolCallCount(events) < productdata.DefaultMaxBoundedToolCallsPerRun
+}
+
+func acceptedToolCallCount(events []productdata.RunEvent) int {
+	seen := map[string]bool{}
+	for _, event := range events {
+		if event.Type != productdata.EventToolCallRequested {
+			continue
+		}
+		toolCallID := metadataString(event.Metadata, "tool_call_id")
+		if toolCallID == "" || seen[toolCallID] {
+			continue
+		}
+		seen[toolCallID] = true
+	}
+	return len(seen)
+}
+
+func (g *Gateway) continuationToolLimitReached(ctx context.Context, run productdata.Run, event ProviderEvent) bool {
+	if event.ToolName == "" || !g.continuationToolNameSupported(event.ToolName) {
+		return false
+	}
+	if !g.scopedToolAllowedForRun(ctx, run.ID, event.ToolName) {
+		return false
+	}
+	events, err := g.Service.ListRunEvents(ctx, identity.LocalDevIdentity(), run.ID, 0)
+	if err != nil {
+		return false
+	}
+	return acceptedToolCallCount(events) >= productdata.DefaultMaxBoundedToolCallsPerRun
+}
+
+func (g *Gateway) continuationToolNameSupported(toolName string) bool {
+	return productdata.IsWorkspaceToolName(toolName) || productdata.IsBrowserToolName(toolName) || productdata.IsArtifactToolName(toolName) || productdata.IsAgentToolName(toolName)
+}
+
+func (g *Gateway) continuationToolCallIDExists(ctx context.Context, runID string, event ProviderEvent) bool {
+	toolCallID := metadataString(event.Metadata, "tool_call_id")
+	if toolCallID == "" {
+		return false
+	}
+	events, err := g.Service.ListRunEvents(ctx, identity.LocalDevIdentity(), runID, 0)
+	if err != nil {
+		return false
+	}
+	for _, runEvent := range events {
+		if runEvent.Type != productdata.EventToolCallRequested {
+			continue
+		}
+		if metadataString(runEvent.Metadata, "tool_call_id") == toolCallID {
+			return true
+		}
+	}
+	return false
+}
+
+func (g *Gateway) workspaceToolAllowedForRun(ctx context.Context, runID string, toolName string) bool {
+	return g.scopedToolAllowedForRun(ctx, runID, toolName)
+}
+
+func (g *Gateway) scopedToolAllowedForRun(ctx context.Context, runID string, toolName string) bool {
+	events, err := g.Service.ListRunEvents(ctx, identity.LocalDevIdentity(), runID, 0)
+	if err != nil {
+		return false
+	}
+	for _, event := range events {
+		for _, name := range metadataStringList(event.Metadata, "enabled_tools") {
+			if name == toolName {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (g *Gateway) mcpToolAllowedForRun(ctx context.Context, runID string, toolName string) (bool, string) {

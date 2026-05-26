@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/sheridiany/loomi/internal/identity"
 )
@@ -29,6 +30,7 @@ type Service interface {
 	AppendRunEvent(context.Context, identity.LocalIdentity, string, AppendRunEventInput) (RunEvent, error)
 	PrepareRunContext(context.Context, identity.LocalIdentity, BackgroundJob) (RunContext, error)
 	ListToolCatalog(context.Context, identity.LocalIdentity) ([]ToolCatalogEntry, error)
+	ListMCPDiscoveryEvents(context.Context, identity.LocalIdentity) ([]RunEvent, error)
 	SyncBuiltInPersonas(context.Context, identity.LocalIdentity, []BuiltInPersonaConfig) (PersonaSyncResult, error)
 	ListPersonas(context.Context, identity.LocalIdentity) ([]Persona, error)
 	StopRun(context.Context, identity.LocalIdentity, string) (StopRunOutput, error)
@@ -54,6 +56,18 @@ type Service interface {
 	ProposeMemoryWrite(context.Context, identity.LocalIdentity, ProposeMemoryWriteInput) (MemoryWriteProposal, error)
 	ApproveMemoryWrite(context.Context, identity.LocalIdentity, string, MemoryWriteDecisionInput) (MemoryWriteDecision, error)
 	DenyMemoryWrite(context.Context, identity.LocalIdentity, string, MemoryWriteDecisionInput) (MemoryWriteDecision, error)
+}
+
+type ArtifactService interface {
+	CreateArtifact(context.Context, identity.LocalIdentity, CreateArtifactInput) (Artifact, error)
+	ReadArtifact(context.Context, identity.LocalIdentity, ReadArtifactInput) (Artifact, error)
+	ListArtifacts(context.Context, identity.LocalIdentity, ListArtifactsInput) ([]Artifact, error)
+}
+
+type AgentTaskService interface {
+	SpawnAgentTask(context.Context, identity.LocalIdentity, SpawnAgentTaskInput) (AgentTask, error)
+	ListAgentTasks(context.Context, identity.LocalIdentity, ListAgentTasksInput) ([]AgentTask, error)
+	CompleteAgentTask(context.Context, identity.LocalIdentity, CompleteAgentTaskInput) (AgentTask, error)
 }
 
 type SeedService interface {
@@ -84,6 +98,8 @@ type MemoryService struct {
 	memoryProposals    map[string]MemoryWriteProposal
 	memoryProposalKeys map[string]string
 	memoryDecisionKeys map[string]MemoryWriteDecision
+	artifacts          map[string]Artifact
+	agentTasks         map[string]AgentTask
 }
 
 func NewMemoryService() *MemoryService {
@@ -104,7 +120,189 @@ func NewMemoryService() *MemoryService {
 		memoryProposals:    map[string]MemoryWriteProposal{},
 		memoryProposalKeys: map[string]string{},
 		memoryDecisionKeys: map[string]MemoryWriteDecision{},
+		artifacts:          map[string]Artifact{},
+		agentTasks:         map[string]AgentTask{},
 	}
+}
+
+func (s *MemoryService) SpawnAgentTask(_ context.Context, ident identity.LocalIdentity, input SpawnAgentTaskInput) (AgentTask, error) {
+	role := strings.TrimSpace(input.Role)
+	goal := strings.TrimSpace(input.Goal)
+	if !isSupportedAgentRole(role) || goal == "" || len([]rune(goal)) > 4000 {
+		return AgentTask{}, NewError(CodeInvalidRequest, "Agent task role and goal are invalid.")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user := s.ensureUserLocked(ident)
+	thread, ok := s.threads[input.ThreadID]
+	if !ok || thread.UserID != user.ID {
+		return AgentTask{}, NewError(CodeThreadNotFound, "Thread not found.")
+	}
+	run, ok := s.runs[input.RunID]
+	if !ok || run.UserID != user.ID || run.ThreadID != thread.ID {
+		return AgentTask{}, NewError(CodeRunNotFound, "Run not found.")
+	}
+	now := s.now()
+	task := AgentTask{
+		ID:        NewAgentTaskID(),
+		ThreadID:  thread.ID,
+		RunID:     run.ID,
+		Role:      role,
+		Goal:      goal,
+		Status:    AgentTaskStatusSpawned,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	s.agentTasks[task.ID] = task
+	return task, nil
+}
+
+func (s *MemoryService) ListAgentTasks(_ context.Context, ident identity.LocalIdentity, input ListAgentTasksInput) ([]AgentTask, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user := s.ensureUserLocked(ident)
+	thread, ok := s.threads[input.ThreadID]
+	if !ok || thread.UserID != user.ID {
+		return nil, NewError(CodeThreadNotFound, "Thread not found.")
+	}
+	limit := input.Limit
+	if limit <= 0 || limit > 50 {
+		limit = 20
+	}
+	result := make([]AgentTask, 0, limit)
+	for _, task := range s.agentTasks {
+		if task.ThreadID != thread.ID {
+			continue
+		}
+		result = append(result, task)
+		if len(result) >= limit {
+			break
+		}
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].CreatedAt.Before(result[j].CreatedAt) })
+	return result, nil
+}
+
+func (s *MemoryService) CompleteAgentTask(_ context.Context, ident identity.LocalIdentity, input CompleteAgentTaskInput) (AgentTask, error) {
+	summary := strings.TrimSpace(input.ResultSummary)
+	if summary == "" || len([]rune(summary)) > 4000 {
+		return AgentTask{}, NewError(CodeInvalidRequest, "Agent result summary is invalid.")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user := s.ensureUserLocked(ident)
+	thread, ok := s.threads[input.ThreadID]
+	if !ok || thread.UserID != user.ID {
+		return AgentTask{}, NewError(CodeThreadNotFound, "Thread not found.")
+	}
+	task, ok := s.agentTasks[strings.TrimSpace(input.TaskID)]
+	if !ok || task.ThreadID != thread.ID {
+		return AgentTask{}, NewError(CodeInvalidRequest, "Agent task not found.")
+	}
+	now := s.now()
+	task.Status = AgentTaskStatusCompleted
+	task.ResultSummary = RedactEventText(summary)
+	task.UpdatedAt = now
+	s.agentTasks[task.ID] = task
+	return task, nil
+}
+
+func (s *MemoryService) CreateArtifact(_ context.Context, ident identity.LocalIdentity, input CreateArtifactInput) (Artifact, error) {
+	title := strings.TrimSpace(input.Title)
+	content := input.Content
+	if title == "" || strings.TrimSpace(content) == "" {
+		return Artifact{}, NewError(CodeInvalidRequest, "Artifact title and content are required.")
+	}
+	if !utf8.ValidString(content) {
+		return Artifact{}, NewError(CodeInvalidRequest, "Artifact content must be valid UTF-8.")
+	}
+	limit := boundedArtifactBytes(input.MaxBytes)
+	if len([]byte(content)) > limit {
+		return Artifact{}, NewError(CodeInvalidRequest, "Artifact content is too large.")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ensureUserLocked(ident)
+	if _, ok := s.threads[input.ThreadID]; !ok {
+		return Artifact{}, NewError(CodeThreadNotFound, "Thread not found.")
+	}
+	if _, ok := s.runs[input.RunID]; !ok {
+		return Artifact{}, NewError(CodeRunNotFound, "Run not found.")
+	}
+	now := s.now()
+	artifact := Artifact{
+		ID:           NewArtifactID(),
+		ThreadID:     input.ThreadID,
+		RunID:        input.RunID,
+		Title:        title,
+		ArtifactType: "text",
+		Content:      content,
+		ContentBytes: len([]byte(content)),
+		TextExcerpt:  artifactExcerpt(content, limit),
+		Truncated:    false,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+	s.artifacts[artifact.ID] = artifact
+	return artifact, nil
+}
+
+func (s *MemoryService) ReadArtifact(_ context.Context, ident identity.LocalIdentity, input ReadArtifactInput) (Artifact, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ensureUserLocked(ident)
+	artifact, ok := s.artifacts[strings.TrimSpace(input.ArtifactID)]
+	if !ok || artifact.ThreadID != input.ThreadID {
+		return Artifact{}, NewError(CodeArtifactNotFound, "Artifact not found.")
+	}
+	limit := boundedArtifactBytes(input.MaxBytes)
+	artifact.TextExcerpt = artifactExcerpt(artifact.Content, limit)
+	artifact.Truncated = len([]byte(artifact.Content)) > limit
+	return artifact, nil
+}
+
+func (s *MemoryService) ListArtifacts(_ context.Context, ident identity.LocalIdentity, input ListArtifactsInput) ([]Artifact, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ensureUserLocked(ident)
+	limit := input.Limit
+	if limit <= 0 || limit > 50 {
+		limit = 20
+	}
+	result := make([]Artifact, 0, limit)
+	for _, artifact := range s.artifacts {
+		if artifact.ThreadID != input.ThreadID {
+			continue
+		}
+		artifact.Content = ""
+		artifact.TextExcerpt = artifactExcerpt(artifact.TextExcerpt, 512)
+		result = append(result, artifact)
+		if len(result) >= limit {
+			break
+		}
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].CreatedAt.Before(result[j].CreatedAt) })
+	return result, nil
+}
+
+func boundedArtifactBytes(value int) int {
+	if value <= 0 || value > 32*1024 {
+		return 32 * 1024
+	}
+	return value
+}
+
+func artifactExcerpt(content string, limit int) string {
+	if len([]byte(content)) <= limit {
+		return content
+	}
+	if limit < 0 {
+		limit = 0
+	}
+	for limit > 0 && !utf8.RuneStart(content[limit]) {
+		limit--
+	}
+	return content[:limit]
 }
 
 func (s *MemoryService) CurrentIdentity(_ context.Context, ident identity.LocalIdentity) (User, error) {
@@ -481,6 +679,27 @@ func (s *MemoryService) ListToolCatalog(_ context.Context, ident identity.LocalI
 		}
 	}
 	return SafeToolCatalogFromEvents(events), nil
+}
+
+func (s *MemoryService) ListMCPDiscoveryEvents(_ context.Context, ident identity.LocalIdentity) ([]RunEvent, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user := s.ensureUserLocked(ident)
+	events := make([]RunEvent, 0)
+	for _, runEvents := range s.runEvents {
+		for _, event := range runEvents {
+			if event.UserID == user.ID && (event.Type == "mcp_discovery_succeeded" || event.Type == "mcp_discovery_failed" || event.Type == "mcp_discovery_rejected") {
+				events = append(events, event)
+			}
+		}
+	}
+	sort.SliceStable(events, func(i, j int) bool {
+		if events[i].CreatedAt.Equal(events[j].CreatedAt) {
+			return events[i].Sequence < events[j].Sequence
+		}
+		return events[i].CreatedAt.Before(events[j].CreatedAt)
+	})
+	return events, nil
 }
 
 func (s *MemoryService) CreateMemoryEntry(_ context.Context, ident identity.LocalIdentity, input CreateMemoryEntryInput) (MemoryEntry, error) {
@@ -1094,8 +1313,21 @@ func applyPersonaToRunContext(context *RunContext, events []RunEvent) {
 			context.ProviderRoute.Model = context.Persona.ModelRoute.Model
 		}
 		context.EnabledTools = toolResolutionsForNamesAndEvents(context.Persona.AllowedToolNames, events)
+		if context.Thread.Mode != ThreadModeWork {
+			context.EnabledTools = withoutWorkModeToolResolutions(context.EnabledTools)
+		}
 	}
 	context.MCPAvailability = mcpAvailabilityForToolResolutions(context.EnabledTools, events)
+}
+
+func withoutWorkModeToolResolutions(tools []ToolResolution) []ToolResolution {
+	filtered := make([]ToolResolution, 0, len(tools))
+	for _, tool := range tools {
+		if !IsWorkspaceToolName(tool.Name) && !IsSandboxToolName(tool.Name) && !IsLSPToolName(tool.Name) && !IsWebToolName(tool.Name) && !IsBrowserToolName(tool.Name) && !IsArtifactToolName(tool.Name) && !IsAgentToolName(tool.Name) {
+			filtered = append(filtered, tool)
+		}
+	}
+	return filtered
 }
 
 func runProviderID(inputProviderID string, snapshot PersonaSnapshot) string {
@@ -1127,7 +1359,7 @@ func validateBuiltInPersonaConfigs(configs []BuiltInPersonaConfig) error {
 		}
 		for _, name := range config.AllowedToolNames {
 			toolName := strings.TrimSpace(name)
-			if toolName != ToolNameCurrentTime && !IsMCPToolName(toolName) {
+			if toolName != ToolNameCurrentTime && !IsWorkspaceToolName(toolName) && !IsSandboxToolName(toolName) && !IsLSPToolName(toolName) && !IsWebToolName(toolName) && !IsBrowserToolName(toolName) && !IsArtifactToolName(toolName) && !IsAgentToolName(toolName) && !IsMCPToolName(toolName) {
 				return NewError(CodeInvalidRequest, "Built-in persona references an unsupported tool.")
 			}
 		}
@@ -1511,8 +1743,8 @@ func (s *MemoryService) RecordToolCallRequest(_ context.Context, ident identity.
 		return ToolCall{}, nil, NewError(CodeInvalidRequest, "Terminal runs cannot request tools.")
 	}
 	for _, existing := range s.toolCalls {
-		if existing.RunID == run.ID && existing.ToolCallID != input.ToolCallID {
-			return ToolCall{}, nil, NewError(CodeInvalidRequest, "Only one tool call is supported per run.")
+		if existing.RunID == run.ID && existing.ToolCallID != input.ToolCallID && !isToolCallTerminal(existing) {
+			return ToolCall{}, nil, NewError(CodeInvalidRequest, "Another tool call is already pending or executing.")
 		}
 	}
 	key := run.ID + ":" + input.ToolCallID
@@ -1533,10 +1765,19 @@ func (s *MemoryService) RecordToolCallRequest(_ context.Context, ident identity.
 			s.backgroundJobs[id] = job
 		}
 	}
-	metadata := toolCallEventMetadata(call)
+	metadata := toolCallEventMetadataForRun(s.runEvents[run.ID], call)
 	requested := s.appendRunEventLocked(run, RunEventCategoryProgress, EventToolCallRequested, "Tool call requested", nil, metadata, now)
 	required := s.appendRunEventLocked(run, RunEventCategoryProgress, EventToolCallApprovalRequired, "Tool approval required", nil, metadata, now)
 	return call, []RunEvent{requested, required}, nil
+}
+
+func isToolCallTerminal(call ToolCall) bool {
+	switch call.ExecutionStatus {
+	case ToolCallExecutionSucceeded, ToolCallExecutionFailed, ToolCallExecutionCancelled:
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *MemoryService) ApproveToolCall(_ context.Context, ident identity.LocalIdentity, threadID string, runID string, toolCallID string) (ToolCall, []RunEvent, error) {
@@ -1574,7 +1815,7 @@ func (s *MemoryService) ApproveToolCall(_ context.Context, ident identity.LocalI
 	jobID := NewBackgroundJobID()
 	metadata := RedactEventMetadata(map[string]any{"source": string(run.Source), "job_id": jobID, "tool_call_id": call.ToolCallID, "resume_reason": "tool_call_approved"})
 	s.backgroundJobs[jobID] = BackgroundJob{ID: jobID, RunID: run.ID, ThreadID: run.ThreadID, UserID: user.ID, Kind: BackgroundJobKindRunExecution, Status: BackgroundJobStatusQueued, Priority: 50, MaxAttempts: 3, ScheduledAt: now, Metadata: metadata, CreatedAt: now, UpdatedAt: now}
-	event := s.appendRunEventLocked(run, RunEventCategoryProgress, EventToolCallApproved, "Tool call approved", nil, toolCallEventMetadata(call), now)
+	event := s.appendRunEventLocked(run, RunEventCategoryProgress, EventToolCallApproved, "Tool call approved", nil, toolCallEventMetadataForRun(s.runEvents[run.ID], call), now)
 	return call, []RunEvent{event}, nil
 }
 
@@ -1611,7 +1852,7 @@ func (s *MemoryService) DenyToolCall(_ context.Context, ident identity.LocalIden
 			s.backgroundJobs[id] = job
 		}
 	}
-	denied := s.appendRunEventLocked(run, RunEventCategoryProgress, EventToolCallDenied, "Tool call denied by user", nil, toolCallEventMetadata(call), now)
+	denied := s.appendRunEventLocked(run, RunEventCategoryProgress, EventToolCallDenied, "Tool call denied by user", nil, toolCallEventMetadataForRun(s.runEvents[run.ID], call), now)
 	final := s.appendRunEventLocked(run, RunEventCategoryFinal, EventRunStopped, "Run stopped after tool denial", nil, map[string]any{"tool_call_id": call.ToolCallID, "reason": "tool_call_denied"}, now)
 	return call, []RunEvent{denied, final}, nil
 }
@@ -1637,7 +1878,7 @@ func (s *MemoryService) StartToolCallExecution(_ context.Context, ident identity
 	call.ExecutionStatus = ToolCallExecutionExecuting
 	call.UpdatedAt = now
 	s.toolCalls[key] = call
-	event := s.appendRunEventLocked(run, RunEventCategoryProgress, EventToolCallExecuting, "Tool call executing", nil, toolCallEventMetadata(call), now)
+	event := s.appendRunEventLocked(run, RunEventCategoryProgress, EventToolCallExecuting, "Tool call executing", nil, toolCallEventMetadataForRun(s.runEvents[run.ID], call), now)
 	return call, []RunEvent{event}, nil
 }
 
@@ -1664,7 +1905,7 @@ func (s *MemoryService) CompleteToolCallSuccess(_ context.Context, ident identit
 	run.CompletedAt = nil
 	run.UpdatedAt = now
 	s.runs[run.ID] = run
-	succeeded := s.appendRunEventLocked(run, RunEventCategoryProgress, EventToolCallSucceeded, "Tool call succeeded", nil, toolCallEventMetadata(call), now)
+	succeeded := s.appendRunEventLocked(run, RunEventCategoryProgress, EventToolCallSucceeded, "Tool call succeeded", nil, toolCallEventMetadataForRun(s.runEvents[run.ID], call), now)
 	return call, []RunEvent{succeeded}, nil
 }
 
@@ -1702,7 +1943,7 @@ func (s *MemoryService) FailToolCallExecution(_ context.Context, ident identity.
 	run.ErrorMessage = &message
 	run.UpdatedAt = now
 	s.runs[run.ID] = run
-	failed := s.appendRunEventLocked(run, RunEventCategoryError, EventToolCallFailed, message, nil, toolCallEventMetadata(call), now)
+	failed := s.appendRunEventLocked(run, RunEventCategoryError, EventToolCallFailed, message, nil, toolCallEventMetadataForRun(s.runEvents[run.ID], call), now)
 	final := s.appendRunEventLocked(run, RunEventCategoryFinal, EventRunFailed, message, nil, map[string]any{"tool_call_id": call.ToolCallID, "error_code": code}, now)
 	return call, []RunEvent{failed, final}, nil
 }
@@ -1750,12 +1991,39 @@ func (s *MemoryService) scopedToolCallLocked(userID string, threadID string, run
 }
 
 func toolCallEventMetadata(call ToolCall) map[string]any {
-	metadata := map[string]any{"tool_call_id": call.ToolCallID, "tool_name": call.ToolName, "arguments_summary": call.ArgumentsSummary, "approval_status": string(call.ApprovalStatus), "execution_status": string(call.ExecutionStatus)}
+	arguments := call.ArgumentsSummary
+	if call.ToolName == ToolNameWorkspaceWriteFile || call.ToolName == ToolNameWorkspaceEdit {
+		arguments = safeWorkspaceMutationArguments(call.ToolName, call.ArgumentsSummary)
+	} else if call.ToolName == ToolNameSandboxExecCommand {
+		arguments = safeSandboxExecArguments(call.ArgumentsSummary)
+	}
+	metadata := map[string]any{"tool_call_id": call.ToolCallID, "tool_name": call.ToolName, "arguments_summary": arguments, "approval_status": string(call.ApprovalStatus), "execution_status": string(call.ExecutionStatus)}
 	if IsMCPToolName(call.ToolName) {
 		metadata["tool_source"] = string(ToolCatalogSourceMCP)
 		metadata["tool_group"] = string(ToolCatalogGroupMCP)
 		metadata["server_slug"] = mcpServerSlugFromToolName(call.ToolName)
 		metadata["candidate_schema_hash"] = call.CandidateSchemaHash
+	} else if IsWorkspaceToolName(call.ToolName) {
+		metadata["tool_source"] = string(ToolCatalogSourceBuiltin)
+		metadata["tool_group"] = string(ToolCatalogGroupWorkspace)
+	} else if IsSandboxToolName(call.ToolName) {
+		metadata["tool_source"] = string(ToolCatalogSourceBuiltin)
+		metadata["tool_group"] = string(ToolCatalogGroupSandbox)
+	} else if IsLSPToolName(call.ToolName) {
+		metadata["tool_source"] = string(ToolCatalogSourceBuiltin)
+		metadata["tool_group"] = string(ToolCatalogGroupLSP)
+	} else if IsWebToolName(call.ToolName) {
+		metadata["tool_source"] = string(ToolCatalogSourceBuiltin)
+		metadata["tool_group"] = string(ToolCatalogGroupWeb)
+	} else if IsBrowserToolName(call.ToolName) {
+		metadata["tool_source"] = string(ToolCatalogSourceBuiltin)
+		metadata["tool_group"] = string(ToolCatalogGroupBrowser)
+	} else if IsArtifactToolName(call.ToolName) {
+		metadata["tool_source"] = string(ToolCatalogSourceBuiltin)
+		metadata["tool_group"] = string(ToolCatalogGroupArtifact)
+	} else if IsAgentToolName(call.ToolName) {
+		metadata["tool_source"] = string(ToolCatalogSourceBuiltin)
+		metadata["tool_group"] = string(ToolCatalogGroupAgent)
 	} else {
 		metadata["tool_source"] = string(ToolCatalogSourceBuiltin)
 		metadata["tool_group"] = string(ToolCatalogGroupRuntime)
@@ -1770,6 +2038,123 @@ func toolCallEventMetadata(call ToolCall) map[string]any {
 		metadata["error_message"] = *call.ErrorMessage
 	}
 	return RedactEventMetadata(metadata)
+}
+
+func safeSandboxExecArguments(args map[string]any) map[string]any {
+	safe := map[string]any{}
+	if argv := sandboxArgumentStrings(args["argv"]); len(argv) > 0 {
+		safe["argv"] = argv
+	}
+	if cwd, ok := args["cwd"].(string); ok {
+		safe["cwd"] = strings.TrimSpace(cwd)
+	}
+	if timeoutMS, ok := args["timeout_ms"]; ok {
+		safe["timeout_ms"] = timeoutMS
+	}
+	if maxOutputBytes, ok := args["max_output_bytes"]; ok {
+		safe["max_output_bytes"] = maxOutputBytes
+	}
+	return safe
+}
+
+func sandboxArgumentStrings(value any) []string {
+	switch typed := value.(type) {
+	case []string:
+		return append([]string(nil), typed...)
+	case []any:
+		items := make([]string, 0, len(typed))
+		for _, item := range typed {
+			if text, ok := item.(string); ok {
+				items = append(items, text)
+			}
+		}
+		return items
+	default:
+		return nil
+	}
+}
+
+func safeWorkspaceMutationArguments(toolName string, args map[string]any) map[string]any {
+	safe := map[string]any{}
+	if path, ok := args["path"].(string); ok {
+		safe["path"] = strings.TrimSpace(path)
+	}
+	if maxBytes, ok := args["max_bytes"]; ok {
+		safe["max_bytes"] = maxBytes
+	}
+	switch toolName {
+	case ToolNameWorkspaceWriteFile:
+		if content, ok := args["content"].(string); ok {
+			safe["content_bytes"] = len([]byte(content))
+			safe["content_provided"] = content != ""
+		}
+	case ToolNameWorkspaceEdit:
+		if oldText, ok := args["old_text"].(string); ok {
+			safe["old_text_bytes"] = len([]byte(oldText))
+			safe["old_text_provided"] = oldText != ""
+		}
+		if newText, ok := args["new_text"].(string); ok {
+			safe["new_text_bytes"] = len([]byte(newText))
+			safe["new_text_provided"] = newText != ""
+		}
+	}
+	return safe
+}
+
+func toolCallEventMetadataForRun(events []RunEvent, call ToolCall) map[string]any {
+	metadata := toolCallEventMetadata(call)
+	loopIndex := toolCallLoopIndex(events, call.ToolCallID)
+	if loopIndex <= 0 {
+		loopIndex = nextToolCallLoopIndex(events)
+	}
+	return withToolLoopMetadata(metadata, loopIndex)
+}
+
+func withToolLoopMetadata(metadata map[string]any, loopIndex int) map[string]any {
+	if metadata == nil {
+		metadata = map[string]any{}
+	}
+	if loopIndex > 0 {
+		metadata[LoopMetadataKeyIndex] = loopIndex
+		metadata[LoopMetadataKeyMax] = DefaultMaxBoundedToolCallsPerRun
+	}
+	return metadata
+}
+
+func toolCallLoopIndex(events []RunEvent, toolCallID string) int {
+	seen := map[string]bool{}
+	index := 0
+	for _, event := range events {
+		if event.Type != EventToolCallRequested {
+			continue
+		}
+		id, _ := event.Metadata["tool_call_id"].(string)
+		id = strings.TrimSpace(id)
+		if id == "" || seen[id] {
+			continue
+		}
+		index++
+		seen[id] = true
+		if id == toolCallID {
+			return index
+		}
+	}
+	return 0
+}
+
+func nextToolCallLoopIndex(events []RunEvent) int {
+	seen := map[string]bool{}
+	for _, event := range events {
+		if event.Type != EventToolCallRequested {
+			continue
+		}
+		id, _ := event.Metadata["tool_call_id"].(string)
+		id = strings.TrimSpace(id)
+		if id != "" {
+			seen[id] = true
+		}
+	}
+	return len(seen) + 1
 }
 
 func (s *MemoryService) ClaimBackgroundJob(_ context.Context, ident identity.LocalIdentity, input ClaimBackgroundJobInput) (BackgroundJob, Run, bool, error) {

@@ -35,7 +35,14 @@ type ToolBroker struct {
 }
 
 type DefaultToolExecutor struct {
-	MCPExecutor MCPToolExecutor
+	MCPExecutor       MCPToolExecutor
+	WorkspaceExecutor WorkspaceToolExecutor
+	SandboxExecutor   SandboxToolExecutor
+	LSPExecutor       LSPToolExecutor
+	WebExecutor       WebToolExecutor
+	BrowserExecutor   BrowserToolExecutor
+	ArtifactExecutor  ArtifactToolExecutor
+	AgentExecutor     AgentToolExecutor
 }
 
 func ToolInvocationFromCall(call productdata.ToolCall, catalog []productdata.ToolCatalogEntry, enabledTools []productdata.ToolResolution) ToolInvocation {
@@ -108,6 +115,55 @@ func (e DefaultToolExecutor) ExecuteTool(ctx context.Context, invocation ToolInv
 			return ToolResult{}, err
 		}
 		return ToolResult{ToolName: invocation.ToolName, ToolCallID: invocation.ToolCallID, ResultSummary: RedactMCPSummary(result)}, nil
+	}
+	if productdata.IsWorkspaceToolName(invocation.ToolName) {
+		result, err := e.WorkspaceExecutor.Execute(ctx, invocation)
+		if err != nil {
+			return ToolResult{}, err
+		}
+		return ToolResult{ToolName: invocation.ToolName, ToolCallID: invocation.ToolCallID, ResultSummary: result}, nil
+	}
+	if productdata.IsSandboxToolName(invocation.ToolName) {
+		result, err := e.SandboxExecutor.Execute(ctx, invocation)
+		if err != nil {
+			return ToolResult{}, err
+		}
+		return ToolResult{ToolName: invocation.ToolName, ToolCallID: invocation.ToolCallID, ResultSummary: result}, nil
+	}
+	if productdata.IsLSPToolName(invocation.ToolName) {
+		result, err := e.LSPExecutor.Execute(ctx, invocation)
+		if err != nil {
+			return ToolResult{}, err
+		}
+		return ToolResult{ToolName: invocation.ToolName, ToolCallID: invocation.ToolCallID, ResultSummary: result}, nil
+	}
+	if productdata.IsWebToolName(invocation.ToolName) {
+		result, err := e.WebExecutor.Execute(ctx, invocation)
+		if err != nil {
+			return ToolResult{}, err
+		}
+		return ToolResult{ToolName: invocation.ToolName, ToolCallID: invocation.ToolCallID, ResultSummary: result}, nil
+	}
+	if productdata.IsBrowserToolName(invocation.ToolName) {
+		result, err := e.BrowserExecutor.Execute(ctx, invocation)
+		if err != nil {
+			return ToolResult{}, err
+		}
+		return ToolResult{ToolName: invocation.ToolName, ToolCallID: invocation.ToolCallID, ResultSummary: result}, nil
+	}
+	if productdata.IsArtifactToolName(invocation.ToolName) {
+		result, err := e.ArtifactExecutor.Execute(ctx, invocation)
+		if err != nil {
+			return ToolResult{}, err
+		}
+		return ToolResult{ToolName: invocation.ToolName, ToolCallID: invocation.ToolCallID, ResultSummary: result}, nil
+	}
+	if productdata.IsAgentToolName(invocation.ToolName) {
+		result, err := e.AgentExecutor.Execute(ctx, invocation)
+		if err != nil {
+			return ToolResult{}, err
+		}
+		return ToolResult{ToolName: invocation.ToolName, ToolCallID: invocation.ToolCallID, ResultSummary: result}, nil
 	}
 	tool := CurrentTimeToolDefinition()
 	if invocation.ToolName != tool.Name {

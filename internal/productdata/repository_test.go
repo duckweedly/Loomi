@@ -630,6 +630,84 @@ func TestPostgresMemoryEntryScopeAndTerminalAudit(t *testing.T) {
 	}
 }
 
+func TestPostgresArtifactsAndAgentTasksUseThreadScope(t *testing.T) {
+	databaseURL := os.Getenv("LOOMI_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("LOOMI_TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	repo := NewPostgresRepository(pool)
+	var _ ArtifactService = repo
+	var _ AgentTaskService = repo
+	ident := postgresTestIdentity()
+	threadA, err := repo.CreateThread(ctx, ident, CreateThreadInput{Title: "PG runtime A", Mode: ThreadModeWork})
+	if err != nil {
+		t.Fatal(err)
+	}
+	threadB, err := repo.CreateThread(ctx, ident, CreateThreadInput{Title: "PG runtime B", Mode: ThreadModeWork})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := repo.StartRun(ctx, ident, threadA.ID, StartRunInput{ScriptName: "pg_artifact_agent_scope"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	artifact, err := repo.CreateArtifact(ctx, ident, CreateArtifactInput{ThreadID: threadA.ID, RunID: run.ID, Title: " Notes ", Content: "hello postgres artifact", MaxBytes: 1024})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if artifact.ThreadID != threadA.ID || artifact.Title != "Notes" || artifact.ContentBytes != len("hello postgres artifact") {
+		t.Fatalf("artifact = %+v", artifact)
+	}
+	read, err := repo.ReadArtifact(ctx, ident, ReadArtifactInput{ThreadID: threadA.ID, ArtifactID: artifact.ID, MaxBytes: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if read.TextExcerpt != "hello" || !read.Truncated || read.Content != "hello postgres artifact" {
+		t.Fatalf("read = %+v", read)
+	}
+	list, err := repo.ListArtifacts(ctx, ident, ListArtifactsInput{ThreadID: threadA.ID, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 || list[0].ID != artifact.ID || list[0].Content != "" {
+		t.Fatalf("list = %+v", list)
+	}
+	if _, err := repo.ReadArtifact(ctx, ident, ReadArtifactInput{ThreadID: threadB.ID, ArtifactID: artifact.ID}); err == nil || ErrorCode(err) != CodeArtifactNotFound {
+		t.Fatalf("cross-thread artifact err = %v", err)
+	}
+
+	task, err := repo.SpawnAgentTask(ctx, ident, SpawnAgentTaskInput{ThreadID: threadA.ID, RunID: run.ID, Role: "reviewer", Goal: "Review PG path"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tasks, err := repo.ListAgentTasks(ctx, ident, ListAgentTasksInput{ThreadID: threadA.ID, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 1 || tasks[0].ID != task.ID || tasks[0].Goal != "Review PG path" {
+		t.Fatalf("tasks = %+v", tasks)
+	}
+	completed, err := repo.CompleteAgentTask(ctx, ident, CompleteAgentTaskInput{ThreadID: threadA.ID, TaskID: task.ID, ResultSummary: "PG path works"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if completed.Status != AgentTaskStatusCompleted || completed.ResultSummary != "PG path works" {
+		t.Fatalf("completed = %+v", completed)
+	}
+	if _, err := repo.CompleteAgentTask(ctx, ident, CompleteAgentTaskInput{ThreadID: threadB.ID, TaskID: task.ID, ResultSummary: "Wrong thread"}); err == nil || ErrorCode(err) != CodeInvalidRequest {
+		t.Fatalf("cross-thread task err = %v", err)
+	}
+}
+
 func TestPostgresPreservesThreadPersonaOnMetadataUpdate(t *testing.T) {
 	databaseURL := os.Getenv("LOOMI_TEST_DATABASE_URL")
 	if databaseURL == "" {

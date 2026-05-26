@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -493,6 +494,179 @@ func (r *PostgresRepository) ListToolCatalog(ctx context.Context, ident identity
 	return SafeToolCatalogFromEvents(events), nil
 }
 
+func (r *PostgresRepository) ListMCPDiscoveryEvents(ctx context.Context, ident identity.LocalIdentity) ([]RunEvent, error) {
+	user, err := r.ensureUser(ctx, ident)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := r.Pool.Query(ctx, `select id, run_id, thread_id, user_id, sequence, category, type, summary, content, metadata, created_at from run_events where user_id=$1 and type in ('mcp_discovery_succeeded','mcp_discovery_failed','mcp_discovery_rejected') order by created_at asc, id asc`, user.ID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var events []RunEvent
+	for rows.Next() {
+		event, err := scanRunEvent(rows)
+		if err != nil {
+			return nil, err
+		}
+		events = append(events, event)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return events, nil
+}
+
+func (r *PostgresRepository) CreateArtifact(ctx context.Context, ident identity.LocalIdentity, input CreateArtifactInput) (Artifact, error) {
+	title := strings.TrimSpace(input.Title)
+	content := input.Content
+	if title == "" || strings.TrimSpace(content) == "" {
+		return Artifact{}, NewError(CodeInvalidRequest, "Artifact title and content are required.")
+	}
+	if !utf8.ValidString(content) {
+		return Artifact{}, NewError(CodeInvalidRequest, "Artifact content must be valid UTF-8.")
+	}
+	limit := boundedArtifactBytes(input.MaxBytes)
+	if len([]byte(content)) > limit {
+		return Artifact{}, NewError(CodeInvalidRequest, "Artifact content is too large.")
+	}
+	user, err := r.ensureUser(ctx, ident)
+	if err != nil {
+		return Artifact{}, err
+	}
+	thread, err := scanThread(r.Pool.QueryRow(ctx, `select id, user_id, title, mode, lifecycle_status, coalesce(persona_id, ''), created_at, updated_at, archived_at from threads where id=$1 and user_id=$2`, strings.TrimSpace(input.ThreadID), user.ID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Artifact{}, NewError(CodeThreadNotFound, "Thread not found.")
+	}
+	if err != nil {
+		return Artifact{}, err
+	}
+	run, err := scanRun(r.Pool.QueryRow(ctx, `select id, thread_id, user_id, status, source, title, created_at, updated_at, completed_at, stop_requested_at, error_code, error_message from runs where id=$1 and user_id=$2 and thread_id=$3`, strings.TrimSpace(input.RunID), user.ID, thread.ID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Artifact{}, NewError(CodeRunNotFound, "Run not found.")
+	}
+	if err != nil {
+		return Artifact{}, err
+	}
+	return scanArtifact(r.Pool.QueryRow(ctx, `insert into artifacts (id, user_id, thread_id, run_id, title, artifact_type, content, content_bytes, text_excerpt, truncated) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) returning id, thread_id, run_id, title, artifact_type, content, content_bytes, text_excerpt, truncated, created_at, updated_at`, NewArtifactID(), user.ID, thread.ID, run.ID, title, "text", content, len([]byte(content)), artifactExcerpt(content, limit), false))
+}
+
+func (r *PostgresRepository) ReadArtifact(ctx context.Context, ident identity.LocalIdentity, input ReadArtifactInput) (Artifact, error) {
+	user, err := r.ensureUser(ctx, ident)
+	if err != nil {
+		return Artifact{}, err
+	}
+	artifact, err := scanArtifact(r.Pool.QueryRow(ctx, `select id, thread_id, run_id, title, artifact_type, content, content_bytes, text_excerpt, truncated, created_at, updated_at from artifacts where id=$1 and user_id=$2 and thread_id=$3`, strings.TrimSpace(input.ArtifactID), user.ID, strings.TrimSpace(input.ThreadID)))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Artifact{}, NewError(CodeArtifactNotFound, "Artifact not found.")
+	}
+	if err != nil {
+		return Artifact{}, err
+	}
+	limit := boundedArtifactBytes(input.MaxBytes)
+	artifact.TextExcerpt = artifactExcerpt(artifact.Content, limit)
+	artifact.Truncated = len([]byte(artifact.Content)) > limit
+	return artifact, nil
+}
+
+func (r *PostgresRepository) ListArtifacts(ctx context.Context, ident identity.LocalIdentity, input ListArtifactsInput) ([]Artifact, error) {
+	user, err := r.ensureUser(ctx, ident)
+	if err != nil {
+		return nil, err
+	}
+	limit := input.Limit
+	if limit <= 0 || limit > 50 {
+		limit = 20
+	}
+	rows, err := r.Pool.Query(ctx, `select a.id, a.thread_id, a.run_id, a.title, a.artifact_type, '' as content, a.content_bytes, a.text_excerpt, a.truncated, a.created_at, a.updated_at from artifacts a join threads t on t.id=a.thread_id and t.user_id=a.user_id where a.user_id=$1 and a.thread_id=$2 order by a.created_at asc, a.id asc limit $3`, user.ID, strings.TrimSpace(input.ThreadID), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	artifacts := []Artifact{}
+	for rows.Next() {
+		artifact, err := scanArtifact(rows)
+		if err != nil {
+			return nil, err
+		}
+		artifact.TextExcerpt = artifactExcerpt(artifact.TextExcerpt, 512)
+		artifacts = append(artifacts, artifact)
+	}
+	return artifacts, rows.Err()
+}
+
+func (r *PostgresRepository) SpawnAgentTask(ctx context.Context, ident identity.LocalIdentity, input SpawnAgentTaskInput) (AgentTask, error) {
+	role := strings.TrimSpace(input.Role)
+	goal := strings.TrimSpace(input.Goal)
+	if !isSupportedAgentRole(role) || goal == "" || len([]rune(goal)) > 4000 {
+		return AgentTask{}, NewError(CodeInvalidRequest, "Agent task role and goal are invalid.")
+	}
+	user, err := r.ensureUser(ctx, ident)
+	if err != nil {
+		return AgentTask{}, err
+	}
+	thread, err := scanThread(r.Pool.QueryRow(ctx, `select id, user_id, title, mode, lifecycle_status, coalesce(persona_id, ''), created_at, updated_at, archived_at from threads where id=$1 and user_id=$2`, strings.TrimSpace(input.ThreadID), user.ID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return AgentTask{}, NewError(CodeThreadNotFound, "Thread not found.")
+	}
+	if err != nil {
+		return AgentTask{}, err
+	}
+	run, err := scanRun(r.Pool.QueryRow(ctx, `select id, thread_id, user_id, status, source, title, created_at, updated_at, completed_at, stop_requested_at, error_code, error_message from runs where id=$1 and user_id=$2 and thread_id=$3`, strings.TrimSpace(input.RunID), user.ID, thread.ID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return AgentTask{}, NewError(CodeRunNotFound, "Run not found.")
+	}
+	if err != nil {
+		return AgentTask{}, err
+	}
+	return scanAgentTask(r.Pool.QueryRow(ctx, `insert into agent_tasks (id, user_id, thread_id, run_id, role, goal, status) values ($1,$2,$3,$4,$5,$6,$7) returning id, thread_id, run_id, role, goal, status, result_summary, created_at, updated_at`, NewAgentTaskID(), user.ID, thread.ID, run.ID, role, goal, AgentTaskStatusSpawned))
+}
+
+func (r *PostgresRepository) ListAgentTasks(ctx context.Context, ident identity.LocalIdentity, input ListAgentTasksInput) ([]AgentTask, error) {
+	user, err := r.ensureUser(ctx, ident)
+	if err != nil {
+		return nil, err
+	}
+	limit := input.Limit
+	if limit <= 0 || limit > 50 {
+		limit = 20
+	}
+	rows, err := r.Pool.Query(ctx, `select at.id, at.thread_id, at.run_id, at.role, at.goal, at.status, at.result_summary, at.created_at, at.updated_at from agent_tasks at join threads t on t.id=at.thread_id and t.user_id=at.user_id where at.user_id=$1 and at.thread_id=$2 order by at.created_at asc, at.id asc limit $3`, user.ID, strings.TrimSpace(input.ThreadID), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	tasks := []AgentTask{}
+	for rows.Next() {
+		task, err := scanAgentTask(rows)
+		if err != nil {
+			return nil, err
+		}
+		tasks = append(tasks, task)
+	}
+	return tasks, rows.Err()
+}
+
+func (r *PostgresRepository) CompleteAgentTask(ctx context.Context, ident identity.LocalIdentity, input CompleteAgentTaskInput) (AgentTask, error) {
+	summary := strings.TrimSpace(input.ResultSummary)
+	if summary == "" || len([]rune(summary)) > 4000 {
+		return AgentTask{}, NewError(CodeInvalidRequest, "Agent result summary is invalid.")
+	}
+	user, err := r.ensureUser(ctx, ident)
+	if err != nil {
+		return AgentTask{}, err
+	}
+	task, err := scanAgentTask(r.Pool.QueryRow(ctx, `update agent_tasks set status=$1, result_summary=$2, updated_at=now() where id=$3 and user_id=$4 and thread_id=$5 returning id, thread_id, run_id, role, goal, status, result_summary, created_at, updated_at`, AgentTaskStatusCompleted, RedactEventText(summary), strings.TrimSpace(input.TaskID), user.ID, strings.TrimSpace(input.ThreadID)))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return AgentTask{}, NewError(CodeInvalidRequest, "Agent task not found.")
+	}
+	if err != nil {
+		return AgentTask{}, err
+	}
+	return task, nil
+}
+
 func (r *PostgresRepository) CreateMemoryEntry(ctx context.Context, ident identity.LocalIdentity, input CreateMemoryEntryInput) (MemoryEntry, error) {
 	user, err := r.ensureUser(ctx, ident)
 	if err != nil {
@@ -901,12 +1075,12 @@ func (r *PostgresRepository) RecordToolCallRequest(ctx context.Context, ident id
 		return ToolCall{}, nil, NewError(CodeInvalidRequest, "Terminal runs cannot request tools.")
 	}
 	var existingToolCallID string
-	err = tx.QueryRow(ctx, `select tool_call_id from tool_calls where run_id=$1 limit 1`, run.ID).Scan(&existingToolCallID)
+	err = tx.QueryRow(ctx, `select tool_call_id from tool_calls where run_id=$1 and execution_status in ('blocked', 'not_started', 'executing') limit 1`, run.ID).Scan(&existingToolCallID)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return ToolCall{}, nil, err
 	}
 	if existingToolCallID != "" && existingToolCallID != input.ToolCallID {
-		return ToolCall{}, nil, NewError(CodeInvalidRequest, "Only one tool call is supported per run.")
+		return ToolCall{}, nil, NewError(CodeInvalidRequest, "Another tool call is already pending or executing.")
 	}
 	arguments := RedactEventMetadata(input.ArgumentsSummary)
 	call, err := scanToolCall(tx.QueryRow(ctx, `insert into tool_calls (id, thread_id, run_id, tool_call_id, tool_name, candidate_schema_hash, arguments_summary, arguments_hash, approval_status, execution_status) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) on conflict (run_id, tool_call_id) do nothing returning id, thread_id, run_id, tool_call_id, tool_name, candidate_schema_hash, arguments_summary, approval_status, execution_status, result_summary, error_code, error_message, requested_at, updated_at`, NewToolCallID(), run.ThreadID, run.ID, input.ToolCallID, input.ToolName, input.CandidateSchemaHash, mustJSON(arguments), input.ArgumentsHash, input.ApprovalStatus, input.ExecutionStatus))
@@ -927,7 +1101,10 @@ func (r *PostgresRepository) RecordToolCallRequest(ctx context.Context, ident id
 	if _, err := tx.Exec(ctx, `update background_jobs set status='cancelled', updated_at=now() where run_id=$1 and user_id=$2 and status in ('queued', 'retrying')`, run.ID, user.ID); err != nil {
 		return ToolCall{}, nil, err
 	}
-	metadata := toolCallEventMetadata(call)
+	metadata, err := toolCallEventMetadataForPostgresRun(ctx, tx, run.ID, call)
+	if err != nil {
+		return ToolCall{}, nil, err
+	}
 	requested, err := insertRunEvent(ctx, tx, run, RunEventCategoryProgress, EventToolCallRequested, "Tool call requested", nil, metadata)
 	if err != nil {
 		return ToolCall{}, nil, err
@@ -978,7 +1155,11 @@ func (r *PostgresRepository) ApproveToolCall(ctx context.Context, ident identity
 	if _, err := tx.Exec(ctx, `insert into background_jobs (id, run_id, thread_id, user_id, kind, status, priority, max_attempts, scheduled_at, metadata) values ($1, $2, $3, $4, $5, 'queued', 50, 3, now(), $6)`, jobID, run.ID, run.ThreadID, user.ID, BackgroundJobKindRunExecution, mustJSON(metadata)); err != nil {
 		return ToolCall{}, nil, err
 	}
-	event, err := insertRunEvent(ctx, tx, run, RunEventCategoryProgress, EventToolCallApproved, "Tool call approved", nil, toolCallEventMetadata(call))
+	toolMetadata, err := toolCallEventMetadataForPostgresRun(ctx, tx, run.ID, call)
+	if err != nil {
+		return ToolCall{}, nil, err
+	}
+	event, err := insertRunEvent(ctx, tx, run, RunEventCategoryProgress, EventToolCallApproved, "Tool call approved", nil, toolMetadata)
 	if err != nil {
 		return ToolCall{}, nil, err
 	}
@@ -1016,7 +1197,11 @@ func (r *PostgresRepository) DenyToolCall(ctx context.Context, ident identity.Lo
 	if err != nil {
 		return ToolCall{}, nil, err
 	}
-	denied, err := insertRunEvent(ctx, tx, stopped, RunEventCategoryProgress, EventToolCallDenied, "Tool call denied by user", nil, toolCallEventMetadata(call))
+	toolMetadata, err := toolCallEventMetadataForPostgresRun(ctx, tx, run.ID, call)
+	if err != nil {
+		return ToolCall{}, nil, err
+	}
+	denied, err := insertRunEvent(ctx, tx, stopped, RunEventCategoryProgress, EventToolCallDenied, "Tool call denied by user", nil, toolMetadata)
 	if err != nil {
 		return ToolCall{}, nil, err
 	}
@@ -1051,7 +1236,11 @@ func (r *PostgresRepository) StartToolCallExecution(ctx context.Context, ident i
 	if err != nil {
 		return ToolCall{}, nil, err
 	}
-	event, err := insertRunEvent(ctx, tx, run, RunEventCategoryProgress, EventToolCallExecuting, "Tool call executing", nil, toolCallEventMetadata(call))
+	toolMetadata, err := toolCallEventMetadataForPostgresRun(ctx, tx, run.ID, call)
+	if err != nil {
+		return ToolCall{}, nil, err
+	}
+	event, err := insertRunEvent(ctx, tx, run, RunEventCategoryProgress, EventToolCallExecuting, "Tool call executing", nil, toolMetadata)
 	if err != nil {
 		return ToolCall{}, nil, err
 	}
@@ -1087,7 +1276,11 @@ func (r *PostgresRepository) CompleteToolCallSuccess(ctx context.Context, ident 
 	if err != nil {
 		return ToolCall{}, nil, err
 	}
-	succeeded, err := insertRunEvent(ctx, tx, running, RunEventCategoryProgress, EventToolCallSucceeded, "Tool call succeeded", nil, toolCallEventMetadata(call))
+	toolMetadata, err := toolCallEventMetadataForPostgresRun(ctx, tx, run.ID, call)
+	if err != nil {
+		return ToolCall{}, nil, err
+	}
+	succeeded, err := insertRunEvent(ctx, tx, running, RunEventCategoryProgress, EventToolCallSucceeded, "Tool call succeeded", nil, toolMetadata)
 	if err != nil {
 		return ToolCall{}, nil, err
 	}
@@ -1130,7 +1323,11 @@ func (r *PostgresRepository) FailToolCallExecution(ctx context.Context, ident id
 	if err != nil {
 		return ToolCall{}, nil, err
 	}
-	failed, err := insertRunEvent(ctx, tx, failedRun, RunEventCategoryError, EventToolCallFailed, message, nil, toolCallEventMetadata(call))
+	toolMetadata, err := toolCallEventMetadataForPostgresRun(ctx, tx, run.ID, call)
+	if err != nil {
+		return ToolCall{}, nil, err
+	}
+	failed, err := insertRunEvent(ctx, tx, failedRun, RunEventCategoryError, EventToolCallFailed, message, nil, toolMetadata)
 	if err != nil {
 		return ToolCall{}, nil, err
 	}
@@ -1380,6 +1577,26 @@ func insertRunEventIgnoringTerminal(ctx context.Context, pool *pgxpool.Pool, run
 		return RunEvent{}, err
 	}
 	return scanRunEvent(pool.QueryRow(ctx, `insert into run_events (id, run_id, thread_id, user_id, sequence, category, type, summary, content, metadata) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) returning id, run_id, thread_id, user_id, sequence, category, type, summary, content, metadata, created_at`, NewRunEventID(), run.ID, run.ThreadID, run.UserID, nextSequence, category, eventType, RedactEventText(summary), content, mustJSON(RedactEventMetadata(metadata))))
+}
+
+func toolCallEventMetadataForPostgresRun(ctx context.Context, tx pgx.Tx, runID string, call ToolCall) (map[string]any, error) {
+	rows, err := tx.Query(ctx, `select id, run_id, thread_id, user_id, sequence, category, type, summary, content, metadata, created_at from run_events where run_id=$1 order by sequence asc, id asc`, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	events := []RunEvent{}
+	for rows.Next() {
+		event, err := scanRunEvent(rows)
+		if err != nil {
+			return nil, err
+		}
+		events = append(events, event)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return toolCallEventMetadataForRun(events, call), nil
 }
 
 func scopedPostgresToolCall(ctx context.Context, tx pgx.Tx, userID string, threadID string, runID string, toolCallID string) (Run, ToolCall, error) {
@@ -1637,6 +1854,22 @@ func scanToolCall(row scanner) (ToolCall, error) {
 		call.ArgumentsSummary = map[string]any{}
 	}
 	return call, nil
+}
+
+func scanArtifact(row scanner) (Artifact, error) {
+	var artifact Artifact
+	if err := row.Scan(&artifact.ID, &artifact.ThreadID, &artifact.RunID, &artifact.Title, &artifact.ArtifactType, &artifact.Content, &artifact.ContentBytes, &artifact.TextExcerpt, &artifact.Truncated, &artifact.CreatedAt, &artifact.UpdatedAt); err != nil {
+		return Artifact{}, err
+	}
+	return artifact, nil
+}
+
+func scanAgentTask(row scanner) (AgentTask, error) {
+	var task AgentTask
+	if err := row.Scan(&task.ID, &task.ThreadID, &task.RunID, &task.Role, &task.Goal, &task.Status, &task.ResultSummary, &task.CreatedAt, &task.UpdatedAt); err != nil {
+		return AgentTask{}, err
+	}
+	return task, nil
 }
 
 func scanMemoryEntry(row scanner) (MemoryEntry, error) {

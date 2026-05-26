@@ -28,6 +28,174 @@ func TestToolCatalogIncludesBuiltinCurrentTime(t *testing.T) {
 	}
 }
 
+func TestToolCatalogIncludesWorkspaceReadOnlyTools(t *testing.T) {
+	svc := NewMemoryService()
+	tools, err := svc.ListToolCatalog(context.Background(), identity.LocalDevIdentity())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{ToolNameWorkspaceGlob, ToolNameWorkspaceGrep, ToolNameWorkspaceRead} {
+		tool := catalogToolByName(tools, name)
+		if tool.Source != ToolCatalogSourceBuiltin || tool.Group != ToolCatalogGroupWorkspace || tool.RiskLevel != ToolRiskLow || tool.ApprovalPolicy != ToolApprovalAlwaysRequired {
+			t.Fatalf("%s metadata = %+v", name, tool)
+		}
+		if !tool.Enabled || tool.ExecutionState != ToolExecutionStateExecutable || tool.SafeMetadata["scope"] != "workspace" || tool.SafeMetadata["read_only"] != true {
+			t.Fatalf("%s safe metadata = %+v", name, tool)
+		}
+		if strings.Contains(fmt.Sprint(tool), "/Users/") {
+			t.Fatalf("workspace catalog leaked host path: %+v", tool)
+		}
+	}
+}
+
+func TestToolCatalogIncludesWorkspaceMutationTools(t *testing.T) {
+	svc := NewMemoryService()
+	tools, err := svc.ListToolCatalog(context.Background(), identity.LocalDevIdentity())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{ToolNameWorkspaceWriteFile, ToolNameWorkspaceEdit} {
+		tool := catalogToolByName(tools, name)
+		if tool.Source != ToolCatalogSourceBuiltin || tool.Group != ToolCatalogGroupWorkspace || tool.RiskLevel != ToolRiskHigh || tool.ApprovalPolicy != ToolApprovalAlwaysRequired {
+			t.Fatalf("%s metadata = %+v", name, tool)
+		}
+		if !tool.Enabled || tool.ExecutionState != ToolExecutionStateExecutable || tool.SafeMetadata["scope"] != "workspace" || tool.SafeMetadata["read_only"] != false || tool.SafeMetadata["write_capable"] != true {
+			t.Fatalf("%s safe metadata = %+v", name, tool)
+		}
+		if strings.Contains(fmt.Sprint(tool), "/Users/") {
+			t.Fatalf("workspace mutation catalog leaked host path: %+v", tool)
+		}
+	}
+}
+
+func TestToolCatalogIncludesSandboxExecCommand(t *testing.T) {
+	svc := NewMemoryService()
+	tools, err := svc.ListToolCatalog(context.Background(), identity.LocalDevIdentity())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tool := catalogToolByName(tools, ToolNameSandboxExecCommand)
+	if tool.Source != ToolCatalogSourceBuiltin || tool.Group != ToolCatalogGroupSandbox || tool.RiskLevel != ToolRiskHigh || tool.ApprovalPolicy != ToolApprovalAlwaysRequired {
+		t.Fatalf("sandbox exec metadata = %+v", tool)
+	}
+	if !tool.Enabled || tool.ExecutionState != ToolExecutionStateExecutable || tool.SafeMetadata["scope"] != "bounded_read_only_command" || tool.SafeMetadata["exec_capable"] != true || tool.SafeMetadata["argv_only"] != true || tool.SafeMetadata["read_only"] != true || tool.SafeMetadata["isolated_sandbox"] != false {
+		t.Fatalf("sandbox exec safe metadata = %+v", tool)
+	}
+	if strings.Contains(fmt.Sprint(tool), "/Users/") {
+		t.Fatalf("sandbox exec catalog leaked host path: %+v", tool)
+	}
+}
+
+func TestToolCatalogIncludesLSPReadOnlyTools(t *testing.T) {
+	svc := NewMemoryService()
+	tools, err := svc.ListToolCatalog(context.Background(), identity.LocalDevIdentity())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{ToolNameLSPDiagnostics, ToolNameLSPSymbols, ToolNameLSPReferences} {
+		tool := catalogToolByName(tools, name)
+		if tool.Source != ToolCatalogSourceBuiltin || tool.Group != ToolCatalogGroupLSP || tool.RiskLevel != ToolRiskLow || tool.ApprovalPolicy != ToolApprovalAlwaysRequired {
+			t.Fatalf("%s metadata = %+v", name, tool)
+		}
+		if !tool.Enabled || tool.ExecutionState != ToolExecutionStateExecutable || tool.SafeMetadata["scope"] != "lsp" || tool.SafeMetadata["read_only"] != true {
+			t.Fatalf("%s safe metadata = %+v", name, tool)
+		}
+		if strings.Contains(fmt.Sprint(tool), "/Users/") {
+			t.Fatalf("lsp catalog leaked host path: %+v", tool)
+		}
+	}
+}
+
+func TestToolCatalogIncludesWebFetchTool(t *testing.T) {
+	svc := NewMemoryService()
+	tools, err := svc.ListToolCatalog(context.Background(), identity.LocalDevIdentity())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tool := catalogToolByName(tools, ToolNameWebFetch)
+	if tool.Source != ToolCatalogSourceBuiltin || tool.Group != ToolCatalogGroupWeb || tool.RiskLevel != ToolRiskMedium || tool.ApprovalPolicy != ToolApprovalAlwaysRequired {
+		t.Fatalf("web fetch metadata = %+v", tool)
+	}
+	if !tool.Enabled || tool.ExecutionState != ToolExecutionStateExecutable || tool.SafeMetadata["scope"] != "web" || tool.SafeMetadata["read_only"] != true || tool.SafeMetadata["network_access"] != "public_http_only" {
+		t.Fatalf("web fetch safe metadata = %+v", tool)
+	}
+	if strings.Contains(fmt.Sprint(tool), "/Users/") {
+		t.Fatalf("web fetch catalog leaked host path: %+v", tool)
+	}
+}
+
+func TestToolCatalogIncludesBrowserAutomationTools(t *testing.T) {
+	svc := NewMemoryService()
+	tools, err := svc.ListToolCatalog(context.Background(), identity.LocalDevIdentity())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{ToolNameBrowserOpen, ToolNameBrowserSnapshot, ToolNameBrowserClickLink} {
+		tool := catalogToolByName(tools, name)
+		if tool.Source != ToolCatalogSourceBuiltin || tool.Group != ToolCatalogGroupBrowser || tool.RiskLevel != ToolRiskMedium || tool.ApprovalPolicy != ToolApprovalAlwaysRequired {
+			t.Fatalf("%s metadata = %+v", name, tool)
+		}
+		if !tool.Enabled || tool.ExecutionState != ToolExecutionStateExecutable || tool.SafeMetadata["scope"] != "browser" || tool.SafeMetadata["network_access"] != "public_http_only" || tool.SafeMetadata["stateful"] != true {
+			t.Fatalf("%s safe metadata = %+v", name, tool)
+		}
+		if strings.Contains(fmt.Sprint(tool), "/Users/") {
+			t.Fatalf("browser catalog leaked host path: %+v", tool)
+		}
+	}
+}
+
+func TestToolCatalogIncludesArtifactRuntimeTools(t *testing.T) {
+	svc := NewMemoryService()
+	tools, err := svc.ListToolCatalog(context.Background(), identity.LocalDevIdentity())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{ToolNameArtifactCreateText, ToolNameArtifactRead, ToolNameArtifactList} {
+		tool := catalogToolByName(tools, name)
+		if tool.Source != ToolCatalogSourceBuiltin || tool.Group != ToolCatalogGroupArtifact || tool.RiskLevel != ToolRiskMedium || tool.ApprovalPolicy != ToolApprovalAlwaysRequired {
+			t.Fatalf("%s metadata = %+v", name, tool)
+		}
+		if !tool.Enabled || tool.ExecutionState != ToolExecutionStateExecutable || tool.SafeMetadata["scope"] != "artifact" || tool.SafeMetadata["non_executable"] != true {
+			t.Fatalf("%s safe metadata = %+v", name, tool)
+		}
+		if name == ToolNameArtifactCreateText && tool.SafeMetadata["read_only"] != false {
+			t.Fatalf("create_text should be mutation-like artifact tool: %+v", tool)
+		}
+		if name != ToolNameArtifactCreateText && tool.SafeMetadata["read_only"] != true {
+			t.Fatalf("%s should be read-only artifact tool: %+v", name, tool)
+		}
+		if strings.Contains(fmt.Sprint(tool), "/Users/") {
+			t.Fatalf("artifact catalog leaked host path: %+v", tool)
+		}
+	}
+}
+
+func TestToolCatalogIncludesAgentRuntimeTools(t *testing.T) {
+	svc := NewMemoryService()
+	tools, err := svc.ListToolCatalog(context.Background(), identity.LocalDevIdentity())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{ToolNameAgentSpawn, ToolNameAgentList, ToolNameAgentComplete} {
+		tool := catalogToolByName(tools, name)
+		if tool.Source != ToolCatalogSourceBuiltin || tool.Group != ToolCatalogGroupAgent || tool.RiskLevel != ToolRiskMedium || tool.ApprovalPolicy != ToolApprovalAlwaysRequired {
+			t.Fatalf("%s metadata = %+v", name, tool)
+		}
+		if !tool.Enabled || tool.ExecutionState != ToolExecutionStateExecutable || tool.SafeMetadata["scope"] != "agent" || tool.SafeMetadata["coordination_only"] != true || tool.SafeMetadata["autonomous_execution"] != false {
+			t.Fatalf("%s safe metadata = %+v", name, tool)
+		}
+		if name == ToolNameAgentList && tool.SafeMetadata["read_only"] != true {
+			t.Fatalf("agent.list should be read-only: %+v", tool)
+		}
+		if name != ToolNameAgentList && tool.SafeMetadata["read_only"] != false {
+			t.Fatalf("%s should mutate coordination records only: %+v", name, tool)
+		}
+		if strings.Contains(fmt.Sprint(tool), "/Users/") {
+			t.Fatalf("agent catalog leaked host path: %+v", tool)
+		}
+	}
+}
+
 func TestToolCatalogIncludesDiscoveredMCPCandidate(t *testing.T) {
 	svc := NewMemoryService()
 	ident := identity.LocalDevIdentity()

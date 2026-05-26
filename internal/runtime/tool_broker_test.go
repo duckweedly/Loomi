@@ -2,6 +2,10 @@ package runtime
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/sheridiany/loomi/internal/productdata"
@@ -9,6 +13,157 @@ import (
 
 type recordingBrokerExecutor struct {
 	names []string
+}
+
+func TestToolBrokerExecutesWorkspaceToolThroughOneEntrypoint(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "notes.txt"), []byte("needle\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	broker := ToolBroker{Executor: DefaultToolExecutor{WorkspaceExecutor: WorkspaceToolExecutor{Root: root}}}
+	call := productdata.ToolCall{ThreadID: "thr_1", RunID: "run_1", ToolCallID: "tc_workspace", ToolName: productdata.ToolNameWorkspaceRead, ArgumentsSummary: map[string]any{"path": "notes.txt"}, ApprovalStatus: productdata.ToolCallApprovalApproved, ExecutionStatus: productdata.ToolCallExecutionExecuting}
+	catalog := []productdata.ToolCatalogEntry{{Name: productdata.ToolNameWorkspaceRead, Enabled: true, ExecutionState: productdata.ToolExecutionStateExecutable, Source: productdata.ToolCatalogSourceBuiltin, Group: productdata.ToolCatalogGroupWorkspace}}
+	allowed := []productdata.ToolResolution{{Name: productdata.ToolNameWorkspaceRead, ExecutionState: string(productdata.ToolExecutionStateExecutable), Source: string(productdata.ToolCatalogSourceBuiltin), Group: string(productdata.ToolCatalogGroupWorkspace)}}
+
+	result, err := broker.Execute(context.Background(), ToolInvocationFromCall(call, catalog, allowed))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ResultSummary["content"] != "needle\n" || result.ResultSummary["scope"] != "workspace" {
+		t.Fatalf("workspace broker result = %+v", result)
+	}
+}
+
+func TestToolBrokerExecutesWorkspaceMutationToolThroughOneEntrypoint(t *testing.T) {
+	root := t.TempDir()
+	broker := ToolBroker{Executor: DefaultToolExecutor{WorkspaceExecutor: WorkspaceToolExecutor{Root: root}}}
+	call := productdata.ToolCall{ThreadID: "thr_1", RunID: "run_1", ToolCallID: "tc_workspace_write", ToolName: productdata.ToolNameWorkspaceWriteFile, ArgumentsSummary: map[string]any{"path": "generated.txt", "content": "created\n"}, ApprovalStatus: productdata.ToolCallApprovalApproved, ExecutionStatus: productdata.ToolCallExecutionExecuting}
+	catalog := []productdata.ToolCatalogEntry{{Name: productdata.ToolNameWorkspaceWriteFile, Enabled: true, ExecutionState: productdata.ToolExecutionStateExecutable, Source: productdata.ToolCatalogSourceBuiltin, Group: productdata.ToolCatalogGroupWorkspace, RiskLevel: productdata.ToolRiskHigh}}
+	allowed := []productdata.ToolResolution{{Name: productdata.ToolNameWorkspaceWriteFile, ExecutionState: string(productdata.ToolExecutionStateExecutable), Source: string(productdata.ToolCatalogSourceBuiltin), Group: string(productdata.ToolCatalogGroupWorkspace), RiskLevel: string(productdata.ToolRiskHigh)}}
+
+	result, err := broker.Execute(context.Background(), ToolInvocationFromCall(call, catalog, allowed))
+	if err != nil {
+		t.Fatal(err)
+	}
+	written, err := os.ReadFile(filepath.Join(root, "generated.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(written) != "created\n" || result.ResultSummary["operation"] != "write_file" || result.ResultSummary["path"] != "generated.txt" {
+		t.Fatalf("workspace mutation broker result = %+v", result)
+	}
+	if _, leaked := result.ResultSummary["content"]; leaked {
+		t.Fatalf("workspace mutation result leaked content: %+v", result)
+	}
+}
+
+func TestToolBrokerExecutesSandboxExecCommandThroughOneEntrypoint(t *testing.T) {
+	root := t.TempDir()
+	broker := ToolBroker{Executor: DefaultToolExecutor{SandboxExecutor: SandboxToolExecutor{Root: root}}}
+	call := productdata.ToolCall{ThreadID: "thr_1", RunID: "run_1", ToolCallID: "tc_sandbox_exec", ToolName: productdata.ToolNameSandboxExecCommand, ArgumentsSummary: map[string]any{"argv": []any{"pwd"}}, ApprovalStatus: productdata.ToolCallApprovalApproved, ExecutionStatus: productdata.ToolCallExecutionExecuting}
+	catalog := []productdata.ToolCatalogEntry{{Name: productdata.ToolNameSandboxExecCommand, Enabled: true, ExecutionState: productdata.ToolExecutionStateExecutable, Source: productdata.ToolCatalogSourceBuiltin, Group: productdata.ToolCatalogGroupSandbox, RiskLevel: productdata.ToolRiskHigh}}
+	allowed := []productdata.ToolResolution{{Name: productdata.ToolNameSandboxExecCommand, ExecutionState: string(productdata.ToolExecutionStateExecutable), Source: string(productdata.ToolCatalogSourceBuiltin), Group: string(productdata.ToolCatalogGroupSandbox), RiskLevel: string(productdata.ToolRiskHigh)}}
+
+	result, err := broker.Execute(context.Background(), ToolInvocationFromCall(call, catalog, allowed))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ResultSummary["operation"] != "exec_command" || result.ResultSummary["scope"] != "bounded_read_only_command" || result.ResultSummary["stdout"] == "" {
+		t.Fatalf("sandbox broker result = %+v", result)
+	}
+}
+
+func TestToolBrokerExecutesLSPToolThroughOneEntrypoint(t *testing.T) {
+	root := createLSPFixture(t)
+	broker := ToolBroker{Executor: DefaultToolExecutor{LSPExecutor: LSPToolExecutor{Root: root}}}
+	call := productdata.ToolCall{ThreadID: "thr_1", RunID: "run_1", ToolCallID: "tc_lsp", ToolName: productdata.ToolNameLSPSymbols, ArgumentsSummary: map[string]any{"path": "src/main.go", "query": "Tool"}, ApprovalStatus: productdata.ToolCallApprovalApproved, ExecutionStatus: productdata.ToolCallExecutionExecuting}
+	catalog := []productdata.ToolCatalogEntry{{Name: productdata.ToolNameLSPSymbols, Enabled: true, ExecutionState: productdata.ToolExecutionStateExecutable, Source: productdata.ToolCatalogSourceBuiltin, Group: productdata.ToolCatalogGroupLSP}}
+	allowed := []productdata.ToolResolution{{Name: productdata.ToolNameLSPSymbols, ExecutionState: string(productdata.ToolExecutionStateExecutable), Source: string(productdata.ToolCatalogSourceBuiltin), Group: string(productdata.ToolCatalogGroupLSP)}}
+
+	result, err := broker.Execute(context.Background(), ToolInvocationFromCall(call, catalog, allowed))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ResultSummary["operation"] != "symbols" || result.ResultSummary["scope"] != "lsp" || result.ResultSummary["count"] != 1 {
+		t.Fatalf("lsp broker result = %+v", result)
+	}
+}
+
+func TestToolBrokerExecutesWebFetchThroughOneEntrypoint(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		_, _ = w.Write([]byte("web result"))
+	}))
+	defer server.Close()
+	broker := ToolBroker{Executor: DefaultToolExecutor{WebExecutor: WebToolExecutor{AllowPrivateHosts: true}}}
+	call := productdata.ToolCall{ThreadID: "thr_1", RunID: "run_1", ToolCallID: "tc_web", ToolName: productdata.ToolNameWebFetch, ArgumentsSummary: map[string]any{"url": server.URL}, ApprovalStatus: productdata.ToolCallApprovalApproved, ExecutionStatus: productdata.ToolCallExecutionExecuting}
+	catalog := []productdata.ToolCatalogEntry{{Name: productdata.ToolNameWebFetch, Enabled: true, ExecutionState: productdata.ToolExecutionStateExecutable, Source: productdata.ToolCatalogSourceBuiltin, Group: productdata.ToolCatalogGroupWeb, RiskLevel: productdata.ToolRiskMedium}}
+	allowed := []productdata.ToolResolution{{Name: productdata.ToolNameWebFetch, ExecutionState: string(productdata.ToolExecutionStateExecutable), Source: string(productdata.ToolCatalogSourceBuiltin), Group: string(productdata.ToolCatalogGroupWeb), RiskLevel: string(productdata.ToolRiskMedium)}}
+
+	result, err := broker.Execute(context.Background(), ToolInvocationFromCall(call, catalog, allowed))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ResultSummary["operation"] != "fetch" || result.ResultSummary["scope"] != "web" || result.ResultSummary["status_code"] != 200 {
+		t.Fatalf("web broker result = %+v", result)
+	}
+}
+
+func TestToolBrokerExecutesBrowserOpenThroughOneEntrypoint(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte("<html><title>Browser</title><body>ok</body></html>"))
+	}))
+	defer server.Close()
+	broker := ToolBroker{Executor: DefaultToolExecutor{BrowserExecutor: BrowserToolExecutor{Store: NewBrowserSessionStore(), AllowPrivateHosts: true}}}
+	call := productdata.ToolCall{ThreadID: "thr_1", RunID: "run_1", ToolCallID: "tc_browser", ToolName: productdata.ToolNameBrowserOpen, ArgumentsSummary: map[string]any{"url": server.URL}, ApprovalStatus: productdata.ToolCallApprovalApproved, ExecutionStatus: productdata.ToolCallExecutionExecuting}
+	catalog := []productdata.ToolCatalogEntry{{Name: productdata.ToolNameBrowserOpen, Enabled: true, ExecutionState: productdata.ToolExecutionStateExecutable, Source: productdata.ToolCatalogSourceBuiltin, Group: productdata.ToolCatalogGroupBrowser, RiskLevel: productdata.ToolRiskMedium}}
+	allowed := []productdata.ToolResolution{{Name: productdata.ToolNameBrowserOpen, ExecutionState: string(productdata.ToolExecutionStateExecutable), Source: string(productdata.ToolCatalogSourceBuiltin), Group: string(productdata.ToolCatalogGroupBrowser), RiskLevel: string(productdata.ToolRiskMedium)}}
+
+	result, err := broker.Execute(context.Background(), ToolInvocationFromCall(call, catalog, allowed))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ResultSummary["operation"] != "open" || result.ResultSummary["scope"] != "browser" || result.ResultSummary["title"] != "Browser" {
+		t.Fatalf("browser broker result = %+v", result)
+	}
+}
+
+func TestToolBrokerExecutesArtifactCreateThroughOneEntrypoint(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	thread, run := artifactTestThreadRun(t, svc)
+	broker := ToolBroker{Executor: DefaultToolExecutor{ArtifactExecutor: ArtifactToolExecutor{Artifacts: svc}}}
+	call := productdata.ToolCall{ThreadID: thread.ID, RunID: run.ID, ToolCallID: "tc_artifact", ToolName: productdata.ToolNameArtifactCreateText, ArgumentsSummary: map[string]any{"title": "Notes", "content": "hello artifact"}, ApprovalStatus: productdata.ToolCallApprovalApproved, ExecutionStatus: productdata.ToolCallExecutionExecuting}
+	catalog := []productdata.ToolCatalogEntry{{Name: productdata.ToolNameArtifactCreateText, Enabled: true, ExecutionState: productdata.ToolExecutionStateExecutable, Source: productdata.ToolCatalogSourceBuiltin, Group: productdata.ToolCatalogGroupArtifact, RiskLevel: productdata.ToolRiskMedium}}
+	allowed := []productdata.ToolResolution{{Name: productdata.ToolNameArtifactCreateText, ExecutionState: string(productdata.ToolExecutionStateExecutable), Source: string(productdata.ToolCatalogSourceBuiltin), Group: string(productdata.ToolCatalogGroupArtifact), RiskLevel: string(productdata.ToolRiskMedium)}}
+
+	result, err := broker.Execute(context.Background(), ToolInvocationFromCall(call, catalog, allowed))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ResultSummary["operation"] != "create_text" || result.ResultSummary["scope"] != "artifact" || result.ResultSummary["title"] != "Notes" {
+		t.Fatalf("artifact broker result = %+v", result)
+	}
+	if _, leaked := result.ResultSummary["content"]; leaked {
+		t.Fatalf("artifact result leaked raw content: %+v", result)
+	}
+}
+
+func TestToolBrokerExecutesAgentSpawnThroughOneEntrypoint(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	thread, run := agentTestThreadRun(t, svc)
+	broker := ToolBroker{Executor: DefaultToolExecutor{AgentExecutor: AgentToolExecutor{Tasks: svc}}}
+	call := productdata.ToolCall{ThreadID: thread.ID, RunID: run.ID, ToolCallID: "tc_agent", ToolName: productdata.ToolNameAgentSpawn, ArgumentsSummary: map[string]any{"role": "reviewer", "goal": "Review safety"}, ApprovalStatus: productdata.ToolCallApprovalApproved, ExecutionStatus: productdata.ToolCallExecutionExecuting}
+	catalog := []productdata.ToolCatalogEntry{{Name: productdata.ToolNameAgentSpawn, Enabled: true, ExecutionState: productdata.ToolExecutionStateExecutable, Source: productdata.ToolCatalogSourceBuiltin, Group: productdata.ToolCatalogGroupAgent, RiskLevel: productdata.ToolRiskMedium}}
+	allowed := []productdata.ToolResolution{{Name: productdata.ToolNameAgentSpawn, ExecutionState: string(productdata.ToolExecutionStateExecutable), Source: string(productdata.ToolCatalogSourceBuiltin), Group: string(productdata.ToolCatalogGroupAgent), RiskLevel: string(productdata.ToolRiskMedium)}}
+
+	result, err := broker.Execute(context.Background(), ToolInvocationFromCall(call, catalog, allowed))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ResultSummary["operation"] != "spawn" || result.ResultSummary["scope"] != "agent" || result.ResultSummary["role"] != "reviewer" || result.ResultSummary["autonomous_execution"] != false {
+		t.Fatalf("agent broker result = %+v", result)
+	}
 }
 
 func (e *recordingBrokerExecutor) ExecuteTool(_ context.Context, invocation ToolInvocation) (ToolResult, error) {

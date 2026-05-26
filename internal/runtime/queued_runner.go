@@ -9,9 +9,13 @@ import (
 )
 
 type QueuedRunRouter struct {
-	Local       *LocalRunner
-	Gateway     *Gateway
-	MCPExecutor MCPToolExecutor
+	Local            *LocalRunner
+	Gateway          *Gateway
+	MCPExecutor      MCPToolExecutor
+	WebExecutor      WebToolExecutor
+	BrowserExecutor  BrowserToolExecutor
+	ArtifactService  productdata.ArtifactService
+	AgentTaskService productdata.AgentTaskService
 }
 
 type MCPToolExecutor interface {
@@ -22,6 +26,9 @@ func (r QueuedRunRouter) Run(ctx context.Context, run productdata.Run, job produ
 	svc := r.service()
 	var prepared *productdata.RunContext
 	if svc != nil && job.ID != "" {
+		if terminal, err := runIsTerminal(ctx, svc, job.RunID); err != nil || terminal {
+			return err
+		}
 		state := &PipelineState{RunContext: productdata.RunContext{Run: run, Job: job}}
 		pipeline := Pipeline{Recorder: PipelineRecorder{Service: svc, Broadcaster: r.broadcaster()}}
 		if err := pipeline.Execute(ctx, state, []PipelineStage{
@@ -87,6 +94,9 @@ func (r QueuedRunRouter) runApprovedTool(ctx context.Context, run productdata.Ru
 	if r.Gateway == nil || r.Gateway.Service == nil {
 		return nil
 	}
+	if terminal, err := runIsTerminal(ctx, r.Gateway.Service, run.ID); err != nil || terminal {
+		return err
+	}
 	existing, err := r.Gateway.Service.GetToolCall(ctx, identity.LocalDevIdentity(), run.ThreadID, run.ID, toolCallID)
 	if err != nil {
 		return err
@@ -96,6 +106,9 @@ func (r QueuedRunRouter) runApprovedTool(ctx context.Context, run productdata.Ru
 	}
 	call, _, err := r.Gateway.Service.StartToolCallExecution(ctx, identity.LocalDevIdentity(), run.ThreadID, run.ID, toolCallID)
 	if err != nil {
+		if terminal, terminalErr := runIsTerminal(ctx, r.Gateway.Service, run.ID); terminalErr != nil || terminal {
+			return terminalErr
+		}
 		return err
 	}
 	enabledTools := []productdata.ToolResolution(nil)
@@ -103,7 +116,7 @@ func (r QueuedRunRouter) runApprovedTool(ctx context.Context, run productdata.Ru
 		enabledTools = prepared.EnabledTools
 	}
 	catalog := toolCatalogForExecution(enabledTools)
-	broker := ToolBroker{Executor: DefaultToolExecutor{MCPExecutor: r.MCPExecutor}}
+	broker := ToolBroker{Executor: DefaultToolExecutor{MCPExecutor: r.MCPExecutor, WebExecutor: r.WebExecutor, BrowserExecutor: r.BrowserExecutor, ArtifactExecutor: ArtifactToolExecutor{Artifacts: r.artifactService()}, AgentExecutor: AgentToolExecutor{Tasks: r.agentTaskService()}}}
 	result, err := broker.Execute(ctx, ToolInvocationFromCall(call, catalog, enabledTools))
 	if err != nil {
 		_, _, _ = r.Gateway.Service.FailToolCallExecution(ctx, identity.LocalDevIdentity(), run.ThreadID, run.ID, toolCallID, "tool_execution_failed", err.Error())
@@ -118,6 +131,34 @@ func (r QueuedRunRouter) runApprovedTool(ctx context.Context, run productdata.Ru
 	}
 	r.Gateway.ContinueAfterToolResult(ctx, run, input)
 	return r.gatewayResult(ctx, run.ID)
+}
+
+func (r QueuedRunRouter) artifactService() productdata.ArtifactService {
+	if r.ArtifactService != nil {
+		return r.ArtifactService
+	}
+	service := r.service()
+	if service == nil {
+		return nil
+	}
+	if svc, ok := service.(productdata.ArtifactService); ok {
+		return svc
+	}
+	return nil
+}
+
+func (r QueuedRunRouter) agentTaskService() productdata.AgentTaskService {
+	if r.AgentTaskService != nil {
+		return r.AgentTaskService
+	}
+	service := r.service()
+	if service == nil {
+		return nil
+	}
+	if svc, ok := service.(productdata.AgentTaskService); ok {
+		return svc
+	}
+	return nil
 }
 
 func toolCatalogForExecution(enabledTools []productdata.ToolResolution) []productdata.ToolCatalogEntry {
@@ -156,10 +197,21 @@ func (r QueuedRunRouter) gatewayResult(ctx context.Context, runID string) error 
 	if err != nil {
 		return err
 	}
-	if run.Status == productdata.RunStatusFailed || run.Status == productdata.RunStatusStopped {
+	if run.Status == productdata.RunStatusStopped {
+		return nil
+	}
+	if run.Status == productdata.RunStatusFailed {
 		return productdata.NewError(productdata.CodeInternalError, "Queued gateway run did not complete.")
 	}
 	return nil
+}
+
+func runIsTerminal(ctx context.Context, svc productdata.Service, runID string) (bool, error) {
+	run, err := svc.GetRun(ctx, identity.LocalDevIdentity(), runID)
+	if err != nil {
+		return false, err
+	}
+	return productdata.IsRunTerminal(run.Status), nil
 }
 
 func gatewayInputFromJob(run productdata.Run, job productdata.BackgroundJob) GatewayRunInput {

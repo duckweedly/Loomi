@@ -425,6 +425,59 @@ func TestSyncBuiltInPersonasRejectsUnsupportedTool(t *testing.T) {
 	}
 }
 
+func TestWorkModeScopedToolsOnlyEnabledForWorkModeRunContext(t *testing.T) {
+	svc := NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	if _, err := svc.SyncBuiltInPersonas(context.Background(), ident, []BuiltInPersonaConfig{{
+		Slug:             "default",
+		Name:             "Default",
+		Description:      "Default persona",
+		SystemPrompt:     "prompt",
+		ModelRoute:       PersonaModelRoute{ProviderID: "custom", Model: "model"},
+		AllowedToolNames: []string{ToolNameCurrentTime, ToolNameWorkspaceGlob, ToolNameWorkspaceGrep, ToolNameWorkspaceRead, ToolNameWorkspaceWriteFile, ToolNameWorkspaceEdit, ToolNameSandboxExecCommand, ToolNameLSPDiagnostics, ToolNameLSPSymbols, ToolNameLSPReferences, ToolNameWebFetch, ToolNameBrowserOpen, ToolNameBrowserSnapshot, ToolNameBrowserClickLink, ToolNameArtifactCreateText, ToolNameArtifactRead, ToolNameArtifactList, ToolNameAgentSpawn, ToolNameAgentList, ToolNameAgentComplete},
+		ReasoningMode:    "balanced",
+		BudgetSummary:    "budget",
+		Version:          "1",
+		IsDefault:        true,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []ThreadMode{ThreadModeChat, ThreadModeWork} {
+		thread, err := svc.CreateThread(context.Background(), ident, CreateThreadInput{Title: string(mode), Mode: mode})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := svc.StartRun(context.Background(), ident, thread.ID, StartRunInput{}); err != nil {
+			t.Fatal(err)
+		}
+		job, _, ok, err := svc.ClaimBackgroundJob(context.Background(), ident, ClaimBackgroundJobInput{WorkerID: "worker_" + string(mode), LeaseSeconds: 5})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !ok {
+			t.Fatal("claim ok = false")
+		}
+		ctxData, err := svc.PrepareRunContext(context.Background(), ident, job)
+		if err != nil {
+			t.Fatal(err)
+		}
+		hasWorkspaceRead := catalogResolutionByName(ctxData.EnabledTools, ToolNameWorkspaceRead).Name != ""
+		hasWorkspaceWrite := catalogResolutionByName(ctxData.EnabledTools, ToolNameWorkspaceWriteFile).Name != ""
+		hasSandboxExec := catalogResolutionByName(ctxData.EnabledTools, ToolNameSandboxExecCommand).Name != ""
+		hasLSPSymbols := catalogResolutionByName(ctxData.EnabledTools, ToolNameLSPSymbols).Name != ""
+		hasWebFetch := catalogResolutionByName(ctxData.EnabledTools, ToolNameWebFetch).Name != ""
+		hasBrowserOpen := catalogResolutionByName(ctxData.EnabledTools, ToolNameBrowserOpen).Name != ""
+		hasArtifactCreate := catalogResolutionByName(ctxData.EnabledTools, ToolNameArtifactCreateText).Name != ""
+		hasAgentSpawn := catalogResolutionByName(ctxData.EnabledTools, ToolNameAgentSpawn).Name != ""
+		if mode == ThreadModeChat && (hasWorkspaceRead || hasWorkspaceWrite || hasSandboxExec || hasLSPSymbols || hasWebFetch || hasBrowserOpen || hasArtifactCreate || hasAgentSpawn) {
+			t.Fatalf("chat enabled work-mode tools: %+v", ctxData.EnabledTools)
+		}
+		if mode == ThreadModeWork && (!hasWorkspaceRead || !hasWorkspaceWrite || !hasSandboxExec || !hasLSPSymbols || !hasWebFetch || !hasBrowserOpen || !hasArtifactCreate || !hasAgentSpawn) {
+			t.Fatalf("work missing work-mode tools: %+v", ctxData.EnabledTools)
+		}
+	}
+}
+
 func TestSyncBuiltInPersonasKeepsUndiscoveredMCPOutOfEnabledTools(t *testing.T) {
 	svc := NewMemoryService()
 	ident := identity.LocalDevIdentity()
@@ -1051,6 +1104,58 @@ func TestRunEventRedactsSecretText(t *testing.T) {
 	}
 	if event.Metadata["database_url"] != "[redacted]" {
 		t.Fatalf("metadata = %+v", event.Metadata)
+	}
+}
+
+func TestAppendRunEventNormalizesTodoMetadata(t *testing.T) {
+	svc := NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, CreateThreadInput{Title: "Run", Mode: ThreadModeWork})
+	if err != nil {
+		t.Fatalf("CreateThread() error = %v", err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, StartRunInput{})
+	if err != nil {
+		t.Fatalf("StartRun() error = %v", err)
+	}
+	metadata := map[string]any{
+		"todo_items": []any{
+			map[string]any{"id": "todo-1", "title": "Find files", "status": "completed", "summary": "Safe summary"},
+			map[string]any{"id": "todo-secret", "title": "Open /Users/xuean/private.md with sk-secret-token", "status": "running", "summary": "curl https://example.test/private", "command": "bash /tmp/run.sh", "file_path": "/Users/xuean/private.md"},
+			map[string]any{"id": "todo-bad-status", "title": "Fallback status", "status": "launched"},
+		},
+		"updated_by":        "provider",
+		"browser_url":       "https://example.test/private",
+		"redaction_applied": false,
+	}
+	event, err := svc.AppendRunEvent(context.Background(), ident, run.ID, AppendRunEventInput{Category: RunEventCategoryProgress, Type: EventWorkTodoUpdated, Summary: "Todo updated", Metadata: metadata})
+	if err != nil {
+		t.Fatalf("AppendRunEvent(todo) error = %v", err)
+	}
+	items, ok := event.Metadata["todo_items"].([]any)
+	if !ok || len(items) != 3 {
+		t.Fatalf("todo_items = %#v", event.Metadata["todo_items"])
+	}
+	first := items[0].(map[string]any)
+	if first["title"] != "Find files" || first["status"] != "completed" || first["summary"] != "Safe summary" {
+		t.Fatalf("first = %+v", first)
+	}
+	second := items[1].(map[string]any)
+	if second["id"] != "[redacted]" || second["title"] != "[redacted]" || second["summary"] != "[redacted]" || second["status"] != "running" || second["redaction_applied"] != true {
+		t.Fatalf("second = %+v", second)
+	}
+	if _, ok := second["command"]; ok {
+		t.Fatalf("unsafe command preserved: %+v", second)
+	}
+	third := items[2].(map[string]any)
+	if third["status"] != "pending" {
+		t.Fatalf("third = %+v", third)
+	}
+	if event.Metadata["updated_by"] != "provider" || event.Metadata["redaction_applied"] != true {
+		t.Fatalf("metadata = %+v", event.Metadata)
+	}
+	if _, ok := event.Metadata["browser_url"]; ok {
+		t.Fatalf("unsafe root metadata preserved: %+v", event.Metadata)
 	}
 }
 

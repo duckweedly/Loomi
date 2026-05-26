@@ -50,12 +50,28 @@ export type ToolCatalogItem = {
   displayName: string
   description: string
   source: 'builtin' | 'mcp'
-  group: 'runtime' | 'mcp' | 'workspace' | 'artifact' | 'sandbox' | 'web' | 'browser'
+  group: 'runtime' | 'mcp' | 'workspace' | 'artifact' | 'sandbox' | 'lsp' | 'web' | 'browser' | 'agent'
   inputSchemaHash?: string
   riskLevel: 'low' | 'medium' | 'high'
   approvalPolicy: 'always_required' | 'read_only' | 'disabled'
   enabled: boolean
   executionState: 'executable' | 'disabled' | 'not_discovered' | 'not_allowed' | 'non_executable'
+  safeMetadata?: Record<string, unknown>
+}
+
+export type MCPServerStatus = {
+  serverSafeId: string
+  serverSlug: string
+  displayName: string
+  transport: 'stdio' | string
+  enabled: boolean
+  configSource: 'local' | string
+  discoveryStatus: 'not_discovered' | 'disabled' | 'succeeded' | 'failed' | 'rejected' | string
+  candidateCount: number
+  candidateNames: string[]
+  executionMode: 'disabled' | 'approval_gated' | string
+  redactedErrorCode?: string
+  lastDiscoveredAt?: string
 }
 
 export type MemoryEntry = {
@@ -144,6 +160,21 @@ export type WorkStep = {
   summary?: string
 }
 
+export type WorkTodoItem = {
+  id: string
+  title: string
+  status: WorkStepStatus
+  summary?: string
+  redactionApplied?: boolean
+}
+
+export type WorkTodoSnapshot = {
+  items: WorkTodoItem[]
+  updatedBy?: 'provider' | 'runtime' | 'user'
+  updatedAtEventId: string
+  redactionApplied: boolean
+}
+
 export type WorkArtifactReference = {
   id: string
   title: string
@@ -167,6 +198,7 @@ export type WorkProgressEvent = {
 export type WorkPlanProjection = {
   goal: string
   steps: WorkStep[]
+  todoSnapshot?: WorkTodoSnapshot
   status: RunStatus | 'empty'
   statusDetail: string
   artifacts: WorkArtifactReference[]
@@ -294,6 +326,7 @@ export type RuntimeScriptStep = {
   status: RuntimeStatus
   group?: RuntimeEventGroup
   severity?: RuntimeEventSeverity
+  metadata?: Record<string, unknown>
   usage?: RuntimeUsage
   assistantDelta?: string
 }

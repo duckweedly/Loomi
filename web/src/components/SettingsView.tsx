@@ -1,6 +1,6 @@
 import { ArrowLeft, ChevronRight } from 'lucide-react'
 import type { ReactNode } from 'react'
-import type { BackendCapabilityState, LocalProviderDetection, MemoryAuditItem, MemoryEntry, MemoryFilters, ProviderCapability, RunStatus, RuntimeScriptId, StreamState, Thread, ToolCatalogItem } from '../domain'
+import type { BackendCapabilityState, LocalProviderDetection, MCPServerStatus, MemoryAuditItem, MemoryEntry, MemoryFilters, ProviderCapability, RunStatus, RuntimeScriptId, StreamState, Thread, ToolCatalogItem } from '../domain'
 import type { ProviderCheckResult, ProviderSaveResult } from '../state'
 import type { ProviderDraftSettings } from '../useWorkspaceShellState'
 import type { Locale } from '../i18n'
@@ -20,6 +20,7 @@ type Props = {
   selectedRunStatus?: RunStatus
   providerCapabilities: ProviderCapability[]
   toolCatalog: ToolCatalogItem[]
+  mcpServers?: MCPServerStatus[]
   localProviderDetections: LocalProviderDetection[]
   localProviderDetectionError?: string | null
   memoryEntries: MemoryEntry[]
@@ -255,10 +256,49 @@ function ToolsPanel({ tools }: { tools: ToolCatalogItem[] }) {
           <div className="tools-catalog-badges">
             <span>{tool.source}</span>
             <span>{tool.group}</span>
+            {tool.safeMetadata?.read_only === true && <span>read-only</span>}
+            {tool.safeMetadata?.write_capable === true && <span>write-capable</span>}
+            {tool.safeMetadata?.exec_capable === true && <span>exec-capable</span>}
+            {tool.safeMetadata?.non_executable === true && <span>non-executable</span>}
+            {tool.safeMetadata?.coordination_only === true && <span>coordination-only</span>}
+            {tool.safeMetadata?.autonomous_execution === false && <span>no autonomous execution</span>}
+            <span>{toolScopeLabel(tool)} scope</span>
+            {tool.safeMetadata?.network_access === 'public_http_only' && <span>public HTTP only</span>}
             <span>{tool.riskLevel}</span>
             <span>{tool.approvalPolicy}</span>
             <span>{tool.enabled ? 'enabled' : 'disabled'}</span>
             <span>{tool.executionState}</span>
+          </div>
+        </article>
+      ))}
+    </div>
+  )
+}
+
+function toolScopeLabel(tool: ToolCatalogItem) {
+  const scope = tool.safeMetadata?.scope
+  return typeof scope === 'string' && scope.trim() ? scope.trim() : tool.group
+}
+
+function MCPPanel({ servers }: { servers: MCPServerStatus[] }) {
+  if (!servers.length) return <StatusValue>No local MCP servers configured</StatusValue>
+  return (
+    <div className="tools-catalog-list" data-testid="mcp-server-list">
+      {servers.map((server) => (
+        <article className="tools-catalog-row" key={server.serverSafeId}>
+          <div className="tools-catalog-main">
+            <strong>{server.displayName || server.serverSlug}</strong>
+            <code>{server.serverSlug}</code>
+            <span>{server.candidateNames.join(', ') || 'No discovered tools'}</span>
+            {server.redactedErrorCode && <small>{server.redactedErrorCode}</small>}
+          </div>
+          <div className="tools-catalog-badges">
+            <span>{server.transport}</span>
+            <span>{server.configSource}</span>
+            <span>{server.enabled ? 'enabled' : 'disabled'}</span>
+            <span>{server.discoveryStatus}</span>
+            <span>{server.executionMode}</span>
+            <span>{server.candidateCount} tools</span>
           </div>
         </article>
       ))}
@@ -299,6 +339,7 @@ export function SettingsView({
   selectedRunStatus,
   providerCapabilities,
   toolCatalog,
+  mcpServers = [],
   localProviderDetections,
   localProviderDetectionError,
   memoryEntries,
@@ -341,6 +382,7 @@ export function SettingsView({
   const isGeneral = selectedCategory.id === 'general'
   const isProviders = selectedCategory.id === 'providers'
   const isMemory = selectedCategory.id === 'memory'
+  const isMCP = selectedCategory.id === 'mcp'
   const isTools = selectedCategory.id === 'tools'
   const isAbout = selectedCategory.id === 'about'
 
@@ -553,6 +595,18 @@ export function SettingsView({
           </div>
         )}
 
+        {isMCP && (
+          <div className="settings-card-stack">
+            <section className="settings-card">
+              <div className="settings-card-head">
+                <h2>MCP</h2>
+                <p>{selectedCategory.description}</p>
+              </div>
+              <MCPPanel servers={mcpServers} />
+            </section>
+          </div>
+        )}
+
         {isTools && (
           <div className="settings-card-stack">
             <section className="settings-card">
@@ -579,7 +633,7 @@ export function SettingsView({
           </div>
         )}
 
-        {!isGeneral && !isProviders && !isMemory && !isTools && !isAbout && <PlaceholderPanel selectedCategory={selectedCategory} t={t} />}
+        {!isGeneral && !isProviders && !isMemory && !isMCP && !isTools && !isAbout && <PlaceholderPanel selectedCategory={selectedCategory} t={t} />}
       </section>
     </div>
   )

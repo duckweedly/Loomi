@@ -62,6 +62,7 @@ func NewServerWithRuntimes(cfg config.Config, checker db.Checker, product produc
 	s.mux.HandleFunc("GET /v1/local-provider-detections", s.handleLocalProviderDetections)
 	s.mux.HandleFunc("/v1/local-provider-detections/", s.handleLocalProviderDetectionByID)
 	s.mux.HandleFunc("/v1/tools/catalog", s.handleToolsCatalog)
+	s.mux.HandleFunc("/v1/mcp/servers", s.handleMCPServers)
 	s.mux.HandleFunc("/v1/memory", s.handleMemory)
 	s.mux.HandleFunc("/v1/memory/", s.handleMemoryByID)
 	s.mux.HandleFunc("/v1/threads", s.handleThreads)

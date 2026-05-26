@@ -3,7 +3,7 @@ title: M18 Tool Runtime Catalog
 description: Tool catalog, broker, approval, and execution boundaries for builtin and MCP tools.
 ---
 
-M18 makes tools first-class runtime objects without adding new powerful tools. The current executable surface remains `runtime.get_current_time` plus already-discovered local stdio MCP tools, but both now share one catalog and broker boundary.
+M18 makes tools first-class runtime objects without adding new powerful tools. M21 extends the same catalog and broker boundary with bounded read-only workspace tools: `workspace.glob`, `workspace.grep`, and `workspace.read`.
 
 ## Catalog
 
@@ -17,11 +17,11 @@ M18 does not persist user policy overrides. Settings > Tools is read-only.
 
 Approved tool resume jobs call the broker before any concrete executor. The broker checks scoped thread/run/tool-call identity, approval status, execution status, catalog membership, enabled state, persona allowed tool resolution, and MCP candidate schema hash.
 
-Only after those checks does the broker dispatch to the builtin current-time executor or the local stdio MCP executor. Provider and worker code should not call those executors directly.
+Only after those checks does the broker dispatch to the builtin current-time executor, workspace read executor, or local stdio MCP executor. Provider and worker code should not call those executors directly.
 
 ## RunContext
 
-RunContext tool resolution now uses the catalog plus persona allowlist plus MCP discovery metadata. Builtin tools appear when allowed by the persona. MCP tools appear only when namespaced, discovered, schema-hashed, and persona-allowed.
+RunContext tool resolution now uses the catalog plus persona allowlist plus MCP discovery metadata. Builtin tools appear when allowed by the persona. Workspace read tools are additionally filtered out unless the thread is in Work mode. MCP tools appear only when namespaced, discovered, schema-hashed, and persona-allowed.
 
 ## Events
 
@@ -33,4 +33,4 @@ Tool event metadata adds safe source/group/schema context. Raw args, raw result,
 
 ## Deferred
 
-Workspace read tools, shell, sandbox execution, browser automation, web search/fetch, artifact runtime, plugin marketplace, remote MCP/OAuth, provider autodetect, multi-agent, and worker queue rewrite remain out of M18.
+Shell, write/edit file tools, sandbox execution, browser automation, web search/fetch, artifact runtime, plugin marketplace, remote MCP/OAuth, multi-agent, and worker queue rewrite remain out of the current tool runtime.

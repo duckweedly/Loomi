@@ -1,5 +1,5 @@
 import type { ApiClient } from './apiClient'
-import type { LocalProviderDetection, MemoryAuditItem, MemoryEntry, MemoryFilters, Message, Persona, ProviderCapability, ProviderFamily, Run, RunEvent, RunSource, RunStatus, Thread, ToolCall, ToolCatalogItem, WorkerQueueDiagnostics, WorkerQueueStatus, WorkerStatus } from './domain'
+import type { LocalProviderDetection, MCPServerStatus, MemoryAuditItem, MemoryEntry, MemoryFilters, Message, Persona, ProviderCapability, ProviderFamily, Run, RunEvent, RunSource, RunStatus, Thread, ToolCall, ToolCatalogItem, WorkerQueueDiagnostics, WorkerQueueStatus, WorkerStatus } from './domain'
 import { isRuntimeTerminal } from './runtime/executionAdapter'
 import { applyRealRunEvent } from './runtime/realExecutionAdapter'
 
@@ -120,6 +120,22 @@ export type ApiToolCatalogItem = {
   approval_policy: ToolCatalogItem['approvalPolicy']
   enabled: boolean
   execution_state: ToolCatalogItem['executionState']
+  safe_metadata?: Record<string, unknown> | null
+}
+
+export type ApiMCPServerStatus = {
+  server_safe_id: string
+  server_slug: string
+  display_name: string
+  transport: string
+  enabled: boolean
+  config_source: string
+  discovery_status: string
+  candidate_count: number
+  candidate_names: string[]
+  execution_mode: string
+  redacted_error_code?: string | null
+  last_discovered_at?: string | null
 }
 
 export type ApiMemoryEntry = {
@@ -238,6 +254,24 @@ function mapApiToolCatalogItem(tool: ApiToolCatalogItem): ToolCatalogItem {
     approvalPolicy: tool.approval_policy,
     enabled: tool.enabled,
     executionState: tool.execution_state,
+    safeMetadata: tool.safe_metadata ?? undefined,
+  }
+}
+
+function mapApiMCPServerStatus(server: ApiMCPServerStatus): MCPServerStatus {
+  return {
+    serverSafeId: server.server_safe_id,
+    serverSlug: server.server_slug,
+    displayName: server.display_name,
+    transport: server.transport,
+    enabled: server.enabled,
+    configSource: server.config_source,
+    discoveryStatus: server.discovery_status,
+    candidateCount: server.candidate_count,
+    candidateNames: server.candidate_names ?? [],
+    executionMode: server.execution_mode,
+    redactedErrorCode: server.redacted_error_code ?? undefined,
+    lastDiscoveredAt: server.last_discovered_at ?? undefined,
   }
 }
 
@@ -290,7 +324,7 @@ export function mapApiRun(run: ApiRun, events: RunEvent[] = []): Run {
 }
 
 function metadataString(metadata: Record<string, unknown>) {
-  const usageKeys = new Set(['input_tokens', 'output_tokens', 'total_tokens'])
+  const usageKeys = new Set(['input_tokens', 'output_tokens', 'total_tokens', 'loop_index', 'loop_max'])
   return Object.entries(metadata)
     .filter(([key, value]) => !usageKeys.has(key) && (typeof value === 'string' || typeof value === 'number'))
     .map(([key, value]) => `${key}: ${value}`)
@@ -333,6 +367,7 @@ function canonicalRunEventType(event: ApiRunEvent) {
     tool_call_succeeded: 'tool.call.succeeded',
     tool_call_failed: 'tool.call.failed',
     tool_call_cancelled: 'tool.call.cancelled',
+    work_todo_updated: 'work.todo.updated',
     run_completed: 'run.completed',
     run_failed: 'run.failed',
     run_stopped: 'run.stopped',
@@ -611,6 +646,11 @@ export const realApiClient: ApiClient = {
     return body.tools.map(mapApiToolCatalogItem)
   },
 
+  async listMCPServers() {
+    const body = await requestJSON<{ servers: ApiMCPServerStatus[] }>('/v1/mcp/servers')
+    return body.servers.map(mapApiMCPServerStatus)
+  },
+
   async listLocalProviderDetections() {
     const body = await requestJSON<{ providers: ApiLocalProviderDetection[] }>('/v1/local-provider-detections')
     return body.providers.map(mapApiLocalProviderDetection)
@@ -699,7 +739,7 @@ export const realApiClient: ApiClient = {
     return loadRunWithEvents(body.run)
   },
 
-  subscribeRunEvents(runId: string, afterSequence: number, onEvent: (event: RunEvent) => void, onError: () => void) {
+  subscribeRunEvents(runId: string, afterSequence: number, onEvent: (event: RunEvent) => void, onError: () => void, onClosed?: () => void) {
     const url = `${apiBaseUrl}/v1/runs/${runId}/events/stream?after_sequence=${afterSequence}`
     const source = new EventSource(url)
     source.addEventListener('run_event', (raw) => {
@@ -710,6 +750,10 @@ export const realApiClient: ApiClient = {
         onError()
         source.close()
       }
+    })
+    source.addEventListener('stream_closed', () => {
+      onClosed?.()
+      source.close()
     })
     source.onerror = () => {
       onError()

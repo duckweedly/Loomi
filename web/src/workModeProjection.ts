@@ -1,4 +1,4 @@
-import type { Message, Run, RunEvent, Thread, WorkArtifactReference, WorkPlanProjection, WorkProgressEvent, WorkStep, WorkStepStatus } from './domain'
+import type { Message, Run, RunEvent, Thread, WorkArtifactReference, WorkPlanProjection, WorkProgressEvent, WorkStep, WorkStepStatus, WorkTodoItem, WorkTodoSnapshot } from './domain'
 
 const SECRET_PATTERN = /(sk-[a-z0-9_-]{8,}|api[_-]?key|token|secret|authorization|bearer\s+[a-z0-9._-]+)/i
 const EXECUTION_KEY_PATTERN = /(path|file|command|shell|browser|filesystem|execute|url)/i
@@ -84,6 +84,42 @@ function deriveSteps(messages: Message[], metadata: Record<string, unknown>[], r
   return []
 }
 
+function safeTodoUpdatedBy(value: unknown): WorkTodoSnapshot['updatedBy'] {
+  return value === 'provider' || value === 'runtime' || value === 'user' ? value : undefined
+}
+
+function todoItemFromMetadata(item: Record<string, unknown>, index: number): WorkTodoItem {
+  const redactionApplied = redactionFlag(item.redaction_applied ?? item.redactionApplied) || valueWouldRedact(item)
+  return {
+    id: safeString(item.id, `todo-${index + 1}`),
+    title: safeString(item.title, `Todo ${index + 1}`),
+    status: safeStatus(item.status, index === 0 ? 'running' : 'pending'),
+    summary: safeString(item.summary) || undefined,
+    redactionApplied: redactionApplied || undefined,
+  }
+}
+
+function todoSnapshotFromEvent(event: RunEvent): WorkTodoSnapshot | null {
+  if (!isRecord(event.metadata)) return null
+  const items = metadataList(event.metadata.todo_items ?? event.metadata.todoItems)
+  if (!items.length) return null
+  const redactionApplied = redactionFlag(event.metadata.redaction_applied ?? event.metadata.redactionApplied)
+    || valueWouldRedact(event.metadata)
+    || items.some(valueWouldRedact)
+
+  return {
+    items: items.map(todoItemFromMetadata),
+    updatedBy: safeTodoUpdatedBy(event.metadata.updated_by ?? event.metadata.updatedBy),
+    updatedAtEventId: safeString(event.metadata.updated_at_event_id ?? event.metadata.updatedAtEventId, event.id),
+    redactionApplied,
+  }
+}
+
+function deriveTodoSnapshot(run: Run | null): WorkTodoSnapshot | undefined {
+  const snapshots = (run?.events ?? []).map(todoSnapshotFromEvent).filter((snapshot): snapshot is WorkTodoSnapshot => snapshot !== null)
+  return snapshots.at(-1)
+}
+
 function artifactFromMetadata(item: Record<string, unknown>, index: number, thread: Thread, run: Run | null, redactionApplied: boolean): WorkArtifactReference {
   return {
     id: safeString(item.id, `artifact-${index + 1}`),
@@ -144,6 +180,7 @@ export function deriveWorkPlanProjection(thread: Thread | null, messages: Messag
   const metadata = metadataFromEvents(run)
   const goal = deriveGoal(thread, messages, metadata)
   const steps = deriveSteps(messages, metadata, run)
+  const todoSnapshot = deriveTodoSnapshot(run)
   const artifacts = deriveArtifacts(thread, run, metadata)
   const recentEvents = deriveRecentEvents(run)
   const emptyReason = !messages.length && !run ? 'No work plan metadata yet.' : undefined
@@ -151,6 +188,7 @@ export function deriveWorkPlanProjection(thread: Thread | null, messages: Messag
   return {
     goal,
     steps,
+    todoSnapshot,
     status: run?.status ?? 'empty',
     statusDetail: statusDetail(run, recentEvents),
     artifacts,

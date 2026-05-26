@@ -2,6 +2,10 @@ package runtime
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -460,6 +464,942 @@ func TestWorkerExecutesApprovedCurrentTimeToolAndContinuesModel(t *testing.T) {
 	}
 	if ok {
 		t.Fatal("second ProcessOne() ok = true, want no duplicate job")
+	}
+}
+
+func TestWorkerExecutesApprovedWorkspaceWriteFileAndContinuesModel(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("LOOMI_WORKSPACE_ROOT", root)
+	svc := productdata.NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	if _, err := svc.SyncBuiltInPersonas(context.Background(), ident, productdata.BuiltInPersonas()); err != nil {
+		t.Fatal(err)
+	}
+	thread, err := svc.CreateThread(context.Background(), ident, productdata.CreateThreadInput{Title: "Workspace write", Mode: productdata.ThreadModeWork})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _, err := svc.CreateMessage(context.Background(), ident, thread.ID, productdata.CreateMessageInput{Content: "create file"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, productdata.StartRunInput{Source: productdata.RunSourceModelGateway, MessageID: message.ID, ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.RecordToolCallRequest(context.Background(), ident, run.ID, productdata.RecordToolCallRequestInput{ToolCallID: "tc_write_1", ToolName: productdata.ToolNameWorkspaceWriteFile, ArgumentsSummary: map[string]any{"path": "created.txt", "content": "created\n"}, ArgumentsHash: "hash_write_1", ApprovalStatus: productdata.ToolCallApprovalRequired, ExecutionStatus: productdata.ToolCallExecutionBlocked}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "created.txt")); err == nil {
+		t.Fatal("file was written before approval")
+	}
+	if _, _, err := svc.ApproveToolCall(context.Background(), ident, thread.ID, run.ID, "tc_write_1"); err != nil {
+		t.Fatal(err)
+	}
+	provider := &capturingProvider{config: ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: "https://example.test/v1", APIKey: "key", Model: "model", Enabled: true}, events: []ProviderEvent{{Type: ProviderEventCompleted, Text: "Created the file."}}}
+	worker := NewWorker(svc, nil, QueuedRunRouter{Gateway: NewGateway(svc, nil, []Provider{provider})})
+	worker.WorkerID = "worker_workspace_write"
+
+	ok, err := worker.ProcessOne(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("ProcessOne() ok = false")
+	}
+	written, err := os.ReadFile(filepath.Join(root, "created.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(written) != "created\n" {
+		t.Fatalf("written = %q", string(written))
+	}
+	call, err := svc.GetToolCall(context.Background(), ident, thread.ID, run.ID, "tc_write_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if call.ExecutionStatus != productdata.ToolCallExecutionSucceeded || call.ResultSummary["operation"] != "write_file" || call.ResultSummary["path"] != "created.txt" {
+		t.Fatalf("call = %+v", call)
+	}
+	got, err := svc.GetRun(context.Background(), ident, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != productdata.RunStatusCompleted {
+		t.Fatalf("run = %+v", got)
+	}
+	if len(provider.request.Messages) != 3 || provider.request.Messages[1].Role != ProviderMessageRoleAssistantToolCall || provider.request.Messages[2].Role != ProviderMessageRoleToolResult {
+		t.Fatalf("continuation request = %+v", provider.request.Messages)
+	}
+}
+
+func TestWorkerExecutesApprovedWorkspaceEditAndContinuesModel(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("LOOMI_WORKSPACE_ROOT", root)
+	if err := os.WriteFile(filepath.Join(root, "notes.txt"), []byte("alpha\nbeta\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	svc := productdata.NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	if _, err := svc.SyncBuiltInPersonas(context.Background(), ident, productdata.BuiltInPersonas()); err != nil {
+		t.Fatal(err)
+	}
+	thread, err := svc.CreateThread(context.Background(), ident, productdata.CreateThreadInput{Title: "Workspace edit", Mode: productdata.ThreadModeWork})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _, err := svc.CreateMessage(context.Background(), ident, thread.ID, productdata.CreateMessageInput{Content: "edit file"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, productdata.StartRunInput{Source: productdata.RunSourceModelGateway, MessageID: message.ID, ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.RecordToolCallRequest(context.Background(), ident, run.ID, productdata.RecordToolCallRequestInput{ToolCallID: "tc_edit_1", ToolName: productdata.ToolNameWorkspaceEdit, ArgumentsSummary: map[string]any{"path": "notes.txt", "old_text": "beta\n", "new_text": "gamma\n"}, ArgumentsHash: "hash_edit_1", ApprovalStatus: productdata.ToolCallApprovalRequired, ExecutionStatus: productdata.ToolCallExecutionBlocked}); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(filepath.Join(root, "notes.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(before) != "alpha\nbeta\n" {
+		t.Fatalf("file changed before approval: %q", string(before))
+	}
+	if _, _, err := svc.ApproveToolCall(context.Background(), ident, thread.ID, run.ID, "tc_edit_1"); err != nil {
+		t.Fatal(err)
+	}
+	provider := &capturingProvider{config: ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: "https://example.test/v1", APIKey: "key", Model: "model", Enabled: true}, events: []ProviderEvent{{Type: ProviderEventCompleted, Text: "Edited the file."}}}
+	worker := NewWorker(svc, nil, QueuedRunRouter{Gateway: NewGateway(svc, nil, []Provider{provider})})
+	worker.WorkerID = "worker_workspace_edit"
+
+	ok, err := worker.ProcessOne(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("ProcessOne() ok = false")
+	}
+	written, err := os.ReadFile(filepath.Join(root, "notes.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(written) != "alpha\ngamma\n" {
+		t.Fatalf("written = %q", string(written))
+	}
+	call, err := svc.GetToolCall(context.Background(), ident, thread.ID, run.ID, "tc_edit_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if call.ExecutionStatus != productdata.ToolCallExecutionSucceeded || call.ResultSummary["operation"] != "edit" || call.ResultSummary["path"] != "notes.txt" {
+		t.Fatalf("call = %+v", call)
+	}
+	got, err := svc.GetRun(context.Background(), ident, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != productdata.RunStatusCompleted {
+		t.Fatalf("run = %+v", got)
+	}
+	ok, err = worker.ProcessOne(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok {
+		t.Fatal("second ProcessOne() ok = true, want no duplicate job")
+	}
+	afterRetry, err := os.ReadFile(filepath.Join(root, "notes.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(afterRetry) != "alpha\ngamma\n" {
+		t.Fatalf("retry changed file: %q", string(afterRetry))
+	}
+}
+
+func TestWorkerExecutesApprovedSandboxExecCommandAndContinuesModel(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("LOOMI_WORKSPACE_ROOT", root)
+	svc := productdata.NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	if _, err := svc.SyncBuiltInPersonas(context.Background(), ident, productdata.BuiltInPersonas()); err != nil {
+		t.Fatal(err)
+	}
+	thread, err := svc.CreateThread(context.Background(), ident, productdata.CreateThreadInput{Title: "Sandbox exec", Mode: productdata.ThreadModeWork})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _, err := svc.CreateMessage(context.Background(), ident, thread.ID, productdata.CreateMessageInput{Content: "run command"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, productdata.StartRunInput{Source: productdata.RunSourceModelGateway, MessageID: message.ID, ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.RecordToolCallRequest(context.Background(), ident, run.ID, productdata.RecordToolCallRequestInput{ToolCallID: "tc_exec_1", ToolName: productdata.ToolNameSandboxExecCommand, ArgumentsSummary: map[string]any{"argv": []any{"ls", "."}, "cwd": "."}, ArgumentsHash: "hash_exec_1", ApprovalStatus: productdata.ToolCallApprovalRequired, ExecutionStatus: productdata.ToolCallExecutionBlocked}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.ApproveToolCall(context.Background(), ident, thread.ID, run.ID, "tc_exec_1"); err != nil {
+		t.Fatal(err)
+	}
+	provider := &capturingProvider{config: ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: "https://example.test/v1", APIKey: "key", Model: "model", Enabled: true}, events: []ProviderEvent{{Type: ProviderEventCompleted, Text: "Ran the command."}}}
+	worker := NewWorker(svc, nil, QueuedRunRouter{Gateway: NewGateway(svc, nil, []Provider{provider})})
+	worker.WorkerID = "worker_sandbox_exec"
+
+	ok, err := worker.ProcessOne(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("ProcessOne() ok = false")
+	}
+	call, err := svc.GetToolCall(context.Background(), ident, thread.ID, run.ID, "tc_exec_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if call.ExecutionStatus != productdata.ToolCallExecutionSucceeded || call.ResultSummary["operation"] != "exec_command" || call.ResultSummary["scope"] != "bounded_read_only_command" || call.ResultSummary["exit_code"] != 0 {
+		t.Fatalf("call = %+v", call)
+	}
+	got, err := svc.GetRun(context.Background(), ident, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != productdata.RunStatusCompleted {
+		t.Fatalf("run = %+v", got)
+	}
+	if len(provider.request.Messages) != 3 || provider.request.Messages[1].Role != ProviderMessageRoleAssistantToolCall || provider.request.Messages[2].Role != ProviderMessageRoleToolResult {
+		t.Fatalf("continuation request = %+v", provider.request.Messages)
+	}
+	ok, err = worker.ProcessOne(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok {
+		t.Fatal("second ProcessOne() ok = true, want no duplicate job")
+	}
+}
+
+func TestWorkerExecutesApprovedLSPToolAndContinuesModel(t *testing.T) {
+	root := createLSPFixture(t)
+	t.Setenv("LOOMI_WORKSPACE_ROOT", root)
+	svc := productdata.NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	if _, err := svc.SyncBuiltInPersonas(context.Background(), ident, productdata.BuiltInPersonas()); err != nil {
+		t.Fatal(err)
+	}
+	thread, err := svc.CreateThread(context.Background(), ident, productdata.CreateThreadInput{Title: "LSP symbols", Mode: productdata.ThreadModeWork})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _, err := svc.CreateMessage(context.Background(), ident, thread.ID, productdata.CreateMessageInput{Content: "find symbols"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, productdata.StartRunInput{Source: productdata.RunSourceModelGateway, MessageID: message.ID, ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.RecordToolCallRequest(context.Background(), ident, run.ID, productdata.RecordToolCallRequestInput{ToolCallID: "tc_lsp_1", ToolName: productdata.ToolNameLSPSymbols, ArgumentsSummary: map[string]any{"path": "src/main.go", "query": "Tool"}, ArgumentsHash: "hash_lsp_1", ApprovalStatus: productdata.ToolCallApprovalRequired, ExecutionStatus: productdata.ToolCallExecutionBlocked}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.ApproveToolCall(context.Background(), ident, thread.ID, run.ID, "tc_lsp_1"); err != nil {
+		t.Fatal(err)
+	}
+	provider := &capturingProvider{config: ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: "https://example.test/v1", APIKey: "key", Model: "model", Enabled: true}, events: []ProviderEvent{{Type: ProviderEventCompleted, Text: "Found the symbol."}}}
+	worker := NewWorker(svc, nil, QueuedRunRouter{Gateway: NewGateway(svc, nil, []Provider{provider})})
+	worker.WorkerID = "worker_lsp_symbols"
+
+	ok, err := worker.ProcessOne(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("ProcessOne() ok = false")
+	}
+	call, err := svc.GetToolCall(context.Background(), ident, thread.ID, run.ID, "tc_lsp_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if call.ExecutionStatus != productdata.ToolCallExecutionSucceeded || call.ResultSummary["operation"] != "symbols" || call.ResultSummary["scope"] != "lsp" || call.ResultSummary["count"] != 1 {
+		t.Fatalf("call = %+v", call)
+	}
+	events, err := svc.ListRunEvents(context.Background(), ident, run.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var executing, succeeded int
+	for _, event := range events {
+		if event.Type == productdata.EventToolCallExecuting {
+			executing++
+		}
+		if event.Type == productdata.EventToolCallSucceeded {
+			succeeded++
+		}
+	}
+	if executing != 1 || succeeded != 1 {
+		t.Fatalf("events = %+v", events)
+	}
+	got, err := svc.GetRun(context.Background(), ident, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != productdata.RunStatusCompleted {
+		t.Fatalf("run = %+v", got)
+	}
+	if len(provider.request.Messages) != 3 || provider.request.Messages[1].Role != ProviderMessageRoleAssistantToolCall || provider.request.Messages[2].Role != ProviderMessageRoleToolResult {
+		t.Fatalf("continuation request = %+v", provider.request.Messages)
+	}
+	ok, err = worker.ProcessOne(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok {
+		t.Fatal("second ProcessOne() ok = true, want no duplicate job")
+	}
+}
+
+func TestWorkerExecutesApprovedWebFetchAndContinuesModel(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		_, _ = w.Write([]byte("worker web fetch result"))
+	}))
+	defer target.Close()
+	svc := productdata.NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	if _, err := svc.SyncBuiltInPersonas(context.Background(), ident, productdata.BuiltInPersonas()); err != nil {
+		t.Fatal(err)
+	}
+	thread, err := svc.CreateThread(context.Background(), ident, productdata.CreateThreadInput{Title: "Web fetch", Mode: productdata.ThreadModeWork})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _, err := svc.CreateMessage(context.Background(), ident, thread.ID, productdata.CreateMessageInput{Content: "fetch page"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, productdata.StartRunInput{Source: productdata.RunSourceModelGateway, MessageID: message.ID, ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.RecordToolCallRequest(context.Background(), ident, run.ID, productdata.RecordToolCallRequestInput{ToolCallID: "tc_web_1", ToolName: productdata.ToolNameWebFetch, ArgumentsSummary: map[string]any{"url": target.URL}, ArgumentsHash: "hash_web_1", ApprovalStatus: productdata.ToolCallApprovalRequired, ExecutionStatus: productdata.ToolCallExecutionBlocked}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.ApproveToolCall(context.Background(), ident, thread.ID, run.ID, "tc_web_1"); err != nil {
+		t.Fatal(err)
+	}
+	provider := &capturingProvider{config: ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: "https://example.test/v1", APIKey: "key", Model: "model", Enabled: true}, events: []ProviderEvent{{Type: ProviderEventCompleted, Text: "Fetched the page."}}}
+	worker := NewWorker(svc, nil, QueuedRunRouter{Gateway: NewGateway(svc, nil, []Provider{provider}), WebExecutor: WebToolExecutor{AllowPrivateHosts: true}})
+	worker.WorkerID = "worker_web_fetch"
+
+	ok, err := worker.ProcessOne(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("ProcessOne() ok = false")
+	}
+	call, err := svc.GetToolCall(context.Background(), ident, thread.ID, run.ID, "tc_web_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if call.ExecutionStatus != productdata.ToolCallExecutionSucceeded || call.ResultSummary["operation"] != "fetch" || call.ResultSummary["scope"] != "web" || call.ResultSummary["status_code"] != 200 {
+		t.Fatalf("call = %+v", call)
+	}
+	got, err := svc.GetRun(context.Background(), ident, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != productdata.RunStatusCompleted {
+		t.Fatalf("run = %+v", got)
+	}
+	if len(provider.request.Messages) != 3 || provider.request.Messages[1].Role != ProviderMessageRoleAssistantToolCall || provider.request.Messages[2].Role != ProviderMessageRoleToolResult {
+		t.Fatalf("continuation request = %+v", provider.request.Messages)
+	}
+}
+
+func TestWorkerExecutesApprovedBrowserOpenAndContinuesModel(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte("<html><title>Worker Browser</title><body>browser open</body></html>"))
+	}))
+	defer target.Close()
+	svc := productdata.NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	if _, err := svc.SyncBuiltInPersonas(context.Background(), ident, productdata.BuiltInPersonas()); err != nil {
+		t.Fatal(err)
+	}
+	thread, err := svc.CreateThread(context.Background(), ident, productdata.CreateThreadInput{Title: "Browser open", Mode: productdata.ThreadModeWork})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _, err := svc.CreateMessage(context.Background(), ident, thread.ID, productdata.CreateMessageInput{Content: "open page"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, productdata.StartRunInput{Source: productdata.RunSourceModelGateway, MessageID: message.ID, ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.RecordToolCallRequest(context.Background(), ident, run.ID, productdata.RecordToolCallRequestInput{ToolCallID: "tc_browser_1", ToolName: productdata.ToolNameBrowserOpen, ArgumentsSummary: map[string]any{"url": target.URL}, ArgumentsHash: "hash_browser_1", ApprovalStatus: productdata.ToolCallApprovalRequired, ExecutionStatus: productdata.ToolCallExecutionBlocked}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.ApproveToolCall(context.Background(), ident, thread.ID, run.ID, "tc_browser_1"); err != nil {
+		t.Fatal(err)
+	}
+	provider := &capturingProvider{config: ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: "https://example.test/v1", APIKey: "key", Model: "model", Enabled: true}, events: []ProviderEvent{{Type: ProviderEventCompleted, Text: "Opened the page."}}}
+	worker := NewWorker(svc, nil, QueuedRunRouter{Gateway: NewGateway(svc, nil, []Provider{provider}), BrowserExecutor: BrowserToolExecutor{Store: NewBrowserSessionStore(), AllowPrivateHosts: true}})
+	worker.WorkerID = "worker_browser_open"
+
+	ok, err := worker.ProcessOne(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("ProcessOne() ok = false")
+	}
+	call, err := svc.GetToolCall(context.Background(), ident, thread.ID, run.ID, "tc_browser_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if call.ExecutionStatus != productdata.ToolCallExecutionSucceeded || call.ResultSummary["operation"] != "open" || call.ResultSummary["scope"] != "browser" || call.ResultSummary["title"] != "Worker Browser" {
+		t.Fatalf("call = %+v", call)
+	}
+	got, err := svc.GetRun(context.Background(), ident, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != productdata.RunStatusCompleted {
+		t.Fatalf("run = %+v", got)
+	}
+	if len(provider.request.Messages) != 3 || provider.request.Messages[1].Role != ProviderMessageRoleAssistantToolCall || provider.request.Messages[2].Role != ProviderMessageRoleToolResult {
+		t.Fatalf("continuation request = %+v", provider.request.Messages)
+	}
+}
+
+func TestWorkerExecutesApprovedArtifactCreateAndContinuesModel(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	if _, err := svc.SyncBuiltInPersonas(context.Background(), ident, productdata.BuiltInPersonas()); err != nil {
+		t.Fatal(err)
+	}
+	thread, err := svc.CreateThread(context.Background(), ident, productdata.CreateThreadInput{Title: "Artifact create", Mode: productdata.ThreadModeWork})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _, err := svc.CreateMessage(context.Background(), ident, thread.ID, productdata.CreateMessageInput{Content: "create artifact"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, productdata.StartRunInput{Source: productdata.RunSourceModelGateway, MessageID: message.ID, ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.RecordToolCallRequest(context.Background(), ident, run.ID, productdata.RecordToolCallRequestInput{ToolCallID: "tc_artifact_1", ToolName: productdata.ToolNameArtifactCreateText, ArgumentsSummary: map[string]any{"title": "Notes", "content": "hello artifact"}, ArgumentsHash: "hash_artifact_1", ApprovalStatus: productdata.ToolCallApprovalRequired, ExecutionStatus: productdata.ToolCallExecutionBlocked}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.ApproveToolCall(context.Background(), ident, thread.ID, run.ID, "tc_artifact_1"); err != nil {
+		t.Fatal(err)
+	}
+	provider := &capturingProvider{config: ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: "https://example.test/v1", APIKey: "key", Model: "model", Enabled: true}, events: []ProviderEvent{{Type: ProviderEventCompleted, Text: "Created the artifact."}}}
+	worker := NewWorker(svc, nil, QueuedRunRouter{Gateway: NewGateway(svc, nil, []Provider{provider})})
+	worker.WorkerID = "worker_artifact_create"
+
+	ok, err := worker.ProcessOne(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("ProcessOne() ok = false")
+	}
+	call, err := svc.GetToolCall(context.Background(), ident, thread.ID, run.ID, "tc_artifact_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if call.ExecutionStatus != productdata.ToolCallExecutionSucceeded || call.ResultSummary["operation"] != "create_text" || call.ResultSummary["scope"] != "artifact" || call.ResultSummary["title"] != "Notes" {
+		t.Fatalf("call = %+v", call)
+	}
+	artifacts, err := svc.ListArtifacts(context.Background(), ident, productdata.ListArtifactsInput{ThreadID: thread.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(artifacts) != 1 || artifacts[0].Title != "Notes" {
+		t.Fatalf("artifacts = %+v", artifacts)
+	}
+	got, err := svc.GetRun(context.Background(), ident, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != productdata.RunStatusCompleted {
+		t.Fatalf("run = %+v", got)
+	}
+	if len(provider.request.Messages) != 3 || provider.request.Messages[1].Role != ProviderMessageRoleAssistantToolCall || provider.request.Messages[2].Role != ProviderMessageRoleToolResult {
+		t.Fatalf("continuation request = %+v", provider.request.Messages)
+	}
+}
+
+func TestWorkerExecutesApprovedAgentSpawnAndContinuesModel(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	if _, err := svc.SyncBuiltInPersonas(context.Background(), ident, productdata.BuiltInPersonas()); err != nil {
+		t.Fatal(err)
+	}
+	thread, err := svc.CreateThread(context.Background(), ident, productdata.CreateThreadInput{Title: "Agent spawn", Mode: productdata.ThreadModeWork})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _, err := svc.CreateMessage(context.Background(), ident, thread.ID, productdata.CreateMessageInput{Content: "spawn reviewer"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, productdata.StartRunInput{Source: productdata.RunSourceModelGateway, MessageID: message.ID, ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.RecordToolCallRequest(context.Background(), ident, run.ID, productdata.RecordToolCallRequestInput{ToolCallID: "tc_agent_1", ToolName: productdata.ToolNameAgentSpawn, ArgumentsSummary: map[string]any{"role": "reviewer", "goal": "Review artifact runtime"}, ArgumentsHash: "hash_agent_1", ApprovalStatus: productdata.ToolCallApprovalRequired, ExecutionStatus: productdata.ToolCallExecutionBlocked}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.ApproveToolCall(context.Background(), ident, thread.ID, run.ID, "tc_agent_1"); err != nil {
+		t.Fatal(err)
+	}
+	provider := &capturingProvider{config: ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: "https://example.test/v1", APIKey: "key", Model: "model", Enabled: true}, events: []ProviderEvent{{Type: ProviderEventCompleted, Text: "Spawned reviewer task."}}}
+	worker := NewWorker(svc, nil, QueuedRunRouter{Gateway: NewGateway(svc, nil, []Provider{provider})})
+	worker.WorkerID = "worker_agent_spawn"
+
+	ok, err := worker.ProcessOne(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("ProcessOne() ok = false")
+	}
+	call, err := svc.GetToolCall(context.Background(), ident, thread.ID, run.ID, "tc_agent_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if call.ExecutionStatus != productdata.ToolCallExecutionSucceeded || call.ResultSummary["operation"] != "spawn" || call.ResultSummary["scope"] != "agent" || call.ResultSummary["role"] != "reviewer" {
+		t.Fatalf("call = %+v", call)
+	}
+	tasks, err := svc.ListAgentTasks(context.Background(), ident, productdata.ListAgentTasksInput{ThreadID: thread.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 1 || tasks[0].Role != "reviewer" || tasks[0].Status != productdata.AgentTaskStatusSpawned {
+		t.Fatalf("tasks = %+v", tasks)
+	}
+	got, err := svc.GetRun(context.Background(), ident, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != productdata.RunStatusCompleted {
+		t.Fatalf("run = %+v", got)
+	}
+	if len(provider.request.Messages) != 3 || provider.request.Messages[1].Role != ProviderMessageRoleAssistantToolCall || provider.request.Messages[2].Role != ProviderMessageRoleToolResult {
+		t.Fatalf("continuation request = %+v", provider.request.Messages)
+	}
+}
+
+func TestWorkerDoesNotCreateArtifactAfterStopOrDenied(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		stop bool
+	}{
+		{name: "stopped", stop: true},
+		{name: "denied", stop: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := productdata.NewMemoryService()
+			ident := identity.LocalDevIdentity()
+			if _, err := svc.SyncBuiltInPersonas(context.Background(), ident, productdata.BuiltInPersonas()); err != nil {
+				t.Fatal(err)
+			}
+			thread, err := svc.CreateThread(context.Background(), ident, productdata.CreateThreadInput{Title: "Artifact no exec", Mode: productdata.ThreadModeWork})
+			if err != nil {
+				t.Fatal(err)
+			}
+			message, _, err := svc.CreateMessage(context.Background(), ident, thread.ID, productdata.CreateMessageInput{Content: "create artifact"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			run, err := svc.StartRun(context.Background(), ident, thread.ID, productdata.StartRunInput{Source: productdata.RunSourceModelGateway, MessageID: message.ID, ProviderID: "custom", Model: "model"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := svc.RecordToolCallRequest(context.Background(), ident, run.ID, productdata.RecordToolCallRequestInput{ToolCallID: "tc_artifact_blocked", ToolName: productdata.ToolNameArtifactCreateText, ArgumentsSummary: map[string]any{"title": "Blocked", "content": "blocked"}, ArgumentsHash: "hash_artifact_blocked", ApprovalStatus: productdata.ToolCallApprovalRequired, ExecutionStatus: productdata.ToolCallExecutionBlocked}); err != nil {
+				t.Fatal(err)
+			}
+			if tc.stop {
+				if _, _, err := svc.ApproveToolCall(context.Background(), ident, thread.ID, run.ID, "tc_artifact_blocked"); err != nil {
+					t.Fatal(err)
+				}
+				job, claimedRun, ok, err := svc.ClaimBackgroundJob(context.Background(), ident, productdata.ClaimBackgroundJobInput{WorkerID: "worker_artifact_stop", LeaseSeconds: 30})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !ok {
+					t.Fatal("claim ok = false")
+				}
+				if _, err := svc.StopRun(context.Background(), ident, run.ID); err != nil {
+					t.Fatal(err)
+				}
+				provider := &capturingProvider{config: ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: "https://example.test/v1", APIKey: "key", Model: "model", Enabled: true}}
+				if err := (QueuedRunRouter{Gateway: NewGateway(svc, nil, []Provider{provider})}).Run(context.Background(), claimedRun, job); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				if _, _, err := svc.DenyToolCall(context.Background(), ident, thread.ID, run.ID, "tc_artifact_blocked"); err != nil {
+					t.Fatal(err)
+				}
+				provider := &capturingProvider{config: ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: "https://example.test/v1", APIKey: "key", Model: "model", Enabled: true}}
+				worker := NewWorker(svc, nil, QueuedRunRouter{Gateway: NewGateway(svc, nil, []Provider{provider})})
+				worker.WorkerID = "worker_artifact_denied"
+				if ok, err := worker.ProcessOne(context.Background()); err != nil || ok {
+					t.Fatalf("ProcessOne ok=%v err=%v", ok, err)
+				}
+			}
+			artifacts, err := svc.ListArtifacts(context.Background(), ident, productdata.ListArtifactsInput{ThreadID: thread.ID})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(artifacts) != 0 {
+				t.Fatalf("artifacts created after %s: %+v", tc.name, artifacts)
+			}
+		})
+	}
+}
+
+func TestWorkerDoesNotSpawnAgentTaskAfterStopOrDenied(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		stop bool
+	}{
+		{name: "stopped", stop: true},
+		{name: "denied", stop: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := productdata.NewMemoryService()
+			ident := identity.LocalDevIdentity()
+			if _, err := svc.SyncBuiltInPersonas(context.Background(), ident, productdata.BuiltInPersonas()); err != nil {
+				t.Fatal(err)
+			}
+			thread, err := svc.CreateThread(context.Background(), ident, productdata.CreateThreadInput{Title: "Agent no exec", Mode: productdata.ThreadModeWork})
+			if err != nil {
+				t.Fatal(err)
+			}
+			message, _, err := svc.CreateMessage(context.Background(), ident, thread.ID, productdata.CreateMessageInput{Content: "spawn agent"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			run, err := svc.StartRun(context.Background(), ident, thread.ID, productdata.StartRunInput{Source: productdata.RunSourceModelGateway, MessageID: message.ID, ProviderID: "custom", Model: "model"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := svc.RecordToolCallRequest(context.Background(), ident, run.ID, productdata.RecordToolCallRequestInput{ToolCallID: "tc_agent_blocked", ToolName: productdata.ToolNameAgentSpawn, ArgumentsSummary: map[string]any{"role": "reviewer", "goal": "Review implementation"}, ArgumentsHash: "hash_agent_blocked", ApprovalStatus: productdata.ToolCallApprovalRequired, ExecutionStatus: productdata.ToolCallExecutionBlocked}); err != nil {
+				t.Fatal(err)
+			}
+			if tc.stop {
+				if _, _, err := svc.ApproveToolCall(context.Background(), ident, thread.ID, run.ID, "tc_agent_blocked"); err != nil {
+					t.Fatal(err)
+				}
+				job, claimedRun, ok, err := svc.ClaimBackgroundJob(context.Background(), ident, productdata.ClaimBackgroundJobInput{WorkerID: "worker_agent_stop", LeaseSeconds: 30})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !ok {
+					t.Fatal("claim ok = false")
+				}
+				if _, err := svc.StopRun(context.Background(), ident, run.ID); err != nil {
+					t.Fatal(err)
+				}
+				provider := &capturingProvider{config: ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: "https://example.test/v1", APIKey: "key", Model: "model", Enabled: true}}
+				if err := (QueuedRunRouter{Gateway: NewGateway(svc, nil, []Provider{provider})}).Run(context.Background(), claimedRun, job); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				if _, _, err := svc.DenyToolCall(context.Background(), ident, thread.ID, run.ID, "tc_agent_blocked"); err != nil {
+					t.Fatal(err)
+				}
+				provider := &capturingProvider{config: ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: "https://example.test/v1", APIKey: "key", Model: "model", Enabled: true}}
+				worker := NewWorker(svc, nil, QueuedRunRouter{Gateway: NewGateway(svc, nil, []Provider{provider})})
+				worker.WorkerID = "worker_agent_denied"
+				if ok, err := worker.ProcessOne(context.Background()); err != nil || ok {
+					t.Fatalf("ProcessOne ok=%v err=%v", ok, err)
+				}
+			}
+			tasks, err := svc.ListAgentTasks(context.Background(), ident, productdata.ListAgentTasksInput{ThreadID: thread.ID})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(tasks) != 0 {
+				t.Fatalf("agent tasks created after %s: %+v", tc.name, tasks)
+			}
+		})
+	}
+}
+
+func TestWorkerDoesNotMutateWorkspaceAfterStopOrDenied(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		stop bool
+	}{
+		{name: "stopped", stop: true},
+		{name: "denied", stop: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			t.Setenv("LOOMI_WORKSPACE_ROOT", root)
+			svc := productdata.NewMemoryService()
+			ident := identity.LocalDevIdentity()
+			if _, err := svc.SyncBuiltInPersonas(context.Background(), ident, productdata.BuiltInPersonas()); err != nil {
+				t.Fatal(err)
+			}
+			thread, err := svc.CreateThread(context.Background(), ident, productdata.CreateThreadInput{Title: "Workspace mutation", Mode: productdata.ThreadModeWork})
+			if err != nil {
+				t.Fatal(err)
+			}
+			message, _, err := svc.CreateMessage(context.Background(), ident, thread.ID, productdata.CreateMessageInput{Content: "create file"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			run, err := svc.StartRun(context.Background(), ident, thread.ID, productdata.StartRunInput{Source: productdata.RunSourceModelGateway, MessageID: message.ID, ProviderID: "custom", Model: "model"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := svc.RecordToolCallRequest(context.Background(), ident, run.ID, productdata.RecordToolCallRequestInput{ToolCallID: "tc_write_1", ToolName: productdata.ToolNameWorkspaceWriteFile, ArgumentsSummary: map[string]any{"path": "blocked.txt", "content": "blocked\n"}, ArgumentsHash: "hash_write_1", ApprovalStatus: productdata.ToolCallApprovalRequired, ExecutionStatus: productdata.ToolCallExecutionBlocked}); err != nil {
+				t.Fatal(err)
+			}
+			if tc.stop {
+				if _, _, err := svc.ApproveToolCall(context.Background(), ident, thread.ID, run.ID, "tc_write_1"); err != nil {
+					t.Fatal(err)
+				}
+				job, claimedRun, ok, err := svc.ClaimBackgroundJob(context.Background(), ident, productdata.ClaimBackgroundJobInput{WorkerID: "worker_workspace_stop", LeaseSeconds: 30})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !ok {
+					t.Fatal("claim ok = false")
+				}
+				if _, err := svc.StopRun(context.Background(), ident, run.ID); err != nil {
+					t.Fatal(err)
+				}
+				provider := &capturingProvider{config: ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: "https://example.test/v1", APIKey: "key", Model: "model", Enabled: true}}
+				if err := (QueuedRunRouter{Gateway: NewGateway(svc, nil, []Provider{provider})}).Run(context.Background(), claimedRun, job); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				if _, _, err := svc.DenyToolCall(context.Background(), ident, thread.ID, run.ID, "tc_write_1"); err != nil {
+					t.Fatal(err)
+				}
+				provider := &capturingProvider{config: ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: "https://example.test/v1", APIKey: "key", Model: "model", Enabled: true}}
+				worker := NewWorker(svc, nil, QueuedRunRouter{Gateway: NewGateway(svc, nil, []Provider{provider})})
+				worker.WorkerID = "worker_workspace_denied"
+				ok, err := worker.ProcessOne(context.Background())
+				if err != nil {
+					t.Fatal(err)
+				}
+				if ok {
+					t.Fatal("ProcessOne() ok = true, want no queued continuation")
+				}
+			}
+			if _, err := os.Stat(filepath.Join(root, "blocked.txt")); err == nil {
+				t.Fatal("mutation wrote file")
+			}
+		})
+	}
+}
+
+func TestWorkerDoesNotExecuteSandboxCommandAfterStopOrDenied(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		stop bool
+	}{
+		{name: "stopped", stop: true},
+		{name: "denied", stop: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			t.Setenv("LOOMI_WORKSPACE_ROOT", root)
+			svc := productdata.NewMemoryService()
+			ident := identity.LocalDevIdentity()
+			if _, err := svc.SyncBuiltInPersonas(context.Background(), ident, productdata.BuiltInPersonas()); err != nil {
+				t.Fatal(err)
+			}
+			thread, err := svc.CreateThread(context.Background(), ident, productdata.CreateThreadInput{Title: "Sandbox exec", Mode: productdata.ThreadModeWork})
+			if err != nil {
+				t.Fatal(err)
+			}
+			message, _, err := svc.CreateMessage(context.Background(), ident, thread.ID, productdata.CreateMessageInput{Content: "run command"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			run, err := svc.StartRun(context.Background(), ident, thread.ID, productdata.StartRunInput{Source: productdata.RunSourceModelGateway, MessageID: message.ID, ProviderID: "custom", Model: "model"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := svc.RecordToolCallRequest(context.Background(), ident, run.ID, productdata.RecordToolCallRequestInput{ToolCallID: "tc_exec_1", ToolName: productdata.ToolNameSandboxExecCommand, ArgumentsSummary: map[string]any{"argv": []any{"pwd"}}, ArgumentsHash: "hash_exec_1", ApprovalStatus: productdata.ToolCallApprovalRequired, ExecutionStatus: productdata.ToolCallExecutionBlocked}); err != nil {
+				t.Fatal(err)
+			}
+			if tc.stop {
+				if _, _, err := svc.ApproveToolCall(context.Background(), ident, thread.ID, run.ID, "tc_exec_1"); err != nil {
+					t.Fatal(err)
+				}
+				job, claimedRun, ok, err := svc.ClaimBackgroundJob(context.Background(), ident, productdata.ClaimBackgroundJobInput{WorkerID: "worker_sandbox_stop", LeaseSeconds: 30})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !ok {
+					t.Fatal("claim ok = false")
+				}
+				if _, err := svc.StopRun(context.Background(), ident, run.ID); err != nil {
+					t.Fatal(err)
+				}
+				provider := &capturingProvider{config: ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: "https://example.test/v1", APIKey: "key", Model: "model", Enabled: true}}
+				if err := (QueuedRunRouter{Gateway: NewGateway(svc, nil, []Provider{provider})}).Run(context.Background(), claimedRun, job); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				if _, _, err := svc.DenyToolCall(context.Background(), ident, thread.ID, run.ID, "tc_exec_1"); err != nil {
+					t.Fatal(err)
+				}
+				provider := &capturingProvider{config: ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: "https://example.test/v1", APIKey: "key", Model: "model", Enabled: true}}
+				worker := NewWorker(svc, nil, QueuedRunRouter{Gateway: NewGateway(svc, nil, []Provider{provider})})
+				worker.WorkerID = "worker_sandbox_denied"
+				ok, err := worker.ProcessOne(context.Background())
+				if err != nil {
+					t.Fatal(err)
+				}
+				if ok {
+					t.Fatal("ProcessOne() ok = true, want no queued continuation")
+				}
+			}
+		})
+	}
+}
+
+func TestWorkerDoesNotExecuteLSPToolAfterStopOrDenied(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		stop bool
+	}{
+		{name: "stopped", stop: true},
+		{name: "denied", stop: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := createLSPFixture(t)
+			t.Setenv("LOOMI_WORKSPACE_ROOT", root)
+			svc := productdata.NewMemoryService()
+			ident := identity.LocalDevIdentity()
+			if _, err := svc.SyncBuiltInPersonas(context.Background(), ident, productdata.BuiltInPersonas()); err != nil {
+				t.Fatal(err)
+			}
+			thread, err := svc.CreateThread(context.Background(), ident, productdata.CreateThreadInput{Title: "LSP no exec", Mode: productdata.ThreadModeWork})
+			if err != nil {
+				t.Fatal(err)
+			}
+			message, _, err := svc.CreateMessage(context.Background(), ident, thread.ID, productdata.CreateMessageInput{Content: "find symbols"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			run, err := svc.StartRun(context.Background(), ident, thread.ID, productdata.StartRunInput{Source: productdata.RunSourceModelGateway, MessageID: message.ID, ProviderID: "custom", Model: "model"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := svc.RecordToolCallRequest(context.Background(), ident, run.ID, productdata.RecordToolCallRequestInput{ToolCallID: "tc_lsp_2", ToolName: productdata.ToolNameLSPSymbols, ArgumentsSummary: map[string]any{"path": "missing.go"}, ArgumentsHash: "hash_lsp_2", ApprovalStatus: productdata.ToolCallApprovalRequired, ExecutionStatus: productdata.ToolCallExecutionBlocked}); err != nil {
+				t.Fatal(err)
+			}
+			if tc.stop {
+				if _, _, err := svc.ApproveToolCall(context.Background(), ident, thread.ID, run.ID, "tc_lsp_2"); err != nil {
+					t.Fatal(err)
+				}
+				job, claimedRun, ok, err := svc.ClaimBackgroundJob(context.Background(), ident, productdata.ClaimBackgroundJobInput{WorkerID: "worker_lsp_stop", LeaseSeconds: 30})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !ok {
+					t.Fatal("claim ok = false")
+				}
+				if _, err := svc.StopRun(context.Background(), ident, run.ID); err != nil {
+					t.Fatal(err)
+				}
+				provider := &capturingProvider{config: ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: "https://example.test/v1", APIKey: "key", Model: "model", Enabled: true}}
+				if err := (QueuedRunRouter{Gateway: NewGateway(svc, nil, []Provider{provider})}).Run(context.Background(), claimedRun, job); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				if _, _, err := svc.DenyToolCall(context.Background(), ident, thread.ID, run.ID, "tc_lsp_2"); err != nil {
+					t.Fatal(err)
+				}
+				provider := &capturingProvider{config: ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: "https://example.test/v1", APIKey: "key", Model: "model", Enabled: true}}
+				worker := NewWorker(svc, nil, QueuedRunRouter{Gateway: NewGateway(svc, nil, []Provider{provider})})
+				worker.WorkerID = "worker_lsp_denied"
+				ok, err := worker.ProcessOne(context.Background())
+				if err != nil {
+					t.Fatal(err)
+				}
+				if ok {
+					t.Fatal("ProcessOne() ok = true, want no queued continuation")
+				}
+			}
+			call, err := svc.GetToolCall(context.Background(), ident, thread.ID, run.ID, "tc_lsp_2")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if call.ExecutionStatus == productdata.ToolCallExecutionExecuting || call.ExecutionStatus == productdata.ToolCallExecutionFailed || call.ExecutionStatus == productdata.ToolCallExecutionSucceeded {
+				t.Fatalf("lsp tool executed unexpectedly: %+v", call)
+			}
+		})
+	}
+}
+
+func TestQueuedRunRouterDoesNotExecuteApprovedToolAfterStop(t *testing.T) {
+	svc, ident, thread, _, run := setupWorkspaceContinuationRun(t)
+	if _, _, err := svc.RecordToolCallRequest(context.Background(), ident, run.ID, productdata.RecordToolCallRequestInput{ToolCallID: "tc_read_2", ToolName: productdata.ToolNameWorkspaceRead, ArgumentsSummary: map[string]any{"path": "safe.txt", "limit": 128}, ArgumentsHash: "hash_read_2", ApprovalStatus: productdata.ToolCallApprovalRequired, ExecutionStatus: productdata.ToolCallExecutionBlocked}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.ApproveToolCall(context.Background(), ident, thread.ID, run.ID, "tc_read_2"); err != nil {
+		t.Fatal(err)
+	}
+	job, claimedRun, ok, err := svc.ClaimBackgroundJob(context.Background(), ident, productdata.ClaimBackgroundJobInput{WorkerID: "worker_tool", LeaseSeconds: 30})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("claim ok = false")
+	}
+	if _, err := svc.StopRun(context.Background(), ident, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	provider := &capturingProvider{config: ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: "https://example.test/v1", APIKey: "key", Model: "model", Enabled: true}, events: []ProviderEvent{{Type: ProviderEventCompleted, Text: "should not continue"}}}
+	router := QueuedRunRouter{Gateway: NewGateway(svc, nil, []Provider{provider})}
+
+	if err := router.Run(context.Background(), claimedRun, job); err != nil {
+		t.Fatal(err)
+	}
+	call, err := svc.GetToolCall(context.Background(), ident, thread.ID, run.ID, "tc_read_2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if call.ExecutionStatus != productdata.ToolCallExecutionNotStarted {
+		t.Fatalf("call = %+v", call)
+	}
+	if provider.request.ThreadID != "" {
+		t.Fatalf("provider was called: %+v", provider.request)
+	}
+	got, err := svc.GetRun(context.Background(), ident, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != productdata.RunStatusStopped {
+		t.Fatalf("run = %+v", got)
+	}
+	events, err := svc.ListRunEvents(context.Background(), ident, run.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range events {
+		if event.Type == productdata.EventToolCallExecuting || event.Type == productdata.EventRunFailed || event.Type == productdata.EventJobAttemptFailed {
+			t.Fatalf("stopped approved tool path wrote execution/failure event: %+v", events)
+		}
 	}
 }
 

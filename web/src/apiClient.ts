@@ -1,4 +1,4 @@
-import type { LocalProviderDetection, MemoryAuditItem, MemoryEntry, MemoryFilters, Message, Persona, ProviderCapability, Run, Thread, ToolCall, ToolCatalogItem, WorkerQueueDiagnostics } from './domain'
+import type { LocalProviderDetection, MCPServerStatus, MemoryAuditItem, MemoryEntry, MemoryFilters, Message, Persona, ProviderCapability, Run, Thread, ToolCall, ToolCatalogItem, WorkerQueueDiagnostics } from './domain'
 import { mockApiClient } from './mockApiClient'
 import { hasRealApiBase, realApiClient } from './realApiClient'
 import type { ExecutionAdapter } from './runtime/executionAdapter'
@@ -14,6 +14,7 @@ export type ApiClient = {
   listPersonas?(): Promise<Persona[]>
   listModelProviders?(): Promise<ProviderCapability[]>
   listToolCatalog?(): Promise<ToolCatalogItem[]>
+  listMCPServers?(): Promise<MCPServerStatus[]>
   listLocalProviderDetections?(): Promise<LocalProviderDetection[]>
   enableLocalProvider?(providerId: string): Promise<ProviderCapability>
   disableLocalProvider?(providerId: string): Promise<ProviderCapability>
@@ -29,7 +30,7 @@ export type ApiClient = {
   deleteMemoryEntry?(entryId: string, filters?: MemoryFilters): Promise<void>
   listMemoryAudit?(filters?: MemoryFilters): Promise<MemoryAuditItem[]>
   startRun?(threadId: string, input?: { messageId?: string; source?: Run['source']; providerId?: string; model?: string; personaId?: string }): Promise<Run>
-  subscribeRunEvents?(runId: string, afterSequence: number, onEvent: (event: Run['events'][number]) => void, onError: () => void): () => void
+  subscribeRunEvents?(runId: string, afterSequence: number, onEvent: (event: Run['events'][number]) => void, onError: () => void, onClosed?: () => void): () => void
   createThread?(title: string, mode: Thread['mode']): Promise<Thread>
   updateThread?(threadId: string, input: Partial<Pick<Thread, 'title' | 'mode'>>): Promise<Thread>
   archiveThread?(threadId: string): Promise<Thread>

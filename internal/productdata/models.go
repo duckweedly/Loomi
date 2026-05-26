@@ -163,6 +163,7 @@ const (
 	EventMemoryWriteApproved      = "memory_write_approved"
 	EventMemoryWriteDenied        = "memory_write_denied"
 	EventMemoryEntryDeleted       = "memory_entry_deleted"
+	EventWorkTodoUpdated          = "work.todo.updated"
 
 	CodeInvalidRequest        Code = "invalid_request"
 	CodeThreadNotFound        Code = "thread_not_found"
@@ -172,46 +173,74 @@ const (
 	CodeProviderMisconfigured Code = "provider_misconfigured"
 	CodeMethodNotAllowed      Code = "method_not_allowed"
 	CodeMemoryNotFound        Code = "memory_not_found"
+	CodeArtifactNotFound      Code = "artifact_not_found"
 	CodeInternalError         Code = "internal_error"
 )
 
 const (
-	MaxThreadTitleLength                               = 120
-	MaxClientMessageIDLength                           = 120
-	ToolNameCurrentTime                                = "runtime.get_current_time"
-	ToolSourceInternal                                 = "internal"
-	ToolSourceMCP                                      = "mcp"
-	ToolCatalogSourceBuiltin        ToolCatalogSource  = "builtin"
-	ToolCatalogSourceMCP            ToolCatalogSource  = "mcp"
-	ToolCatalogGroupRuntime         ToolCatalogGroup   = "runtime"
-	ToolCatalogGroupMCP             ToolCatalogGroup   = "mcp"
-	ToolCatalogGroupWorkspace       ToolCatalogGroup   = "workspace"
-	ToolCatalogGroupArtifact        ToolCatalogGroup   = "artifact"
-	ToolCatalogGroupSandbox         ToolCatalogGroup   = "sandbox"
-	ToolCatalogGroupWeb             ToolCatalogGroup   = "web"
-	ToolCatalogGroupBrowser         ToolCatalogGroup   = "browser"
-	ToolRiskLow                     ToolRiskLevel      = "low"
-	ToolRiskMedium                  ToolRiskLevel      = "medium"
-	ToolRiskHigh                    ToolRiskLevel      = "high"
-	ToolApprovalAlwaysRequired      ToolApprovalPolicy = "always_required"
-	ToolApprovalReadOnly            ToolApprovalPolicy = "read_only"
-	ToolApprovalDisabled            ToolApprovalPolicy = "disabled"
-	ToolExecutionStateExecutable    ToolExecutionState = "executable"
-	ToolExecutionStateDisabled      ToolExecutionState = "disabled"
-	ToolExecutionStateNotDiscovered ToolExecutionState = "not_discovered"
-	ToolExecutionStateNotAllowed    ToolExecutionState = "not_allowed"
-	ToolExecutionStateNonExecutable ToolExecutionState = "non_executable"
-	MemoryScopeUser                 MemoryScopeType    = "user"
-	MemoryScopeThread               MemoryScopeType    = "thread"
-	MemoryEntryApproved             MemoryEntryStatus  = "approved"
-	MemoryEntryTombstoned           MemoryEntryStatus  = "tombstoned"
-	MemoryEntryDisabled             MemoryEntryStatus  = "disabled"
-	MemorySafetySafe                MemorySafetyState  = "safe"
-	MemorySafetyRedacted            MemorySafetyState  = "redacted"
-	MemorySafetyBlocked             MemorySafetyState  = "blocked"
-	MemoryWritePending              MemoryWriteStatus  = "pending"
-	MemoryWriteApproved             MemoryWriteStatus  = "approved"
-	MemoryWriteDenied               MemoryWriteStatus  = "denied"
+	MaxThreadTitleLength                                = 120
+	MaxClientMessageIDLength                            = 120
+	ToolNameCurrentTime                                 = "runtime.get_current_time"
+	ToolNameWorkspaceGlob                               = "workspace.glob"
+	ToolNameWorkspaceGrep                               = "workspace.grep"
+	ToolNameWorkspaceRead                               = "workspace.read"
+	ToolNameWorkspaceWriteFile                          = "workspace.write_file"
+	ToolNameWorkspaceEdit                               = "workspace.edit"
+	ToolNameSandboxExecCommand                          = "sandbox.exec_command"
+	ToolNameLSPDiagnostics                              = "lsp.diagnostics"
+	ToolNameLSPSymbols                                  = "lsp.symbols"
+	ToolNameLSPReferences                               = "lsp.references"
+	ToolNameWebFetch                                    = "web.fetch"
+	ToolNameBrowserOpen                                 = "browser.open"
+	ToolNameBrowserSnapshot                             = "browser.snapshot"
+	ToolNameBrowserClickLink                            = "browser.click_link"
+	ToolNameArtifactCreateText                          = "artifact.create_text"
+	ToolNameArtifactRead                                = "artifact.read"
+	ToolNameArtifactList                                = "artifact.list"
+	ToolNameAgentSpawn                                  = "agent.spawn"
+	ToolNameAgentList                                   = "agent.list"
+	ToolNameAgentComplete                               = "agent.complete"
+	ToolSourceInternal                                  = "internal"
+	ToolSourceMCP                                       = "mcp"
+	ToolCatalogSourceBuiltin         ToolCatalogSource  = "builtin"
+	ToolCatalogSourceMCP             ToolCatalogSource  = "mcp"
+	ToolCatalogGroupRuntime          ToolCatalogGroup   = "runtime"
+	ToolCatalogGroupMCP              ToolCatalogGroup   = "mcp"
+	ToolCatalogGroupWorkspace        ToolCatalogGroup   = "workspace"
+	ToolCatalogGroupArtifact         ToolCatalogGroup   = "artifact"
+	ToolCatalogGroupSandbox          ToolCatalogGroup   = "sandbox"
+	ToolCatalogGroupLSP              ToolCatalogGroup   = "lsp"
+	ToolCatalogGroupWeb              ToolCatalogGroup   = "web"
+	ToolCatalogGroupBrowser          ToolCatalogGroup   = "browser"
+	ToolCatalogGroupAgent            ToolCatalogGroup   = "agent"
+	ToolRiskLow                      ToolRiskLevel      = "low"
+	ToolRiskMedium                   ToolRiskLevel      = "medium"
+	ToolRiskHigh                     ToolRiskLevel      = "high"
+	ToolApprovalAlwaysRequired       ToolApprovalPolicy = "always_required"
+	ToolApprovalReadOnly             ToolApprovalPolicy = "read_only"
+	ToolApprovalDisabled             ToolApprovalPolicy = "disabled"
+	ToolExecutionStateExecutable     ToolExecutionState = "executable"
+	ToolExecutionStateDisabled       ToolExecutionState = "disabled"
+	ToolExecutionStateNotDiscovered  ToolExecutionState = "not_discovered"
+	ToolExecutionStateNotAllowed     ToolExecutionState = "not_allowed"
+	ToolExecutionStateNonExecutable  ToolExecutionState = "non_executable"
+	DefaultMaxBoundedToolCallsPerRun                    = 3
+	LoopMetadataKeyIndex                                = "loop_index"
+	LoopMetadataKeyMax                                  = "loop_max"
+	MaxWorkTodoItems                                    = 8
+	MaxWorkTodoTitleLength                              = 160
+	MaxWorkTodoSummaryLength                            = 240
+	MemoryScopeUser                  MemoryScopeType    = "user"
+	MemoryScopeThread                MemoryScopeType    = "thread"
+	MemoryEntryApproved              MemoryEntryStatus  = "approved"
+	MemoryEntryTombstoned            MemoryEntryStatus  = "tombstoned"
+	MemoryEntryDisabled              MemoryEntryStatus  = "disabled"
+	MemorySafetySafe                 MemorySafetyState  = "safe"
+	MemorySafetyRedacted             MemorySafetyState  = "redacted"
+	MemorySafetyBlocked              MemorySafetyState  = "blocked"
+	MemoryWritePending               MemoryWriteStatus  = "pending"
+	MemoryWriteApproved              MemoryWriteStatus  = "approved"
+	MemoryWriteDenied                MemoryWriteStatus  = "denied"
 )
 
 type ProductError struct {
@@ -845,6 +874,76 @@ type RecordToolCallRequestInput struct {
 	ExecutionStatus     ToolCallExecutionStatus
 }
 
+type Artifact struct {
+	ID           string
+	ThreadID     string
+	RunID        string
+	Title        string
+	ArtifactType string
+	Content      string
+	ContentBytes int
+	TextExcerpt  string
+	Truncated    bool
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+}
+
+type AgentTaskStatus string
+
+const (
+	AgentTaskStatusSpawned   AgentTaskStatus = "spawned"
+	AgentTaskStatusCompleted AgentTaskStatus = "completed"
+)
+
+type AgentTask struct {
+	ID            string
+	ThreadID      string
+	RunID         string
+	Role          string
+	Goal          string
+	Status        AgentTaskStatus
+	ResultSummary string
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+}
+
+type SpawnAgentTaskInput struct {
+	ThreadID string
+	RunID    string
+	Role     string
+	Goal     string
+}
+
+type ListAgentTasksInput struct {
+	ThreadID string
+	Limit    int
+}
+
+type CompleteAgentTaskInput struct {
+	ThreadID      string
+	TaskID        string
+	ResultSummary string
+}
+
+type CreateArtifactInput struct {
+	ThreadID string
+	RunID    string
+	Title    string
+	Content  string
+	MaxBytes int
+}
+
+type ReadArtifactInput struct {
+	ThreadID   string
+	ArtifactID string
+	MaxBytes   int
+}
+
+type ListArtifactsInput struct {
+	ThreadID string
+	Limit    int
+}
+
 type BackgroundJobRecovery struct {
 	Job       BackgroundJob
 	Run       Run
@@ -874,6 +973,8 @@ func NewToolCallID() string       { return prefixedID("tool") }
 func NewPersonaID() string        { return prefixedID("persona") }
 func NewMemoryEntryID() string    { return prefixedID("mem") }
 func NewMemoryProposalID() string { return prefixedID("memprop") }
+func NewArtifactID() string       { return prefixedID("art") }
+func NewAgentTaskID() string      { return prefixedID("agt") }
 
 func prefixedID(prefix string) string {
 	buf := make([]byte, 6)
@@ -927,7 +1028,7 @@ func ValidateToolCallRequestInput(input RecordToolCallRequestInput) (RecordToolC
 	if input.ToolCallID == "" || input.ToolName == "" {
 		return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Tool call id and name are required.")
 	}
-	if input.ToolName != ToolNameCurrentTime && !IsMCPToolName(input.ToolName) {
+	if input.ToolName != ToolNameCurrentTime && !IsWorkspaceToolName(input.ToolName) && !IsSandboxToolName(input.ToolName) && !IsLSPToolName(input.ToolName) && !IsWebToolName(input.ToolName) && !IsBrowserToolName(input.ToolName) && !IsArtifactToolName(input.ToolName) && !IsAgentToolName(input.ToolName) && !IsMCPToolName(input.ToolName) {
 		return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Tool is not supported.")
 	}
 	if input.ApprovalStatus != ToolCallApprovalRequired || input.ExecutionStatus != ToolCallExecutionBlocked {
@@ -948,6 +1049,27 @@ func ValidateToolCallRequestInput(input RecordToolCallRequestInput) (RecordToolC
 		}
 		return input, nil
 	}
+	if IsWorkspaceToolName(input.ToolName) {
+		return validateWorkspaceToolCallArguments(input)
+	}
+	if IsSandboxToolName(input.ToolName) {
+		return validateSandboxToolCallArguments(input)
+	}
+	if IsLSPToolName(input.ToolName) {
+		return validateLSPToolCallArguments(input)
+	}
+	if IsWebToolName(input.ToolName) {
+		return validateWebToolCallArguments(input)
+	}
+	if IsBrowserToolName(input.ToolName) {
+		return validateBrowserToolCallArguments(input)
+	}
+	if IsArtifactToolName(input.ToolName) {
+		return validateArtifactToolCallArguments(input)
+	}
+	if IsAgentToolName(input.ToolName) {
+		return validateAgentToolCallArguments(input)
+	}
 	for key := range input.ArgumentsSummary {
 		if key != "timezone" {
 			return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Tool call argument is not supported.")
@@ -963,6 +1085,386 @@ func ValidateToolCallRequestInput(input RecordToolCallRequestInput) (RecordToolC
 		return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Tool call timezone must be UTC.")
 	}
 	return input, nil
+}
+
+func IsWorkspaceToolName(name string) bool {
+	switch strings.TrimSpace(name) {
+	case ToolNameWorkspaceGlob, ToolNameWorkspaceGrep, ToolNameWorkspaceRead, ToolNameWorkspaceWriteFile, ToolNameWorkspaceEdit:
+		return true
+	default:
+		return false
+	}
+}
+
+func IsSandboxToolName(name string) bool {
+	switch strings.TrimSpace(name) {
+	case ToolNameSandboxExecCommand:
+		return true
+	default:
+		return false
+	}
+}
+
+func IsLSPToolName(name string) bool {
+	switch strings.TrimSpace(name) {
+	case ToolNameLSPDiagnostics, ToolNameLSPSymbols, ToolNameLSPReferences:
+		return true
+	default:
+		return false
+	}
+}
+
+func IsWebToolName(name string) bool {
+	switch strings.TrimSpace(name) {
+	case ToolNameWebFetch:
+		return true
+	default:
+		return false
+	}
+}
+
+func IsBrowserToolName(name string) bool {
+	switch strings.TrimSpace(name) {
+	case ToolNameBrowserOpen, ToolNameBrowserSnapshot, ToolNameBrowserClickLink:
+		return true
+	default:
+		return false
+	}
+}
+
+func IsArtifactToolName(name string) bool {
+	switch strings.TrimSpace(name) {
+	case ToolNameArtifactCreateText, ToolNameArtifactRead, ToolNameArtifactList:
+		return true
+	default:
+		return false
+	}
+}
+
+func IsAgentToolName(name string) bool {
+	switch strings.TrimSpace(name) {
+	case ToolNameAgentSpawn, ToolNameAgentList, ToolNameAgentComplete:
+		return true
+	default:
+		return false
+	}
+}
+
+func validateWorkspaceToolCallArguments(input RecordToolCallRequestInput) (RecordToolCallRequestInput, error) {
+	allowed := map[string]map[string]struct{}{
+		ToolNameWorkspaceGlob:      {"pattern": {}, "path": {}, "limit": {}},
+		ToolNameWorkspaceGrep:      {"query": {}, "pattern": {}, "path": {}, "include": {}, "case_sensitive": {}, "limit": {}},
+		ToolNameWorkspaceRead:      {"path": {}, "offset": {}, "limit": {}, "max_bytes": {}},
+		ToolNameWorkspaceWriteFile: {"path": {}, "content": {}, "max_bytes": {}},
+		ToolNameWorkspaceEdit:      {"path": {}, "old_text": {}, "new_text": {}, "max_bytes": {}},
+	}
+	for key := range input.ArgumentsSummary {
+		if _, ok := allowed[input.ToolName][key]; !ok {
+			return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Tool call argument is not supported.")
+		}
+	}
+	switch input.ToolName {
+	case ToolNameWorkspaceGlob:
+		if strings.TrimSpace(workspaceArgumentString(input.ArgumentsSummary, "pattern")) == "" {
+			return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Workspace glob pattern is required.")
+		}
+	case ToolNameWorkspaceGrep:
+		query := workspaceArgumentString(input.ArgumentsSummary, "query")
+		if query == "" {
+			query = workspaceArgumentString(input.ArgumentsSummary, "pattern")
+		}
+		if strings.TrimSpace(query) == "" {
+			return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Workspace grep query is required.")
+		}
+	case ToolNameWorkspaceRead:
+		if strings.TrimSpace(workspaceArgumentString(input.ArgumentsSummary, "path")) == "" {
+			return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Workspace read path is required.")
+		}
+	case ToolNameWorkspaceWriteFile:
+		if strings.TrimSpace(workspaceArgumentString(input.ArgumentsSummary, "path")) == "" {
+			return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Workspace write path is required.")
+		}
+	case ToolNameWorkspaceEdit:
+		if strings.TrimSpace(workspaceArgumentString(input.ArgumentsSummary, "path")) == "" {
+			return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Workspace edit path is required.")
+		}
+		if workspaceArgumentString(input.ArgumentsSummary, "old_text") == "" {
+			return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Workspace edit old text is required.")
+		}
+	}
+	return input, nil
+}
+
+func validateSandboxToolCallArguments(input RecordToolCallRequestInput) (RecordToolCallRequestInput, error) {
+	allowed := map[string]struct{}{"argv": {}, "cwd": {}, "timeout_ms": {}, "max_output_bytes": {}}
+	for key := range input.ArgumentsSummary {
+		if _, ok := allowed[key]; !ok {
+			return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Tool call argument is not supported.")
+		}
+	}
+	argv, ok := input.ArgumentsSummary["argv"]
+	if !ok || !sandboxArgumentStringSliceNonEmpty(argv) {
+		return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Sandbox exec argv is required.")
+	}
+	if !sandboxArgumentUsesTinyAllowlist(argv) {
+		return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Sandbox exec command is not allowed.")
+	}
+	return input, nil
+}
+
+func validateLSPToolCallArguments(input RecordToolCallRequestInput) (RecordToolCallRequestInput, error) {
+	allowed := map[string]struct{}{"path": {}, "query": {}, "line": {}, "column": {}, "include_declaration": {}, "language": {}, "limit": {}}
+	for key := range input.ArgumentsSummary {
+		if _, ok := allowed[key]; !ok {
+			return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Tool call argument is not supported.")
+		}
+	}
+	if strings.TrimSpace(workspaceArgumentString(input.ArgumentsSummary, "path")) == "" {
+		return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "LSP path is required.")
+	}
+	if input.ToolName == ToolNameLSPReferences {
+		if !positiveNumberArgument(input.ArgumentsSummary["line"]) || !positiveNumberArgument(input.ArgumentsSummary["column"]) {
+			return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "LSP references line and column are required.")
+		}
+	}
+	return input, nil
+}
+
+func validateWebToolCallArguments(input RecordToolCallRequestInput) (RecordToolCallRequestInput, error) {
+	allowed := map[string]struct{}{"url": {}, "max_bytes": {}, "timeout_ms": {}}
+	for key := range input.ArgumentsSummary {
+		if _, ok := allowed[key]; !ok {
+			return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Tool call argument is not supported.")
+		}
+	}
+	url, ok := input.ArgumentsSummary["url"].(string)
+	if !ok || strings.TrimSpace(url) == "" {
+		return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Web fetch URL is required.")
+	}
+	input.ArgumentsSummary["url"] = strings.TrimSpace(url)
+	return input, nil
+}
+
+func validateBrowserToolCallArguments(input RecordToolCallRequestInput) (RecordToolCallRequestInput, error) {
+	allowed := map[string]map[string]struct{}{
+		ToolNameBrowserOpen:      {"url": {}, "max_bytes": {}, "timeout_ms": {}},
+		ToolNameBrowserSnapshot:  {"session_id": {}},
+		ToolNameBrowserClickLink: {"session_id": {}, "link_index": {}, "max_bytes": {}, "timeout_ms": {}},
+	}
+	for key := range input.ArgumentsSummary {
+		if _, ok := allowed[input.ToolName][key]; !ok {
+			return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Tool call argument is not supported.")
+		}
+	}
+	switch input.ToolName {
+	case ToolNameBrowserOpen:
+		url, ok := input.ArgumentsSummary["url"].(string)
+		if !ok || strings.TrimSpace(url) == "" {
+			return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Browser URL is required.")
+		}
+		input.ArgumentsSummary["url"] = strings.TrimSpace(url)
+	case ToolNameBrowserSnapshot:
+		sessionID, ok := input.ArgumentsSummary["session_id"].(string)
+		if !ok || strings.TrimSpace(sessionID) == "" {
+			return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Browser session id is required.")
+		}
+		input.ArgumentsSummary["session_id"] = strings.TrimSpace(sessionID)
+	case ToolNameBrowserClickLink:
+		sessionID, ok := input.ArgumentsSummary["session_id"].(string)
+		if !ok || strings.TrimSpace(sessionID) == "" {
+			return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Browser session id is required.")
+		}
+		input.ArgumentsSummary["session_id"] = strings.TrimSpace(sessionID)
+		if _, ok := input.ArgumentsSummary["link_index"]; !ok {
+			return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Browser link index is required.")
+		}
+	}
+	return input, nil
+}
+
+func validateArtifactToolCallArguments(input RecordToolCallRequestInput) (RecordToolCallRequestInput, error) {
+	allowed := map[string]map[string]struct{}{
+		ToolNameArtifactCreateText: {"title": {}, "content": {}, "max_bytes": {}},
+		ToolNameArtifactRead:       {"artifact_id": {}, "max_bytes": {}},
+		ToolNameArtifactList:       {"limit": {}},
+	}
+	for key := range input.ArgumentsSummary {
+		if _, ok := allowed[input.ToolName][key]; !ok {
+			return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Tool call argument is not supported.")
+		}
+	}
+	switch input.ToolName {
+	case ToolNameArtifactCreateText:
+		title, ok := input.ArgumentsSummary["title"].(string)
+		if !ok || strings.TrimSpace(title) == "" {
+			return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Artifact title is required.")
+		}
+		content, ok := input.ArgumentsSummary["content"].(string)
+		if !ok || strings.TrimSpace(content) == "" {
+			return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Artifact content is required.")
+		}
+		input.ArgumentsSummary["title"] = strings.TrimSpace(title)
+	case ToolNameArtifactRead:
+		artifactID, ok := input.ArgumentsSummary["artifact_id"].(string)
+		if !ok || strings.TrimSpace(artifactID) == "" {
+			return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Artifact id is required.")
+		}
+		input.ArgumentsSummary["artifact_id"] = strings.TrimSpace(artifactID)
+	}
+	return input, nil
+}
+
+func validateAgentToolCallArguments(input RecordToolCallRequestInput) (RecordToolCallRequestInput, error) {
+	allowed := map[string]map[string]struct{}{
+		ToolNameAgentSpawn:    {"role": {}, "goal": {}},
+		ToolNameAgentList:     {"limit": {}},
+		ToolNameAgentComplete: {"task_id": {}, "result_summary": {}},
+	}
+	for key := range input.ArgumentsSummary {
+		if _, ok := allowed[input.ToolName][key]; !ok {
+			return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Tool call argument is not supported.")
+		}
+	}
+	switch input.ToolName {
+	case ToolNameAgentSpawn:
+		role, ok := input.ArgumentsSummary["role"].(string)
+		if !ok || strings.TrimSpace(role) == "" {
+			return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Agent role is required.")
+		}
+		goal, ok := input.ArgumentsSummary["goal"].(string)
+		if !ok || strings.TrimSpace(goal) == "" {
+			return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Agent goal is required.")
+		}
+		role = strings.TrimSpace(role)
+		goal = strings.TrimSpace(goal)
+		if !isSupportedAgentRole(role) {
+			return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Agent role is not supported.")
+		}
+		if len([]rune(role)) > 64 || len([]rune(goal)) > 4000 {
+			return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Agent task fields are too large.")
+		}
+		input.ArgumentsSummary["role"] = role
+		input.ArgumentsSummary["goal"] = goal
+	case ToolNameAgentComplete:
+		taskID, ok := input.ArgumentsSummary["task_id"].(string)
+		if !ok || strings.TrimSpace(taskID) == "" {
+			return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Agent task id is required.")
+		}
+		summary, ok := input.ArgumentsSummary["result_summary"].(string)
+		if !ok || strings.TrimSpace(summary) == "" {
+			return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Agent result summary is required.")
+		}
+		taskID = strings.TrimSpace(taskID)
+		summary = strings.TrimSpace(summary)
+		if len([]rune(summary)) > 4000 {
+			return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Agent result summary is too large.")
+		}
+		input.ArgumentsSummary["task_id"] = taskID
+		input.ArgumentsSummary["result_summary"] = summary
+	}
+	return input, nil
+}
+
+func isSupportedAgentRole(role string) bool {
+	switch strings.TrimSpace(role) {
+	case "researcher", "implementer", "reviewer":
+		return true
+	default:
+		return false
+	}
+}
+
+func positiveNumberArgument(value any) bool {
+	switch typed := value.(type) {
+	case int:
+		return typed > 0
+	case int64:
+		return typed > 0
+	case float64:
+		return typed >= 1 && typed == float64(int64(typed))
+	default:
+		return false
+	}
+}
+
+func sandboxArgumentStringSliceNonEmpty(value any) bool {
+	switch typed := value.(type) {
+	case []string:
+		if len(typed) == 0 {
+			return false
+		}
+		for _, item := range typed {
+			if strings.TrimSpace(item) == "" {
+				return false
+			}
+		}
+		return true
+	case []any:
+		if len(typed) == 0 {
+			return false
+		}
+		for _, item := range typed {
+			text, ok := item.(string)
+			if !ok || strings.TrimSpace(text) == "" {
+				return false
+			}
+		}
+		return true
+	default:
+		return false
+	}
+}
+
+func sandboxArgumentStringsForValidation(value any) []string {
+	switch typed := value.(type) {
+	case []string:
+		out := make([]string, 0, len(typed))
+		for _, item := range typed {
+			out = append(out, strings.TrimSpace(item))
+		}
+		return out
+	case []any:
+		out := make([]string, 0, len(typed))
+		for _, item := range typed {
+			text, ok := item.(string)
+			if !ok {
+				return nil
+			}
+			out = append(out, strings.TrimSpace(text))
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func sandboxArgumentUsesTinyAllowlist(value any) bool {
+	argv := sandboxArgumentStringsForValidation(value)
+	if len(argv) == 0 || strings.ContainsAny(argv[0], `/\`) {
+		return false
+	}
+	switch strings.ToLower(argv[0]) {
+	case "pwd":
+		return len(argv) == 1
+	case "ls":
+		return len(argv) == 1 || (len(argv) == 2 && argv[1] == ".")
+	case "git":
+		return len(argv) == 2 && argv[1] == "status"
+	default:
+		return false
+	}
+}
+
+func workspaceArgumentString(arguments map[string]any, key string) string {
+	value, ok := arguments[key]
+	if !ok || value == nil {
+		return ""
+	}
+	text, ok := value.(string)
+	if !ok {
+		return ""
+	}
+	return text
 }
 
 func NormalizeRunSource(source RunSource) (RunSource, error) {
@@ -1086,12 +1588,142 @@ func NormalizeRunEventInput(input AppendRunEventInput) (AppendRunEventInput, err
 		input.Content = &content
 	}
 	input.Metadata = RedactEventMetadata(input.Metadata)
+	if input.Type == EventWorkTodoUpdated {
+		input.Metadata = NormalizeWorkTodoMetadata(input.Metadata)
+	}
 	if input.Metadata == nil {
 		input.Metadata = map[string]any{}
 	}
 	input.ErrorCode = strings.TrimSpace(input.ErrorCode)
 	input.ErrorMessage = RedactEventText(strings.TrimSpace(input.ErrorMessage))
 	return input, nil
+}
+
+func NormalizeWorkTodoMetadata(metadata map[string]any) map[string]any {
+	normalized := map[string]any{}
+	items, _ := metadata["todo_items"].([]any)
+	if len(items) == 0 {
+		items, _ = metadata["todoItems"].([]any)
+	}
+	if len(items) > MaxWorkTodoItems {
+		items = items[:MaxWorkTodoItems]
+		normalized["redaction_applied"] = true
+	}
+	todos := make([]any, 0, len(items))
+	for index, raw := range items {
+		item, ok := raw.(map[string]any)
+		if !ok {
+			normalized["redaction_applied"] = true
+			continue
+		}
+		todo, redacted := normalizeWorkTodoItem(item, index)
+		if redacted {
+			normalized["redaction_applied"] = true
+		}
+		todos = append(todos, todo)
+	}
+	normalized["todo_items"] = todos
+	if updatedBy := normalizeTodoUpdatedBy(metadata["updated_by"]); updatedBy != "" {
+		normalized["updated_by"] = updatedBy
+	}
+	if redactionFlag(metadata["redaction_applied"]) {
+		normalized["redaction_applied"] = true
+	}
+	for key := range metadata {
+		switch key {
+		case "todo_items", "todoItems", "updated_by", "updatedBy", "redaction_applied", "redactionApplied":
+		default:
+			normalized["redaction_applied"] = true
+		}
+	}
+	if _, ok := normalized["redaction_applied"]; !ok {
+		normalized["redaction_applied"] = false
+	}
+	return normalized
+}
+
+func normalizeWorkTodoItem(item map[string]any, index int) (map[string]any, bool) {
+	normalized := map[string]any{}
+	redacted := false
+	normalized["id"], redacted = safeTodoString(item["id"], "todo_"+fmt.Sprint(index+1), MaxClientMessageIDLength, redacted)
+	normalized["title"], redacted = safeTodoString(item["title"], "Todo "+fmt.Sprint(index+1), MaxWorkTodoTitleLength, redacted)
+	normalized["status"] = normalizeTodoStatus(item["status"])
+	if summary, nextRedacted := safeTodoString(item["summary"], "", MaxWorkTodoSummaryLength, redacted); summary != "" {
+		normalized["summary"] = summary
+		redacted = nextRedacted
+	} else {
+		redacted = nextRedacted
+	}
+	for key := range item {
+		switch key {
+		case "id", "title", "status", "summary", "redaction_applied", "redactionApplied":
+		default:
+			redacted = true
+		}
+	}
+	if redactionFlag(item["redaction_applied"]) || redactionFlag(item["redactionApplied"]) || redacted {
+		normalized["redaction_applied"] = true
+		redacted = true
+	}
+	return normalized, redacted
+}
+
+func safeTodoString(value any, fallback string, maxLength int, redacted bool) (string, bool) {
+	text := strings.TrimSpace(fmt.Sprint(value))
+	if value == nil || text == "" {
+		text = fallback
+	}
+	if len(text) > maxLength {
+		text = text[:maxLength]
+		redacted = true
+	}
+	safe := RedactEventText(text)
+	if safe != text || isUnsafeTodoText(text) {
+		return "[redacted]", true
+	}
+	return safe, redacted
+}
+
+func isUnsafeTodoText(value string) bool {
+	lower := strings.ToLower(value)
+	if strings.Contains(lower, "http://") || strings.Contains(lower, "https://") || strings.Contains(lower, "file://") || strings.Contains(lower, "/tmp/") || strings.Contains(lower, "../") || strings.Contains(lower, "~/") {
+		return true
+	}
+	for _, marker := range []string{"curl ", "wget ", "bash ", "zsh ", "python ", "node ", "open ", "rm "} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeTodoStatus(value any) string {
+	switch strings.TrimSpace(fmt.Sprint(value)) {
+	case "pending", "running", "completed", "blocked", "failed":
+		return strings.TrimSpace(fmt.Sprint(value))
+	default:
+		return "pending"
+	}
+}
+
+func normalizeTodoUpdatedBy(value any) string {
+	switch strings.TrimSpace(fmt.Sprint(value)) {
+	case "provider", "runtime", "user":
+		return strings.TrimSpace(fmt.Sprint(value))
+	default:
+		return ""
+	}
+}
+
+func redactionFlag(value any) bool {
+	switch typed := value.(type) {
+	case bool:
+		return typed
+	case string:
+		return strings.TrimSpace(strings.ToLower(typed)) == "true"
+	default:
+		return false
+	}
 }
 
 func RedactEventMetadata(metadata map[string]any) map[string]any {

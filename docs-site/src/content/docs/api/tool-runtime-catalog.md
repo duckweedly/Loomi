@@ -34,6 +34,8 @@ MCP candidates use namespaced names such as `mcp.local-smoke.echo` and carry the
 
 The read-only catalog uses the latest successful discovery metadata for each MCP tool name. Because the API cannot prove that the current worker has the matching stdio executor configured, MCP catalog entries are shown as `non_executable` until a run-specific RunContext enables them for broker execution.
 
+M21 also adds builtin workspace entries for `workspace.glob`, `workspace.grep`, and `workspace.read`. They appear under `group=workspace` with `safe_metadata.scope=workspace` and `safe_metadata.read_only=true`; the catalog does not expose the host absolute workspace root.
+
 ## Event Metadata
 
 Tool lifecycle events may include `tool_call_id`, `tool_name`, `tool_source`, `tool_group`, `candidate_schema_hash`, `arguments_summary`, `approval_status`, `execution_status`, `result_summary`, `error_code`, and `error_message`.

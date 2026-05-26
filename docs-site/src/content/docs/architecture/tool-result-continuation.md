@@ -3,9 +3,9 @@ title: Tool Result Continuation
 description: Minimal model continuation boundary after an approved tool result.
 ---
 
-Tool result continuation is the M7 slice after approval-gated tool execution. It lets Loomi take a redacted `tool_call_succeeded` result, feed it back to the configured model provider, and persist one final assistant answer in the same run.
+Tool result continuation is the M7 slice after approval-gated tool execution. It lets Loomi take a redacted `tool_call_succeeded` result, feed it back to the configured model provider, and persist follow-up assistant output in the same run.
 
-The current implementation adds the continuation boundary without adding new tool families. The only supported tool remains `runtime.get_current_time`, and continuation allows only one tool call and one follow-up model request per run.
+The M22 loop foundation starts from the same continuation boundary. Continuation may request another enabled `workspace.*` read tool in Work mode, but every new tool call is persisted, blocks on approval, and re-enters the worker only after approval. Non-workspace tools and Chat-mode continuation still use the original single-tool boundary.
 
 ## Context source
 
@@ -52,7 +52,13 @@ History-first SSE remains unchanged. The second model phase is just another orde
 
 ## Loop limit
 
-Continuation does not support another tool call. If the continuation provider asks for any tool, Loomi records `unsupported_tool_loop` and fails the run. This keeps M7 to one approved tool execution and avoids introducing a multi-step agent loop before the UI, safety policy, and worker state are ready.
+Continuation is bounded to three accepted tool calls per run for the M22 foundation. If the provider asks for a fourth continuation tool, Loomi records `tool_loop_limit_reached` and fails the run without recording or executing the extra call.
+
+Only enabled `workspace.glob`, `workspace.grep`, and `workspace.read` calls can use the bounded continuation path. If the continuation provider asks for `runtime.get_current_time`, MCP, an unknown tool, or any tool outside the run's enabled tool snapshot, Loomi records `unsupported_tool_loop` and fails the run. This keeps the first loop slice read-only, approval-gated, and limited to Work-mode workspace context.
+
+Provider tool call ids are single-use inside a run. If continuation repeats an already-requested `tool_call_id`, Loomi records `duplicate_tool_call_id` and fails the run without duplicating approval events or reusing a terminal projection.
+
+If the user stops a run while it is blocked on approval or after approval but before the resume worker executes the tool, the queued runner treats `stopped` as terminal. It exits without preparing another continuation, executing the approved tool, calling the provider, or writing a worker failure over the stopped run.
 
 ## Draft behavior
 

@@ -3,6 +3,7 @@ import type { Locale } from '../i18n'
 import { getDictionary } from '../i18n'
 import { deriveBackendCapabilityStatus, getBackendCapabilityCopy, getProviderUnavailableWarning, shouldShowProviderUnavailableWarning } from '../runtime/backendCapabilityStatus'
 import { deriveChatCanvasState } from '../runtime/chatCanvasState'
+import { shouldBlockRuntimeSubmit } from '../state'
 import { deriveWorkPlanProjection } from '../workModeProjection'
 import { Composer } from './Composer'
 import { ToolCallCard } from './ToolCallCard'
@@ -145,12 +146,12 @@ export function ChatCanvas({ sidebarCollapsed, thread, messages, run, loading, e
     run,
   })
   const copy = getDictionary(locale).chatCanvas
-  const isWorkModeReadOnly = thread?.mode === 'work'
   const stateCopy = createStateCopy(locale)
-  const composerDisabled = isWorkModeReadOnly || state === 'loading' || state === 'error' || state === 'no-thread' || state === 'backend-unavailable' || state === 'waiting-run' || state === 'running' || state === 'recovering' || state === 'stopping'
-  const composerPlaceholder = isWorkModeReadOnly ? copy.workReadOnlyComposer : state === 'history' || !composerDisabled ? copy.messageLoomi : stateCopy[state].title
-  const providerUnavailableBeforeSend = !isWorkModeReadOnly && shouldShowProviderUnavailableWarning(dataSourceMode, providerCapabilities)
+  const composerDisabled = state === 'loading' || state === 'error' || state === 'no-thread' || state === 'backend-unavailable' || state === 'waiting-run' || state === 'running' || state === 'recovering' || state === 'stopping'
+  const composerPlaceholder = state === 'history' || !composerDisabled ? copy.messageLoomi : stateCopy[state].title
+  const providerUnavailableBeforeSend = shouldShowProviderUnavailableWarning(dataSourceMode, providerCapabilities)
   const providerUnavailableWarning = getProviderUnavailableWarning(providerCapabilities, locale)
+  const activeRun = shouldBlockRuntimeSubmit(run)
   const activeProvider = providerCapabilities.find((provider) => provider.id === 'local_codex' && provider.status === 'available' && provider.executionState === 'supported')
     ?? providerCapabilities.find((provider) => provider.status === 'available' && provider.executionState !== 'unsupported')
   const activeProviderLabel = activeProvider ? `${activeProvider.id} · ${activeProvider.model}` : undefined
@@ -160,7 +161,7 @@ export function ChatCanvas({ sidebarCollapsed, thread, messages, run, loading, e
     backendUnavailable: backendCapability === 'unavailable' || backendUnavailableAttempted || capabilitySignals?.backendUnavailable,
     modelSetupMissing: capabilitySignals?.modelSetupMissing,
     providerUnavailable: providerUnavailableBeforeSend,
-    activeRun: Boolean(run && (run.status === 'pending' || run.status === 'queued' || run.status === 'running' || run.status === 'retrying' || run.status === 'recovering' || run.status === 'blocked_on_tool_approval' || run.status === 'stopping')),
+    activeRun,
     streamDisconnected: Boolean(run && (run.status === 'pending' || run.status === 'queued' || run.status === 'running' || run.status === 'retrying' || run.status === 'recovering' || run.status === 'blocked_on_tool_approval' || run.status === 'stopping') && (capabilitySignals?.streamDisconnected || streamState === 'recoverable_error')),
     runRecovering: run?.status === 'recovering' || run?.assistantDraft?.status === 'recovering',
   })
@@ -187,7 +188,7 @@ export function ChatCanvas({ sidebarCollapsed, thread, messages, run, loading, e
         <span className={`capability-chip ${capabilityStatus}`}>{capabilityCopy.title}</span>
         <span className="capability-detail">{capabilityCopy.detail}</span>
         <span>{streamState}</span>
-        {!isWorkModeReadOnly && (run?.status === 'queued' || run?.status === 'running' || run?.status === 'retrying' || run?.status === 'recovering') && <button className="titlebar-button" onClick={onStopRun}>{copy.stop}</button>}
+        {activeRun && <button className="titlebar-button" onClick={onStopRun}>{copy.stop}</button>}
       </div>
 
       {error && <div className="api-error">{error}</div>}
@@ -233,7 +234,7 @@ export function ChatCanvas({ sidebarCollapsed, thread, messages, run, loading, e
         retryLabel={copy.retry}
         regenerateLabel={copy.regenerate}
         onSubmit={onSendMessage}
-        onStop={isWorkModeReadOnly ? undefined : onStopRun}
+        onStop={onStopRun}
         onRetry={onRetryRun}
         onRegenerate={onRegenerateRun}
       />

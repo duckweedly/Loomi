@@ -11,6 +11,7 @@ const projection: WorkPlanProjection = {
   status: 'running',
   statusDetail: 'Rendering work progress',
   steps: [{ id: 'step-1', title: 'Build projection', status: 'completed' }, { id: 'step-2', title: 'Render view', status: 'running' }],
+  todoSnapshot: { items: [{ id: 'todo-1', title: 'Find candidate files', status: 'completed' }, { id: 'todo-2', title: 'Read selected file', status: 'running', summary: 'Safe metadata only' }], updatedBy: 'runtime', updatedAtEventId: 'evt-todo', redactionApplied: true },
   artifacts: [{ id: 'artifact-1', title: 'Work mode plan', type: 'markdown', sourceThreadId: 'thread-work', sourceRunId: 'run-work', summary: 'Safe metadata preview', createdAt: '2026-05-25', redactionApplied: true }],
   recentEvents: [{ id: 'evt-1', type: 'work.plan.updated', detail: 'Rendering work progress', time: 'Now', status: 'running' }],
 }
@@ -22,6 +23,10 @@ describe('WorkPlanView', () => {
     expect(html).toContain('Ship M16 work mode foundation')
     expect(html).toContain('Build projection')
     expect(html).toContain('Render view')
+    expect(html).toContain('Find candidate files')
+    expect(html).toContain('Read selected file')
+    expect(html).toContain('Safe metadata only')
+    expect(html).toContain('Updated by runtime')
     expect(html).toContain('running')
     expect(html).toContain('Work mode plan')
     expect(html).toContain('artifact-1')
@@ -75,9 +80,70 @@ describe('ChatCanvas Work mode integration', () => {
     expect(html).toContain('Work plan')
     expect(html).toContain('Projected goal')
     expect(html).toContain('Projected step')
-    expect(html).toContain('M16 Work mode is read-only for plan and progress')
     expect(html).toContain('<textarea class="composer-input" disabled=""')
-    expect(html).not.toContain('Stop</button>')
+    expect(html).toContain('Stop</button>')
+  })
+
+  test('keeps Stop visible while Work mode is blocked on tool approval', () => {
+    const html = renderToStaticMarkup(createElement(ChatCanvas, {
+      sidebarCollapsed: false,
+      thread: workThread,
+      messages,
+      run: { ...run, status: 'blocked_on_tool_approval' },
+      loading: false,
+      error: null,
+      dataSourceMode: 'mock',
+      streamState: 'open',
+      onSendMessage: () => {},
+      onStopRun: () => {},
+      locale: 'en',
+    }))
+
+    expect(html).toContain('Work plan')
+    expect(html).toContain('<textarea class="composer-input" disabled=""')
+    expect(html).toContain('Stop</button>')
+  })
+
+  test('allows Work mode Composer when provider is available and no run is active', () => {
+    const html = renderToStaticMarkup(createElement(ChatCanvas, {
+      sidebarCollapsed: false,
+      thread: { ...workThread, runStatus: 'completed' },
+      messages,
+      run: { ...run, status: 'completed', events: run.events },
+      loading: false,
+      error: null,
+      dataSourceMode: 'real_api',
+      streamState: 'closed',
+      providerCapabilities: [{ id: 'local_codex', family: 'openai_compatible', model: 'gpt-5.5', status: 'available', executionState: 'supported' }],
+      onSendMessage: () => {},
+      onStopRun: () => {},
+      locale: 'en',
+    }))
+
+    expect(html).toContain('Work plan')
+    expect(html).toContain('<textarea class="composer-input"')
+    expect(html).not.toContain('<textarea class="composer-input" disabled=""')
+    expect(html).not.toContain('M16 Work mode is read-only for plan and progress')
+  })
+
+  test('keeps Work mode Composer disabled for provider unavailable states', () => {
+    const html = renderToStaticMarkup(createElement(ChatCanvas, {
+      sidebarCollapsed: false,
+      thread: { ...workThread, runStatus: 'completed' },
+      messages,
+      run: { ...run, status: 'completed', events: run.events },
+      loading: false,
+      error: null,
+      dataSourceMode: 'real_api',
+      streamState: 'closed',
+      providerCapabilities: [],
+      onSendMessage: () => {},
+      onStopRun: () => {},
+      locale: 'en',
+    }))
+
+    expect(html).toContain('provider-warning')
+    expect(html).toContain('<textarea class="composer-input" disabled=""')
   })
 
   test('keeps Chat mode isolated from Work Plan View', () => {
@@ -99,5 +165,27 @@ describe('ChatCanvas Work mode integration', () => {
     expect(html).not.toContain('Work plan')
     expect(html).not.toContain('Projected goal')
     expect(html).toContain('Build Work mode UI')
+    expect(html).toContain('<textarea class="composer-input" disabled=""')
+  })
+
+  test('keeps Chat mode Composer available when provider is available and no run is active', () => {
+    const html = renderToStaticMarkup(createElement(ChatCanvas, {
+      sidebarCollapsed: false,
+      thread: { ...chatThread, runStatus: 'completed' },
+      messages: messages.map((message) => ({ ...message, threadId: chatThread.id })),
+      run: { ...run, threadId: chatThread.id, status: 'completed', events: run.events },
+      loading: false,
+      error: null,
+      dataSourceMode: 'real_api',
+      streamState: 'closed',
+      providerCapabilities: [{ id: 'local_codex', family: 'openai_compatible', model: 'gpt-5.5', status: 'available', executionState: 'supported' }],
+      onSendMessage: () => {},
+      onStopRun: () => {},
+      locale: 'en',
+    }))
+
+    expect(html).not.toContain('Work plan')
+    expect(html).toContain('<textarea class="composer-input"')
+    expect(html).not.toContain('<textarea class="composer-input" disabled=""')
   })
 })

@@ -33,6 +33,10 @@ Expected chain:
 
 With the web shell connected to the local API, open Settings > Tools. The page should show tool name, source, group, risk, approval policy, enabled state, execution state, and schema hash. It should not show install/edit/enable/disable controls.
 
+## M21 Follow-Up
+
+Workspace read tools now have their own validation runbook: [Local M21 Workspace Read Tools Validation](./local-m21-workspace-read-tools/).
+
 ## Known Limits
 
-M18 does not add workspace file tools, shell, sandbox, browser, web fetch/search, artifact runtime, remote MCP/OAuth, plugin marketplace, provider autodetect, multi-agent, or worker queue changes.
+The current tool runtime still does not add shell, write/edit file tools, sandbox, browser, web fetch/search, artifact runtime, remote MCP/OAuth, plugin marketplace, multi-agent, or worker queue changes.

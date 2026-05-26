@@ -155,6 +155,8 @@ describe('run stream state helpers', () => {
       expect(source).resolves.toContain('apiClient.subscribeRunEvents'),
       expect(source).resolves.toContain('recoverable_error'),
       expect(source).resolves.toContain('mergeRunEvents'),
+      expect(source).resolves.toContain('reconcileActiveRun'),
+      expect(source).resolves.toContain('window.setInterval'),
       expect(source).resolves.not.toContain('run?.events.length'),
     ])
   })

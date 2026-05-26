@@ -559,7 +559,11 @@ describe('M4 run mapping', () => {
 
   test('exposes subscribeRunEvents for EventSource-compatible streaming', () => {
     const source = Bun.file(new URL('./realApiClient.ts', import.meta.url)).text()
-    return expect(source).resolves.toContain('subscribeRunEvents')
+    return Promise.all([
+      expect(source).resolves.toContain('subscribeRunEvents'),
+      expect(source).resolves.toContain('stream_closed'),
+      expect(source).resolves.toContain('onClosed?.()'),
+    ])
   })
 
   test('maps model delta final and error events into assistant draft signals', () => {
@@ -687,6 +691,16 @@ describe('M4 run mapping', () => {
     expect(backend.type).toBe('backend.unavailable')
     expect(backend.group).toBe('error')
     expect(backend.severity).toBe('error')
+  })
+
+  test('maps bounded loop metadata without duplicating loop fields in event detail', () => {
+    const tool = mapApiRunEvent({ id: 'evt-loop', run_id: 'run-1', thread_id: 'thread-1', sequence: 9, category: 'progress', type: 'tool_call_approval_required', summary: 'Tool approval required', content: null, metadata: { tool_call_id: 'tc_glob_1', tool_name: 'workspace.glob', tool_group: 'workspace', loop_index: 2, loop_max: 3 }, created_at: '2026-05-25T00:00:06Z' })
+    const todo = mapApiRunEvent({ id: 'evt-todo', run_id: 'run-1', thread_id: 'thread-1', sequence: 10, category: 'progress', type: 'work_todo_updated', summary: 'Todo updated', content: null, metadata: { updated_by: 'runtime' }, created_at: '2026-05-25T00:00:07Z' })
+
+    expect(tool).toMatchObject({ type: 'tool.call.approval_required', status: 'blocked_on_tool_approval', metadata: { loop_index: 2, loop_max: 3 } })
+    expect(tool.detail).not.toContain('loop_index')
+    expect(tool.detail).not.toContain('loop_max')
+    expect(todo).toMatchObject({ type: 'work.todo.updated', group: 'run-lifecycle' })
   })
 
   test('maps M6 queue worker and pipeline events into frontend statuses', () => {

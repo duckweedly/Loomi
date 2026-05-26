@@ -16,6 +16,9 @@ const (
 	ToolApprovalNotRequired    ToolApprovalPolicy = "not_required"
 
 	ToolSafetyNoSideEffectInternal ToolSafetyClass = "no_side_effect_internal"
+	ToolSafetyWorkspaceMutation    ToolSafetyClass = "workspace_mutation"
+	ToolSafetySandboxCommand       ToolSafetyClass = "sandbox_command"
+	ToolSafetyPublicNetworkRead    ToolSafetyClass = "public_network_read"
 )
 
 type ToolArguments struct {
@@ -37,6 +40,38 @@ func CurrentTimeToolDefinition() ToolDefinition {
 func ToolResolutionsForPersona(allowedToolNames []string) []productdata.ToolResolution {
 	resolutions := make([]productdata.ToolResolution, 0, len(allowedToolNames))
 	for _, name := range allowedToolNames {
+		if productdata.IsWorkspaceToolName(name) {
+			riskLevel := productdata.ToolRiskLow
+			if name == productdata.ToolNameWorkspaceWriteFile || name == productdata.ToolNameWorkspaceEdit {
+				riskLevel = productdata.ToolRiskHigh
+			}
+			resolutions = append(resolutions, productdata.ToolResolution{Name: name, ApprovalPolicy: string(ToolApprovalAlwaysRequired), ExecutionState: string(productdata.ToolExecutionStateExecutable), Source: string(productdata.ToolCatalogSourceBuiltin), Group: string(productdata.ToolCatalogGroupWorkspace), RiskLevel: string(riskLevel)})
+			continue
+		}
+		if productdata.IsSandboxToolName(name) {
+			resolutions = append(resolutions, productdata.ToolResolution{Name: name, ApprovalPolicy: string(ToolApprovalAlwaysRequired), ExecutionState: string(productdata.ToolExecutionStateExecutable), Source: string(productdata.ToolCatalogSourceBuiltin), Group: string(productdata.ToolCatalogGroupSandbox), RiskLevel: string(productdata.ToolRiskHigh)})
+			continue
+		}
+		if productdata.IsLSPToolName(name) {
+			resolutions = append(resolutions, productdata.ToolResolution{Name: name, ApprovalPolicy: string(ToolApprovalAlwaysRequired), ExecutionState: string(productdata.ToolExecutionStateExecutable), Source: string(productdata.ToolCatalogSourceBuiltin), Group: string(productdata.ToolCatalogGroupLSP), RiskLevel: string(productdata.ToolRiskLow)})
+			continue
+		}
+		if productdata.IsWebToolName(name) {
+			resolutions = append(resolutions, productdata.ToolResolution{Name: name, ApprovalPolicy: string(ToolApprovalAlwaysRequired), ExecutionState: string(productdata.ToolExecutionStateExecutable), Source: string(productdata.ToolCatalogSourceBuiltin), Group: string(productdata.ToolCatalogGroupWeb), RiskLevel: string(productdata.ToolRiskMedium)})
+			continue
+		}
+		if productdata.IsBrowserToolName(name) {
+			resolutions = append(resolutions, productdata.ToolResolution{Name: name, ApprovalPolicy: string(ToolApprovalAlwaysRequired), ExecutionState: string(productdata.ToolExecutionStateExecutable), Source: string(productdata.ToolCatalogSourceBuiltin), Group: string(productdata.ToolCatalogGroupBrowser), RiskLevel: string(productdata.ToolRiskMedium)})
+			continue
+		}
+		if productdata.IsArtifactToolName(name) {
+			resolutions = append(resolutions, productdata.ToolResolution{Name: name, ApprovalPolicy: string(ToolApprovalAlwaysRequired), ExecutionState: string(productdata.ToolExecutionStateExecutable), Source: string(productdata.ToolCatalogSourceBuiltin), Group: string(productdata.ToolCatalogGroupArtifact), RiskLevel: string(productdata.ToolRiskMedium)})
+			continue
+		}
+		if productdata.IsAgentToolName(name) {
+			resolutions = append(resolutions, productdata.ToolResolution{Name: name, ApprovalPolicy: string(ToolApprovalAlwaysRequired), ExecutionState: string(productdata.ToolExecutionStateExecutable), Source: string(productdata.ToolCatalogSourceBuiltin), Group: string(productdata.ToolCatalogGroupAgent), RiskLevel: string(productdata.ToolRiskMedium)})
+			continue
+		}
 		if name != productdata.ToolNameCurrentTime {
 			if IsMCPToolName(name) {
 				resolutions = append(resolutions, productdata.ToolResolution{Name: name, ApprovalPolicy: string(ToolApprovalAlwaysRequired), ExecutionState: "discovered_non_executable"})

@@ -55,7 +55,7 @@ The saved provider updates both `GET /v1/model-providers` and the in-process mod
 }
 ```
 
-A tool call is scoped by `thread_id`, `run_id`, and `tool_call_id`. The same `(run_id, tool_call_id)` request is idempotent and returns the existing projection without duplicating events. M7 MVP allows only one tool call per run.
+A tool call is scoped by `thread_id`, `run_id`, and `tool_call_id`. The same `(run_id, tool_call_id)` request is idempotent and returns the existing projection without duplicating events. M7 allowed only one tool call per run; M22 starts a bounded Work-mode continuation path where a run can record a later workspace read tool call after the previous call reaches a terminal execution state.
 
 ## Run status
 
@@ -144,7 +144,22 @@ The provider-neutral continuation context uses in-memory roles:
 
 OpenAI-compatible providers serialize these as an assistant `tool_calls` message followed by a matching `tool` message. Loomi does not persist a durable `messages.role = tool` row for this MVP.
 
-The second model stream reuses existing run events with `metadata.model_phase = "continuation"`. If the continuation provider asks for another tool, runtime records `unsupported_tool_loop` and fails the run without executing another tool.
+The second model stream reuses existing run events with `metadata.model_phase = "continuation"`. For M22, continuation can request another enabled workspace read tool and runtime records it as a fresh approval-required tool call:
+
+```json
+{
+  "type": "tool_call_approval_required",
+  "category": "progress",
+  "metadata": {
+    "tool_call_id": "tc_read_2",
+    "tool_name": "workspace.read",
+    "approval_status": "required",
+    "execution_status": "blocked"
+  }
+}
+```
+
+Only one non-terminal tool call may exist in a run. Workspace continuation is capped at three accepted tool calls; exceeding the cap records `tool_loop_limit_reached` and fails the run without recording the extra call. Continuation requests for non-workspace tools, tools outside the run's enabled tool snapshot, or Chat-mode-only tools still record `unsupported_tool_loop` and fail without execution. Repeating an already-requested `tool_call_id` during continuation records `duplicate_tool_call_id` and does not duplicate approval-required events.
 
 ## Diagnostics
 

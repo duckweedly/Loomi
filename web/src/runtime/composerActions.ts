@@ -19,7 +19,7 @@ export function deriveComposerActions(input: ComposerActionsInput) {
     return {
       canSend: false,
       canContinue: false,
-      canStop: false,
+      canStop: activeRun,
       canRetry: false,
       canRegenerate: false,
       disabledReason: 'provider-unavailable' as const,
@@ -39,7 +39,7 @@ export function deriveComposerActions(input: ComposerActionsInput) {
   return {
     canSend: input.threadSelected && hasText && !activeRun,
     canContinue: input.threadSelected && hasText && !activeRun,
-    canStop: input.run?.status === 'queued' || input.run?.status === 'running' || input.run?.status === 'retrying' || input.run?.status === 'recovering',
+    canStop: activeRun,
     canRetry: input.threadSelected && failedRun && !activeRun,
     canRegenerate: input.threadSelected && completedAssistant && !activeRun,
     disabledReason,

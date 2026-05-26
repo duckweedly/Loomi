@@ -70,6 +70,34 @@ export function WorkPlanView({ projection, loading, error }: Props) {
 
           <section className="work-plan-section">
             <div className="work-plan-section-title">
+              <ListChecks size={15} strokeWidth={1.8} />
+              <strong>Todos</strong>
+            </div>
+            {projection.todoSnapshot?.items.length ? (
+              <>
+                {projection.todoSnapshot.items.map((todo, index) => (
+                  <div className="work-step-row" key={todo.id}>
+                    <span className={`work-step-index ${todo.status}`}>{index + 1}</span>
+                    <div>
+                      <strong>{todo.title}</strong>
+                      {todo.summary && <span>{todo.summary}</span>}
+                    </div>
+                    <em>{stepLabels[todo.status]}</em>
+                  </div>
+                ))}
+                <p>
+                  {[
+                    projection.todoSnapshot.updatedBy ? `Updated by ${projection.todoSnapshot.updatedBy}` : '',
+                    projection.todoSnapshot.updatedAtEventId,
+                    projection.todoSnapshot.redactionApplied ? 'Redacted unsafe metadata' : '',
+                  ].filter(Boolean).join(' · ')}
+                </p>
+              </>
+            ) : <p>No todo snapshot yet.</p>}
+          </section>
+
+          <section className="work-plan-section">
+            <div className="work-plan-section-title">
               <PackageCheck size={15} strokeWidth={1.8} />
               <strong>Artifacts</strong>
             </div>
