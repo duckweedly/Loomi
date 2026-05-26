@@ -90,6 +90,74 @@ func TestRepositoryContractCoversM7ToolCallRequestProjection(t *testing.T) {
 	}
 }
 
+func TestRepositoryContractCoversM7ToolCallApprovalDecisions(t *testing.T) {
+	var repo Repository = NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := repo.CreateThread(context.Background(), ident, CreateThreadInput{Title: "M7 approve", Mode: ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := repo.StartRun(context.Background(), ident, thread.ID, StartRunInput{Source: RunSourceModelGateway, MessageID: "msg_1", ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := repo.RecordToolCallRequest(context.Background(), ident, run.ID, RecordToolCallRequestInput{ToolCallID: "tc_approve", ToolName: ToolNameCurrentTime, ArgumentsSummary: map[string]any{"timezone": "UTC"}, ArgumentsHash: "hash_approve", ApprovalStatus: ToolCallApprovalRequired, ExecutionStatus: ToolCallExecutionBlocked}); err != nil {
+		t.Fatal(err)
+	}
+	approved, events, err := repo.ApproveToolCall(context.Background(), ident, thread.ID, run.ID, "tc_approve")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if approved.ApprovalStatus != ToolCallApprovalApproved || approved.ExecutionStatus != ToolCallExecutionNotStarted {
+		t.Fatalf("approved = %+v", approved)
+	}
+	if len(events) != 1 || events[0].Type != EventToolCallApproved {
+		t.Fatalf("events = %+v", events)
+	}
+	approvedAgain, retryEvents, err := repo.ApproveToolCall(context.Background(), ident, thread.ID, run.ID, "tc_approve")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if approvedAgain.ID != approved.ID || len(retryEvents) != 0 {
+		t.Fatalf("retry call=%+v events=%+v", approvedAgain, retryEvents)
+	}
+	if _, _, err := repo.DenyToolCall(context.Background(), ident, thread.ID, run.ID, "tc_approve"); err == nil || ErrorCode(err) != CodeConflict {
+		t.Fatalf("deny after approve err = %v", err)
+	}
+
+	denyThread, err := repo.CreateThread(context.Background(), ident, CreateThreadInput{Title: "M7 deny", Mode: ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	denyRun, err := repo.StartRun(context.Background(), ident, denyThread.ID, StartRunInput{Source: RunSourceModelGateway, MessageID: "msg_2", ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := repo.RecordToolCallRequest(context.Background(), ident, denyRun.ID, RecordToolCallRequestInput{ToolCallID: "tc_deny", ToolName: ToolNameCurrentTime, ArgumentsSummary: map[string]any{"timezone": "UTC"}, ArgumentsHash: "hash_deny", ApprovalStatus: ToolCallApprovalRequired, ExecutionStatus: ToolCallExecutionBlocked}); err != nil {
+		t.Fatal(err)
+	}
+	denied, denyEvents, err := repo.DenyToolCall(context.Background(), ident, denyThread.ID, denyRun.ID, "tc_deny")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if denied.ApprovalStatus != ToolCallApprovalDenied || denied.ExecutionStatus != ToolCallExecutionCancelled {
+		t.Fatalf("denied = %+v", denied)
+	}
+	if len(denyEvents) != 2 || denyEvents[0].Type != EventToolCallDenied || denyEvents[1].Type != EventRunStopped {
+		t.Fatalf("deny events = %+v", denyEvents)
+	}
+	deniedAgain, deniedRetryEvents, err := repo.DenyToolCall(context.Background(), ident, denyThread.ID, denyRun.ID, "tc_deny")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deniedAgain.ID != denied.ID || len(deniedRetryEvents) != 0 {
+		t.Fatalf("deny retry call=%+v events=%+v", deniedAgain, deniedRetryEvents)
+	}
+	if _, _, err := repo.ApproveToolCall(context.Background(), ident, denyThread.ID, denyRun.ID, "tc_deny"); err == nil || ErrorCode(err) != CodeConflict {
+		t.Fatalf("approve after deny err = %v", err)
+	}
+}
+
 func TestRepositoryContractRejectsToolCallsForTerminalRuns(t *testing.T) {
 	var repo Repository = NewMemoryService()
 	ident := identity.LocalDevIdentity()

@@ -114,6 +114,12 @@ Expected results:
 - No later `tool_call_succeeded` event overwrites cancellation.
 - Worker recovery does not duplicate terminal tool events.
 
+Implementation-verified checks:
+
+```bash
+go test ./internal/productdata ./internal/runtime ./internal/httpapi -run 'TestStopRunCancelsPendingApprovedAndExecutingToolCalls|TestWorkerSkipsCancelledApprovedToolCall|TestStopRunHandlerCancelsPendingToolCall'
+```
+
 ## 8. History-first SSE replay smoke
 
 For approve, deny, fail, and cancel paths:
@@ -122,6 +128,13 @@ For approve, deny, fail, and cancel paths:
 2. Reconnect with history-first SSE.
 3. Verify ordered replay includes every tool lifecycle event.
 4. Verify live continuation produces the same UI state as uninterrupted streaming.
+
+Implementation-verified checks:
+
+```bash
+go test ./internal/runtime -run 'TestMergeHistoryThenLiveKeepsM7ToolEventOrder|TestMergeHistoryThenLiveKeepsMixedModelToolAndFinalOrder'
+bun test web/src/runtime/executionAdapter.test.ts web/src/runtime/realExecutionAdapter.test.ts web/src/runtime/runtimeEventGroups.test.ts
+```
 
 ## 9. Browser smoke
 

@@ -305,6 +305,344 @@ func TestRecordToolCallRequestValidatesM7SafetyBoundary(t *testing.T) {
 	}
 }
 
+func TestRecordWorkspaceReadToolRequestsRequireApprovalAndValidateArguments(t *testing.T) {
+	svc := NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, CreateThreadInput{Title: "M8 workspace reads", Mode: ThreadModeChat})
+	if err != nil {
+		t.Fatalf("CreateThread() error = %v", err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, StartRunInput{Source: RunSourceModelGateway, MessageID: "msg_1", ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatalf("StartRun() error = %v", err)
+	}
+	call, events, err := svc.RecordToolCallRequest(context.Background(), ident, run.ID, RecordToolCallRequestInput{ToolCallID: "tc_glob", ToolName: ToolNameWorkspaceGlob, ArgumentsSummary: map[string]any{"pattern": "**/*.go", "limit": 10}, ArgumentsHash: "hash_glob", ApprovalStatus: ToolCallApprovalRequired, ExecutionStatus: ToolCallExecutionBlocked})
+	if err != nil {
+		t.Fatalf("RecordToolCallRequest(workspace.glob) error = %v", err)
+	}
+	if call.ToolName != ToolNameWorkspaceGlob || call.ArgumentsSummary["pattern"] != "**/*.go" || len(events) != 2 {
+		t.Fatalf("call=%+v events=%+v", call, events)
+	}
+
+	secondThread, err := svc.CreateThread(context.Background(), ident, CreateThreadInput{Title: "M8 rejected reads", Mode: ThreadModeChat})
+	if err != nil {
+		t.Fatalf("CreateThread(second) error = %v", err)
+	}
+	secondRun, err := svc.StartRun(context.Background(), ident, secondThread.ID, StartRunInput{Source: RunSourceModelGateway, MessageID: "msg_2", ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatalf("StartRun(second) error = %v", err)
+	}
+	if _, _, err := svc.RecordToolCallRequest(context.Background(), ident, secondRun.ID, RecordToolCallRequestInput{ToolCallID: "tc_bad", ToolName: ToolNameWorkspaceReadFile, ArgumentsSummary: map[string]any{"path": ".env"}, ArgumentsHash: "hash_bad", ApprovalStatus: ToolCallApprovalRequired, ExecutionStatus: ToolCallExecutionBlocked}); err == nil || ErrorCode(err) != CodeInvalidRequest {
+		t.Fatalf("sensitive path err = %v", err)
+	}
+	if _, _, err := svc.RecordToolCallRequest(context.Background(), ident, secondRun.ID, RecordToolCallRequestInput{ToolCallID: "tc_auto", ToolName: ToolNameWorkspaceGrep, ArgumentsSummary: map[string]any{"query": "TODO"}, ArgumentsHash: "hash_auto", ApprovalStatus: ToolCallApprovalNotRequired, ExecutionStatus: ToolCallExecutionNotStarted}); err == nil || ErrorCode(err) != CodeInvalidRequest {
+		t.Fatalf("not-required approval err = %v", err)
+	}
+}
+
+func TestRecordWorkspaceWriteToolRequestsRequireApprovalAndValidateArguments(t *testing.T) {
+	svc := NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, CreateThreadInput{Title: "M9 workspace writes", Mode: ThreadModeChat})
+	if err != nil {
+		t.Fatalf("CreateThread() error = %v", err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, StartRunInput{Source: RunSourceModelGateway, MessageID: "msg_1", ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatalf("StartRun() error = %v", err)
+	}
+	call, events, err := svc.RecordToolCallRequest(context.Background(), ident, run.ID, RecordToolCallRequestInput{ToolCallID: "tc_write", ToolName: ToolNameWorkspaceWriteFile, ArgumentsSummary: map[string]any{"path": "internal/generated.txt", "content": "hello"}, ArgumentsHash: "hash_write", ApprovalStatus: ToolCallApprovalRequired, ExecutionStatus: ToolCallExecutionBlocked})
+	if err != nil {
+		t.Fatalf("RecordToolCallRequest(workspace.write_file) error = %v", err)
+	}
+	if call.ToolName != ToolNameWorkspaceWriteFile || call.ArgumentsSummary["path"] != "internal/generated.txt" || len(events) != 2 {
+		t.Fatalf("call=%+v events=%+v", call, events)
+	}
+
+	secondThread, err := svc.CreateThread(context.Background(), ident, CreateThreadInput{Title: "M9 rejected writes", Mode: ThreadModeChat})
+	if err != nil {
+		t.Fatalf("CreateThread(second) error = %v", err)
+	}
+	secondRun, err := svc.StartRun(context.Background(), ident, secondThread.ID, StartRunInput{Source: RunSourceModelGateway, MessageID: "msg_2", ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatalf("StartRun(second) error = %v", err)
+	}
+	if _, _, err := svc.RecordToolCallRequest(context.Background(), ident, secondRun.ID, RecordToolCallRequestInput{ToolCallID: "tc_bad", ToolName: ToolNameWorkspaceWriteFile, ArgumentsSummary: map[string]any{"path": ".env", "content": "SECRET=sk-live"}, ArgumentsHash: "hash_bad", ApprovalStatus: ToolCallApprovalRequired, ExecutionStatus: ToolCallExecutionBlocked}); err == nil || ErrorCode(err) != CodeInvalidRequest {
+		t.Fatalf("sensitive write path err = %v", err)
+	}
+	if _, _, err := svc.RecordToolCallRequest(context.Background(), ident, secondRun.ID, RecordToolCallRequestInput{ToolCallID: "tc_auto", ToolName: ToolNameWorkspaceEdit, ArgumentsSummary: map[string]any{"path": "file.txt", "old_text": "a", "new_text": "b"}, ArgumentsHash: "hash_auto", ApprovalStatus: ToolCallApprovalNotRequired, ExecutionStatus: ToolCallExecutionNotStarted}); err == nil || ErrorCode(err) != CodeInvalidRequest {
+		t.Fatalf("not-required approval err = %v", err)
+	}
+	if _, _, err := svc.RecordToolCallRequest(context.Background(), ident, secondRun.ID, RecordToolCallRequestInput{ToolCallID: "tc_edit_bad", ToolName: ToolNameWorkspaceEdit, ArgumentsSummary: map[string]any{"path": "file.txt", "old_text": "", "new_text": "b"}, ArgumentsHash: "hash_edit_bad", ApprovalStatus: ToolCallApprovalRequired, ExecutionStatus: ToolCallExecutionBlocked}); err == nil || ErrorCode(err) != CodeInvalidRequest {
+		t.Fatalf("empty old_text err = %v", err)
+	}
+}
+
+func TestRecordWorkspaceExecCommandRequiresApprovalAndValidatesArguments(t *testing.T) {
+	svc := NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, CreateThreadInput{Title: "M10 workspace exec", Mode: ThreadModeChat})
+	if err != nil {
+		t.Fatalf("CreateThread() error = %v", err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, StartRunInput{Source: RunSourceModelGateway, MessageID: "msg_1", ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatalf("StartRun() error = %v", err)
+	}
+	call, events, err := svc.RecordToolCallRequest(context.Background(), ident, run.ID, RecordToolCallRequestInput{ToolCallID: "tc_exec", ToolName: ToolNameWorkspaceExecCommand, ArgumentsSummary: map[string]any{"command": []any{"printf", "hello"}, "cwd": ".", "timeout_seconds": 5}, ArgumentsHash: "hash_exec", ApprovalStatus: ToolCallApprovalRequired, ExecutionStatus: ToolCallExecutionBlocked})
+	if err != nil {
+		t.Fatalf("RecordToolCallRequest(workspace.exec_command) error = %v", err)
+	}
+	if call.ToolName != ToolNameWorkspaceExecCommand || len(events) != 2 {
+		t.Fatalf("call=%+v events=%+v", call, events)
+	}
+
+	secondThread, err := svc.CreateThread(context.Background(), ident, CreateThreadInput{Title: "M10 rejected exec", Mode: ThreadModeChat})
+	if err != nil {
+		t.Fatalf("CreateThread(second) error = %v", err)
+	}
+	secondRun, err := svc.StartRun(context.Background(), ident, secondThread.ID, StartRunInput{Source: RunSourceModelGateway, MessageID: "msg_2", ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatalf("StartRun(second) error = %v", err)
+	}
+	if _, _, err := svc.RecordToolCallRequest(context.Background(), ident, secondRun.ID, RecordToolCallRequestInput{ToolCallID: "tc_shell", ToolName: ToolNameWorkspaceExecCommand, ArgumentsSummary: map[string]any{"command": []any{"sh", "-c", "echo no"}}, ArgumentsHash: "hash_shell", ApprovalStatus: ToolCallApprovalRequired, ExecutionStatus: ToolCallExecutionBlocked}); err == nil || ErrorCode(err) != CodeInvalidRequest {
+		t.Fatalf("shell wrapper err = %v", err)
+	}
+	if _, _, err := svc.RecordToolCallRequest(context.Background(), ident, secondRun.ID, RecordToolCallRequestInput{ToolCallID: "tc_escape", ToolName: ToolNameWorkspaceExecCommand, ArgumentsSummary: map[string]any{"command": []any{"printf", "x"}, "cwd": "../"}, ArgumentsHash: "hash_escape", ApprovalStatus: ToolCallApprovalRequired, ExecutionStatus: ToolCallExecutionBlocked}); err == nil || ErrorCode(err) != CodeInvalidRequest {
+		t.Fatalf("cwd escape err = %v", err)
+	}
+	if _, _, err := svc.RecordToolCallRequest(context.Background(), ident, secondRun.ID, RecordToolCallRequestInput{ToolCallID: "tc_auto", ToolName: ToolNameWorkspaceExecCommand, ArgumentsSummary: map[string]any{"command": []any{"printf", "x"}}, ArgumentsHash: "hash_auto", ApprovalStatus: ToolCallApprovalNotRequired, ExecutionStatus: ToolCallExecutionNotStarted}); err == nil || ErrorCode(err) != CodeInvalidRequest {
+		t.Fatalf("not-required approval err = %v", err)
+	}
+}
+
+func TestRecordTodoWriteToolRequestsRequireApprovalAndValidateArguments(t *testing.T) {
+	svc := NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, CreateThreadInput{Title: "M12 todo write", Mode: ThreadModeChat})
+	if err != nil {
+		t.Fatalf("CreateThread() error = %v", err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, StartRunInput{Source: RunSourceModelGateway, MessageID: "msg_1", ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatalf("StartRun() error = %v", err)
+	}
+	call, events, err := svc.RecordToolCallRequest(context.Background(), ident, run.ID, RecordToolCallRequestInput{ToolCallID: "tc_todo", ToolName: ToolNameTodoWrite, ArgumentsSummary: map[string]any{"items": []any{map[string]any{"title": "Inspect tool registry", "status": "completed"}, map[string]any{"title": "Add todo tool", "status": "in_progress"}, map[string]any{"title": "Validate docs"}}}, ArgumentsHash: "hash_todo", ApprovalStatus: ToolCallApprovalRequired, ExecutionStatus: ToolCallExecutionBlocked})
+	if err != nil {
+		t.Fatalf("RecordToolCallRequest(runtime.todo_write) error = %v", err)
+	}
+	items, ok := call.ArgumentsSummary["items"].([]any)
+	if call.ToolName != ToolNameTodoWrite || !ok || len(items) != 3 || len(events) != 2 {
+		t.Fatalf("call=%+v events=%+v", call, events)
+	}
+
+	secondThread, err := svc.CreateThread(context.Background(), ident, CreateThreadInput{Title: "M12 rejected todo", Mode: ThreadModeChat})
+	if err != nil {
+		t.Fatalf("CreateThread(second) error = %v", err)
+	}
+	secondRun, err := svc.StartRun(context.Background(), ident, secondThread.ID, StartRunInput{Source: RunSourceModelGateway, MessageID: "msg_2", ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatalf("StartRun(second) error = %v", err)
+	}
+	if _, _, err := svc.RecordToolCallRequest(context.Background(), ident, secondRun.ID, RecordToolCallRequestInput{ToolCallID: "tc_empty", ToolName: ToolNameTodoWrite, ArgumentsSummary: map[string]any{"items": []any{}}, ArgumentsHash: "hash_empty", ApprovalStatus: ToolCallApprovalRequired, ExecutionStatus: ToolCallExecutionBlocked}); err == nil || ErrorCode(err) != CodeInvalidRequest {
+		t.Fatalf("empty items err = %v", err)
+	}
+	if _, _, err := svc.RecordToolCallRequest(context.Background(), ident, secondRun.ID, RecordToolCallRequestInput{ToolCallID: "tc_status", ToolName: ToolNameTodoWrite, ArgumentsSummary: map[string]any{"items": []any{map[string]any{"title": "Bad status", "status": "blocked"}}}, ArgumentsHash: "hash_status", ApprovalStatus: ToolCallApprovalRequired, ExecutionStatus: ToolCallExecutionBlocked}); err == nil || ErrorCode(err) != CodeInvalidRequest {
+		t.Fatalf("bad status err = %v", err)
+	}
+	if _, _, err := svc.RecordToolCallRequest(context.Background(), ident, secondRun.ID, RecordToolCallRequestInput{ToolCallID: "tc_auto", ToolName: ToolNameTodoWrite, ArgumentsSummary: map[string]any{"items": []any{map[string]any{"title": "Auto"}}}, ArgumentsHash: "hash_auto", ApprovalStatus: ToolCallApprovalNotRequired, ExecutionStatus: ToolCallExecutionNotStarted}); err == nil || ErrorCode(err) != CodeInvalidRequest {
+		t.Fatalf("not-required approval err = %v", err)
+	}
+}
+
+func TestRecordMCPCallToolRequestsRequireApprovalAndValidateArguments(t *testing.T) {
+	svc := NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, CreateThreadInput{Title: "M13 MCP call", Mode: ThreadModeChat})
+	if err != nil {
+		t.Fatalf("CreateThread() error = %v", err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, StartRunInput{Source: RunSourceModelGateway, MessageID: "msg_1", ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatalf("StartRun() error = %v", err)
+	}
+	call, events, err := svc.RecordToolCallRequest(context.Background(), ident, run.ID, RecordToolCallRequestInput{ToolCallID: "tc_mcp", ToolName: ToolNameMCPCallTool, ArgumentsSummary: map[string]any{"server": "local", "tool": "echo", "arguments": map[string]any{"message": "hello mcp"}}, ArgumentsHash: "hash_mcp", ApprovalStatus: ToolCallApprovalRequired, ExecutionStatus: ToolCallExecutionBlocked})
+	if err != nil {
+		t.Fatalf("RecordToolCallRequest(mcp.call_tool) error = %v", err)
+	}
+	if call.ToolName != ToolNameMCPCallTool || call.ArgumentsSummary["server"] != "local" || call.ArgumentsSummary["tool"] != "echo" || len(events) != 2 {
+		t.Fatalf("call=%+v events=%+v", call, events)
+	}
+
+	secondThread, err := svc.CreateThread(context.Background(), ident, CreateThreadInput{Title: "M13 rejected MCP", Mode: ThreadModeChat})
+	if err != nil {
+		t.Fatalf("CreateThread(second) error = %v", err)
+	}
+	secondRun, err := svc.StartRun(context.Background(), ident, secondThread.ID, StartRunInput{Source: RunSourceModelGateway, MessageID: "msg_2", ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatalf("StartRun(second) error = %v", err)
+	}
+	if _, _, err := svc.RecordToolCallRequest(context.Background(), ident, secondRun.ID, RecordToolCallRequestInput{ToolCallID: "tc_server", ToolName: ToolNameMCPCallTool, ArgumentsSummary: map[string]any{"server": "remote", "tool": "echo", "arguments": map[string]any{"message": "hello"}}, ArgumentsHash: "hash_server", ApprovalStatus: ToolCallApprovalRequired, ExecutionStatus: ToolCallExecutionBlocked}); err == nil || ErrorCode(err) != CodeInvalidRequest {
+		t.Fatalf("unknown server err = %v", err)
+	}
+	if _, _, err := svc.RecordToolCallRequest(context.Background(), ident, secondRun.ID, RecordToolCallRequestInput{ToolCallID: "tc_tool", ToolName: ToolNameMCPCallTool, ArgumentsSummary: map[string]any{"server": "local", "tool": "shell", "arguments": map[string]any{"message": "hello"}}, ArgumentsHash: "hash_tool", ApprovalStatus: ToolCallApprovalRequired, ExecutionStatus: ToolCallExecutionBlocked}); err == nil || ErrorCode(err) != CodeInvalidRequest {
+		t.Fatalf("unknown tool err = %v", err)
+	}
+	if _, _, err := svc.RecordToolCallRequest(context.Background(), ident, secondRun.ID, RecordToolCallRequestInput{ToolCallID: "tc_secret", ToolName: ToolNameMCPCallTool, ArgumentsSummary: map[string]any{"server": "local", "tool": "echo", "arguments": map[string]any{"message": "secret=sk-live"}}, ArgumentsHash: "hash_secret", ApprovalStatus: ToolCallApprovalRequired, ExecutionStatus: ToolCallExecutionBlocked}); err == nil || ErrorCode(err) != CodeInvalidRequest {
+		t.Fatalf("secret message err = %v", err)
+	}
+	if _, _, err := svc.RecordToolCallRequest(context.Background(), ident, secondRun.ID, RecordToolCallRequestInput{ToolCallID: "tc_auto", ToolName: ToolNameMCPCallTool, ArgumentsSummary: map[string]any{"server": "local", "tool": "echo", "arguments": map[string]any{"message": "hello"}}, ArgumentsHash: "hash_auto", ApprovalStatus: ToolCallApprovalNotRequired, ExecutionStatus: ToolCallExecutionNotStarted}); err == nil || ErrorCode(err) != CodeInvalidRequest {
+		t.Fatalf("not-required approval err = %v", err)
+	}
+}
+
+func TestToolCallApprovalDecisionsAreIdempotent(t *testing.T) {
+	svc := NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, CreateThreadInput{Title: "M7 approval", Mode: ThreadModeChat})
+	if err != nil {
+		t.Fatalf("CreateThread() error = %v", err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, StartRunInput{Source: RunSourceModelGateway, MessageID: "msg_1", ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatalf("StartRun() error = %v", err)
+	}
+	if _, _, err := svc.RecordToolCallRequest(context.Background(), ident, run.ID, RecordToolCallRequestInput{ToolCallID: "tc_approve", ToolName: ToolNameCurrentTime, ArgumentsSummary: map[string]any{"timezone": "UTC"}, ArgumentsHash: "hash_approve", ApprovalStatus: ToolCallApprovalRequired, ExecutionStatus: ToolCallExecutionBlocked}); err != nil {
+		t.Fatalf("RecordToolCallRequest(approve) error = %v", err)
+	}
+
+	approved, events, err := svc.ApproveToolCall(context.Background(), ident, thread.ID, run.ID, "tc_approve")
+	if err != nil {
+		t.Fatalf("ApproveToolCall() error = %v", err)
+	}
+	if approved.ApprovalStatus != ToolCallApprovalApproved || approved.ExecutionStatus != ToolCallExecutionNotStarted {
+		t.Fatalf("approved call = %+v", approved)
+	}
+	if len(events) != 1 || events[0].Type != EventToolCallApproved {
+		t.Fatalf("approve events = %+v", events)
+	}
+	again, againEvents, err := svc.ApproveToolCall(context.Background(), ident, thread.ID, run.ID, "tc_approve")
+	if err != nil {
+		t.Fatalf("ApproveToolCall(retry) error = %v", err)
+	}
+	if again.ID != approved.ID || len(againEvents) != 0 {
+		t.Fatalf("approve retry call=%+v events=%+v", again, againEvents)
+	}
+	if _, _, err := svc.DenyToolCall(context.Background(), ident, thread.ID, run.ID, "tc_approve"); err == nil || ErrorCode(err) != CodeConflict {
+		t.Fatalf("deny after approve err = %v", err)
+	}
+
+	denyThread, err := svc.CreateThread(context.Background(), ident, CreateThreadInput{Title: "M7 denial", Mode: ThreadModeChat})
+	if err != nil {
+		t.Fatalf("CreateThread(deny) error = %v", err)
+	}
+	denyRun, err := svc.StartRun(context.Background(), ident, denyThread.ID, StartRunInput{Source: RunSourceModelGateway, MessageID: "msg_2", ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatalf("StartRun(deny) error = %v", err)
+	}
+	if _, _, err := svc.RecordToolCallRequest(context.Background(), ident, denyRun.ID, RecordToolCallRequestInput{ToolCallID: "tc_deny", ToolName: ToolNameCurrentTime, ArgumentsSummary: map[string]any{"timezone": "UTC"}, ArgumentsHash: "hash_deny", ApprovalStatus: ToolCallApprovalRequired, ExecutionStatus: ToolCallExecutionBlocked}); err != nil {
+		t.Fatalf("RecordToolCallRequest(deny) error = %v", err)
+	}
+	denied, denyEvents, err := svc.DenyToolCall(context.Background(), ident, denyThread.ID, denyRun.ID, "tc_deny")
+	if err != nil {
+		t.Fatalf("DenyToolCall() error = %v", err)
+	}
+	if denied.ApprovalStatus != ToolCallApprovalDenied || denied.ExecutionStatus != ToolCallExecutionCancelled {
+		t.Fatalf("denied call = %+v", denied)
+	}
+	if len(denyEvents) != 2 || denyEvents[0].Type != EventToolCallDenied || denyEvents[1].Type != EventRunStopped {
+		t.Fatalf("deny events = %+v", denyEvents)
+	}
+	deniedAgain, deniedAgainEvents, err := svc.DenyToolCall(context.Background(), ident, denyThread.ID, denyRun.ID, "tc_deny")
+	if err != nil {
+		t.Fatalf("DenyToolCall(retry) error = %v", err)
+	}
+	if deniedAgain.ID != denied.ID || len(deniedAgainEvents) != 0 {
+		t.Fatalf("deny retry call=%+v events=%+v", deniedAgain, deniedAgainEvents)
+	}
+	if _, _, err := svc.ApproveToolCall(context.Background(), ident, denyThread.ID, denyRun.ID, "tc_deny"); err == nil || ErrorCode(err) != CodeConflict {
+		t.Fatalf("approve after deny err = %v", err)
+	}
+}
+
+func TestStopRunCancelsPendingApprovedAndExecutingToolCalls(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		prepare func(*MemoryService, identity.LocalIdentity, Thread, Run)
+	}{
+		{name: "pending", prepare: func(*MemoryService, identity.LocalIdentity, Thread, Run) {}},
+		{name: "approved", prepare: func(svc *MemoryService, ident identity.LocalIdentity, thread Thread, run Run) {
+			if _, _, err := svc.ApproveToolCall(context.Background(), ident, thread.ID, run.ID, "tc_cancel"); err != nil {
+				t.Fatalf("ApproveToolCall() error = %v", err)
+			}
+		}},
+		{name: "executing", prepare: func(svc *MemoryService, ident identity.LocalIdentity, thread Thread, run Run) {
+			if _, _, err := svc.ApproveToolCall(context.Background(), ident, thread.ID, run.ID, "tc_cancel"); err != nil {
+				t.Fatalf("ApproveToolCall() error = %v", err)
+			}
+			if _, _, err := svc.StartToolCallExecution(context.Background(), ident, thread.ID, run.ID, "tc_cancel"); err != nil {
+				t.Fatalf("StartToolCallExecution() error = %v", err)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := NewMemoryService()
+			ident := identity.LocalDevIdentity()
+			thread, err := svc.CreateThread(context.Background(), ident, CreateThreadInput{Title: "M7 cancel", Mode: ThreadModeChat})
+			if err != nil {
+				t.Fatalf("CreateThread() error = %v", err)
+			}
+			run, err := svc.StartRun(context.Background(), ident, thread.ID, StartRunInput{Source: RunSourceModelGateway, MessageID: "msg_cancel", ProviderID: "custom", Model: "model"})
+			if err != nil {
+				t.Fatalf("StartRun() error = %v", err)
+			}
+			if _, _, err := svc.RecordToolCallRequest(context.Background(), ident, run.ID, RecordToolCallRequestInput{ToolCallID: "tc_cancel", ToolName: ToolNameCurrentTime, ArgumentsSummary: map[string]any{"timezone": "UTC"}, ArgumentsHash: "hash_cancel", ApprovalStatus: ToolCallApprovalRequired, ExecutionStatus: ToolCallExecutionBlocked}); err != nil {
+				t.Fatalf("RecordToolCallRequest() error = %v", err)
+			}
+			tc.prepare(svc, ident, thread, run)
+
+			stopped, err := svc.StopRun(context.Background(), ident, run.ID)
+			if err != nil {
+				t.Fatalf("StopRun() error = %v", err)
+			}
+			if stopped.Run.Status != RunStatusStopped {
+				t.Fatalf("stopped = %+v", stopped)
+			}
+			call, err := svc.GetToolCall(context.Background(), ident, thread.ID, run.ID, "tc_cancel")
+			if err != nil {
+				t.Fatalf("GetToolCall() error = %v", err)
+			}
+			if call.ApprovalStatus != ToolCallApprovalCancelled || call.ExecutionStatus != ToolCallExecutionCancelled {
+				t.Fatalf("call = %+v", call)
+			}
+			if _, _, err := svc.CompleteToolCallSuccess(context.Background(), ident, thread.ID, run.ID, "tc_cancel", map[string]any{"timezone": "UTC"}); err != nil {
+				t.Fatalf("CompleteToolCallSuccess(after cancel) error = %v", err)
+			}
+			if _, _, err := svc.CompleteToolCallFailure(context.Background(), ident, thread.ID, run.ID, "tc_cancel", "tool_execution_failed", "failed"); err != nil {
+				t.Fatalf("CompleteToolCallFailure(after cancel) error = %v", err)
+			}
+			events, err := svc.ListRunEvents(context.Background(), ident, run.ID, 0)
+			if err != nil {
+				t.Fatalf("ListRunEvents() error = %v", err)
+			}
+			var cancelled, succeeded, failed int
+			for _, event := range events {
+				switch event.Type {
+				case EventToolCallCancelled:
+					cancelled++
+				case EventToolCallSucceeded:
+					succeeded++
+				case EventToolCallFailed:
+					failed++
+				}
+			}
+			if cancelled != 1 || succeeded != 0 || failed != 0 {
+				t.Fatalf("cancelled=%d succeeded=%d failed=%d events=%+v", cancelled, succeeded, failed, events)
+			}
+		})
+	}
+}
+
 func TestStartRunCreatesInitialLifecycleEvent(t *testing.T) {
 	svc := NewMemoryService()
 	ident := identity.LocalDevIdentity()

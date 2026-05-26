@@ -3,7 +3,7 @@ title: M7 Tool Call Approval API
 description: Tool-call projection, event payloads, diagnostics fields, and Phase 2 API-facing contracts.
 ---
 
-M7 Phase 2 adds the backend and frontend contracts needed for approval-gated internal tool calls. The US1 observable request slice now records provider-requested `runtime.get_current_time` calls, replays approval-required events, and exposes scoped current-state reads. HTTP approve/deny endpoints are specified for M7 but not implemented yet.
+M7 adds the backend and frontend contracts needed for approval-gated internal tool calls. The US1 observable request slice records provider-requested `runtime.get_current_time` calls, replays approval-required events, and exposes scoped current-state reads. The US2 decision slice adds idempotent approve/deny HTTP actions and frontend client hooks. The US3 execution slice schedules the existing worker after approval, executes the approved `runtime.get_current_time` call, and records terminal result, failure, or cancellation events. US4 keeps mixed model/tool replay ordered and visibly grouped.
 
 Local desktop Settings can also save one OpenAI-compatible `custom` model provider into the running local API process. That endpoint only returns redacted capability data and never echoes the API key.
 
@@ -110,15 +110,58 @@ Frontend API mapping converts these backend types to dotted runtime types such a
 
 `blocked_tool_approval_count` counts tool calls with `approval_status = required` and `execution_status = blocked`. `resumable_tool_call_count` counts calls approved but not started.
 
-## Planned approve/deny endpoints
+## Tool-call endpoints
 
-The M7 contract reserves these paths for later implementation:
+Tool calls are scoped by thread, run, and provider `tool_call_id`:
 
 - `GET /v1/threads/{thread_id}/runs/{run_id}/tool-calls/{tool_call_id}`
 - `POST /v1/threads/{thread_id}/runs/{run_id}/tool-calls/{tool_call_id}/approve`
 - `POST /v1/threads/{thread_id}/runs/{run_id}/tool-calls/{tool_call_id}/deny`
 
-Approve/deny must be idempotent for repeated same decisions and reject conflicting reversals after incompatible states.
+`approve` records one `tool_call_approved` event and moves the projection to:
+
+```json
+{
+  "approval_status": "approved",
+  "execution_status": "not_started"
+}
+```
+
+Approval also queues one M6 worker job for the run. When the worker claims that job, the tool-call projection moves through:
+
+```json
+{
+  "approval_status": "approved",
+  "execution_status": "executing"
+}
+```
+
+Successful execution records `tool_call_succeeded`, stores a redacted `result_summary`, emits `run_completed`, and leaves the projection at:
+
+```json
+{
+  "approval_status": "approved",
+  "execution_status": "succeeded",
+  "result_summary": {
+    "iso_time": "2026-05-24T10:00:00Z",
+    "timezone": "UTC",
+    "source": "runtime"
+  }
+}
+```
+
+Validation or executor failures record `tool_call_failed`, store stable redacted `error_code` and `error_message` fields, and emit `run_failed`.
+
+`deny` records one `tool_call_denied` event, emits `run_stopped`, and moves the projection to:
+
+```json
+{
+  "approval_status": "denied",
+  "execution_status": "cancelled"
+}
+```
+
+Repeated same decisions return HTTP 200 with the current projection and do not duplicate decision events. Conflicting reversals are rejected as HTTP 409 with error code `conflict`.
 
 ## Redaction and validation
 

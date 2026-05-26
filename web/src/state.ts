@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { apiClient, executionAdapter } from './apiClient'
 import { setMockRuntimeScript } from './mockApiClient'
-import type { BackendCapabilityState, Message, ProviderCapability, Run, RunEvent, RuntimeEvent, RuntimeScriptId, StaleEventGuard, StreamState, Thread, ThreadRuntimeState } from './domain'
+import type { BackendCapabilityState, Message, ProviderCapability, Run, RunEvent, RuntimeEvent, RuntimeScriptId, StaleEventGuard, StreamState, Thread, ThreadRuntimeState, ToolCatalogEntry } from './domain'
 import { isRuntimeActive, isRuntimeTerminal } from './runtime/executionAdapter'
 import { deriveCapabilitySignalFromEvent } from './runtime/backendCapabilityStatus'
 import { applyRealRunEvent, mapRealRuntimeCapabilitySignal } from './runtime/realExecutionAdapter'
@@ -235,6 +235,7 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
   const [capabilitySignals, setCapabilitySignals] = useState({ backendUnavailable: false, modelSetupMissing: false, providerUnavailable: false, streamDisconnected: false })
   const [selectedRuntimeScript, setSelectedRuntimeScript] = useState<RuntimeScriptId>('success')
   const [providerCapabilities, setProviderCapabilities] = useState<ProviderCapability[]>([])
+  const [toolCatalog, setToolCatalog] = useState<ToolCatalogEntry[]>([])
   const [providerCheckResults, setProviderCheckResults] = useState<Record<string, ProviderCheckResult>>({})
   const [providerSaveResult, setProviderSaveResult] = useState<ProviderSaveResult>({ status: 'idle' })
   const selectedThreadIdRef = useRef(selectedThreadId)
@@ -291,6 +292,24 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
       })
       .catch(() => {
         if (!cancelled) setProviderCapabilities([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!apiClient.getToolCatalog) {
+      setToolCatalog([])
+      return
+    }
+    let cancelled = false
+    apiClient.getToolCatalog()
+      .then((tools) => {
+        if (!cancelled) setToolCatalog(tools)
+      })
+      .catch(() => {
+        if (!cancelled) setToolCatalog([])
       })
     return () => {
       cancelled = true
@@ -400,6 +419,30 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
     setThreads(await apiClient.listThreads())
   }, [run])
 
+  const approveToolCall = useCallback(async (toolCallId: string) => {
+    if (!run || !apiClient.approveToolCall) return
+    setError(null)
+    try {
+      const toolCall = await apiClient.approveToolCall(selectedThreadId, run.id, toolCallId)
+      setRun((currentRun) => currentRun ? { ...currentRun, toolCalls: (currentRun.toolCalls ?? []).map((candidate) => candidate.toolCallId === toolCall.toolCallId ? toolCall : candidate) } : currentRun)
+      await refresh(selectedThreadId)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'API request failed')
+    }
+  }, [refresh, run, selectedThreadId])
+
+  const denyToolCall = useCallback(async (toolCallId: string) => {
+    if (!run || !apiClient.denyToolCall) return
+    setError(null)
+    try {
+      const toolCall = await apiClient.denyToolCall(selectedThreadId, run.id, toolCallId)
+      setRun((currentRun) => currentRun ? { ...currentRun, toolCalls: (currentRun.toolCalls ?? []).map((candidate) => candidate.toolCallId === toolCall.toolCallId ? toolCall : candidate), status: 'stopped' } : currentRun)
+      await refresh(selectedThreadId)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'API request failed')
+    }
+  }, [refresh, run, selectedThreadId])
+
   const retryRun = useCallback(async () => {
     if (!run || run.status !== 'failed') return
     setError(null)
@@ -497,6 +540,7 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
     capabilitySignals,
     selectedRuntimeScript,
     providerCapabilities,
+    toolCatalog,
     providerCheckResults,
     providerSaveResult,
     selectRuntimeScript,
@@ -509,6 +553,8 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
     archiveThread,
     sendMessage,
     stopRun,
+    approveToolCall,
+    denyToolCall,
     retryRun,
     regenerateRun,
   }

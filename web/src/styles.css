@@ -2136,6 +2136,58 @@ button, textarea, input, .sidebar, .chat-shell, .run-dock, .right-panel-menu, .r
 .provider-check-result.success { color: var(--green); }
 .provider-check-result.failed { color: var(--orange); }
 
+.tool-catalog-list {
+  display: grid;
+  gap: 10px;
+  padding: 16px 20px 20px;
+}
+
+.tool-catalog-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: center;
+  border: 1px solid var(--border-subtle);
+  border-radius: 14px;
+  padding: 13px 14px;
+  background: color-mix(in srgb, var(--material-floating) 42%, transparent);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+.tool-catalog-title,
+.tool-catalog-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.tool-catalog-title strong {
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.tool-catalog-main p {
+  margin: 6px 0 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.tool-catalog-meta {
+  justify-content: flex-end;
+  max-width: min(360px, 34vw);
+}
+
+.tool-catalog-meta span {
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  padding: 4px 7px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 620;
+}
+
 .provider-test-button,
 .provider-save-button {
   border: 1px solid var(--border-subtle);

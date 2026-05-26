@@ -2,6 +2,16 @@ import { describe, expect, test } from 'bun:test'
 import { mockApiClient, setMockRuntimeScript } from './mockApiClient'
 
 describe('mockApiClient thread runs', () => {
+  test('does not reuse seeded message ids when completing a seeded mock run', async () => {
+    mockApiClient.subscribeRunEvents?.('run-1', 0, () => {}, () => {})
+    await new Promise((resolve) => setTimeout(resolve, 220))
+
+    const messages = await mockApiClient.getThreadMessages('thread-brief')
+    const ids = messages.map((message) => message.id)
+
+    expect(new Set(ids).size).toBe(ids.length)
+  })
+
   test('creates a retrievable idle run for a new mock thread', async () => {
     const thread = await mockApiClient.createThread?.('New thread', 'chat')
 

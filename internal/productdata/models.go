@@ -137,12 +137,21 @@ const (
 	CodeProviderMisconfigured Code = "provider_misconfigured"
 	CodeMethodNotAllowed      Code = "method_not_allowed"
 	CodeInternalError         Code = "internal_error"
+	CodeConflict              Code = "conflict"
 )
 
 const (
-	MaxThreadTitleLength     = 120
-	MaxClientMessageIDLength = 120
-	ToolNameCurrentTime      = "runtime.get_current_time"
+	MaxThreadTitleLength         = 120
+	MaxClientMessageIDLength     = 120
+	ToolNameCurrentTime          = "runtime.get_current_time"
+	ToolNameTodoWrite            = "runtime.todo_write"
+	ToolNameMCPCallTool          = "mcp.call_tool"
+	ToolNameWorkspaceGlob        = "workspace.glob"
+	ToolNameWorkspaceGrep        = "workspace.grep"
+	ToolNameWorkspaceReadFile    = "workspace.read_file"
+	ToolNameWorkspaceWriteFile   = "workspace.write_file"
+	ToolNameWorkspaceEdit        = "workspace.edit"
+	ToolNameWorkspaceExecCommand = "workspace.exec_command"
 )
 
 type ProductError struct {
@@ -442,7 +451,7 @@ func ValidateToolCallRequestInput(input RecordToolCallRequestInput) (RecordToolC
 	if input.ToolCallID == "" || input.ToolName == "" {
 		return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Tool call id and name are required.")
 	}
-	if input.ToolName != ToolNameCurrentTime {
+	if !isSupportedToolName(input.ToolName) {
 		return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Tool is not supported.")
 	}
 	if input.ApprovalStatus != ToolCallApprovalRequired || input.ExecutionStatus != ToolCallExecutionBlocked {
@@ -457,21 +466,295 @@ func ValidateToolCallRequestInput(input RecordToolCallRequestInput) (RecordToolC
 	if input.ArgumentsSummary == nil {
 		input.ArgumentsSummary = map[string]any{}
 	}
-	for key := range input.ArgumentsSummary {
-		if key != "timezone" {
-			return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Tool call argument is not supported.")
+	return normalizeToolArguments(input)
+}
+
+func isSupportedToolName(name string) bool {
+	switch name {
+	case ToolNameCurrentTime, ToolNameTodoWrite, ToolNameMCPCallTool, ToolNameWorkspaceGlob, ToolNameWorkspaceGrep, ToolNameWorkspaceReadFile, ToolNameWorkspaceWriteFile, ToolNameWorkspaceEdit, ToolNameWorkspaceExecCommand:
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeToolArguments(input RecordToolCallRequestInput) (RecordToolCallRequestInput, error) {
+	switch input.ToolName {
+	case ToolNameCurrentTime:
+		for key := range input.ArgumentsSummary {
+			if key != "timezone" {
+				return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Tool call argument is not supported.")
+			}
+		}
+		value, ok := input.ArgumentsSummary["timezone"]
+		if !ok || value == nil {
+			input.ArgumentsSummary["timezone"] = "UTC"
+			return input, nil
+		}
+		timezone, ok := value.(string)
+		if !ok || timezone != "UTC" {
+			return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Tool call timezone must be UTC.")
+		}
+		return input, nil
+	case ToolNameTodoWrite:
+		if err := validateAllowedArgumentKeys(input.ArgumentsSummary, "items"); err != nil {
+			return RecordToolCallRequestInput{}, err
+		}
+		items, err := normalizeTodoWriteSummary(input.ArgumentsSummary["items"])
+		if err != nil {
+			return RecordToolCallRequestInput{}, err
+		}
+		input.ArgumentsSummary["items"] = items
+		return input, nil
+	case ToolNameMCPCallTool:
+		if err := validateAllowedArgumentKeys(input.ArgumentsSummary, "server", "tool", "arguments"); err != nil {
+			return RecordToolCallRequestInput{}, err
+		}
+		arguments, err := normalizeMCPCallToolSummary(input.ArgumentsSummary)
+		if err != nil {
+			return RecordToolCallRequestInput{}, err
+		}
+		input.ArgumentsSummary["server"] = "local"
+		input.ArgumentsSummary["tool"] = "echo"
+		input.ArgumentsSummary["arguments"] = arguments
+		return input, nil
+	case ToolNameWorkspaceGlob:
+		if err := validateAllowedArgumentKeys(input.ArgumentsSummary, "pattern", "limit"); err != nil {
+			return RecordToolCallRequestInput{}, err
+		}
+		pattern, ok := input.ArgumentsSummary["pattern"].(string)
+		if !ok || strings.TrimSpace(pattern) == "" || sensitiveWorkspacePath(pattern) || workspacePathEscapes(pattern) {
+			return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Workspace glob pattern is invalid.")
+		}
+		input.ArgumentsSummary["pattern"] = strings.TrimSpace(pattern)
+		return input, nil
+	case ToolNameWorkspaceGrep:
+		if err := validateAllowedArgumentKeys(input.ArgumentsSummary, "query", "path", "limit"); err != nil {
+			return RecordToolCallRequestInput{}, err
+		}
+		query, ok := input.ArgumentsSummary["query"].(string)
+		if !ok || strings.TrimSpace(query) == "" {
+			return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Workspace grep query is invalid.")
+		}
+		input.ArgumentsSummary["query"] = strings.TrimSpace(query)
+		if value, ok := input.ArgumentsSummary["path"]; ok && value != nil {
+			pathValue, ok := value.(string)
+			if !ok || sensitiveWorkspacePath(pathValue) || workspacePathEscapes(pathValue) {
+				return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Workspace grep path is invalid.")
+			}
+			input.ArgumentsSummary["path"] = strings.TrimSpace(pathValue)
+		}
+		return input, nil
+	case ToolNameWorkspaceReadFile:
+		if err := validateAllowedArgumentKeys(input.ArgumentsSummary, "path", "max_bytes"); err != nil {
+			return RecordToolCallRequestInput{}, err
+		}
+		pathValue, ok := input.ArgumentsSummary["path"].(string)
+		if !ok || strings.TrimSpace(pathValue) == "" || sensitiveWorkspacePath(pathValue) || workspacePathEscapes(pathValue) {
+			return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Workspace read path is invalid.")
+		}
+		input.ArgumentsSummary["path"] = strings.TrimSpace(pathValue)
+		return input, nil
+	case ToolNameWorkspaceWriteFile:
+		if err := validateAllowedArgumentKeys(input.ArgumentsSummary, "path", "content"); err != nil {
+			return RecordToolCallRequestInput{}, err
+		}
+		pathValue, ok := input.ArgumentsSummary["path"].(string)
+		if !ok || strings.TrimSpace(pathValue) == "" || sensitiveWorkspacePath(pathValue) || workspacePathEscapes(pathValue) {
+			return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Workspace write path is invalid.")
+		}
+		content, ok := input.ArgumentsSummary["content"].(string)
+		if !ok || len(content) > 65536 {
+			return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Workspace write content is invalid.")
+		}
+		input.ArgumentsSummary["path"] = strings.TrimSpace(pathValue)
+		return input, nil
+	case ToolNameWorkspaceEdit:
+		if err := validateAllowedArgumentKeys(input.ArgumentsSummary, "path", "old_text", "new_text"); err != nil {
+			return RecordToolCallRequestInput{}, err
+		}
+		pathValue, ok := input.ArgumentsSummary["path"].(string)
+		if !ok || strings.TrimSpace(pathValue) == "" || sensitiveWorkspacePath(pathValue) || workspacePathEscapes(pathValue) {
+			return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Workspace edit path is invalid.")
+		}
+		oldText, ok := input.ArgumentsSummary["old_text"].(string)
+		if !ok || oldText == "" || len(oldText) > 65536 {
+			return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Workspace edit old_text is invalid.")
+		}
+		newText, ok := input.ArgumentsSummary["new_text"].(string)
+		if !ok || len(newText) > 65536 {
+			return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Workspace edit new_text is invalid.")
+		}
+		input.ArgumentsSummary["path"] = strings.TrimSpace(pathValue)
+		return input, nil
+	case ToolNameWorkspaceExecCommand:
+		if err := validateAllowedArgumentKeys(input.ArgumentsSummary, "command", "cwd", "timeout_seconds"); err != nil {
+			return RecordToolCallRequestInput{}, err
+		}
+		command, err := normalizeCommandSummary(input.ArgumentsSummary["command"])
+		if err != nil || dangerousCommandSummary(command) {
+			return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Workspace command is invalid.")
+		}
+		input.ArgumentsSummary["command"] = command
+		if value, ok := input.ArgumentsSummary["cwd"]; ok && value != nil {
+			cwd, ok := value.(string)
+			if !ok || strings.TrimSpace(cwd) == "" || sensitiveWorkspacePath(cwd) || workspacePathEscapes(cwd) {
+				return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Workspace command cwd is invalid.")
+			}
+			input.ArgumentsSummary["cwd"] = strings.TrimSpace(cwd)
+		}
+		if value, ok := input.ArgumentsSummary["timeout_seconds"]; ok && value != nil {
+			if !validBoundedNumber(value, 1, 120) {
+				return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Workspace command timeout is invalid.")
+			}
+		}
+		return input, nil
+	default:
+		return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Tool is not supported.")
+	}
+}
+
+func validateAllowedArgumentKeys(arguments map[string]any, allowed ...string) error {
+	allowedSet := map[string]struct{}{}
+	for _, key := range allowed {
+		allowedSet[key] = struct{}{}
+	}
+	for key := range arguments {
+		if _, ok := allowedSet[key]; !ok {
+			return NewError(CodeInvalidRequest, "Tool call argument is not supported.")
 		}
 	}
-	value, ok := input.ArgumentsSummary["timezone"]
-	if !ok || value == nil {
-		input.ArgumentsSummary["timezone"] = "UTC"
-		return input, nil
+	return nil
+}
+
+func normalizeCommandSummary(value any) ([]any, error) {
+	items, ok := value.([]any)
+	if !ok || len(items) == 0 || len(items) > 32 {
+		return nil, NewError(CodeInvalidRequest, "Workspace command argv is invalid.")
 	}
-	timezone, ok := value.(string)
-	if !ok || timezone != "UTC" {
-		return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Tool call timezone must be UTC.")
+	for _, item := range items {
+		part, ok := item.(string)
+		if !ok || strings.TrimSpace(part) == "" || len(part) > 65536 {
+			return nil, NewError(CodeInvalidRequest, "Workspace command argv is invalid.")
+		}
 	}
-	return input, nil
+	return items, nil
+}
+
+func normalizeTodoWriteSummary(value any) ([]any, error) {
+	items, ok := value.([]any)
+	if !ok || len(items) == 0 || len(items) > 20 {
+		return nil, NewError(CodeInvalidRequest, "Todo items are invalid.")
+	}
+	normalized := make([]any, 0, len(items))
+	for _, raw := range items {
+		item, ok := raw.(map[string]any)
+		if !ok {
+			return nil, NewError(CodeInvalidRequest, "Todo item is invalid.")
+		}
+		title, ok := item["title"].(string)
+		title = strings.TrimSpace(title)
+		if !ok || title == "" || len(title) > 160 {
+			return nil, NewError(CodeInvalidRequest, "Todo item title is invalid.")
+		}
+		status := "pending"
+		if rawStatus, ok := item["status"]; ok && rawStatus != nil {
+			statusValue, ok := rawStatus.(string)
+			if !ok {
+				return nil, NewError(CodeInvalidRequest, "Todo item status is invalid.")
+			}
+			status = strings.TrimSpace(statusValue)
+		}
+		if status != "pending" && status != "in_progress" && status != "completed" {
+			return nil, NewError(CodeInvalidRequest, "Todo item status is invalid.")
+		}
+		normalized = append(normalized, map[string]any{"title": title, "status": status})
+	}
+	return normalized, nil
+}
+
+func normalizeMCPCallToolSummary(arguments map[string]any) (map[string]any, error) {
+	server, ok := arguments["server"].(string)
+	if !ok || strings.TrimSpace(server) != "local" {
+		return nil, NewError(CodeInvalidRequest, "MCP server is invalid.")
+	}
+	tool, ok := arguments["tool"].(string)
+	if !ok || strings.TrimSpace(tool) != "echo" {
+		return nil, NewError(CodeInvalidRequest, "MCP tool is invalid.")
+	}
+	rawArguments, ok := arguments["arguments"].(map[string]any)
+	if !ok {
+		return nil, NewError(CodeInvalidRequest, "MCP arguments are invalid.")
+	}
+	if err := validateAllowedArgumentKeys(rawArguments, "message"); err != nil {
+		return nil, err
+	}
+	message, ok := rawArguments["message"].(string)
+	message = strings.TrimSpace(message)
+	if !ok || message == "" || len(message) > 500 || secretLookingText(message) {
+		return nil, NewError(CodeInvalidRequest, "MCP message is invalid.")
+	}
+	return map[string]any{"message": message}, nil
+}
+
+func secretLookingText(value string) bool {
+	lower := strings.ToLower(value)
+	return RedactEventText(value) == "[redacted]" || strings.Contains(lower, "sk-")
+}
+
+func dangerousCommandSummary(command []any) bool {
+	if len(command) == 0 {
+		return true
+	}
+	first, _ := command[0].(string)
+	base := strings.ToLower(strings.TrimSpace(first))
+	if slash := strings.LastIndexAny(base, "/\\"); slash >= 0 {
+		base = base[slash+1:]
+	}
+	switch base {
+	case "sh", "bash", "zsh", "fish", "rm", "dd", "mkfs", "chmod", "chown", "kill", "killall", "shutdown", "reboot", "sudo", "su":
+		return true
+	case "git":
+		if len(command) > 1 {
+			sub, _ := command[1].(string)
+			sub = strings.ToLower(strings.TrimSpace(sub))
+			return sub == "push" || sub == "reset" || sub == "clean" || sub == "checkout"
+		}
+	}
+	return false
+}
+
+func validBoundedNumber(value any, min int, max int) bool {
+	var number int
+	switch typed := value.(type) {
+	case int:
+		number = typed
+	case int64:
+		number = int(typed)
+	case float64:
+		number = int(typed)
+	default:
+		return false
+	}
+	return number >= min && number <= max
+}
+
+func workspacePathEscapes(value string) bool {
+	value = strings.TrimSpace(strings.ReplaceAll(value, "\\", "/"))
+	return value == "" || strings.HasPrefix(value, "/") || strings.Contains(value, "../") || strings.HasPrefix(value, "..")
+}
+
+func sensitiveWorkspacePath(value string) bool {
+	value = strings.ToLower(strings.ReplaceAll(value, "\\", "/"))
+	for _, segment := range strings.Split(value, "/") {
+		if segment == "" {
+			continue
+		}
+		if segment == ".ssh" || segment == ".aws" || segment == "secrets" || segment == "credentials" || strings.HasPrefix(segment, ".env") || strings.HasPrefix(segment, "id_rsa") || strings.HasPrefix(segment, "id_ed25519") || strings.HasSuffix(segment, ".pem") {
+			return true
+		}
+	}
+	return false
 }
 
 func NormalizeRunSource(source RunSource) (RunSource, error) {
@@ -525,6 +808,15 @@ func IsRunActive(status RunStatus) bool {
 func IsBackgroundJobTerminal(status BackgroundJobStatus) bool {
 	switch status {
 	case BackgroundJobStatusCompleted, BackgroundJobStatusFailed, BackgroundJobStatusCancelled, BackgroundJobStatusDead:
+		return true
+	default:
+		return false
+	}
+}
+
+func IsToolCallTerminal(status ToolCallExecutionStatus) bool {
+	switch status {
+	case ToolCallExecutionSucceeded, ToolCallExecutionFailed, ToolCallExecutionCancelled:
 		return true
 	default:
 		return false

@@ -3,7 +3,7 @@ title: Local M7 Tool Call Approval Runbook
 description: Local validation commands and smoke expectations for the M7 tool-call approval foundation.
 ---
 
-M7 currently has the Phase 2 foundation plus the US1 observable request slice: schema, product-data services, runtime tool definition, provider-to-approval-required conversion for `runtime.get_current_time`, scoped tool-call reads, stream replay tests, diagnostics counters, and frontend approval-required placeholders. Full approve/deny UI and execution smoke paths are later M7 tasks.
+M7 currently has the complete current-time approval slice: schema, product-data services, runtime tool definition, provider-to-approval-required conversion for `runtime.get_current_time`, scoped tool-call reads, idempotent approve/deny actions, worker resume after approval, stream replay tests, diagnostics counters, frontend approval/result/error/cancel controls, cancellation precedence, and mixed model/tool RunRail polish. Full multi-step model continuation remains outside M7.
 
 ## Start local services
 
@@ -30,7 +30,7 @@ The response and later provider list only expose redacted capability fields. The
 
 ## Foundation smoke expectations
 
-Until approve/deny endpoints land, validate the foundation and observable request slice with automated tests:
+Validate the foundation, observable request slice, and approve/deny decision slice with automated tests:
 
 - `tool_calls` migration creates a unique `(run_id, tool_call_id)` projection and rolls back cleanly.
 - `RecordToolCallRequest` records `tool_call_requested` and `tool_call_approval_required` once for duplicate requests.
@@ -41,8 +41,10 @@ Until approve/deny endpoints land, validate the foundation and observable reques
 - worker diagnostics count approval-blocked tool calls.
 - frontend runtime replay maps `tool.call.*` events into one stable `ToolCall` view model.
 - gateway provider tool-call events for `runtime.get_current_time` become `tool_call_requested` and `tool_call_approval_required` without assistant message persistence or tool execution.
+- approve schedules one worker job, emits `tool_call_executing`, and completes approved `runtime.get_current_time` calls with `tool_call_succeeded` plus `run_completed`.
+- tool execution failures emit `tool_call_failed` plus `run_failed` with stable redacted error fields.
 - scoped `GET /v1/threads/{thread_id}/runs/{run_id}/tool-calls/{tool_call_id}` returns the redacted current projection.
-- ToolCallCard renders approval-required placeholders with disabled controls until approve/deny handlers land.
+- ToolCallCard renders disabled approval controls without handlers, enabled controls when approve/deny handlers are wired, and terminal denied/executing/succeeded/failed/cancelled states.
 
 ## Validation commands
 

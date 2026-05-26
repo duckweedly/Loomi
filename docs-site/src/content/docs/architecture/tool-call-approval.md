@@ -5,7 +5,7 @@ description: Approval-gated internal tool-call foundation, audit events, and saf
 
 M7 starts the tool-calling slice without opening broad tool execution. The foundation records model-requested internal tool calls, blocks runs on approval, keeps a redacted current-state projection, and replays the lifecycle through persisted run events.
 
-The implemented Phase 2 slice is infrastructure foundation, and the US1 observable request slice now converts allowlisted provider `runtime.get_current_time` requests into durable approval-required tool calls. Approve/deny HTTP handlers, full enabled UI controls, and worker execution resume are later M7 user-story work.
+The implemented slice includes the infrastructure foundation plus US1-US4. US1 converts allowlisted provider `runtime.get_current_time` requests into durable approval-required tool calls. US2 records idempotent approve/deny decisions through scoped HTTP actions and frontend client controls. US3 queues the existing M6 worker after approval and executes the approved current-time tool through the M7 internal tool executor. US4 keeps tool lifecycle rows distinct from model stream rows across history-first replay and live continuation.
 
 ## Boundary
 
@@ -16,6 +16,7 @@ M7 reuses the M6 worker/job and M4 run/event/SSE foundations:
 - runs can enter `blocked_on_tool_approval`
 - history-first SSE continues to replay persisted events by sequence
 - worker diagnostics can count approval-blocked and resumable tool calls
+- approval creates one resumable worker job for the existing run
 - RunRail/runtime grouping separates tool-call events from model stream and worker/job rows
 
 ## Durable projection
@@ -79,4 +80,4 @@ Model-generated tool arguments are untrusted data. Persisted summaries and event
 
 ## Current limitations
 
-Phase 2 records and replays the foundation. US1 now converts allowlisted provider tool calls through the gateway, blocks the run on approval, exposes scoped tool-call reads, and renders disabled approval placeholders. It does not yet expose approve/deny endpoints, enable approval controls, execute approved tools through the worker, or continue the model loop with tool results.
+The US3 MVP finalizes the run after the approved tool succeeds, fails, or is cancelled. It does not yet continue a multi-step model loop with tool results. Stop/cancel has precedence over pending, approved, and executing tool calls; later worker attempts see the cancelled projection and avoid duplicate terminal tool events.

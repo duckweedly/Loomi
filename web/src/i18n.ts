@@ -154,6 +154,10 @@ type Dictionary = {
     providerApiKeyHelper: string
     providerConfigured: string
     providerNotConfigured: string
+    toolCatalogTitle: string
+    toolCatalogDescription: string
+    toolCatalogEmpty: string
+    toolCatalogEmptyHelper: string
     aboutLocalApp: string
     aboutLocalAppDescription: string
     appName: string
@@ -337,6 +341,10 @@ export const dictionaries: Record<Locale, Dictionary> = {
       providerApiKeyHelper: '密钥只发送给本地 API 保存到当前进程，不会从接口返回或在界面回显。',
       providerConfigured: '已填写',
       providerNotConfigured: '未填写',
+      toolCatalogTitle: '工具目录',
+      toolCatalogDescription: '只读显示当前后端暴露的工具、审批策略、风险等级和副作用边界。',
+      toolCatalogEmpty: '暂无工具目录',
+      toolCatalogEmptyHelper: '未连接本地 API 时不会展示真实工具权限。',
       aboutLocalApp: '本地应用状态',
       aboutLocalAppDescription: '显示已知本地状态；构建和账号信息仍是占位。',
       appName: '应用',
@@ -518,6 +526,10 @@ export const dictionaries: Record<Locale, Dictionary> = {
       providerApiKeyHelper: 'The key is sent only to the local API and is never returned or echoed in the UI.',
       providerConfigured: 'Set',
       providerNotConfigured: 'Not set',
+      toolCatalogTitle: 'Tool catalog',
+      toolCatalogDescription: 'Read-only view of backend tools, approval policy, risk level, and side-effect boundary.',
+      toolCatalogEmpty: 'No tool catalog',
+      toolCatalogEmptyHelper: 'Real tool permissions are hidden until the local API is connected.',
       aboutLocalApp: 'Local app status',
       aboutLocalAppDescription: 'Shows known local state; build and account metadata remain placeholders.',
       appName: 'Application',

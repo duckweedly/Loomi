@@ -35,7 +35,7 @@ func statusForError(err error) int {
 		return http.StatusBadRequest
 	case productdata.CodeThreadNotFound, productdata.CodeRunNotFound:
 		return http.StatusNotFound
-	case productdata.CodeActiveRunExists:
+	case productdata.CodeActiveRunExists, productdata.CodeConflict:
 		return http.StatusConflict
 	case productdata.CodeProviderUnavailable:
 		return http.StatusServiceUnavailable

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { createClientMessageID, mapApiProviderCapability, mapApiRun, mapApiRunEvent, mapApiToolCall, mapApiWorkerQueueDiagnostics } from './realApiClient'
+import { createClientMessageID, mapApiProviderCapability, mapApiRun, mapApiRunEvent, mapApiToolCall, mapApiToolCatalogEntry, mapApiWorkerQueueDiagnostics, realApiClient } from './realApiClient'
 
 describe('createClientMessageID', () => {
   test('does not rely on Date.now alone', () => {
@@ -14,6 +14,65 @@ describe('createClientMessageID', () => {
       expect(second).not.toBe(first)
     } finally {
       Date.now = originalNow
+    }
+  })
+})
+
+describe('M11 tool catalog mapping', () => {
+  test('maps tool catalog entries without executable payload fields', () => {
+    const tool = mapApiToolCatalogEntry({
+      name: 'workspace.exec_command',
+      label: 'Run workspace command',
+      group: 'workspace',
+      capability: 'exec',
+      approval_policy: 'required',
+      safety_class: 'workspace_exec',
+      risk_level: 'high',
+      side_effect: 'process',
+      enabled: true,
+      description: 'Run an allowlisted argv command inside the workspace.',
+    })
+
+    expect(tool).toEqual({
+      name: 'workspace.exec_command',
+      label: 'Run workspace command',
+      group: 'workspace',
+      capability: 'exec',
+      approvalPolicy: 'required',
+      safetyClass: 'workspace_exec',
+      riskLevel: 'high',
+      sideEffect: 'process',
+      enabled: true,
+      description: 'Run an allowlisted argv command inside the workspace.',
+    })
+  })
+
+  test('loads the read-only catalog from the local API', async () => {
+    const originalFetch = globalThis.fetch
+    const calls: string[] = []
+    globalThis.fetch = (async (url: RequestInfo | URL) => {
+      calls.push(String(url))
+      return new Response(JSON.stringify({
+        tools: [{
+          name: 'workspace.read_file',
+          label: 'Read workspace file',
+          group: 'workspace',
+          capability: 'read',
+          approval_policy: 'required',
+          safety_class: 'workspace_read',
+          risk_level: 'medium',
+          side_effect: 'none',
+          enabled: true,
+          description: 'Read a bounded text file.',
+        }],
+        updated_at: '2026-05-26T00:00:00Z',
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    }) as typeof fetch
+    try {
+      await expect(realApiClient.getToolCatalog?.()).resolves.toMatchObject([{ name: 'workspace.read_file', approvalPolicy: 'required', riskLevel: 'medium' }])
+      expect(calls).toEqual(['/v1/tools/catalog'])
+    } finally {
+      globalThis.fetch = originalFetch
     }
   })
 })
@@ -49,6 +108,69 @@ describe('M7 tool-call mapping', () => {
       errorCode: null,
       errorMessage: null,
     })
+  })
+
+  test('maps approval decisions and execution states distinctly', () => {
+    expect(mapApiToolCall({
+      id: 'tool_approved',
+      thread_id: 'thread_1',
+      run_id: 'run_1',
+      tool_call_id: 'tc_approved',
+      tool_name: 'runtime.get_current_time',
+      arguments_summary: { timezone: 'UTC' },
+      approval_status: 'approved',
+      execution_status: 'not_started',
+      result_summary: null,
+      error_code: null,
+      error_message: null,
+    }).status).toBe('approved')
+    expect(mapApiToolCall({
+      id: 'tool_denied',
+      thread_id: 'thread_1',
+      run_id: 'run_1',
+      tool_call_id: 'tc_denied',
+      tool_name: 'runtime.get_current_time',
+      arguments_summary: { timezone: 'UTC' },
+      approval_status: 'denied',
+      execution_status: 'cancelled',
+      result_summary: null,
+      error_code: null,
+      error_message: null,
+    }).status).toBe('denied')
+  })
+
+  test('approve and deny clients POST and map the returned current tool-call state', async () => {
+    const originalFetch = globalThis.fetch
+    const calls: Array<{ url: string; method?: string }> = []
+    globalThis.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(url), method: init?.method })
+      const denied = String(url).endsWith('/deny')
+      return new Response(JSON.stringify({
+        tool_call: {
+          id: denied ? 'tool_denied' : 'tool_approved',
+          thread_id: 'thread_1',
+          run_id: 'run_1',
+          tool_call_id: denied ? 'tc_denied' : 'tc_approved',
+          tool_name: 'runtime.get_current_time',
+          arguments_summary: { timezone: 'UTC' },
+          approval_status: denied ? 'denied' : 'approved',
+          execution_status: denied ? 'cancelled' : 'not_started',
+          result_summary: null,
+          error_code: null,
+          error_message: null,
+        },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    }) as typeof fetch
+    try {
+      await expect(realApiClient.approveToolCall('thread_1', 'run_1', 'tc_approved')).resolves.toMatchObject({ toolCallId: 'tc_approved', status: 'approved', approvalStatus: 'approved', executionStatus: 'not_started' })
+      await expect(realApiClient.denyToolCall('thread_1', 'run_1', 'tc_denied')).resolves.toMatchObject({ toolCallId: 'tc_denied', status: 'denied', approvalStatus: 'denied', executionStatus: 'cancelled' })
+      expect(calls).toEqual([
+        { url: '/v1/threads/thread_1/runs/run_1/tool-calls/tc_approved/approve', method: 'POST' },
+        { url: '/v1/threads/thread_1/runs/run_1/tool-calls/tc_denied/deny', method: 'POST' },
+      ])
+    } finally {
+      globalThis.fetch = originalFetch
+    }
   })
 })
 

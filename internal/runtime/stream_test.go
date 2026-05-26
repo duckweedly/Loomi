@@ -91,3 +91,33 @@ func TestMergeHistoryThenLiveKeepsM6WorkerEventOrder(t *testing.T) {
 		}
 	}
 }
+
+func TestMergeHistoryThenLiveKeepsMixedModelToolAndFinalOrder(t *testing.T) {
+	history := []productdata.RunEvent{
+		{ID: "evt_model", RunID: "run_1", Sequence: 2, Type: "message.model_output_delta"},
+		{ID: "evt_requested", RunID: "run_1", Sequence: 3, Type: productdata.EventToolCallRequested},
+		{ID: "evt_required", RunID: "run_1", Sequence: 4, Type: productdata.EventToolCallApprovalRequired},
+	}
+	live := make(chan productdata.RunEvent, 5)
+	live <- productdata.RunEvent{ID: "evt_approved", RunID: "run_1", Sequence: 5, Type: productdata.EventToolCallApproved}
+	live <- productdata.RunEvent{ID: "evt_executing", RunID: "run_1", Sequence: 6, Type: productdata.EventToolCallExecuting}
+	live <- productdata.RunEvent{ID: "evt_succeeded", RunID: "run_1", Sequence: 7, Type: productdata.EventToolCallSucceeded}
+	live <- productdata.RunEvent{ID: "evt_final", RunID: "run_1", Sequence: 8, Type: productdata.EventRunCompleted}
+	live <- productdata.RunEvent{ID: "evt_required", RunID: "run_1", Sequence: 4, Type: productdata.EventToolCallApprovalRequired}
+	close(live)
+
+	merged := CollectHistoryThenLive(context.Background(), history, live, 1)
+	got := make([]string, 0, len(merged))
+	for _, event := range merged {
+		got = append(got, event.Type)
+	}
+	want := []string{"message.model_output_delta", productdata.EventToolCallRequested, productdata.EventToolCallApprovalRequired, productdata.EventToolCallApproved, productdata.EventToolCallExecuting, productdata.EventToolCallSucceeded, productdata.EventRunCompleted}
+	if len(got) != len(want) {
+		t.Fatalf("merged = %+v", merged)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("got = %+v want = %+v", got, want)
+		}
+	}
+}

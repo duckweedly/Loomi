@@ -28,6 +28,11 @@ type Service interface {
 	StopRun(context.Context, identity.LocalIdentity, string) (StopRunOutput, error)
 	GetToolCall(context.Context, identity.LocalIdentity, string, string, string) (ToolCall, error)
 	RecordToolCallRequest(context.Context, identity.LocalIdentity, string, RecordToolCallRequestInput) (ToolCall, []RunEvent, error)
+	ApproveToolCall(context.Context, identity.LocalIdentity, string, string, string) (ToolCall, []RunEvent, error)
+	DenyToolCall(context.Context, identity.LocalIdentity, string, string, string) (ToolCall, []RunEvent, error)
+	StartToolCallExecution(context.Context, identity.LocalIdentity, string, string, string) (ToolCall, []RunEvent, error)
+	CompleteToolCallSuccess(context.Context, identity.LocalIdentity, string, string, string, map[string]any) (ToolCall, []RunEvent, error)
+	CompleteToolCallFailure(context.Context, identity.LocalIdentity, string, string, string, string, string) (ToolCall, []RunEvent, error)
 	ClaimBackgroundJob(context.Context, identity.LocalIdentity, ClaimBackgroundJobInput) (BackgroundJob, Run, bool, error)
 	RenewBackgroundJobLease(context.Context, identity.LocalIdentity, RenewBackgroundJobLeaseInput) (BackgroundJob, bool, error)
 	RecoverBackgroundJobs(context.Context, identity.LocalIdentity, RecoverBackgroundJobsInput) ([]BackgroundJobRecovery, error)
@@ -417,6 +422,177 @@ func (s *MemoryService) RecordToolCallRequest(_ context.Context, ident identity.
 	return call, []RunEvent{requested, required}, nil
 }
 
+func (s *MemoryService) ApproveToolCall(_ context.Context, ident identity.LocalIdentity, threadID string, runID string, toolCallID string) (ToolCall, []RunEvent, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user := s.ensureUserLocked(ident)
+	run, ok := s.runs[runID]
+	if !ok || run.UserID != user.ID || run.ThreadID != threadID {
+		return ToolCall{}, nil, NewError(CodeRunNotFound, "Run not found.")
+	}
+	key := run.ID + ":" + strings.TrimSpace(toolCallID)
+	call, ok := s.toolCalls[key]
+	if !ok {
+		return ToolCall{}, nil, NewError(CodeRunNotFound, "Run not found.")
+	}
+	if call.ApprovalStatus == ToolCallApprovalApproved && call.ExecutionStatus == ToolCallExecutionNotStarted {
+		return call, nil, nil
+	}
+	if call.ApprovalStatus != ToolCallApprovalRequired || call.ExecutionStatus != ToolCallExecutionBlocked {
+		return ToolCall{}, nil, NewError(CodeConflict, "Tool call decision conflicts with current state.")
+	}
+	now := s.now()
+	call.ApprovalStatus = ToolCallApprovalApproved
+	call.ExecutionStatus = ToolCallExecutionNotStarted
+	call.UpdatedAt = now
+	s.toolCalls[key] = call
+	run.Status = RunStatusQueued
+	run.UpdatedAt = now
+	s.runs[run.ID] = run
+	s.enqueueToolCallJobLocked(user.ID, run, call, now)
+	metadata := toolCallEventMetadata(call)
+	event := s.appendRunEventLocked(run, RunEventCategoryProgress, EventToolCallApproved, "Tool call approved", nil, metadata, now)
+	return call, []RunEvent{event}, nil
+}
+
+func (s *MemoryService) DenyToolCall(_ context.Context, ident identity.LocalIdentity, threadID string, runID string, toolCallID string) (ToolCall, []RunEvent, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user := s.ensureUserLocked(ident)
+	run, ok := s.runs[runID]
+	if !ok || run.UserID != user.ID || run.ThreadID != threadID {
+		return ToolCall{}, nil, NewError(CodeRunNotFound, "Run not found.")
+	}
+	key := run.ID + ":" + strings.TrimSpace(toolCallID)
+	call, ok := s.toolCalls[key]
+	if !ok {
+		return ToolCall{}, nil, NewError(CodeRunNotFound, "Run not found.")
+	}
+	if call.ApprovalStatus == ToolCallApprovalDenied && call.ExecutionStatus == ToolCallExecutionCancelled {
+		return call, nil, nil
+	}
+	if call.ApprovalStatus != ToolCallApprovalRequired || call.ExecutionStatus != ToolCallExecutionBlocked {
+		return ToolCall{}, nil, NewError(CodeConflict, "Tool call decision conflicts with current state.")
+	}
+	now := s.now()
+	call.ApprovalStatus = ToolCallApprovalDenied
+	call.ExecutionStatus = ToolCallExecutionCancelled
+	call.UpdatedAt = now
+	s.toolCalls[key] = call
+	run.Status = RunStatusStopped
+	run.UpdatedAt = now
+	run.CompletedAt = &now
+	s.runs[run.ID] = run
+	metadata := toolCallEventMetadata(call)
+	denied := s.appendRunEventLocked(run, RunEventCategoryProgress, EventToolCallDenied, "Tool call denied", nil, metadata, now)
+	stopped := s.appendRunEventLocked(run, RunEventCategoryFinal, EventRunStopped, "Run stopped", nil, metadata, now)
+	return call, []RunEvent{denied, stopped}, nil
+}
+
+func (s *MemoryService) StartToolCallExecution(_ context.Context, ident identity.LocalIdentity, threadID string, runID string, toolCallID string) (ToolCall, []RunEvent, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user := s.ensureUserLocked(ident)
+	run, call, key, err := s.getToolCallLocked(user.ID, threadID, runID, toolCallID)
+	if err != nil {
+		return ToolCall{}, nil, err
+	}
+	if call.ExecutionStatus == ToolCallExecutionExecuting {
+		return call, nil, nil
+	}
+	if call.ExecutionStatus == ToolCallExecutionCancelled {
+		return call, nil, nil
+	}
+	if call.ApprovalStatus != ToolCallApprovalApproved || call.ExecutionStatus != ToolCallExecutionNotStarted {
+		return ToolCall{}, nil, NewError(CodeConflict, "Tool call cannot start from current state.")
+	}
+	now := s.now()
+	call.ExecutionStatus = ToolCallExecutionExecuting
+	call.UpdatedAt = now
+	s.toolCalls[key] = call
+	metadata := toolCallEventMetadata(call)
+	event := s.appendRunEventLocked(run, RunEventCategoryProgress, EventToolCallExecuting, "Tool call executing", nil, metadata, now)
+	return call, []RunEvent{event}, nil
+}
+
+func (s *MemoryService) CompleteToolCallSuccess(_ context.Context, ident identity.LocalIdentity, threadID string, runID string, toolCallID string, result map[string]any) (ToolCall, []RunEvent, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user := s.ensureUserLocked(ident)
+	run, call, key, err := s.getToolCallLocked(user.ID, threadID, runID, toolCallID)
+	if err != nil {
+		return ToolCall{}, nil, err
+	}
+	if call.ExecutionStatus == ToolCallExecutionSucceeded {
+		return call, nil, nil
+	}
+	if call.ExecutionStatus == ToolCallExecutionCancelled {
+		return call, nil, nil
+	}
+	if call.ExecutionStatus != ToolCallExecutionExecuting {
+		return ToolCall{}, nil, NewError(CodeConflict, "Tool call cannot complete from current state.")
+	}
+	now := s.now()
+	call.ExecutionStatus = ToolCallExecutionSucceeded
+	call.ResultSummary = RedactEventMetadata(result)
+	call.UpdatedAt = now
+	s.toolCalls[key] = call
+	run.Status = RunStatusCompleted
+	run.CompletedAt = &now
+	run.UpdatedAt = now
+	s.runs[run.ID] = run
+	metadata := toolCallEventMetadata(call)
+	metadata["result_summary"] = call.ResultSummary
+	succeeded := s.appendRunEventLocked(run, RunEventCategoryProgress, EventToolCallSucceeded, "Tool call succeeded", nil, metadata, now)
+	completed := s.appendRunEventLocked(run, RunEventCategoryFinal, EventRunCompleted, "Run completed", nil, metadata, now)
+	return call, []RunEvent{succeeded, completed}, nil
+}
+
+func (s *MemoryService) CompleteToolCallFailure(_ context.Context, ident identity.LocalIdentity, threadID string, runID string, toolCallID string, errorCode string, errorMessage string) (ToolCall, []RunEvent, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user := s.ensureUserLocked(ident)
+	run, call, key, err := s.getToolCallLocked(user.ID, threadID, runID, toolCallID)
+	if err != nil {
+		return ToolCall{}, nil, err
+	}
+	if call.ExecutionStatus == ToolCallExecutionFailed {
+		return call, nil, nil
+	}
+	if call.ExecutionStatus == ToolCallExecutionCancelled {
+		return call, nil, nil
+	}
+	if call.ExecutionStatus != ToolCallExecutionExecuting {
+		return ToolCall{}, nil, NewError(CodeConflict, "Tool call cannot fail from current state.")
+	}
+	now := s.now()
+	code := strings.TrimSpace(errorCode)
+	if code == "" {
+		code = "tool_execution_failed"
+	}
+	message := RedactEventText(strings.TrimSpace(errorMessage))
+	if message == "" {
+		message = "Tool execution failed."
+	}
+	call.ExecutionStatus = ToolCallExecutionFailed
+	call.ErrorCode = &code
+	call.ErrorMessage = &message
+	call.UpdatedAt = now
+	s.toolCalls[key] = call
+	run.Status = RunStatusFailed
+	run.CompletedAt = &now
+	run.UpdatedAt = now
+	run.ErrorCode = &code
+	run.ErrorMessage = &message
+	s.runs[run.ID] = run
+	metadata := toolCallEventMetadata(call)
+	metadata["error_code"] = code
+	metadata["error_message"] = message
+	failed := s.appendRunEventLocked(run, RunEventCategoryError, EventToolCallFailed, "Tool call failed", nil, metadata, now)
+	final := s.appendRunEventLocked(run, RunEventCategoryFinal, EventRunFailed, message, nil, metadata, now)
+	return call, []RunEvent{failed, final}, nil
+}
+
 func (s *MemoryService) StopRun(_ context.Context, ident identity.LocalIdentity, runID string) (StopRunOutput, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -441,9 +617,22 @@ func (s *MemoryService) StopRun(_ context.Context, ident identity.LocalIdentity,
 			s.backgroundJobs[id] = job
 		}
 	}
+	events := []RunEvent{}
+	for key, call := range s.toolCalls {
+		if call.RunID != run.ID || call.ThreadID != run.ThreadID || IsToolCallTerminal(call.ExecutionStatus) {
+			continue
+		}
+		call.ApprovalStatus = ToolCallApprovalCancelled
+		call.ExecutionStatus = ToolCallExecutionCancelled
+		call.UpdatedAt = now
+		s.toolCalls[key] = call
+		metadata := toolCallEventMetadata(call)
+		events = append(events, s.appendRunEventLocked(run, RunEventCategoryProgress, EventToolCallCancelled, "Tool call cancelled", nil, metadata, now))
+	}
 	lifecycle := s.appendRunEventLocked(run, RunEventCategoryProgress, EventStopRequested, "Stop requested", nil, map[string]any{}, now)
 	final := s.appendRunEventLocked(run, RunEventCategoryFinal, EventRunStopped, "Run stopped", nil, map[string]any{}, now)
-	return StopRunOutput{Run: run, Result: StopRunResultStopped, Events: []RunEvent{lifecycle, final}}, nil
+	events = append(events, lifecycle, final)
+	return StopRunOutput{Run: run, Result: StopRunResultStopped, Events: events}, nil
 }
 
 func (s *MemoryService) ClaimBackgroundJob(_ context.Context, ident identity.LocalIdentity, input ClaimBackgroundJobInput) (BackgroundJob, Run, bool, error) {
@@ -683,6 +872,40 @@ func (s *MemoryService) appendRunEventLocked(run Run, category RunEventCategory,
 	event := RunEvent{ID: NewRunEventID(), RunID: run.ID, ThreadID: run.ThreadID, UserID: run.UserID, Sequence: len(s.runEvents[run.ID]) + 1, Category: category, Type: eventType, Summary: RedactEventText(summary), Content: content, Metadata: RedactEventMetadata(metadata), CreatedAt: createdAt}
 	s.runEvents[run.ID] = append(s.runEvents[run.ID], event)
 	return event
+}
+
+func (s *MemoryService) getToolCallLocked(userID string, threadID string, runID string, toolCallID string) (Run, ToolCall, string, error) {
+	run, ok := s.runs[runID]
+	if !ok || run.UserID != userID || run.ThreadID != threadID {
+		return Run{}, ToolCall{}, "", NewError(CodeRunNotFound, "Run not found.")
+	}
+	key := run.ID + ":" + strings.TrimSpace(toolCallID)
+	call, ok := s.toolCalls[key]
+	if !ok {
+		return Run{}, ToolCall{}, "", NewError(CodeRunNotFound, "Run not found.")
+	}
+	return run, call, key, nil
+}
+
+func (s *MemoryService) enqueueToolCallJobLocked(userID string, run Run, call ToolCall, now time.Time) {
+	for _, job := range s.backgroundJobs {
+		if job.UserID == userID && job.RunID == run.ID && !IsBackgroundJobTerminal(job.Status) && job.Metadata["tool_call_id"] == call.ToolCallID {
+			return
+		}
+	}
+	jobID := NewBackgroundJobID()
+	metadata := RedactEventMetadata(map[string]any{"source": string(run.Source), "tool_call_id": call.ToolCallID, "tool_name": call.ToolName})
+	s.backgroundJobs[jobID] = BackgroundJob{ID: jobID, RunID: run.ID, ThreadID: run.ThreadID, UserID: userID, Kind: BackgroundJobKindRunExecution, Status: BackgroundJobStatusQueued, Priority: 80, MaxAttempts: 3, ScheduledAt: now, Metadata: metadata, CreatedAt: now, UpdatedAt: now}
+}
+
+func toolCallEventMetadata(call ToolCall) map[string]any {
+	return map[string]any{
+		"tool_call_id":      call.ToolCallID,
+		"tool_name":         call.ToolName,
+		"arguments_summary": call.ArgumentsSummary,
+		"approval_status":   string(call.ApprovalStatus),
+		"execution_status":  string(call.ExecutionStatus),
+	}
 }
 
 func jobOwnedBy(job BackgroundJob, workerID string, ownershipVersion int) bool {

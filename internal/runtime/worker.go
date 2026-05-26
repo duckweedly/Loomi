@@ -14,12 +14,13 @@ type WorkerRunner interface {
 }
 
 type Worker struct {
-	Service      productdata.Service
-	Broadcaster  *Broadcaster
-	Runner       WorkerRunner
-	WorkerID     string
-	LeaseSeconds int
-	PollInterval time.Duration
+	Service       productdata.Service
+	Broadcaster   *Broadcaster
+	Runner        WorkerRunner
+	WorkerID      string
+	LeaseSeconds  int
+	PollInterval  time.Duration
+	WorkspaceRoot string
 }
 
 func NewWorker(service productdata.Service, broadcaster *Broadcaster, runner WorkerRunner) *Worker {
@@ -56,7 +57,8 @@ func (w *Worker) ProcessOne(ctx context.Context) (bool, error) {
 		return true, err
 	}
 	w.publishRunEvents(ctx, claim.Run.ID, afterRenew)
-	if err := w.Runner.Run(ctx, claim.Run, claim.Job); err != nil {
+	err = w.runClaimedJob(ctx, claim.Run, claim.Job)
+	if err != nil {
 		afterFail := 0
 		if w.Broadcaster != nil {
 			afterFail = w.highestRunSequence(ctx, claim.Run.ID)
@@ -67,6 +69,64 @@ func (w *Worker) ProcessOne(ctx context.Context) (bool, error) {
 	}
 	_, err = coordinator.Complete(ctx, claim.Job)
 	return true, err
+}
+
+func (w *Worker) runClaimedJob(ctx context.Context, run productdata.Run, job productdata.BackgroundJob) error {
+	toolCallID, ok := job.Metadata["tool_call_id"].(string)
+	if !ok || toolCallID == "" {
+		return w.Runner.Run(ctx, run, job)
+	}
+	call, events, err := w.Service.StartToolCallExecution(ctx, identity.LocalDevIdentity(), run.ThreadID, run.ID, toolCallID)
+	if err != nil {
+		return err
+	}
+	w.publishEvents(events)
+	if call.ExecutionStatus == productdata.ToolCallExecutionCancelled {
+		return nil
+	}
+	tool, err := toolDefinitionForCall(call.ToolName, w.WorkspaceRoot)
+	if err != nil {
+		_, events, failureErr := w.Service.CompleteToolCallFailure(ctx, identity.LocalDevIdentity(), run.ThreadID, run.ID, toolCallID, "unsupported_tool", "Tool is not supported.")
+		w.publishEvents(events)
+		return failureErr
+	}
+	arguments, err := tool.NormalizeArguments(call.ArgumentsSummary)
+	if err != nil {
+		_, events, failureErr := w.Service.CompleteToolCallFailure(ctx, identity.LocalDevIdentity(), run.ThreadID, run.ID, toolCallID, "invalid_tool_arguments", "Tool arguments are invalid.")
+		w.publishEvents(events)
+		return failureErr
+	}
+	result, err := tool.Execute(arguments)
+	if err != nil {
+		_, events, failureErr := w.Service.CompleteToolCallFailure(ctx, identity.LocalDevIdentity(), run.ThreadID, run.ID, toolCallID, "tool_execution_failed", "Tool execution failed.")
+		w.publishEvents(events)
+		return failureErr
+	}
+	_, events, err = w.Service.CompleteToolCallSuccess(ctx, identity.LocalDevIdentity(), run.ThreadID, run.ID, toolCallID, result)
+	w.publishEvents(events)
+	return err
+}
+
+func toolDefinitionForCall(name string, workspaceRoot string) (ToolDefinition, error) {
+	if name == productdata.ToolNameCurrentTime {
+		return CurrentTimeToolDefinition(), nil
+	}
+	if name == productdata.ToolNameTodoWrite {
+		return TodoWriteToolDefinition(), nil
+	}
+	if name == productdata.ToolNameMCPCallTool {
+		return MCPCallToolDefinition(), nil
+	}
+	return WorkspaceToolDefinition(name, workspaceRoot)
+}
+
+func (w *Worker) publishEvents(events []productdata.RunEvent) {
+	if w.Broadcaster == nil {
+		return
+	}
+	for _, event := range events {
+		w.Broadcaster.Publish(event)
+	}
 }
 
 func (w *Worker) publishRecoveryEvents(recovery JobRecoveryResult) {

@@ -36,9 +36,12 @@ export default function App() {
     archiveThread,
     sendMessage,
     stopRun,
+    approveToolCall,
+    denyToolCall,
     retryRun,
     regenerateRun,
     providerCapabilities,
+    toolCatalog,
     providerCheckResults,
     providerSaveResult,
     checkProvider,
@@ -183,6 +186,7 @@ export default function App() {
                   selectedThreadTitle={selectedThread?.title}
                   selectedRunStatus={run?.status}
                   providerCapabilities={providerCapabilities}
+                  toolCatalog={toolCatalog}
                   providerCheckResults={providerCheckResults}
                   providerSaveResult={providerSaveResult}
                   providerDraftSettings={shell.providerDraftSettings}
@@ -215,6 +219,8 @@ export default function App() {
                   onOpenProviderSettings={() => shell.openSettings('providers')}
                   onSendMessage={(content) => void sendMessage(content)}
                   onStopRun={() => void stopRun()}
+                  onApproveToolCall={(toolCallId) => void approveToolCall(toolCallId)}
+                  onDenyToolCall={(toolCallId) => void denyToolCall(toolCallId)}
                   onRetryRun={retryRun}
                   onRegenerateRun={regenerateRun}
                   locale={shell.locale}

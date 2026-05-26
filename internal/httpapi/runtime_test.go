@@ -287,6 +287,43 @@ func TestScopedToolCallHandlerReturnsProjection(t *testing.T) {
 	}
 }
 
+func TestScopedToolCallDecisionHandlersAreIdempotent(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	thread := createRuntimeTestThread(t, svc)
+	run, err := svc.StartRun(context.Background(), identity.LocalDevIdentity(), thread.ID, productdata.StartRunInput{Source: productdata.RunSourceModelGateway, ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.RecordToolCallRequest(context.Background(), identity.LocalDevIdentity(), run.ID, productdata.RecordToolCallRequestInput{ToolCallID: "tc_approve", ToolName: productdata.ToolNameCurrentTime, ArgumentsSummary: map[string]any{"timezone": "UTC"}, ArgumentsHash: "hash_approve", ApprovalStatus: productdata.ToolCallApprovalRequired, ExecutionStatus: productdata.ToolCallExecutionBlocked}); err != nil {
+		t.Fatal(err)
+	}
+	srv := NewServerWithProduct(config.Config{AppEnv: "local"}, fakeChecker{}, svc)
+
+	first := requestJSON(t, srv, http.MethodPost, "/v1/threads/"+thread.ID+"/runs/"+run.ID+"/tool-calls/tc_approve/approve", "")
+	retry := requestJSON(t, srv, http.MethodPost, "/v1/threads/"+thread.ID+"/runs/"+run.ID+"/tool-calls/tc_approve/approve", "")
+	conflict := requestJSON(t, srv, http.MethodPost, "/v1/threads/"+thread.ID+"/runs/"+run.ID+"/tool-calls/tc_approve/deny", "")
+
+	if first.Code != http.StatusOK || retry.Code != http.StatusOK || conflict.Code != http.StatusConflict {
+		t.Fatalf("codes first=%d retry=%d conflict=%d body=%s", first.Code, retry.Code, conflict.Code, conflict.Body.String())
+	}
+	if !strings.Contains(first.Body.String(), `"approval_status":"approved"`) || !strings.Contains(first.Body.String(), `"execution_status":"not_started"`) {
+		t.Fatalf("first body=%s", first.Body.String())
+	}
+	events, err := svc.ListRunEvents(context.Background(), identity.LocalDevIdentity(), run.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	approvedEvents := 0
+	for _, event := range events {
+		if event.Type == productdata.EventToolCallApproved {
+			approvedEvents++
+		}
+	}
+	if approvedEvents != 1 {
+		t.Fatalf("approved event count = %d events=%+v", approvedEvents, events)
+	}
+}
+
 func TestRunEventStreamSubscribesBeforeHistoryRead(t *testing.T) {
 	svc := productdata.NewMemoryService()
 	run := createRuntimeTestRun(t, svc)
@@ -350,6 +387,37 @@ func TestStopRunHandlerPublishesStopEvents(t *testing.T) {
 	second := <-events
 	if first.Type != productdata.EventStopRequested || second.Category != productdata.RunEventCategoryFinal {
 		t.Fatalf("published events = %+v %+v", first, second)
+	}
+}
+
+func TestStopRunHandlerCancelsPendingToolCall(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	thread := createRuntimeTestThread(t, svc)
+	run, err := svc.StartRun(context.Background(), identity.LocalDevIdentity(), thread.ID, productdata.StartRunInput{Source: productdata.RunSourceModelGateway, MessageID: "msg_1", ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.RecordToolCallRequest(context.Background(), identity.LocalDevIdentity(), run.ID, productdata.RecordToolCallRequestInput{ToolCallID: "tc_stop", ToolName: productdata.ToolNameCurrentTime, ArgumentsSummary: map[string]any{"timezone": "UTC"}, ArgumentsHash: "hash_stop", ApprovalStatus: productdata.ToolCallApprovalRequired, ExecutionStatus: productdata.ToolCallExecutionBlocked}); err != nil {
+		t.Fatal(err)
+	}
+	broadcaster := productruntime.NewBroadcaster()
+	srv := NewServerWithRuntime(config.Config{AppEnv: "local"}, fakeChecker{}, svc, broadcaster, nil)
+	events := broadcaster.Subscribe(context.Background(), run.ID)
+
+	res := requestJSON(t, srv, http.MethodPost, "/v1/runs/"+run.ID+"/stop", "")
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", res.Code, res.Body.String())
+	}
+	first := <-events
+	if first.Type != productdata.EventToolCallCancelled {
+		t.Fatalf("first published event = %+v", first)
+	}
+	call, err := svc.GetToolCall(context.Background(), identity.LocalDevIdentity(), thread.ID, run.ID, "tc_stop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if call.ApprovalStatus != productdata.ToolCallApprovalCancelled || call.ExecutionStatus != productdata.ToolCallExecutionCancelled {
+		t.Fatalf("call = %+v", call)
 	}
 }
 

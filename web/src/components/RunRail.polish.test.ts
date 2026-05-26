@@ -83,6 +83,33 @@ describe('RunRail restrained runtime polish', () => {
     expect(html).toContain('cancelled')
   })
 
+  test('summarizes tool lifecycle events separately from model stream rows', () => {
+    const html = renderToStaticMarkup(createElement(RunRail, {
+      open: true,
+      onOpenArtifact: () => {},
+      run: {
+        id: 'run-a',
+        threadId: 'thread-a',
+        status: 'running',
+        model: 'Model gateway',
+        context: 'model_gateway',
+        events: [
+          { id: 'evt-model', runId: 'run-a', threadId: 'thread-a', sequence: 1, type: 'model.delta', label: 'Model', detail: 'streaming', time: 'Now', status: 'running' },
+          { id: 'evt-tool-wait', runId: 'run-a', threadId: 'thread-a', sequence: 2, type: 'tool.call.approval_required', label: 'Tool', detail: 'approval required', time: 'Now', status: 'blocked_on_tool_approval' },
+          { id: 'evt-tool-run', runId: 'run-a', threadId: 'thread-a', sequence: 3, type: 'tool.call.executing', label: 'Tool', detail: 'executing current time', time: 'Now', status: 'running' },
+          { id: 'evt-tool-done', runId: 'run-a', threadId: 'thread-a', sequence: 4, type: 'tool.call.succeeded', label: 'Tool', detail: 'result ready', time: 'Now', status: 'running' },
+        ],
+      },
+    }))
+
+    expect(html).toContain('Model stream')
+    expect(html).toContain('Tool call')
+    expect(html).toContain('Tool lifecycle · approval required')
+    expect(html).toContain('Tool lifecycle · executing current time')
+    expect(html).toContain('Tool lifecycle · result ready')
+    expect(html).toContain('runtime-event-group tool-call')
+  })
+
   test('shows capability status detail in the rail', () => {
     const html = renderToStaticMarkup(createElement(RunRail, {
       open: true,

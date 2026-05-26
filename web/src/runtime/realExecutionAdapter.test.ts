@@ -59,6 +59,25 @@ describe('applyRealRunEvent', () => {
     expect(next.toolCalls?.[0]).toMatchObject({ status: 'approved', approvalStatus: 'approved' })
   })
 
+  test('maps M7 approved denied executing result error and cancel events into stable tool state', () => {
+    const run = { id: 'run-a', threadId: 'thread-a', status: 'running', model: 'Model gateway', context: 'model_gateway', source: 'model_gateway', events: [], toolCalls: [] } as const
+    const events: RuntimeEvent[] = [
+      { id: 'evt-approved', runId: 'run-a', threadId: 'thread-a', sequence: 1, type: 'tool.call.approved', label: 'tool', detail: 'Tool call approved', time: 'Now', status: 'running', group: 'tool-call', metadata: { tool_call_id: 'tc_ok', tool_name: 'runtime.get_current_time', arguments_summary: { timezone: 'UTC' }, approval_status: 'approved', execution_status: 'not_started' } },
+      { id: 'evt-executing', runId: 'run-a', threadId: 'thread-a', sequence: 2, type: 'tool.call.executing', label: 'tool', detail: 'Tool call executing', time: 'Now', status: 'running', group: 'tool-call', metadata: { tool_call_id: 'tc_ok', tool_name: 'runtime.get_current_time', approval_status: 'approved', execution_status: 'executing' } },
+      { id: 'evt-succeeded', runId: 'run-a', threadId: 'thread-a', sequence: 3, type: 'tool.call.succeeded', label: 'tool', detail: 'Tool call succeeded', time: 'Now', status: 'running', group: 'tool-call', metadata: { tool_call_id: 'tc_ok', tool_name: 'runtime.get_current_time', approval_status: 'approved', execution_status: 'succeeded', result_summary: { timezone: 'UTC', local_time: '2026-05-26T10:00:00Z' } } },
+      { id: 'evt-denied', runId: 'run-a', threadId: 'thread-a', sequence: 4, type: 'tool.call.denied', label: 'tool', detail: 'Tool call denied', time: 'Now', status: 'running', group: 'tool-call', metadata: { tool_call_id: 'tc_denied', tool_name: 'runtime.get_current_time', arguments_summary: { timezone: 'UTC' }, approval_status: 'denied', execution_status: 'cancelled' } },
+      { id: 'evt-failed', runId: 'run-a', threadId: 'thread-a', sequence: 5, type: 'tool.call.failed', label: 'tool', detail: 'Tool call failed', time: 'Now', status: 'running', group: 'tool-call', metadata: { tool_call_id: 'tc_failed', tool_name: 'runtime.get_current_time', arguments_summary: { timezone: 'Bad/Zone' }, approval_status: 'approved', execution_status: 'failed', error_code: 'validation_failed', error_message: 'Invalid timezone' } },
+      { id: 'evt-cancelled', runId: 'run-a', threadId: 'thread-a', sequence: 6, type: 'tool.call.cancelled', label: 'tool', detail: 'Tool call cancelled', time: 'Now', status: 'cancelled', group: 'tool-call', metadata: { tool_call_id: 'tc_cancelled', tool_name: 'runtime.get_current_time', arguments_summary: { timezone: 'UTC' }, approval_status: 'cancelled', execution_status: 'cancelled' } },
+    ]
+
+    const next = events.reduce(applyRealRunEvent, run)
+
+    expect(next.toolCalls?.find((call) => call.toolCallId === 'tc_ok')).toMatchObject({ status: 'succeeded', approvalStatus: 'approved', executionStatus: 'succeeded', resultSummary: { timezone: 'UTC', local_time: '2026-05-26T10:00:00Z' } })
+    expect(next.toolCalls?.find((call) => call.toolCallId === 'tc_denied')).toMatchObject({ status: 'denied', approvalStatus: 'denied', executionStatus: 'cancelled' })
+    expect(next.toolCalls?.find((call) => call.toolCallId === 'tc_failed')).toMatchObject({ status: 'failed', approvalStatus: 'approved', executionStatus: 'failed', errorCode: 'validation_failed', errorMessage: 'Invalid timezone' })
+    expect(next.toolCalls?.find((call) => call.toolCallId === 'tc_cancelled')).toMatchObject({ status: 'cancelled', approvalStatus: 'cancelled', executionStatus: 'cancelled' })
+  })
+
   test('maps backend setup provider and stream failures to capability signals', () => {
     expect(mapRealRuntimeCapabilitySignal(new Error('Failed to fetch'))).toEqual({ backendUnavailable: true })
     expect(mapRealRuntimeCapabilitySignal(Object.assign(new Error('model setup missing'), { code: 'model_setup_missing' }))).toEqual({ modelSetupMissing: true })

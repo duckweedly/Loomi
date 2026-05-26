@@ -1,15 +1,31 @@
 import type { ApiClient } from './apiClient'
-import type { Message, Run, RuntimeScriptId } from './domain'
+import type { Message, Run, RuntimeScriptId, ToolCatalogEntry } from './domain'
 import { messages, runs, threads } from './mockData'
 import { isRuntimeTerminal } from './runtime/executionAdapter'
 import { mockExecutionAdapter } from './runtime/mockExecutionAdapter'
 import { createRuntimeEvent, getRuntimeScript, getRuntimeScriptSteps } from './runtime/runtimeScripts'
 
-let mockId = 0
+function seedMockId() {
+  return Math.max(0, ...messages.map((message) => Number(message.id.match(/^msg-(\d+)$/)?.[1] ?? 0)), ...runs.map((run) => Number(run.id.match(/^run-(\d+)$/)?.[1] ?? 0)))
+}
+
+let mockId = seedMockId()
 let threadStore = [...threads]
 let messageStore = [...messages]
 let runStore = runs.map((run) => ({ ...run, events: [...run.events] }))
 let selectedRuntimeScriptId: RuntimeScriptId = 'success'
+
+const toolCatalog: ToolCatalogEntry[] = [
+  { name: 'runtime.get_current_time', label: 'Get current time', group: 'runtime', capability: 'time', approvalPolicy: 'required', safetyClass: 'no_side_effect_internal', riskLevel: 'low', sideEffect: 'none', enabled: true, description: 'Return current time for a requested timezone.' },
+  { name: 'runtime.todo_write', label: 'Write todo plan', group: 'runtime', capability: 'plan', approvalPolicy: 'required', safetyClass: 'no_side_effect_internal', riskLevel: 'low', sideEffect: 'none', enabled: true, description: 'Publish a bounded structured plan for the current run.' },
+  { name: 'mcp.call_tool', label: 'Call MCP tool', group: 'mcp', capability: 'call_tool', approvalPolicy: 'required', safetyClass: 'mcp_bridge', riskLevel: 'medium', sideEffect: 'mcp', enabled: true, description: 'Call one allowlisted local MCP-style tool.' },
+  { name: 'workspace.glob', label: 'Find workspace files', group: 'workspace', capability: 'read', approvalPolicy: 'required', safetyClass: 'workspace_read_only', riskLevel: 'medium', sideEffect: 'read', enabled: true, description: 'List matching files under the workspace root.' },
+  { name: 'workspace.grep', label: 'Search workspace text', group: 'workspace', capability: 'read', approvalPolicy: 'required', safetyClass: 'workspace_read_only', riskLevel: 'medium', sideEffect: 'read', enabled: true, description: 'Search text files under the workspace root.' },
+  { name: 'workspace.read_file', label: 'Read workspace file', group: 'workspace', capability: 'read', approvalPolicy: 'required', safetyClass: 'workspace_read_only', riskLevel: 'medium', sideEffect: 'read', enabled: true, description: 'Read a bounded UTF-8 file under the workspace root.' },
+  { name: 'workspace.write_file', label: 'Write workspace file', group: 'workspace', capability: 'write', approvalPolicy: 'required', safetyClass: 'workspace_write', riskLevel: 'high', sideEffect: 'write', enabled: true, description: 'Write a bounded UTF-8 file under the workspace root.' },
+  { name: 'workspace.edit', label: 'Edit workspace file', group: 'workspace', capability: 'write', approvalPolicy: 'required', safetyClass: 'workspace_write', riskLevel: 'high', sideEffect: 'write', enabled: true, description: 'Apply an exact single replacement under the workspace root.' },
+  { name: 'workspace.exec_command', label: 'Run workspace command', group: 'workspace', capability: 'exec', approvalPolicy: 'required', safetyClass: 'workspace_exec', riskLevel: 'high', sideEffect: 'process', enabled: true, description: 'Run an allowlisted argv command inside the workspace.' },
+]
 
 function nextMockId(prefix: string) {
   mockId += 1
@@ -132,6 +148,10 @@ export const mockApiClient: ApiClient = {
 
   async getRunEvents(runId: string) {
     return runStore.find((run) => run.id === runId)?.events ?? []
+  },
+
+  async getToolCatalog() {
+    return toolCatalog.map((tool) => ({ ...tool }))
   },
 
   subscribeRunEvents(runId: string, afterSequence: number, onEvent) {

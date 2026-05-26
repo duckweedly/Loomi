@@ -50,17 +50,25 @@ function metadataString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value : undefined
 }
 
+function metadataApprovalStatus(value: unknown): ToolCallApprovalStatus | undefined {
+  return value === 'not_required' || value === 'required' || value === 'approved' || value === 'denied' || value === 'cancelled' ? value : undefined
+}
+
+function metadataExecutionStatus(value: unknown): ToolCallExecutionStatus | undefined {
+  return value === 'not_started' || value === 'blocked' || value === 'executing' || value === 'succeeded' || value === 'failed' || value === 'cancelled' ? value : undefined
+}
+
 function applyToolEvent(toolCalls: ToolCall[] | undefined, event: RuntimeEvent, mapping: ToolEventMapping): ToolCall[] {
   const toolCallId = metadataString(event.metadata?.tool_call_id)
   const index = toolCalls?.findIndex((call) => call.toolCallId === toolCallId) ?? -1
-  const current = index >= 0 ? toolCalls?.[index] : toolCalls?.[0]
+  const current = index >= 0 ? toolCalls?.[index] : toolCallId ? undefined : toolCalls?.[0]
   const next: ToolCall = {
     id: current?.id ?? event.id,
     toolCallId: toolCallId ?? current?.toolCallId,
     name: metadataString(event.metadata?.tool_name) ?? current?.name ?? event.label,
     status: mapping.status,
-    approvalStatus: mapping.approvalStatus ?? current?.approvalStatus,
-    executionStatus: mapping.executionStatus ?? current?.executionStatus,
+    approvalStatus: metadataApprovalStatus(event.metadata?.approval_status) ?? mapping.approvalStatus ?? current?.approvalStatus,
+    executionStatus: metadataExecutionStatus(event.metadata?.execution_status) ?? mapping.executionStatus ?? current?.executionStatus,
     summary: event.detail,
     input: current?.input ?? '',
     output: event.content ?? current?.output ?? '',

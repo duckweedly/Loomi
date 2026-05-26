@@ -1,4 +1,4 @@
-import type { AssistantDraft as AssistantDraftState, BackendCapabilityState, ChatCanvasState, Message, ProviderCapability, Run, StreamState, Thread } from '../domain'
+import type { AssistantDraft as AssistantDraftState, BackendCapabilityState, ChatCanvasState, Message, ProviderCapability, Run, StreamState, Thread, ToolCall } from '../domain'
 import type { Locale } from '../i18n'
 import { getDictionary } from '../i18n'
 import { deriveBackendCapabilityStatus, getBackendCapabilityCopy, shouldShowProviderUnavailableWarning } from '../runtime/backendCapabilityStatus'
@@ -27,6 +27,8 @@ type Props = {
   onOpenProviderSettings?: () => void
   onSendMessage: (content: string) => void
   onStopRun: () => void
+  onApproveToolCall?: (toolCallId: string) => void
+  onDenyToolCall?: (toolCallId: string) => void
   onRetryRun?: () => void
   onRegenerateRun?: () => void
   locale: Locale
@@ -50,7 +52,7 @@ function createStateCopy(locale: Locale): Record<Exclude<ChatCanvasState, 'histo
   }
 }
 
-function MessageHistory({ messages, locale }: { messages: Message[]; locale: Locale }) {
+function MessageHistory({ messages, locale, onApproveToolCall, onDenyToolCall }: { messages: Message[]; locale: Locale; onApproveToolCall?: (toolCallId: string) => void; onDenyToolCall?: (toolCallId: string) => void }) {
   const copy = getDictionary(locale).chatCanvas
   return messages.map((message) => (
     <article key={message.id} className={`message-row ${message.role}`}>
@@ -58,7 +60,14 @@ function MessageHistory({ messages, locale }: { messages: Message[]; locale: Loc
       <div className="message-bubble">
         <div className="message-meta">{message.role === 'assistant' ? copy.assistant : copy.user} · {message.createdAt}</div>
         <p className="message-markdown">{message.content}</p>
-        {message.toolCalls?.map((toolCall) => <ToolCallCard key={toolCall.id} toolCall={toolCall} />)}
+        {message.toolCalls?.map((toolCall: ToolCall) => (
+          <ToolCallCard
+            key={toolCall.id}
+            toolCall={toolCall}
+            onApprove={onApproveToolCall && toolCall.toolCallId ? () => onApproveToolCall(toolCall.toolCallId as string) : undefined}
+            onDeny={onDenyToolCall && toolCall.toolCallId ? () => onDenyToolCall(toolCall.toolCallId as string) : undefined}
+          />
+        ))}
       </div>
     </article>
   ))
@@ -115,7 +124,7 @@ function StatePanel({ state, error, locale }: { state: Exclude<ChatCanvasState, 
   )
 }
 
-export function ChatCanvas({ sidebarCollapsed, thread, messages, run, loading, error, dataSourceMode, streamState, backendCapability = 'available', backendUnavailableAttempted = false, capabilitySignals, providerCapabilities = [], onOpenProviderSettings, onSendMessage, onStopRun, onRetryRun, onRegenerateRun, locale }: Props) {
+export function ChatCanvas({ sidebarCollapsed, thread, messages, run, loading, error, dataSourceMode, streamState, backendCapability = 'available', backendUnavailableAttempted = false, capabilitySignals, providerCapabilities = [], onOpenProviderSettings, onSendMessage, onStopRun, onApproveToolCall, onDenyToolCall, onRetryRun, onRegenerateRun, locale }: Props) {
   const state = deriveChatCanvasState({
     loading,
     error,
@@ -177,7 +186,7 @@ export function ChatCanvas({ sidebarCollapsed, thread, messages, run, loading, e
       <div className="message-list">
         {state === 'history' ? (
           <>
-            <MessageHistory messages={messages} locale={locale} />
+        <MessageHistory messages={messages} locale={locale} onApproveToolCall={onApproveToolCall} onDenyToolCall={onDenyToolCall} />
             {shouldShowAssistantDraft && <AssistantDraft run={run} locale={locale} />}
           </>
         ) : (

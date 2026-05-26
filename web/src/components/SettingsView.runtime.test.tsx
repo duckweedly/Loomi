@@ -29,6 +29,18 @@ describe('SettingsView runtime rows', () => {
     expect(source).toContain('t.providerLocalDraftTitle')
     expect(source).toContain('t.aboutLocalApp')
   })
+
+  test('gives Tools a read-only catalog panel instead of the placeholder', async () => {
+    const source = await Bun.file(new URL('./SettingsView.tsx', import.meta.url)).text()
+
+    expect(source).toContain('isTools')
+    expect(source).toContain('ToolCatalogPanel')
+    expect(source).toContain('toolCatalog')
+    expect(source).toContain('tool.name')
+    expect(source).toContain('riskLevel')
+    expect(source).toContain('sideEffect')
+    expect(source).toContain('!isTools && !isAbout')
+  })
 })
 
 describe('SettingsView provider test console', () => {

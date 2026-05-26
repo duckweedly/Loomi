@@ -23,11 +23,13 @@ describe('settings catalog', () => {
     ])
   })
 
-  test('keeps General working and future areas visibly non-working', () => {
+  test('keeps implemented areas distinct from future placeholders', () => {
     expect(settingsCategories.find((category) => category.id === 'general')).toMatchObject({ group: 'primary', status: 'working' })
     expect(settingsCategories.find((category) => category.id === 'providers')).toMatchObject({ group: 'agent_core', status: 'mixed' })
+    expect(settingsCategories.find((category) => category.id === 'tools')).toMatchObject({ group: 'management', status: 'read_only' })
     expect(settingsCategories.find((category) => category.id === 'about')).toMatchObject({ group: 'management', status: 'mixed' })
     expect(placeholderCategoryIds).not.toContain('general')
+    expect(placeholderCategoryIds).not.toContain('tools')
     expect(settingsCategories.filter((category) => category.status === 'mock').length).toBeGreaterThan(10)
   })
 

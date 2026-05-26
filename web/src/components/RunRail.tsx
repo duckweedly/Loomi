@@ -43,6 +43,8 @@ function getEventDetail(event: Run['events'][number]) {
     ? `Provider failure · ${event.detail}`
     : event.type === 'progress.tool_call_blocked'
       ? `Tool request blocked · ${event.detail}`
+      : event.group === 'tool-call' || event.type.startsWith('tool.')
+        ? `Tool lifecycle · ${event.detail}`
       : event.detail
   return usageParts.length > 0 ? `${detail} · ${usageParts.join(' / ')}` : detail
 }

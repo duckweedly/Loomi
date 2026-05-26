@@ -36,7 +36,133 @@ Claude Code 项目内命令使用横线格式：
 
 `/speckit-implement` 按任务实现，并在必要时回到 spec 或 plan 修正前提。
 
-## 当前功能：M6 Worker Job Pipeline
+## 当前功能：M13 MCP Call Tool Bridge
+
+当前 Spec Kit 功能目录：
+
+```text
+specs/015-mcp-call-tool-bridge/
+```
+
+关键产物：
+
+- `spec.md`：定义 approval-gated `mcp.call_tool` 用户故事、固定 `local.echo` bridge、安全边界和非目标。
+- `plan.md`：确定复用 M7-M12 tool lifecycle、catalog、worker execution、ToolCallCard 和 Settings Tools。
+- `research.md`：记录 minimal local MCP-style bridge、approval required、no external MCP processes 和 bounded message 决策。
+- `data-model.md`：定义 MCP Tool Call Arguments、Local MCP Echo Tool 和 Tool Result。
+- `contracts/mcp-call-tool-bridge.md`：定义 tool name、arguments、安全规则和结果形状。
+- `quickstart.md`：记录 focused tests、full validation 和 Settings Tools smoke。
+- `tasks.md`：按 setup、backend、frontend、documentation 和 validation 拆分任务。
+
+## 近期已完成：M12 Todo Write Planning Tool
+
+当前 Spec Kit 功能目录：
+
+```text
+specs/014-todo-write-planning-tool/
+```
+
+关键产物：
+
+- `spec.md`：定义 approval-gated `runtime.todo_write` 用户故事、bounded todo items、安全边界和非目标。
+- `plan.md`：确定复用 M7-M11 tool lifecycle、catalog、worker execution、ToolCallCard 和 Settings Tools。
+- `research.md`：记录 runtime planning tool、approval required、no durable todo table 和 bounded items 决策。
+- `data-model.md`：定义 Todo Item、Tool Arguments 和 Tool Result。
+- `contracts/todo-write-planning-tool.md`：定义 tool name、arguments、安全规则和结果形状。
+- `quickstart.md`：记录 focused tests、full validation 和 Settings Tools smoke。
+- `tasks.md`：按 setup、backend、frontend、documentation 和 validation 拆分任务。
+
+## 近期已完成：M11 Tool Catalog Visibility
+
+当前 Spec Kit 功能目录：
+
+```text
+specs/013-tool-catalog-visibility/
+```
+
+关键产物：
+
+- `spec.md`：定义只读工具目录 API、Settings > Tools 可见性、安全 redaction 和非目标。
+- `plan.md`：确定复用 runtime tool registry、HTTP API、real/mock API client 和 Settings surface。
+- `research.md`：记录 static catalog、read-only metadata、Settings read-only panel 和 redaction 决策。
+- `data-model.md`：定义 Tool Catalog Entry、Tool Capability、Risk Level 和 Side Effect。
+- `contracts/tool-catalog.md`：定义 `GET /v1/tools/catalog`、字段形状和安全边界。
+- `quickstart.md`：记录 API smoke、Settings Tools smoke 和验证命令。
+- `tasks.md`：按 setup、backend、frontend、documentation 和 validation 拆分任务。
+
+## 近期已完成：M10 Safe Workspace Exec Command
+
+当前 Spec Kit 功能目录：
+
+```text
+specs/012-safe-workspace-exec-command/
+```
+
+关键产物：
+
+- `spec.md`：定义 approval-required `workspace.exec_command` 用户故事、argv-only/no-shell、安全拒绝和 bounded output。
+- `plan.md`：确定复用 M7 approval、M8/M9 workspace boundary、worker resume、run events、SSE replay 和现有 frontend tool UI。
+- `research.md`：记录 argv-only、shell/destructive command rejection、timeout 和 bounded output 决策。
+- `data-model.md`：定义 Exec Command Tool、Arguments 和 Result。
+- `contracts/workspace-exec-command.md`：定义 tool name、arguments、安全规则和结果形状。
+- `quickstart.md`：记录本地 approve/deny、安全命令、危险命令、timeout、history replay 和验证命令。
+- `tasks.md`：按 setup、backend、frontend、documentation 和 validation 拆分任务。
+
+## 近期已完成：M9 Safe Workspace Write Tools
+
+当前 Spec Kit 功能目录：
+
+```text
+specs/011-safe-workspace-write-tools/
+```
+
+关键产物：
+
+- `spec.md`：定义 approval-required `workspace.write_file` 和 `workspace.edit` 用户故事、安全边界和 no-mutation failure。
+- `plan.md`：确定复用 M7 approval、M8 workspace boundary、worker resume、run events、SSE replay 和现有 frontend tool UI。
+- `research.md`：记录 write_file 先于 shell、exact replacement、parent directory required 和 text-only bounded content 决策。
+- `data-model.md`：定义 Workspace Write Tool、Tool Arguments、Tool Results 和 Sensitive Path Policy。
+- `contracts/workspace-write-tools.md`：定义 lifecycle、tool names、安全规则和结果形状。
+- `quickstart.md`：记录本地 approve/deny、write、edit、unsafe path、history replay、browser smoke 和验证命令。
+- `tasks.md`：按 setup、backend、frontend、documentation 和 validation 拆分任务。
+
+## 近期已完成：M8 Safe Workspace Read Tools
+
+当前 Spec Kit 功能目录：
+
+```text
+specs/010-safe-workspace-read-tools/
+```
+
+关键产物：
+
+- `spec.md`：定义 approval-required `workspace.glob`、`workspace.grep`、`workspace.read_file` 用户故事和安全边界。
+- `plan.md`：确定复用 M7 tool-call lifecycle、worker resume、run events、SSE replay 和现有前端 tool UI。
+- `research.md`：记录 approval、workspace root containment、sensitive path denial、bounded summaries 和非目标决策。
+- `data-model.md`：定义 Workspace Read Tool、Workspace Root、Tool Arguments、Tool Results 和 Sensitive Path Policy。
+- `contracts/workspace-read-tools.md`：定义 lifecycle、tool names、安全规则和结果形状。
+- `quickstart.md`：记录本地 approval/deny、unsafe path、history replay、browser smoke 和验证命令。
+- `tasks.md`：按 setup、backend、frontend、documentation 和 validation 拆分任务。
+
+## 近期已完成：M7 Tool Call Approval Core
+
+当前 Spec Kit 功能目录：
+
+```text
+specs/009-tool-call-approval-core/
+```
+
+关键产物：
+
+- `spec.md`：定义 approval-gated tool-call lifecycle、approve/deny、current-time MVP tool 和 UI replay。
+- `plan.md`：确定复用 M5 gateway、M6 worker/job pipeline、run/event/SSE 和 ToolCallCard/RunRail/Timeline。
+- `research.md`：记录 allowlisted tool registry、`runtime.get_current_time`、tool_calls projection、worker block/resume 和 redaction 决策。
+- `data-model.md`：定义 Tool Call、Tool Definition、Approval Decision、Tool Result、Run Event extensions 和 Worker Block/Resume State。
+- `contracts/`：定义 HTTP、tool lifecycle、worker resume、frontend tool UI 和 docs update contracts。
+- `quickstart.md`：记录 fake/model tool request、approve/deny、execution、cancellation、replay 和 browser smoke。
+- `tasks.md`：按 setup、foundation、US1-US4 和 polish 拆分并跟踪实现任务。
+
+## 近期已完成：M6 Worker Job Pipeline
 
 当前 Spec Kit 功能目录：
 

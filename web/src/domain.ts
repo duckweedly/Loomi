@@ -29,6 +29,19 @@ export type ProviderCapability = {
   message?: string | null
 }
 
+export type ToolCatalogEntry = {
+  name: string
+  label: string
+  group: string
+  capability: string
+  approvalPolicy: string
+  safetyClass: string
+  riskLevel: 'low' | 'medium' | 'high' | string
+  sideEffect: 'none' | 'read' | 'write' | 'process' | string
+  enabled: boolean
+  description: string
+}
+
 export type ChatCanvasState =
   | 'no-thread'
   | 'empty-thread'

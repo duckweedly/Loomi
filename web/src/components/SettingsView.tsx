@@ -1,6 +1,6 @@
 import { ArrowLeft, ChevronRight } from 'lucide-react'
 import type { ReactNode } from 'react'
-import type { BackendCapabilityState, ProviderCapability, RunStatus, RuntimeScriptId, StreamState, Thread } from '../domain'
+import type { BackendCapabilityState, ProviderCapability, RunStatus, RuntimeScriptId, StreamState, Thread, ToolCatalogEntry } from '../domain'
 import type { ProviderCheckResult, ProviderSaveResult } from '../state'
 import type { ProviderDraftSettings } from '../useWorkspaceShellState'
 import type { Locale } from '../i18n'
@@ -18,6 +18,7 @@ type Props = {
   selectedThreadTitle?: string
   selectedRunStatus?: RunStatus
   providerCapabilities: ProviderCapability[]
+  toolCatalog: ToolCatalogEntry[]
   providerCheckResults: Record<string, ProviderCheckResult>
   providerSaveResult: ProviderSaveResult
   providerDraftSettings: ProviderDraftSettings
@@ -153,6 +154,58 @@ function RuntimeStatusRows({ dataSourceMode, backendCapability, streamState, sel
   )
 }
 
+function ToolCatalogPanel({ toolCatalog, t }: { toolCatalog: ToolCatalogEntry[]; t: ReturnType<typeof getDictionary>['settings'] }) {
+  if (!toolCatalog.length) {
+    return (
+      <section className="settings-card">
+        <div className="settings-card-head">
+          <h2>{t.toolCatalogTitle}</h2>
+          <p>{t.toolCatalogDescription}</p>
+        </div>
+        <div className="setting-row">
+          <div className="setting-row-copy">
+            <div className="setting-row-title">
+              <span>{t.toolCatalogEmpty}</span>
+              <span className="setting-status-badge read_only">{t.readOnly}</span>
+            </div>
+            <p>{t.toolCatalogEmptyHelper}</p>
+          </div>
+          <div className="setting-row-control"><StatusValue>{t.notConnected}</StatusValue></div>
+        </div>
+      </section>
+    )
+  }
+
+  return (
+    <section className="settings-card">
+      <div className="settings-card-head">
+        <h2>{t.toolCatalogTitle}</h2>
+        <p>{t.toolCatalogDescription}</p>
+      </div>
+      <div className="tool-catalog-list" aria-label={t.toolCatalogTitle}>
+        {toolCatalog.map((tool) => (
+          <article className="tool-catalog-card" key={tool.name}>
+            <div className="tool-catalog-main">
+              <div className="tool-catalog-title">
+                <strong>{tool.name}</strong>
+                <span className={`setting-status-badge ${tool.enabled ? 'read_only' : 'disabled'}`}>{tool.enabled ? t.readOnly : t.disabled}</span>
+              </div>
+              <p>{tool.description}</p>
+            </div>
+            <div className="tool-catalog-meta">
+              <span>{tool.capability}</span>
+              <span>{tool.approvalPolicy}</span>
+              <span>{tool.riskLevel}</span>
+              <span>{tool.sideEffect}</span>
+              <span>{tool.safetyClass}</span>
+            </div>
+          </article>
+        ))}
+      </div>
+    </section>
+  )
+}
+
 function PlaceholderPanel({ selectedCategory, t }: { selectedCategory: SettingsCategory; t: ReturnType<typeof getDictionary>['settings'] }) {
   return (
     <section className="settings-card placeholder-panel">
@@ -185,6 +238,7 @@ export function SettingsView({
   selectedThreadTitle,
   selectedRunStatus,
   providerCapabilities,
+  toolCatalog,
   providerCheckResults,
   providerSaveResult,
   providerDraftSettings,
@@ -202,6 +256,7 @@ export function SettingsView({
   const selectedCategory = getSettingsCategory(selectedCategoryId, locale)
   const isGeneral = selectedCategory.id === 'general'
   const isProviders = selectedCategory.id === 'providers'
+  const isTools = selectedCategory.id === 'tools'
   const isAbout = selectedCategory.id === 'about'
 
   return (
@@ -372,6 +427,12 @@ export function SettingsView({
           </div>
         )}
 
+        {isTools && (
+          <div className="settings-card-stack">
+            <ToolCatalogPanel toolCatalog={toolCatalog} t={t} />
+          </div>
+        )}
+
         {isAbout && (
           <div className="settings-card-stack">
             <section className="settings-card">
@@ -386,7 +447,7 @@ export function SettingsView({
           </div>
         )}
 
-        {!isGeneral && !isProviders && !isAbout && <PlaceholderPanel selectedCategory={selectedCategory} t={t} />}
+        {!isGeneral && !isProviders && !isTools && !isAbout && <PlaceholderPanel selectedCategory={selectedCategory} t={t} />}
       </section>
     </div>
   )

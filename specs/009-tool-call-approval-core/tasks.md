@@ -87,23 +87,23 @@
 
 ### Tests for User Story 2
 
-- [ ] T032 [P] [US2] Add repository tests for idempotent approve, idempotent deny, conflicting decisions, and terminal-state conflicts in `internal/productdata/repository_test.go`
-- [ ] T033 [P] [US2] Add service tests for `tool_call_approved` and `tool_call_denied` event idempotency in `internal/productdata/service_test.go`
-- [ ] T034 [P] [US2] Add HTTP tests for approve/deny route scoping, retries, and conflict responses in `internal/httpapi/runtime_test.go`
-- [ ] T035 [P] [US2] Add frontend API client tests for approve/deny parsing and safe retry behavior in `web/src/realApiClient.test.ts`
-- [ ] T036 [P] [US2] Add ToolCallCard approve/deny interaction tests in `web/src/components/ToolCallCard.test.tsx`
+- [X] T032 [P] [US2] Add repository tests for idempotent approve, idempotent deny, conflicting decisions, and terminal-state conflicts in `internal/productdata/repository_test.go`
+- [X] T033 [P] [US2] Add service tests for `tool_call_approved` and `tool_call_denied` event idempotency in `internal/productdata/service_test.go`
+- [X] T034 [P] [US2] Add HTTP tests for approve/deny route scoping, retries, and conflict responses in `internal/httpapi/runtime_test.go`
+- [X] T035 [P] [US2] Add frontend API client tests for approve/deny parsing and safe retry behavior in `web/src/realApiClient.test.ts`
+- [X] T036 [P] [US2] Add ToolCallCard approve/deny interaction tests in `web/src/components/ToolCallCard.test.tsx`
 
 ### Implementation for User Story 2
 
-- [ ] T037 [US2] Implement atomic approve and deny transitions in `internal/productdata/repository.go`
-- [ ] T038 [US2] Implement approval decision service methods that record exactly one decision event, return 200/current state for repeated same decisions, and reserve conflicts for incompatible decision reversals in `internal/productdata/service.go`
-- [ ] T039 [US2] Add scoped approve and deny HTTP handlers with same-decision idempotent 200 responses and conflicting-decision 409 responses in `internal/httpapi/runtime.go`
-- [ ] T040 [US2] Register approve and deny routes in `internal/httpapi/server.go`
-- [ ] T041 [US2] Wake or schedule the existing M6 worker/job pipeline exactly once after approval in `internal/runtime/jobs.go`
-- [ ] T042 [US2] Ensure denied tool calls never reach execution and finalize the run through `run_stopped` in `internal/runtime/worker.go`
-- [ ] T043 [US2] Add approve/deny client methods in `web/src/realApiClient.ts`
-- [ ] T044 [US2] Wire ToolCallCard approve/deny controls to client actions and disable controls after decision in `web/src/components/ToolCallCard.tsx`
-- [ ] T045 [US2] Map approved and denied events into frontend runtime state in `web/src/runtime/executionAdapter.ts`
+- [X] T037 [US2] Implement atomic approve and deny transitions in `internal/productdata/repository.go`
+- [X] T038 [US2] Implement approval decision service methods that record exactly one decision event, return 200/current state for repeated same decisions, and reserve conflicts for incompatible decision reversals in `internal/productdata/service.go`
+- [X] T039 [US2] Add scoped approve and deny HTTP handlers with same-decision idempotent 200 responses and conflicting-decision 409 responses in `internal/httpapi/runtime.go`
+- [X] T040 [US2] Register approve and deny routes in `internal/httpapi/server.go`
+- [X] T041 [US2] Wake or schedule the existing M6 worker/job pipeline exactly once after approval in `internal/runtime/jobs.go`
+- [X] T042 [US2] Ensure denied tool calls never reach execution and finalize the run through `run_stopped` in `internal/runtime/worker.go`
+- [X] T043 [US2] Add approve/deny client methods in `web/src/realApiClient.ts`
+- [X] T044 [US2] Wire ToolCallCard approve/deny controls to client actions and disable controls after decision in `web/src/components/ToolCallCard.tsx`
+- [X] T045 [US2] Map approved and denied events into frontend runtime state in `web/src/runtime/executionAdapter.ts`
 
 **Checkpoint**: User Story 2 can be validated independently with approve/deny API retries and UI controls.
 
@@ -117,23 +117,23 @@
 
 ### Tests for User Story 3
 
-- [ ] T046 [P] [US3] Add worker tests for approval resume, single execution attempt, and two-worker race prevention in `internal/runtime/worker_test.go`
-- [ ] T047 [P] [US3] Add runtime tool executor tests for successful `runtime.get_current_time` result and redacted failure in `internal/runtime/tools_test.go`
-- [ ] T048 [P] [US3] Add service tests for `tool_call_executing`, `tool_call_succeeded`, `tool_call_failed`, and `tool_call_cancelled` terminal guards in `internal/productdata/service_test.go`
-- [ ] T049 [P] [US3] Add stop/cancel HTTP or worker tests for pending and executing tool calls in `internal/httpapi/runtime_test.go`
-- [ ] T050 [P] [US3] Add frontend tests for executing, succeeded, failed, and cancelled ToolCallCard states in `web/src/components/ToolCallCard.test.tsx`
+- [X] T046 [P] [US3] Add worker tests for approval resume, single execution attempt, and two-worker race prevention in `internal/runtime/worker_test.go`
+- [X] T047 [P] [US3] Add runtime tool executor tests for successful `runtime.get_current_time` result and redacted failure in `internal/runtime/tools_test.go`
+- [X] T048 [P] [US3] Add service tests for `tool_call_executing`, `tool_call_succeeded`, `tool_call_failed`, and `tool_call_cancelled` terminal guards in `internal/productdata/service_test.go`
+- [X] T049 [P] [US3] Add stop/cancel HTTP or worker tests for pending and executing tool calls in `internal/httpapi/runtime_test.go`
+- [X] T050 [P] [US3] Add frontend tests for executing, succeeded, failed, and cancelled ToolCallCard states in `web/src/components/ToolCallCard.test.tsx`
 
 ### Implementation for User Story 3
 
-- [ ] T051 [US3] Execute approved `runtime.get_current_time` calls through the M7 internal tool executor in `internal/runtime/worker.go`
-- [ ] T052 [US3] Record `tool_call_executing` before executor invocation in `internal/productdata/service.go`
-- [ ] T053 [US3] Record `tool_call_succeeded` with redacted result summary in `internal/productdata/service.go`
-- [ ] T054 [US3] Record `tool_call_failed` with stable redacted error codes for validation/executor failures and finalize unsafe/failed tool runs through `run_failed` in `internal/productdata/service.go`
-- [ ] T055 [US3] Implement cancellation precedence for pending, approved, and executing tool calls in `internal/productdata/repository.go`
-- [ ] T056 [US3] Make worker stop/recovery logic avoid duplicate terminal tool events after cancellation or lease recovery in `internal/runtime/worker.go`
-- [ ] T057 [US3] Define the MVP tool-result-to-model context boundary without full multi-step continuation in `internal/runtime/gateway.go`
-- [ ] T058 [US3] Map executing, succeeded, failed, and cancelled events into frontend runtime state in `web/src/runtime/executionAdapter.ts`
-- [ ] T059 [US3] Render executing, result, redacted error, and cancelled states in `web/src/components/ToolCallCard.tsx`
+- [X] T051 [US3] Execute approved `runtime.get_current_time` calls through the M7 internal tool executor in `internal/runtime/worker.go`
+- [X] T052 [US3] Record `tool_call_executing` before executor invocation in `internal/productdata/service.go`
+- [X] T053 [US3] Record `tool_call_succeeded` with redacted result summary in `internal/productdata/service.go`
+- [X] T054 [US3] Record `tool_call_failed` with stable redacted error codes for validation/executor failures and finalize unsafe/failed tool runs through `run_failed` in `internal/productdata/service.go`
+- [X] T055 [US3] Implement cancellation precedence for pending, approved, and executing tool calls in `internal/productdata/repository.go`
+- [X] T056 [US3] Make worker stop/recovery logic avoid duplicate terminal tool events after cancellation or lease recovery in `internal/runtime/worker.go`
+- [X] T057 [US3] Define the MVP tool-result-to-model context boundary without full multi-step continuation in `internal/runtime/gateway.go`
+- [X] T058 [US3] Map executing, succeeded, failed, and cancelled events into frontend runtime state in `web/src/runtime/executionAdapter.ts`
+- [X] T059 [US3] Render executing, result, redacted error, and cancelled states in `web/src/components/ToolCallCard.tsx`
 
 **Checkpoint**: User Story 3 completes the runnable M7 approval-gated internal tool execution slice.
 
@@ -147,17 +147,17 @@
 
 ### Tests for User Story 4
 
-- [ ] T060 [P] [US4] Add RunTimeline mixed model/tool grouping and ordering tests in `web/src/components/RunTimeline.test.tsx`
-- [ ] T061 [P] [US4] Add RunRail summary tests for waiting, executing, succeeded, failed, denied, and cancelled tool states in `web/src/components/RunRail.test.tsx`
-- [ ] T062 [P] [US4] Add frontend runtime replay equivalence tests for history-first and live M7 tool events in `web/src/runtime/executionAdapter.test.ts`
-- [ ] T063 [P] [US4] Add backend stream ordering regression tests for mixed model/tool/final events in `internal/runtime/stream_test.go`
+- [X] T060 [P] [US4] Add RunTimeline mixed model/tool grouping and ordering tests in `web/src/components/RunTimeline.test.tsx`
+- [X] T061 [P] [US4] Add RunRail summary tests for waiting, executing, succeeded, failed, denied, and cancelled tool states in `web/src/components/RunRail.test.tsx`
+- [X] T062 [P] [US4] Add frontend runtime replay equivalence tests for history-first and live M7 tool events in `web/src/runtime/executionAdapter.test.ts`
+- [X] T063 [P] [US4] Add backend stream ordering regression tests for mixed model/tool/final events in `internal/runtime/stream_test.go`
 
 ### Implementation for User Story 4
 
-- [ ] T064 [US4] Refine RunTimeline tool grouping labels and metadata summaries in `web/src/components/RunTimeline.tsx`
-- [ ] T065 [US4] Refine RunRail tool lifecycle summaries without regressing M6 queued/running/recovering states in `web/src/components/RunRail.tsx`
-- [ ] T066 [US4] Ensure frontend runtime replay produces the same tool view model for historical and live events in `web/src/runtime/executionAdapter.ts`
-- [ ] T067 [US4] Ensure backend stream serialization preserves mixed model/tool/final event order in `internal/runtime/stream.go`
+- [X] T064 [US4] Refine RunTimeline tool grouping labels and metadata summaries in `web/src/components/RunTimeline.tsx`
+- [X] T065 [US4] Refine RunRail tool lifecycle summaries without regressing M6 queued/running/recovering states in `web/src/components/RunRail.tsx`
+- [X] T066 [US4] Ensure frontend runtime replay produces the same tool view model for historical and live events in `web/src/runtime/executionAdapter.ts`
+- [X] T067 [US4] Ensure backend stream serialization preserves mixed model/tool/final event order in `internal/runtime/stream.go`
 
 **Checkpoint**: User Story 4 makes M7 tool audit states clearly inspectable in UI and history replay.
 
@@ -167,18 +167,18 @@
 
 **Purpose**: Documentation, smoke coverage, security checks, and final validation spanning all user stories.
 
-- [ ] T068 [P] Add M7 architecture documentation in `docs-site/src/content/docs/architecture/tool-call-approval.md`
-- [ ] T069 [P] Add M7 API and event contract documentation in `docs-site/src/content/docs/api/tool-call-approval.md`
-- [ ] T070 [P] Add local M7 validation and troubleshooting runbook in `docs-site/src/content/docs/runbooks/local-m7.md`
-- [ ] T071 [P] Add M7 devlog with validation results, known limitations, and deferred multi-step loop notes in `docs-site/src/content/docs/devlog/2026-05-24-m7-tool-call-approval.md`
-- [ ] T072 Update roadmap current status with M7 scope, blocked/resumable tool diagnostic visibility, and remaining desktop/MCP/memory/multi-agent boundaries in `docs-site/src/content/docs/roadmap/current-status.md`
-- [ ] T073 Add local smoke coverage for fake/model tool request, approval wait, approve, deny, execution, validation failure, duplicate tool_call_id, multiple tool request safe handling, cancellation, and SSE reconnect in `specs/009-tool-call-approval-core/quickstart.md`
-- [ ] T074 Run backend validation from `specs/009-tool-call-approval-core/quickstart.md` using `go test ./...`
-- [ ] T075 Run frontend validation from `specs/009-tool-call-approval-core/quickstart.md` using `bun test ./web/src/*.test.ts ./web/src/*.test.tsx ./web/src/components/*.test.ts ./web/src/components/*.test.tsx ./web/src/runtime/*.test.ts`
-- [ ] T076 Run web build validation from `specs/009-tool-call-approval-core/quickstart.md` using `bun run --cwd web build`
-- [ ] T077 Run docs build validation from `specs/009-tool-call-approval-core/quickstart.md` using `bun run --cwd docs-site build`
-- [ ] T078 Perform browser smoke for ToolCallCard approve/deny/result/error/cancel states in `web/`
-- [ ] T079 Record final validation outcomes and exact skipped-command reasons in `docs-site/src/content/docs/devlog/2026-05-24-m7-tool-call-approval.md`
+- [X] T068 [P] Add M7 architecture documentation in `docs-site/src/content/docs/architecture/tool-call-approval.md`
+- [X] T069 [P] Add M7 API and event contract documentation in `docs-site/src/content/docs/api/tool-call-approval.md`
+- [X] T070 [P] Add local M7 validation and troubleshooting runbook in `docs-site/src/content/docs/runbooks/local-m7.md`
+- [X] T071 [P] Add M7 devlog with validation results, known limitations, and deferred multi-step loop notes in `docs-site/src/content/docs/devlog/2026-05-24-m7-tool-call-approval.md`
+- [X] T072 Update roadmap current status with M7 scope, blocked/resumable tool diagnostic visibility, and remaining desktop/MCP/memory/multi-agent boundaries in `docs-site/src/content/docs/roadmap/current-status.md`
+- [X] T073 Add local smoke coverage for fake/model tool request, approval wait, approve, deny, execution, validation failure, duplicate tool_call_id, multiple tool request safe handling, cancellation, and SSE reconnect in `specs/009-tool-call-approval-core/quickstart.md`
+- [X] T074 Run backend validation from `specs/009-tool-call-approval-core/quickstart.md` using `go test ./...`
+- [X] T075 Run frontend validation from `specs/009-tool-call-approval-core/quickstart.md` using `bun test ./web/src/*.test.ts ./web/src/*.test.tsx ./web/src/components/*.test.ts ./web/src/components/*.test.tsx ./web/src/runtime/*.test.ts`
+- [X] T076 Run web build validation from `specs/009-tool-call-approval-core/quickstart.md` using `bun run --cwd web build`
+- [X] T077 Run docs build validation from `specs/009-tool-call-approval-core/quickstart.md` using `bun run --cwd docs-site build`
+- [X] T078 Perform browser smoke for ToolCallCard approve/deny/result/error/cancel states in `web/`
+- [X] T079 Record final validation outcomes and exact skipped-command reasons in `docs-site/src/content/docs/devlog/2026-05-24-m7-tool-call-approval.md`
 
 ---
 

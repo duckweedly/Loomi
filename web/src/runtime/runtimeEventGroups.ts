@@ -19,6 +19,7 @@ export function mapRuntimeEventGroup(event: RunEvent): RuntimeEventGroup {
   if (event.group) return event.group
   if (event.type.startsWith('model.') || event.type.startsWith('assistant.')) return 'model-stream'
   if (event.type.startsWith('worker.') || event.type.startsWith('job.') || event.type.startsWith('pipeline.')) return 'worker-job'
+  if (event.type.startsWith('tool.')) return 'tool-call'
   return 'run-lifecycle'
 }
 
