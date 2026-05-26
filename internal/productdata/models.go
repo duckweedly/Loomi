@@ -1446,6 +1446,7 @@ func validateLSPToolCallArguments(input RecordToolCallRequestInput) (RecordToolC
 
 func validateWebToolCallArguments(input RecordToolCallRequestInput) (RecordToolCallRequestInput, error) {
 	if input.ToolName == ToolNameWebSearch {
+		normalizeWebSearchArgumentAliases(input.ArgumentsSummary)
 		allowed := map[string]struct{}{"query": {}, "provider": {}, "limit": {}, "timeout_ms": {}}
 		for key := range input.ArgumentsSummary {
 			if _, ok := allowed[key]; !ok {
@@ -1478,6 +1479,28 @@ func validateWebToolCallArguments(input RecordToolCallRequestInput) (RecordToolC
 	}
 	input.ArgumentsSummary["url"] = strings.TrimSpace(url)
 	return input, nil
+}
+
+func normalizeWebSearchArgumentAliases(args map[string]any) {
+	if args == nil {
+		return
+	}
+	for _, key := range []string{"q", "search_query", "searchQuery"} {
+		if _, exists := args["query"]; !exists {
+			if value, ok := args[key]; ok {
+				args["query"] = value
+			}
+		}
+		delete(args, key)
+	}
+	for _, key := range []string{"count", "max_results", "maxResults", "num_results", "numResults"} {
+		if _, exists := args["limit"]; !exists {
+			if value, ok := args[key]; ok {
+				args["limit"] = value
+			}
+		}
+		delete(args, key)
+	}
 }
 
 func isSupportedWebSearchProvider(provider string) bool {

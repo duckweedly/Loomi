@@ -891,9 +891,11 @@ export const realApiClient: ApiClient = {
     return mapThread(body.thread)
   },
 
-  async sendMessage(threadId: string, content: string, personaId?: string) {
+  async sendMessage(threadId: string, content: string, personaId?: string, options?: { providerId?: string; model?: string }) {
     const providers = await this.listModelProviders?.()
-    const provider = selectSendProvider(providers)
+    const provider = options?.providerId
+      ? providers?.find((candidate) => candidate.id === options.providerId && candidate.status === 'available') ?? selectSendProvider(providers)
+      : selectSendProvider(providers)
     if (!provider) throw new ApiRequestError('Model provider is unavailable.', 'provider_unavailable', 503)
     try {
       const currentRun = await this.getThreadRun(threadId)
@@ -908,7 +910,7 @@ export const realApiClient: ApiClient = {
     })
     let run: Run | undefined
     try {
-      run = await this.startRun?.(threadId, { messageId: created.message.id, source: 'model_gateway', providerId: provider.id, model: provider.model, personaId })
+      run = await this.startRun?.(threadId, { messageId: created.message.id, source: 'model_gateway', providerId: provider.id, model: options?.model || provider.model, personaId })
     } catch (err) {
       if (!(err instanceof ApiRequestError) || err.code !== 'active_run_exists') throw err
       run = await this.getThreadRun(threadId)

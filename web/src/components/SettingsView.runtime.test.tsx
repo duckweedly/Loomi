@@ -1,16 +1,14 @@
 import { describe, expect, test } from 'bun:test'
 
 describe('SettingsView runtime rows', () => {
-  test('renders read-only runtime and provider status rows', async () => {
+  test('keeps runtime diagnostics out of General settings', async () => {
     const source = await Bun.file(new URL('./SettingsView.tsx', import.meta.url)).text()
 
     expect(source).not.toContain('t.dataSourceMode')
     expect(source).not.toContain('t.mockRuntimeScenario')
     expect(source).toContain('t.theme')
-    expect(source).toContain('t.backendCapability')
-    expect(source).toContain('t.providerCapability')
-    expect(source).toContain('t.streamState')
-    expect(source).toContain('t.readOnly')
+    expect(source).not.toContain('RuntimeStatusRows')
+    expect(source).not.toContain('t.streamState')
   })
 
   test('masks provider key entry and does not embed credentials', async () => {

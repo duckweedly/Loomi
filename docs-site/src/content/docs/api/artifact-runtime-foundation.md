@@ -73,3 +73,14 @@ description: Catalog, arguments, and result contract for M28 artifact tools.
 ```
 
 Events and continuation context persist safe summaries only. They do not include raw unbounded content, executable controls, credentials, local paths, or raw provider payloads.
+
+## Read-only HTTP Projection
+
+The CLI and UI may inspect persisted artifacts through thread-scoped read-only endpoints:
+
+- `GET /v1/threads/:thread_id/artifacts?limit=20`
+- `GET /v1/threads/:thread_id/artifacts/:artifact_id?max_bytes=4096`
+
+Responses return safe artifact fields only: id, thread/run ids, title, type, content byte count, bounded `text_excerpt`, truncation flag, and timestamps. List responses do not include a raw `content` field. Cross-thread reads return `artifact_not_found`.
+
+There is intentionally no HTTP create/update/delete endpoint in this slice. Artifact creation remains an approval-gated Work-mode tool call.

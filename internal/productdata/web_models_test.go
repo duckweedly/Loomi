@@ -46,3 +46,25 @@ func TestValidateWebSearchToolCallArguments(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateWebSearchToolCallNormalizesProviderArgumentAliases(t *testing.T) {
+	input, err := ValidateToolCallRequestInput(RecordToolCallRequestInput{
+		ToolCallID:       "tc_search",
+		ToolName:         ToolNameWebSearch,
+		ArgumentsSummary: map[string]any{"q": "latest AI news", "count": 3, "provider": "brave"},
+		ApprovalStatus:   ToolCallApprovalApproved,
+		ExecutionStatus:  ToolCallExecutionNotStarted,
+	})
+	if err != nil {
+		t.Fatalf("ValidateToolCallRequestInput() error = %v", err)
+	}
+	if input.ArgumentsSummary["query"] != "latest AI news" || input.ArgumentsSummary["limit"] != 3 {
+		t.Fatalf("arguments = %+v", input.ArgumentsSummary)
+	}
+	if _, ok := input.ArgumentsSummary["q"]; ok {
+		t.Fatalf("q alias leaked into normalized arguments: %+v", input.ArgumentsSummary)
+	}
+	if _, ok := input.ArgumentsSummary["count"]; ok {
+		t.Fatalf("count alias leaked into normalized arguments: %+v", input.ArgumentsSummary)
+	}
+}

@@ -106,12 +106,12 @@ describe('ChatCanvas state copy', () => {
     expect(html.match(/Real final/g)).toHaveLength(1)
   })
 
-  test('renders composer retry and regenerate actions from selected run context', () => {
+  test('renders message-level retry regenerate and copy actions from selected run context', () => {
     const failedHtml = renderToStaticMarkup(createElement(ChatCanvas, {
       sidebarCollapsed: false,
       thread: { id: 'thread-a', title: 'Thread A', project: 'Loomi', mode: 'chat', updatedAt: 'Now', lifecycleStatus: 'active', runStatus: 'failed' },
       messages: [],
-      run: { id: 'run-a', threadId: 'thread-a', status: 'failed', model: 'Local simulated', context: 'local_simulated', events: [] },
+      run: { id: 'run-a', threadId: 'thread-a', status: 'failed', model: 'Local simulated', context: 'local_simulated', events: [], assistantDraft: { content: 'Failed response', status: 'failed' } },
       loading: false,
       error: null,
       dataSourceMode: 'mock',
@@ -139,7 +139,10 @@ describe('ChatCanvas state copy', () => {
     }))
 
     expect(failedHtml).toContain('Retry')
+    expect(failedHtml).not.toContain('composer-action" type="button">Retry')
+    expect(completedHtml).toContain('Copy')
     expect(completedHtml).toContain('Regenerate')
+    expect(completedHtml).not.toContain('composer-action" type="button">Regenerate')
   })
 
   test('does not render the old runtime capability header', () => {
@@ -345,7 +348,7 @@ describe('ChatCanvas provider unavailable warning', () => {
     }))
 
     expect(html).toContain('模型 Provider 未配置或不可用')
-    expect(html).toContain('Provider Settings')
+    expect(html).toContain('打开设置')
   })
 
   test('keeps guidance when only enabled local provider execution is unsupported', () => {

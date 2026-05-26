@@ -1,17 +1,11 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024" style="color:#FFFFFF">
-  <defs>
-    <mask id="cutouts" maskUnits="userSpaceOnUse">
-      <rect x="0" y="0" width="1024" height="1024" fill="white"/>
-      <ellipse cx="415" cy="535" rx="54" ry="74" fill="black"/>
-      <ellipse cx="580" cy="548" rx="54" ry="74" fill="black"/>
-      <path d="M456 640 C490 696 558 696 596 640" fill="none" stroke="black" stroke-width="54" stroke-linecap="round"/>
-      <path d="M350 750 C493 570 620 370 765 185" fill="none" stroke="black" stroke-width="26" stroke-linecap="round" opacity="0.58"/>
-    </mask>
-  </defs>
-  <g fill="currentColor" stroke="none" mask="url(#cutouts)">
-    <path d="M230 768 C144 616 188 380 367 273 C528 176 708 166 800 135 C900 236 896 438 797 602 C690 777 466 884 318 839 C276 826 249 804 230 768 Z"/>
-    <path d="M241 748 C203 800 172 850 134 905 C123 921 129 944 147 957 C168 972 197 965 211 943 C249 883 287 827 336 770 Z"/>
-    <circle cx="818" cy="640" r="56"/>
-    <circle cx="725" cy="775" r="52"/>
+<svg style="color:#FFFFFF" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="none">
+  <g fill="currentColor">
+    <path d="M39 163c26-27 45-43 67-50-8-28 11-55 47-57 31-2 56 21 57 47 1 19-11 39-38 54-15 9-31 15-47 20-1 24-1 41-2 75h-10c0-34 0-51-2-75-15-6-30-13-44-22-20-12-32-26-28-48z" opacity="0.98"/>
+    <path d="M30 155c26 7 49 22 67 43-26-1-63-12-83-31 5-4 10-8 16-12z"/>
+    <path d="M228 145c-37 6-71 26-98 56 4-33 33-78 84-95 6 12 10 25 14 39z"/>
+    <circle cx="109" cy="91" r="9"/>
+    <circle cx="153" cy="108" r="6"/>
+    <circle cx="192" cy="105" r="5"/>
   </g>
+  <path d="M143 116c18-2 33-1 49 3" stroke="transparent"/>
 </svg>

@@ -115,7 +115,7 @@ func (r *REPL) handleCommand(ctx context.Context, line string, renderer Renderer
 	case "/quit", "/exit":
 		return true, nil
 	case "/help":
-		_, err := fmt.Fprintln(renderer.out(), "/status\n/thread\n/new\n/model <provider-id-or-model>\n/persona <id-or-slug>\n/tools [group]\n/approvals [run-id]\n/events [compact] [run-id]\n/quit")
+		_, err := fmt.Fprintln(renderer.out(), "/status\n/thread\n/new\n/model <provider-id-or-model>\n/persona <id-or-slug>\n/tools [group]\n/run [run-id]\n/approvals [run-id]\n/events [compact] [run-id]\n/stop [run-id]\n/quit")
 		return false, err
 	case "/status":
 		return false, renderer.PrintStatus(r.client())
@@ -142,10 +142,14 @@ func (r *REPL) handleCommand(ctx context.Context, line string, renderer Renderer
 		return false, r.setPersona(ctx, args[0])
 	case "/tools":
 		return false, r.printTools(ctx, args, renderer)
+	case "/run":
+		return false, r.printRun(ctx, args, renderer)
 	case "/approvals":
 		return false, r.printApprovals(ctx, args, renderer)
 	case "/events":
 		return false, r.printEvents(ctx, args, renderer)
+	case "/stop":
+		return false, r.stopRun(ctx, args, renderer)
 	default:
 		return false, fmt.Errorf("unknown command %s", cmd)
 	}
@@ -174,6 +178,22 @@ func (r *REPL) printTools(ctx context.Context, args []string, renderer Renderer)
 		return err
 	}
 	return renderer.PrintTools(tools)
+}
+
+func (r *REPL) printRun(ctx context.Context, args []string, renderer Renderer) error {
+	if len(args) > 1 {
+		return errors.New("usage: /run [run-id]")
+	}
+	runID := r.runIDArg(args)
+	if runID == "" {
+		_, err := fmt.Fprintln(renderer.out(), "no run yet")
+		return err
+	}
+	run, err := r.client().GetRun(ctx, runID)
+	if err != nil {
+		return err
+	}
+	return renderer.PrintRun(run)
 }
 
 func (r *REPL) printApprovals(ctx context.Context, args []string, renderer Renderer) error {
@@ -231,6 +251,22 @@ func (r *REPL) printEvents(ctx context.Context, args []string, renderer Renderer
 		}
 	}
 	return nil
+}
+
+func (r *REPL) stopRun(ctx context.Context, args []string, renderer Renderer) error {
+	if len(args) > 1 {
+		return errors.New("usage: /stop [run-id]")
+	}
+	runID := r.runIDArg(args)
+	if runID == "" {
+		_, err := fmt.Fprintln(renderer.out(), "no run yet")
+		return err
+	}
+	result, err := r.client().StopRun(ctx, runID)
+	if err != nil {
+		return err
+	}
+	return renderer.PrintStopRun(result)
 }
 
 func (r *REPL) runIDArg(args []string) string {

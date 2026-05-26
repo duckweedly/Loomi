@@ -63,6 +63,87 @@ func (r Renderer) PrintToolsFlat(tools []ToolCatalogEntry) error {
 	return nil
 }
 
+func (r Renderer) PrintMCPServers(servers []MCPServerStatus) error {
+	for _, server := range servers {
+		candidates := "-"
+		if len(server.CandidateNames) > 0 {
+			candidates = strings.Join(server.CandidateNames, ",")
+		}
+		errorCode := server.RedactedErrorCode
+		if errorCode == "" {
+			errorCode = "-"
+		}
+		if _, err := fmt.Fprintf(r.out(), "%s\t%s\t%s\tenabled=%v\tdiscovery=%s\tcandidates=%d\texecution=%s\terror=%s\t%s\n", server.ServerSlug, server.DisplayName, server.Transport, server.Enabled, server.DiscoveryStatus, server.CandidateCount, server.ExecutionMode, errorCode, candidates); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r Renderer) PrintArtifacts(artifacts []Artifact) error {
+	for _, artifact := range artifacts {
+		excerpt := strings.ReplaceAll(strings.TrimSpace(artifact.TextExcerpt), "\n", "\\n")
+		if len(excerpt) > 120 {
+			excerpt = excerpt[:117] + "..."
+		}
+		if _, err := fmt.Fprintf(r.out(), "%s\t%s\t%s\tbytes=%d\ttruncated=%v\t%s\n", artifact.ID, artifact.ArtifactType, artifact.Title, artifact.ContentBytes, artifact.Truncated, excerpt); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r Renderer) PrintArtifact(artifact Artifact) error {
+	if _, err := fmt.Fprintf(r.out(), "artifact %s %s\nthread %s\nrun %s\ntitle %s\nbytes %d\ntruncated %v\n\n", artifact.ID, artifact.ArtifactType, artifact.ThreadID, artifact.RunID, artifact.Title, artifact.ContentBytes, artifact.Truncated); err != nil {
+		return err
+	}
+	_, err := fmt.Fprintln(r.out(), artifact.TextExcerpt)
+	return err
+}
+
+func (r Renderer) PrintMemoryItems(items []MemorySearchResult) error {
+	for _, item := range items {
+		summary := strings.ReplaceAll(strings.TrimSpace(item.Summary), "\n", "\\n")
+		if len(summary) > 120 {
+			summary = summary[:117] + "..."
+		}
+		if _, err := fmt.Fprintf(r.out(), "%s\t%s\t%s\t%s/%s\tredacted=%v\t%s\n", item.ID, item.Status, item.SafetyState, item.ScopeType, item.ScopeID, item.RedactionApplied, summary); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r Renderer) PrintMemoryItem(item MemorySearchResult) error {
+	if _, err := fmt.Fprintf(r.out(), "memory %s\nstatus %s\nsafety %s\nscope %s/%s\nsource %s %s\nredacted %v\n\ntitle %s\nsummary %s\n", item.ID, item.Status, item.SafetyState, item.ScopeType, item.ScopeID, item.SourceType, item.SourceRunID, item.RedactionApplied, item.Title, item.Summary); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (r Renderer) PrintMemoryAudit(items []MemoryAuditItem) error {
+	for _, item := range items {
+		target := firstNonEmpty(item.MemoryEntryID, item.MemoryProposalID, "-")
+		if _, err := fmt.Fprintf(r.out(), "%s\t%s\t%s\tthread=%s\trun=%s\tstatus=%s\tredacted=%v\n", item.ID, item.EventType, target, item.ThreadID, item.RunID, item.Status, item.RedactionApplied); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r Renderer) PrintAgentTasks(tasks []AgentTask) error {
+	for _, task := range tasks {
+		goal := strings.ReplaceAll(strings.TrimSpace(task.Goal), "\n", "\\n")
+		if len(goal) > 120 {
+			goal = goal[:117] + "..."
+		}
+		if _, err := fmt.Fprintf(r.out(), "%s\t%s\t%s\t%s\t%s\n", task.ID, task.Status, task.Role, task.RunID, goal); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (r Renderer) PrintThreads(threads []Thread) error {
 	for _, thread := range threads {
 		title := strings.TrimSpace(thread.Title)
@@ -74,6 +155,11 @@ func (r Renderer) PrintThreads(threads []Thread) error {
 		}
 	}
 	return nil
+}
+
+func (r Renderer) PrintRun(run Run) error {
+	_, err := fmt.Fprintf(r.out(), "run %s %s\nthread %s\n", run.ID, run.Status, run.ThreadID)
+	return err
 }
 
 func (r Renderer) PrintPersonas(personas []Persona) error {
@@ -96,6 +182,11 @@ func (r Renderer) PrintModelProviders(providers []ProviderCapability) error {
 		}
 	}
 	return nil
+}
+
+func (r Renderer) PrintStopRun(result StopRunResult) error {
+	_, err := fmt.Fprintf(r.out(), "run %s %s %s\n", result.Run.ID, result.Run.Status, result.Result)
+	return err
 }
 
 func (r Renderer) PrintEvent(event RunEvent) error {

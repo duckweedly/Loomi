@@ -772,13 +772,14 @@ describe('M4 run mapping', () => {
 
   test('real sendMessage checks provider and active run before creating a user message', async () => {
     const source = await Bun.file(new URL('./realApiClient.ts', import.meta.url)).text()
-    const providerCheck = source.indexOf('const provider = selectSendProvider(providers)')
+    const providerCheck = source.indexOf('const provider = options?.providerId')
     const activeRunCheck = source.indexOf('const currentRun = await this.getThreadRun(threadId)')
     const messageCreate = source.indexOf("requestJSON<{ message: ApiMessage }>(`/v1/threads/${threadId}/messages`")
 
     expect(providerCheck).toBeGreaterThan(0)
     expect(activeRunCheck).toBeGreaterThan(providerCheck)
     expect(messageCreate).toBeGreaterThan(activeRunCheck)
+    expect(source).toContain("model: options?.model || provider.model")
     expect(source).toContain('当前会话还有任务未结束，请先确认或停止当前任务。')
   })
 

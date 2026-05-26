@@ -31,8 +31,6 @@ describe('settings catalog', () => {
     expect(generalSettingSections.flatMap((section) => section.rows.map((row) => row.id))).toEqual([
       'default-workspace-mode',
       'theme',
-      'backend-capability',
-      'provider-capability',
     ])
   })
 })

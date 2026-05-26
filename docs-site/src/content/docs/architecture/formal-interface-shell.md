@@ -43,9 +43,12 @@ Composer 固定在画布底部居中，保留现有真实入口：
 
 - send / continue
 - Stop
-- retry / regenerate
+- available model selector, using the configured provider/model for the next send
+- file attachment picker and pasted-image chips for the current message draft
 
-UI-02 不再把 Work in Folder、附件、persona/provider selector 或 voice 画成不能用的假入口。Chat placeholder 用发消息语义，Work placeholder 用描述任务语义。
+Copy, retry, and regenerate are icon-only message-level actions with accessible labels. They render under the relevant assistant response or failed draft, not inside the composer toolbar. Stop remains near the composer because it controls the currently active generation.
+
+Attachment chips are frontend draft state in this slice. They show selected PDF/image/document names and pasted clipboard images, but runtime parsing/embedding of file contents remains a future file-ingestion slice. Chat placeholder 用发消息语义，Work placeholder 用描述任务语义。
 
 不可新增没有行为支撑的 runtime/tool/provider 按钮。
 

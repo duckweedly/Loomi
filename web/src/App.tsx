@@ -219,9 +219,6 @@ export default function App() {
                   defaultWorkspaceMode={shell.defaultWorkspaceMode}
                   theme={shell.theme}
                   backendCapability={backendCapability}
-                  streamState={streamState}
-                  selectedThreadTitle={selectedThread?.title}
-                  selectedRunStatus={run?.status}
                   providerCapabilities={providerCapabilities}
                   workspaceRootConfig={workspaceRootConfig}
                   workspaceRootSaveResult={workspaceRootSaveResult}
@@ -298,7 +295,7 @@ export default function App() {
                   onSelectPersona={setSelectedPersonaId}
                   onOpenProviderSettings={() => shell.openSettings('providers')}
                   onChooseWorkspaceFolder={() => void chooseWorkspaceFolder()}
-                  onSendMessage={(content) => void sendMessage(content)}
+                  onSendMessage={(content, options) => void sendMessage(content, options)}
                   onStopRun={() => void stopRun()}
                   onApproveToolCall={(toolCall) => approveToolCall(toolCall)}
                   onDenyToolCall={(toolCall) => denyToolCall(toolCall)}

@@ -76,3 +76,11 @@ Supported roles are `researcher`, `implementer`, and `reviewer`.
 `agent.list` returns `tasks` and `count`. `agent.complete` returns the task status and bounded result summary.
 
 Events and continuation context persist safe summaries only. They do not include raw provider payloads, credentials, local paths, child model runs, external process handles, or cross-thread delegation data.
+
+## Read-only HTTP Projection
+
+The CLI can inspect coordination records through:
+
+- `GET /v1/threads/:thread_id/agent-tasks?limit=20`
+
+Responses include bounded safe task fields: task id, thread/run ids, role, goal, status, result summary, and timestamps. This endpoint is read-only. Creating or completing tasks remains an approval-gated Work-mode tool flow through `agent.spawn` and `agent.complete`; Loomi still does not launch child model runs or external workers in this slice.

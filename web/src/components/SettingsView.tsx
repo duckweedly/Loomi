@@ -1,6 +1,6 @@
 import { ArrowLeft, Check, ChevronDown, ChevronRight, Minus, Plus, Search, X } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
-import type { BackendCapabilityState, InstalledSkill, LocalProviderDetection, MCPServerConfigInput, MCPServerStatus, MemoryAuditItem, MemoryEntry, MemoryFilters, Persona, ProviderCapability, RunStatus, StreamState, Thread, ToolCatalogItem, WebSearchConfig, WorkspaceRootConfig } from '../domain'
+import type { BackendCapabilityState, InstalledSkill, LocalProviderDetection, MCPServerConfigInput, MCPServerStatus, MemoryAuditItem, MemoryEntry, MemoryFilters, Persona, ProviderCapability, Thread, ToolCatalogItem, WebSearchConfig, WorkspaceRootConfig } from '../domain'
 import type { ProviderCheckResult, ProviderSaveResult } from '../state'
 import type { ProviderDraftSettings } from '../useWorkspaceShellState'
 import type { Locale } from '../i18n'
@@ -14,9 +14,6 @@ type Props = {
   defaultWorkspaceMode: Thread['mode']
   theme: 'dark' | 'light'
   backendCapability: BackendCapabilityState
-  streamState: StreamState
-  selectedThreadTitle?: string
-  selectedRunStatus?: RunStatus
   providerCapabilities: ProviderCapability[]
   workspaceRootConfig?: WorkspaceRootConfig | null
   workspaceRootSaveResult?: ProviderSaveResult
@@ -383,18 +380,6 @@ function ProviderManagementPanel({
   )
 }
 
-function RuntimeStatusRows({ backendCapability, streamState, selectedThreadTitle, selectedRunStatus, providerCapabilities, t }: Pick<Props, 'backendCapability' | 'streamState' | 'selectedThreadTitle' | 'selectedRunStatus' | 'providerCapabilities'> & { t: ReturnType<typeof getDictionary>['settings'] }) {
-  return (
-    <>
-      <SettingRow label={t.backendCapability} helperText={t.backendCapabilityHelper} status="read_only" t={t} control={<StatusValue>{capabilityLabel(backendCapability, t)}</StatusValue>} />
-      <SettingRow label={t.streamState} helperText={t.streamStateHelper} status="read_only" t={t} control={<StatusValue>{streamState}</StatusValue>} />
-      <SettingRow label={t.selectedThread} helperText={t.selectedThreadHelper} status="read_only" t={t} control={<StatusValue>{selectedThreadTitle ?? t.noThreadSelected}</StatusValue>} />
-      <SettingRow label={t.selectedRunStatus} helperText={t.selectedRunStatusHelper} status="read_only" t={t} control={<StatusValue>{selectedRunStatus ?? t.noActiveRun}</StatusValue>} />
-      <SettingRow label={t.providerCapability} helperText={t.providerCapabilityHelper} status="read_only" t={t} control={<ProviderCapabilityList providerCapabilities={providerCapabilities} t={t} />} />
-    </>
-  )
-}
-
 const toolDisplayCopy: Record<string, { zh: { name: string; description: string }; en: { name: string; description: string } }> = {
   'runtime.get_current_time': { zh: { name: '当前时间', description: '返回当前 UTC 时间。' }, en: { name: 'Current time', description: 'Returns the current UTC time.' } },
   'workspace.glob': { zh: { name: '查找工作区文件', description: '在已配置的工作区根目录下查找文件。' }, en: { name: 'Workspace glob', description: 'Find files under the configured workspace root.' } },
@@ -749,9 +734,6 @@ export function SettingsView({
   defaultWorkspaceMode,
   theme,
   backendCapability,
-  streamState,
-  selectedThreadTitle,
-  selectedRunStatus,
   providerCapabilities,
   personas = [],
   installedSkills = [],
@@ -897,14 +879,6 @@ export function SettingsView({
                   />
                 )}
               />
-            </section>
-
-            <section className="settings-card">
-              <div className="settings-card-head">
-                <h2>{t.runtimeStatus}</h2>
-                <p>{t.runtimeStatusDescription}</p>
-              </div>
-              <RuntimeStatusRows backendCapability={backendCapability} streamState={streamState} selectedThreadTitle={selectedThreadTitle} selectedRunStatus={selectedRunStatus} providerCapabilities={providerCapabilities} t={t} />
             </section>
           </div>
         )}

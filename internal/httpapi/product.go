@@ -118,6 +118,14 @@ func (s *Server) handleThreadByID(w http.ResponseWriter, r *http.Request) {
 		s.handleThreadMessages(w, r, threadID)
 		return
 	}
+	if suffix == "artifacts" || strings.HasPrefix(suffix, "artifacts/") {
+		s.handleThreadArtifacts(w, r, threadID, suffix)
+		return
+	}
+	if suffix == "agent-tasks" {
+		s.handleThreadAgentTasks(w, r, threadID, suffix)
+		return
+	}
 	if suffix == "runs" || suffix == "runs/current" {
 		s.handleThreadRuns(w, r, threadID)
 		return

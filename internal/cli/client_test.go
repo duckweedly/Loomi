@@ -301,6 +301,39 @@ func TestREPLSlashCommandsListToolsApprovalsAndEvents(t *testing.T) {
 	}
 }
 
+func TestREPLStopCommandStopsLastRun(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/runs/run_cli":
+			writeTestJSON(w, http.StatusOK, `{"run":{"id":"run_cli","thread_id":"thr_cli","status":"running"},"request_id":"req_run"}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/runs/run_cli/stop":
+			writeTestJSON(w, http.StatusOK, `{"run":{"id":"run_cli","thread_id":"thr_cli","status":"stopped"},"result":"stopped","request_id":"req_stop"}`)
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
+		}
+	}))
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	repl := REPL{
+		Client:    NewClient(server.URL),
+		In:        strings.NewReader("/run\n/stop\n/quit\n"),
+		Out:       &stdout,
+		Err:       &stderr,
+		LastRunID: "run_cli",
+	}
+	if err := repl.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout.String(), "run run_cli running") || !strings.Contains(stdout.String(), "run run_cli stopped stopped") {
+		t.Fatalf("stdout = %s", stdout.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %s", stderr.String())
+	}
+}
+
 func TestPendingApprovalEventsOnlyReturnsUnresolvedApprovals(t *testing.T) {
 	events := []RunEvent{
 		{Type: "tool_call_approval_required", RunID: "run", ThreadID: "thr", Metadata: map[string]any{"tool_call_id": "tc_read", "tool_name": "workspace.read"}},

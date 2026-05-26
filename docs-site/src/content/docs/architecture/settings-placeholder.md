@@ -1,19 +1,19 @@
 ---
 title: M5.5 Settings Placeholder Architecture
-description: Temporary settings surface boundaries for session-local controls, read-only runtime state, and safe placeholders.
+description: Temporary settings surface boundaries for session-local controls, real management panels, and hidden placeholders.
 ---
 
-M5.5 adds an in-app Settings surface to the existing Loomi web shell. The surface is a desktop-style two-column view with Loomi-owned categories, grouped cards, and clear working versus placeholder status.
+M5.5 adds an in-app Settings surface to the existing Loomi web shell. The surface is a desktop-style two-column view with Loomi-owned categories, grouped cards, and only real user-facing controls.
 
 ## Boundary
 
 Settings is frontend state for this milestone. Working controls are limited to current-session local behavior:
 
 - default workspace mode for future local thread creation
-- mock runtime scenario for future mock sends
 - current-session interface language, defaulting to Chinese with an English switch in Settings
+- current-session light/dark appearance
 
-Runtime, data source, stream, selected thread/run, and provider capability rows are read-only status views. They expose only frontend-safe state already available to the shell.
+Runtime, data source, stream, selected thread/run, and provider capability diagnostics are not part of General settings. Runtime state belongs in Chat, run details, or future debug/timeline surfaces where it explains execution instead of pretending to be a user preference.
 
 Providers uses a management-list layout for redacted model providers: search, All/Enabled/Local/Cloud filters, read-only local provider cards, safe connection-test actions, and an Add provider dialog. The dialog submits the current OpenAI-compatible Base URL, model, and API key to the local API save path; the key string is cleared after save and is never echoed back into the interface.
 
@@ -21,9 +21,7 @@ Provider secrets stay outside durable settings in M5.5. The settings UI must nev
 
 ## State flow
 
-`useWorkspaceShellState` owns the Settings surface state: open/closed, selected category, session-local default workspace mode, current language, and provider draft settings. `useWorkspaceState` still owns thread/message/run behavior and receives the default workspace mode when creating future local threads.
-
-The mock runtime scenario control reuses the existing `selectRuntimeScript` path. Changing it does not mutate an active run; it only affects the next mock send.
+`useWorkspaceShellState` owns the Settings surface state: open/closed, selected category, session-local default workspace mode, current theme, current language, and provider draft settings. `useWorkspaceState` still owns thread/message/run behavior and receives the default workspace mode when creating future local threads.
 
 ## Categories
 

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ChevronDown, ChevronRight } from 'lucide-react'
+import { Copy, ChevronDown, ChevronRight, RefreshCcw, RotateCcw } from 'lucide-react'
 import type { AssistantDraft as AssistantDraftState, BackendCapabilityState, ChatCanvasState, Message, Persona, ProviderCapability, Run, StreamState, Thread, WorkspaceRootConfig } from '../domain'
 import type { Locale } from '../i18n'
 import { getDictionary } from '../i18n'
@@ -9,6 +9,7 @@ import { humanToolName } from '../runtime/toolPreview'
 import type { ProviderSaveResult } from '../state'
 import { deriveWorkPlanProjection } from '../workModeProjection'
 import { Composer } from './Composer'
+import type { ComposerAttachment, ComposerModelOption } from './Composer'
 import { ToolCallCard } from './ToolCallCard'
 import { WorkPlanView } from './WorkPlanView'
 
@@ -39,7 +40,7 @@ type Props = {
   onSelectPersona?: (personaId: string) => void
   onOpenProviderSettings?: () => void
   onChooseWorkspaceFolder?: () => void
-  onSendMessage: (content: string) => void
+  onSendMessage: (content: string, options?: { providerId?: string; model?: string; attachments?: ComposerAttachment[] }) => void
   onStopRun: () => void
   onRetryRun?: () => void
   onRegenerateRun?: () => void
@@ -206,8 +207,34 @@ function visibleRunForTranscript(run: Run | null, messages: Message[]) {
   return run
 }
 
-function MessageHistory({ messages, locale }: { messages: Message[]; locale: Locale }) {
+function MessageActions({ message, locale, canRegenerate, onRetry, onRegenerate }: { message: Message; locale: Locale; canRegenerate?: boolean; onRetry?: () => void; onRegenerate?: () => void }) {
   const copy = getDictionary(locale).chatCanvas
+  if (message.role !== 'assistant') return null
+  return (
+    <div className="message-actions" aria-label={locale === 'zh' ? '消息操作' : 'Message actions'}>
+      <button type="button" onClick={() => void navigator.clipboard?.writeText(message.content)} aria-label={copy.copy} title={copy.copy}>
+        <Copy size={14} />
+        <span>{copy.copy}</span>
+      </button>
+      {onRetry && (
+        <button type="button" onClick={onRetry} aria-label={copy.retry} title={copy.retry}>
+          <RotateCcw size={14} />
+          <span>{copy.retry}</span>
+        </button>
+      )}
+      {canRegenerate && onRegenerate && (
+        <button type="button" onClick={onRegenerate} aria-label={copy.regenerate} title={copy.regenerate}>
+          <RefreshCcw size={14} />
+          <span>{copy.regenerate}</span>
+        </button>
+      )}
+    </div>
+  )
+}
+
+function MessageHistory({ messages, locale, canRegenerate, onRegenerate }: { messages: Message[]; locale: Locale; canRegenerate?: boolean; onRegenerate?: () => void }) {
+  const copy = getDictionary(locale).chatCanvas
+  const lastAssistant = [...messages].reverse().find((message) => message.role === 'assistant')
   return messages.map((message, index) => (
     <article key={`${message.id}-${index}`} className={`message-row ${message.role}`}>
       <div className="message-avatar">{message.role === 'assistant' ? 'L' : 'U'}</div>
@@ -215,6 +242,7 @@ function MessageHistory({ messages, locale }: { messages: Message[]; locale: Loc
         <div className="message-meta">{message.role === 'assistant' ? copy.assistant : copy.user} · {displayMessageTime(message.createdAt, locale)}</div>
         <MarkdownMessage content={message.content} />
         {message.toolCalls?.length ? <ToolCallList toolCalls={message.toolCalls} locale={locale} /> : null}
+        <MessageActions message={message} locale={locale} canRegenerate={canRegenerate && message.id === lastAssistant?.id} onRegenerate={onRegenerate} />
       </div>
     </article>
   ))
@@ -240,17 +268,20 @@ function draftStatusLabel(status: AssistantDraftState['status'], locale: Locale)
   return copy.waitingRunTitle
 }
 
-function AssistantDraft({ run, locale }: { run: Run | null; locale: Locale }) {
+function AssistantDraft({ run, locale, onRetry }: { run: Run | null; locale: Locale; onRetry?: () => void }) {
   const copy = getDictionary(locale).chatCanvas
   const draft = run?.assistantDraft
   if (!run || !draft || draft.status === 'empty') return null
+
+  const failedMessage: Message = { id: draft.messageId ?? run.id, threadId: run.threadId, role: 'assistant', content: draft.content || draftFallback(draft.status, locale), createdAt: run.completedAt ?? run.createdAt ?? new Date().toISOString(), runId: run.id }
 
   return (
     <article className={`message-row assistant draft ${draft.status}`}>
       <div className="message-avatar">L</div>
       <div className="message-bubble">
         <div className="message-meta">{copy.assistant} · {draftStatusLabel(draft.status, locale)}</div>
-        <MarkdownMessage content={draft.content || draftFallback(draft.status, locale)} />
+        <MarkdownMessage content={failedMessage.content} />
+        {draft.status === 'failed' && <MessageActions message={failedMessage} locale={locale} onRetry={onRetry} />}
       </div>
     </article>
   )
@@ -365,6 +396,15 @@ export function ChatCanvas({ thread, messages, run, loading, error, dataSourceMo
   const shouldShowAssistantDraft = Boolean(visibleRun && !hasPersistedCompletedDraftMessage)
   const shouldShowHistory = state === 'history' || state === 'waiting-run' || state === 'running' || state === 'completed' || state === 'failed' || state === 'stopped' || state === 'recovering' || state === 'stopping'
   const workPlanProjection = deriveWorkPlanProjection(thread, messages, visibleRun)
+  const composerModelOptions: ComposerModelOption[] = providerCapabilities
+    .filter((provider) => provider.status === 'available' && provider.executionState !== 'unsupported')
+    .map((provider) => ({
+      key: `${provider.id}:${provider.model}`,
+      providerId: provider.id,
+      model: provider.model,
+      label: `${provider.model} · ${provider.localProvider ? 'Local' : provider.family}`,
+    }))
+  const canRegenerateAnswer = Boolean(thread && visibleRun && !activeRunStatuses.has(visibleRun.status) && messages.some((message) => message.role === 'assistant'))
 
   return (
     <section className="chat-shell glass-panel" data-chat-state={state}>
@@ -382,14 +422,14 @@ export function ChatCanvas({ thread, messages, run, loading, error, dataSourceMo
         {workPlanProjection && <WorkPlanView projection={workPlanProjection} loading={loading} error={error} locale={locale} />}
         {state === 'history' ? (
           <>
-            <MessageHistory messages={messages} locale={locale} />
-            {shouldShowAssistantDraft && <AssistantDraft run={visibleRun} locale={locale} />}
+            <MessageHistory messages={messages} locale={locale} canRegenerate={canRegenerateAnswer} onRegenerate={onRegenerateRun} />
+            {shouldShowAssistantDraft && <AssistantDraft run={visibleRun} locale={locale} onRetry={onRetryRun} />}
             <ActiveToolCalls run={visibleRun} locale={locale} onApproveToolCall={onApproveToolCall} onDenyToolCall={onDenyToolCall} />
           </>
         ) : (
           <>
-            {shouldShowHistory && <MessageHistory messages={messages} locale={locale} />}
-            {shouldShowAssistantDraft && <AssistantDraft run={visibleRun} locale={locale} />}
+            {shouldShowHistory && <MessageHistory messages={messages} locale={locale} canRegenerate={canRegenerateAnswer} onRegenerate={onRegenerateRun} />}
+            {shouldShowAssistantDraft && <AssistantDraft run={visibleRun} locale={locale} onRetry={onRetryRun} />}
             <ActiveToolCalls run={visibleRun} locale={locale} onApproveToolCall={onApproveToolCall} onDenyToolCall={onDenyToolCall} />
             {(state === 'no-thread' || state === 'empty-thread' || state === 'loading' || state === 'error' || state === 'backend-unavailable') && <StatePanel state={state} error={state === 'error' ? error : null} locale={locale} />}
           </>
@@ -404,9 +444,13 @@ export function ChatCanvas({ thread, messages, run, loading, error, dataSourceMo
         threadSelected={Boolean(thread)}
         run={visibleRun}
         messages={messages}
+        modelOptions={composerModelOptions}
         stopLabel={copy.stop}
-        retryLabel={copy.retry}
-        regenerateLabel={copy.regenerate}
+        modelLabel={copy.model}
+        modelUnavailableLabel={copy.modelUnavailable}
+        attachLabel={copy.attach}
+        pasteImageLabel={copy.pasteImage}
+        attachmentPendingLabel={copy.attachmentPending}
         workspaceFolderLabel={copy.chooseWorkspaceFolder}
         workspaceFolderStatus={workspaceFolderStatus}
         onSubmit={onSendMessage}

@@ -6,7 +6,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { Composer } from './Composer'
 
 describe('Composer interactions', () => {
-  test('renders retry and regenerate controls when enabled', () => {
+  test('keeps retry and regenerate out of the input composer', () => {
     const html = renderToStaticMarkup(createElement(Composer, {
       threadSelected: true,
       run: { id: 'run-a', threadId: 'thread-a', status: 'failed', model: 'Mock', context: 'M3.5 mock', events: [] },
@@ -17,8 +17,8 @@ describe('Composer interactions', () => {
       onRegenerate: () => {},
     }))
 
-    expect(html).toContain('Retry')
-    expect(html).toContain('Regenerate')
+    expect(html).not.toContain('Retry')
+    expect(html).not.toContain('Regenerate')
   })
 
   test('renders stop control for an active run', () => {
@@ -60,14 +60,15 @@ describe('Composer interactions', () => {
     const source = readFileSync(resolve(import.meta.dir, 'Composer.tsx'), 'utf8')
 
     expect(source).toContain('deriveComposerActions({ threadSelected, text: value, run, messages, providerUnavailable })')
-    expect(source).toContain('if (composerDisabled || !canSubmit || !content) return')
+    expect(source).toContain('if (composerDisabled || !canSubmit || (!content && !hasAttachments)) return')
   })
 
-  test('does not render unused persona provider attachment or voice controls', () => {
+  test('renders attachment and model affordances without unused persona or voice controls', () => {
     const html = renderToStaticMarkup(createElement(Composer, {
       threadSelected: true,
       run: undefined,
       messages: [],
+      modelOptions: [{ key: 'custom:gpt-5.5', providerId: 'custom', model: 'gpt-5.5', label: 'gpt-5.5 · openai_compatible' }],
       onSubmit: () => {},
       onStop: () => {},
       onRetry: () => {},
@@ -75,9 +76,11 @@ describe('Composer interactions', () => {
     }))
 
     expect(html).not.toContain('aria-label="Persona"')
-    expect(html).not.toContain('composer-model')
+    expect(html).toContain('composer-model-select')
+    expect(html).toContain('gpt-5.5 · openai_compatible')
+    expect(html).toContain('type="file"')
+    expect(html).toContain('accept="image/*,.pdf')
     expect(html).not.toContain('lucide-mic')
-    expect(html).not.toContain('lucide-plus')
   })
 
   test('renders mode-specific placeholder and honest folder limitation state', () => {

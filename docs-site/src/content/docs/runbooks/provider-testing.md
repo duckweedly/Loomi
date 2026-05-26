@@ -50,7 +50,7 @@ Switch to a real provider-dependent capability such as `real_api` or model gatew
 
 Expected:
 
-- if provider readiness is available, Composer can send the message
+- if provider readiness is available, Composer can select an available model and send the message with that provider/model
 - if provider readiness is unavailable, Composer shows provider unavailable and Open Settings > Providers
 - provider unavailable does not show a generating state
 - mock mode remains usable without real provider readiness

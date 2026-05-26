@@ -41,7 +41,7 @@ export type ApiClient = {
   createThread?(title: string, mode: Thread['mode']): Promise<Thread>
   updateThread?(threadId: string, input: Partial<Pick<Thread, 'title' | 'mode'>>): Promise<Thread>
   archiveThread?(threadId: string): Promise<Thread>
-  sendMessage(threadId: string, content: string, personaId?: string): Promise<{ messages: Message[]; run: Run }>
+  sendMessage(threadId: string, content: string, personaId?: string, options?: { providerId?: string; model?: string }): Promise<{ messages: Message[]; run: Run }>
   stopRun(runId: string): Promise<Run>
 }
 

@@ -38,6 +38,409 @@ func TestRunToolsListCommand(t *testing.T) {
 	}
 }
 
+func TestRunMCPServersCommand(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/mcp/servers" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"servers":[{"server_safe_id":"mcp:local-smoke","server_slug":"local-smoke","display_name":"Local Smoke","transport":"stdio","enabled":true,"config_source":"local","discovery_status":"succeeded","candidate_count":1,"candidate_names":["mcp.local-smoke.echo"],"execution_mode":"approval_gated"}],"request_id":"req"}`)
+	}))
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	err := run([]string{"mcp", "servers", "--host", server.URL}, &stdout, &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := stdout.String()
+	for _, expected := range []string{"local-smoke", "Local Smoke", "discovery=succeeded", "candidates=1", "execution=approval_gated", "mcp.local-smoke.echo"} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("stdout missing %q: %s", expected, output)
+		}
+	}
+}
+
+func TestRunLSPToolsCommand(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/tools/catalog" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"tools":[{"name":"workspace.read","group":"workspace","risk_level":"low","approval_policy":"always_required","execution_state":"executable","enabled":true},{"name":"lsp.symbols","group":"lsp","risk_level":"low","approval_policy":"always_required","execution_state":"executable","enabled":true},{"name":"lsp.hover","group":"lsp","risk_level":"low","approval_policy":"always_required","execution_state":"executable","enabled":true}],"request_id":"req"}`)
+	}))
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	err := run([]string{"lsp", "tools", "--host", server.URL}, &stdout, &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := stdout.String()
+	for _, expected := range []string{"[lsp]", "lsp.symbols", "lsp.hover", "always_required"} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("stdout missing %q: %s", expected, output)
+		}
+	}
+	if strings.Contains(output, "workspace.read") {
+		t.Fatalf("stdout contains non-lsp tool: %s", output)
+	}
+}
+
+func TestArtifactsListCommand(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/threads/thr/artifacts" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		if r.URL.Query().Get("limit") != "5" {
+			t.Fatalf("limit = %q", r.URL.Query().Get("limit"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"artifacts":[{"id":"art_1","thread_id":"thr","run_id":"run","title":"Notes","artifact_type":"text","content_bytes":42,"text_excerpt":"hello artifact","truncated":false,"created_at":"2026-05-26T00:00:00Z","updated_at":"2026-05-26T00:00:00Z"}],"request_id":"req"}`)
+	}))
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	err := run([]string{"artifacts", "list", "--host", server.URL, "--limit", "5", "thr"}, &stdout, &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := stdout.String()
+	for _, expected := range []string{"art_1", "text", "Notes", "bytes=42", "hello artifact"} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("stdout missing %q: %s", expected, output)
+		}
+	}
+}
+
+func TestArtifactsReadCommand(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/threads/thr/artifacts/art_1" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		if r.URL.Query().Get("max_bytes") != "7" {
+			t.Fatalf("max_bytes = %q", r.URL.Query().Get("max_bytes"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"artifact":{"id":"art_1","thread_id":"thr","run_id":"run","title":"Notes","artifact_type":"text","content_bytes":42,"text_excerpt":"hello a","truncated":true,"created_at":"2026-05-26T00:00:00Z","updated_at":"2026-05-26T00:00:00Z"},"request_id":"req"}`)
+	}))
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	err := run([]string{"artifacts", "read", "--host", server.URL, "--max-bytes", "7", "thr", "art_1"}, &stdout, &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := stdout.String()
+	for _, expected := range []string{"artifact art_1 text", "thread thr", "run run", "title Notes", "truncated true", "hello a"} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("stdout missing %q: %s", expected, output)
+		}
+	}
+}
+
+func TestMemoryListCommand(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/memory" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		if r.URL.Query().Get("scope_type") != "thread" || r.URL.Query().Get("scope_id") != "thr" || r.URL.Query().Get("limit") != "3" {
+			t.Fatalf("query = %s", r.URL.RawQuery)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"items":[{"id":"mem_1","title":"Preference","summary":"likes concise output","scope_type":"thread","scope_id":"thr","status":"approved","safety_state":"safe","source_type":"thread","redaction_applied":false}],"request_id":"req"}`)
+	}))
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	err := run([]string{"memory", "list", "--host", server.URL, "--scope-type", "thread", "--scope-id", "thr", "--limit", "3"}, &stdout, &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := stdout.String()
+	for _, expected := range []string{"mem_1", "approved", "safe", "thread/thr", "likes concise output"} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("stdout missing %q: %s", expected, output)
+		}
+	}
+}
+
+func TestMemorySearchCommand(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/memory/search" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		raw, _ := io.ReadAll(r.Body)
+		body := string(raw)
+		for _, expected := range []string{`"query":"concise memory"`, `"scope_type":"thread"`, `"scope_id":"thr"`} {
+			if !strings.Contains(body, expected) {
+				t.Fatalf("body missing %q: %s", expected, body)
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"items":[{"id":"mem_2","title":"Style","summary":"concise memory match","scope_type":"thread","scope_id":"thr","status":"approved","safety_state":"safe","source_type":"run","source_run_id":"run","redaction_applied":true}],"excluded_count":0,"request_id":"req"}`)
+	}))
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	err := run([]string{"memory", "search", "--host", server.URL, "--scope-type", "thread", "--scope-id", "thr", "concise", "memory"}, &stdout, &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if output := stdout.String(); !strings.Contains(output, "mem_2") || !strings.Contains(output, "redacted=true") {
+		t.Fatalf("stdout = %s", output)
+	}
+}
+
+func TestMemoryShowCommand(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/memory/entries/mem_1" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		if r.URL.Query().Get("scope_type") != "thread" || r.URL.Query().Get("scope_id") != "thr" {
+			t.Fatalf("query = %s", r.URL.RawQuery)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"entry":{"id":"mem_1","title":"Preference","summary":"likes concise output","scope_type":"thread","scope_id":"thr","status":"approved","safety_state":"safe","source_type":"thread","redaction_applied":false},"request_id":"req"}`)
+	}))
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	err := run([]string{"memory", "show", "--host", server.URL, "--scope-type", "thread", "--scope-id", "thr", "mem_1"}, &stdout, &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := stdout.String()
+	for _, expected := range []string{"memory mem_1", "title Preference", "summary likes concise output"} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("stdout missing %q: %s", expected, output)
+		}
+	}
+}
+
+func TestMemoryAuditCommand(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/memory/audit" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		if r.URL.Query().Get("source_thread_id") != "thr" || r.URL.Query().Get("event_type") != "memory_write_approved" {
+			t.Fatalf("query = %s", r.URL.RawQuery)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"items":[{"id":"evt_1","event_type":"memory_write_approved","summary":"Memory write approved","thread_id":"thr","run_id":"run","memory_entry_id":"mem_1","status":"approved","scope_type":"thread","source_type":"run","redaction_applied":true,"occurred_at":"2026-05-26T00:00:00Z"}],"request_id":"req"}`)
+	}))
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	err := run([]string{"memory", "audit", "--host", server.URL, "--thread-id", "thr", "--event-type", "memory_write_approved"}, &stdout, &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if output := stdout.String(); !strings.Contains(output, "evt_1") || !strings.Contains(output, "memory_write_approved") || !strings.Contains(output, "mem_1") {
+		t.Fatalf("stdout = %s", output)
+	}
+}
+
+func TestAgentTasksCommand(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/threads/thr/agent-tasks" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		if r.URL.Query().Get("limit") != "4" {
+			t.Fatalf("limit = %q", r.URL.Query().Get("limit"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"tasks":[{"id":"agt_1","thread_id":"thr","run_id":"run","role":"reviewer","goal":"Review implementation","status":"spawned","created_at":"2026-05-26T00:00:00Z","updated_at":"2026-05-26T00:00:00Z"}],"request_id":"req"}`)
+	}))
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	err := run([]string{"agent", "tasks", "--host", server.URL, "--limit", "4", "thr"}, &stdout, &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := stdout.String()
+	for _, expected := range []string{"agt_1", "spawned", "reviewer", "run", "Review implementation"} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("stdout missing %q: %s", expected, output)
+		}
+	}
+}
+
+func TestBrowserToolsCommand(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/tools/catalog" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"tools":[{"name":"browser.open","group":"browser","risk_level":"medium","approval_policy":"always_required","execution_state":"executable","enabled":true},{"name":"agent.spawn","group":"agent","risk_level":"medium","approval_policy":"always_required","execution_state":"executable","enabled":true}],"request_id":"req"}`)
+	}))
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	err := run([]string{"browser", "tools", "--host", server.URL}, &stdout, &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := stdout.String()
+	if !strings.Contains(output, "browser.open") || strings.Contains(output, "agent.spawn") {
+		t.Fatalf("stdout = %s", output)
+	}
+}
+
+func TestBrowserEventsCommandFiltersBrowserToolEvents(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/runs/run/events/stream" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "event: run_event\n")
+		fmt.Fprint(w, "data: {\"id\":\"evt_1\",\"run_id\":\"run\",\"thread_id\":\"thr\",\"sequence\":1,\"type\":\"tool_call_succeeded\",\"metadata\":{\"tool_call_id\":\"tc_browser\",\"tool_name\":\"browser.open\",\"result_summary\":{\"session_id\":\"br_1\",\"title\":\"Docs\",\"url\":\"https://example.test\"}}}\n\n")
+		fmt.Fprint(w, "event: run_event\n")
+		fmt.Fprint(w, "data: {\"id\":\"evt_2\",\"run_id\":\"run\",\"thread_id\":\"thr\",\"sequence\":2,\"type\":\"tool_call_succeeded\",\"metadata\":{\"tool_call_id\":\"tc_agent\",\"tool_name\":\"agent.spawn\"}}\n\n")
+		fmt.Fprint(w, "event: close\n")
+		fmt.Fprint(w, "data: {\"run_id\":\"run\"}\n\n")
+	}))
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	err := run([]string{"browser", "events", "--host", server.URL, "--compact", "run"}, &stdout, &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := stdout.String()
+	if !strings.Contains(output, "browser.open") || strings.Contains(output, "agent.spawn") {
+		t.Fatalf("stdout = %s", output)
+	}
+}
+
+func TestVersionCommand(t *testing.T) {
+	var stdout bytes.Buffer
+	err := run([]string{"version"}, &stdout, &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := stdout.String()
+	for _, expected := range []string{"loomi dev", "commit unknown", "date unknown"} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("stdout missing %q: %s", expected, output)
+		}
+	}
+}
+
+func TestVersionCommandJSON(t *testing.T) {
+	var stdout bytes.Buffer
+	err := run([]string{"version", "--output", "json"}, &stdout, &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := stdout.String()
+	for _, expected := range []string{`"version": "dev"`, `"commit": "unknown"`, `"date": "unknown"`} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("stdout missing %q: %s", expected, output)
+		}
+	}
+}
+
+func TestCompletionCommandBash(t *testing.T) {
+	var stdout bytes.Buffer
+	err := run([]string{"completion", "bash"}, &stdout, &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := stdout.String()
+	for _, expected := range []string{"_loomi_completion()", "complete -F _loomi_completion loomi", "doctor", "approvals"} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("stdout missing %q: %s", expected, output)
+		}
+	}
+}
+
+func TestCompletionCommandZsh(t *testing.T) {
+	var stdout bytes.Buffer
+	err := run([]string{"completion", "zsh"}, &stdout, &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := stdout.String()
+	for _, expected := range []string{"#compdef loomi", "_loomi()", "'completion:print shell completion script'"} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("stdout missing %q: %s", expected, output)
+		}
+	}
+}
+
+func TestCompletionCommandFish(t *testing.T) {
+	var stdout bytes.Buffer
+	err := run([]string{"completion", "fish"}, &stdout, &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := stdout.String()
+	for _, expected := range []string{"complete -c loomi -f", "completion", "bash zsh fish"} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("stdout missing %q: %s", expected, output)
+		}
+	}
+}
+
+func TestCompletionCommandRejectsUnknownShell(t *testing.T) {
+	var stdout bytes.Buffer
+	err := run([]string{"completion", "powershell"}, &stdout, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "unsupported shell powershell") {
+		t.Fatalf("err = %#v", err)
+	}
+}
+
+func TestDoctorCommandReportsHealthyChecks(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/readyz":
+			fmt.Fprint(w, `{"ok":true}`)
+		case "/v1/model-providers":
+			fmt.Fprint(w, `{"providers":[{"id":"local_codex","status":"available","execution_state":"supported","model":"gpt-5-codex"}],"request_id":"req_providers"}`)
+		case "/v1/tools/catalog":
+			fmt.Fprint(w, `{"tools":[{"name":"workspace.read","group":"workspace","risk_level":"low","approval_policy":"always_required","execution_state":"executable","enabled":true}],"request_id":"req_tools"}`)
+		default:
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	err := run([]string{"doctor", "--host", server.URL}, &stdout, &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := stdout.String()
+	for _, expected := range []string{
+		"doctor ok",
+		"ok\tapi\t" + server.URL,
+		"ok\tproviders\tlocal_codex status=available execution=supported model=gpt-5-codex",
+		"ok\ttools\t1 tools, 1 enabled, 1 groups",
+	} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("stdout missing %q: %s", expected, output)
+		}
+	}
+}
+
+func TestDoctorCommandReturnsExitErrorWhenAPIUnavailable(t *testing.T) {
+	var stdout bytes.Buffer
+	err := run([]string{"doctor", "--host", "http://127.0.0.1:1"}, &stdout, &bytes.Buffer{})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if exit, ok := err.(exitError); !ok || exit.code != 1 {
+		t.Fatalf("err = %#v", err)
+	}
+	output := stdout.String()
+	if !strings.Contains(output, "doctor fail") || !strings.Contains(output, "fail\tapi\t") {
+		t.Fatalf("stdout = %s", output)
+	}
+}
+
 func TestRunHelpCommandShowsTopics(t *testing.T) {
 	var stdout bytes.Buffer
 	if err := run([]string{"help", "tools"}, &stdout, &bytes.Buffer{}); err != nil {
@@ -101,6 +504,124 @@ func TestRunApprovalDecisionCommand(t *testing.T) {
 	}
 	if strings.TrimSpace(stdout.String()) != "tc approved not_started" {
 		t.Fatalf("stdout = %s", stdout.String())
+	}
+}
+
+func TestRunStopCommand(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/runs/run_cli/stop" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"run":{"id":"run_cli","thread_id":"thr_cli","status":"stopped"},"result":"stopped","request_id":"req_stop"}`)
+	}))
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	err := run([]string{"runs", "stop", "--host", server.URL, "run_cli"}, &stdout, &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(stdout.String()) != "run run_cli stopped stopped" {
+		t.Fatalf("stdout = %s", stdout.String())
+	}
+}
+
+func TestRunStatusCommand(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/runs/run_cli" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"run":{"id":"run_cli","thread_id":"thr_cli","status":"running"},"request_id":"req_run"}`)
+	}))
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	err := run([]string{"runs", "status", "--host", server.URL, "run_cli"}, &stdout, &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout.String(), "run run_cli running") || !strings.Contains(stdout.String(), "thread thr_cli") {
+		t.Fatalf("stdout = %s", stdout.String())
+	}
+}
+
+func TestRunsAttachReplaysThenStreamsFromLastSequence(t *testing.T) {
+	var calls []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls = append(calls, r.Method+" "+r.URL.String())
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/runs/run_cli" && r.URL.RawQuery == "":
+			fmt.Fprint(w, `{"run":{"id":"run_cli","thread_id":"thr_cli","status":"running"},"request_id":"req_run"}`)
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/runs/run_cli/events" && r.URL.Query().Get("after_sequence") == "":
+			fmt.Fprint(w, `{"events":[{"id":"evt_1","run_id":"run_cli","thread_id":"thr_cli","sequence":1,"type":"model_output_delta","content":"hello"},{"id":"evt_2","run_id":"run_cli","thread_id":"thr_cli","sequence":2,"type":"tool_call_approval_required","metadata":{"tool_call_id":"tc","tool_name":"workspace.read"}}],"request_id":"req_events"}`)
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/runs/run_cli/events/stream":
+			if r.URL.Query().Get("after_sequence") != "2" {
+				t.Fatalf("after_sequence = %q", r.URL.Query().Get("after_sequence"))
+			}
+			w.Header().Set("Content-Type", "text/event-stream")
+			fmt.Fprint(w, "event: run_event\n")
+			fmt.Fprint(w, "data: {\"id\":\"evt_3\",\"run_id\":\"run_cli\",\"thread_id\":\"thr_cli\",\"sequence\":3,\"type\":\"run_completed\"}\n\n")
+			fmt.Fprint(w, "event: close\n")
+			fmt.Fprint(w, "data: {\"run_id\":\"run_cli\"}\n\n")
+		default:
+			t.Fatalf("request = %s %s", r.Method, r.URL.String())
+		}
+	}))
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	err := run([]string{"runs", "attach", "--host", server.URL, "--compact", "run_cli"}, &stdout, &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := stdout.String()
+	for _, expected := range []string{
+		"run run_cli running",
+		"0001 hello",
+		"0002 approval_required workspace.read tc",
+		"0003 run_completed",
+	} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("stdout missing %q: %s", expected, output)
+		}
+	}
+	if len(calls) != 3 {
+		t.Fatalf("calls = %#v", calls)
+	}
+}
+
+func TestRunsFollowDefaultsToFutureEventsOnly(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/runs/run_cli/events":
+			fmt.Fprint(w, `{"events":[{"id":"evt_1","run_id":"run_cli","thread_id":"thr_cli","sequence":1,"type":"model_output_delta","content":"old"}],"request_id":"req_events"}`)
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/runs/run_cli/events/stream":
+			if r.URL.Query().Get("after_sequence") != "1" {
+				t.Fatalf("after_sequence = %q", r.URL.Query().Get("after_sequence"))
+			}
+			w.Header().Set("Content-Type", "text/event-stream")
+			fmt.Fprint(w, "event: run_event\n")
+			fmt.Fprint(w, "data: {\"id\":\"evt_2\",\"run_id\":\"run_cli\",\"thread_id\":\"thr_cli\",\"sequence\":2,\"type\":\"model_output_delta\",\"content\":\"new\"}\n\n")
+			fmt.Fprint(w, "event: close\n")
+			fmt.Fprint(w, "data: {\"run_id\":\"run_cli\"}\n\n")
+		default:
+			t.Fatalf("request = %s %s", r.Method, r.URL.String())
+		}
+	}))
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	err := run([]string{"runs", "follow", "--host", server.URL, "run_cli"}, &stdout, &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := stdout.String()
+	if strings.Contains(output, "old") || !strings.Contains(output, "0002 model_output_delta new") {
+		t.Fatalf("stdout = %s", output)
 	}
 }
 

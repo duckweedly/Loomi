@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/sheridiany/loomi/internal/config"
+	"github.com/sheridiany/loomi/internal/productdata"
 )
 
 func TestProviderConfigsFromConfig(t *testing.T) {
@@ -82,7 +83,7 @@ func TestHTTPProviderStreamsOpenAICompatibleTextAndToolEvents(t *testing.T) {
 
 	events := collectProviderEvents(t, provider)
 
-	if len(events) != 3 || events[0].Type != ProviderEventTextDelta || events[0].Text != "hi" || events[1].Type != ProviderEventToolCall || events[1].ToolName != "search" || events[2].Type != ProviderEventCompleted {
+	if len(events) != 3 || events[0].Type != ProviderEventTextDelta || events[0].Text != "hi" || events[1].Type != ProviderEventToolCall || events[1].ToolName != productdata.ToolNameWebSearch || events[2].Type != ProviderEventCompleted {
 		t.Fatalf("events = %+v", events)
 	}
 }
@@ -128,6 +129,15 @@ func TestHTTPProviderAccumulatesOpenAIToolArgumentsAcrossChunks(t *testing.T) {
 	arguments, ok := events[0].Metadata["arguments_summary"].(map[string]any)
 	if !ok || arguments["query"] != "今天最新 AI" {
 		t.Fatalf("metadata = %+v", events[0].Metadata)
+	}
+}
+
+func TestHTTPProviderMapsCommonSearchFunctionAlias(t *testing.T) {
+	if got := internalProviderToolName("search"); got != productdata.ToolNameWebSearch {
+		t.Fatalf("internalProviderToolName(search) = %q", got)
+	}
+	if got := internalProviderToolName("web.search"); got != productdata.ToolNameWebSearch {
+		t.Fatalf("internalProviderToolName(web.search) = %q", got)
 	}
 }
 

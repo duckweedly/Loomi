@@ -47,7 +47,7 @@ export const settingsCategoryGroups: Record<SettingsCategoryGroup, Record<Locale
 }
 
 const categoryCopy: Record<SettingsCategoryId, Record<Locale, Pick<SettingsCategory, 'label' | 'description'>>> = {
-  general: { zh: { label: '通用', description: '当前会话的工作区默认值和运行状态可见性。' }, en: { label: 'General', description: 'Current-session workspace defaults and runtime visibility.' } },
+  general: { zh: { label: '通用', description: '当前会话的基础偏好。' }, en: { label: 'General', description: 'Basic preferences for the current session.' } },
   providers: { zh: { label: '供应商', description: '管理模型供应商与可用模型。' }, en: { label: 'Providers', description: 'Manage model providers and available models.' } },
   'web-search': { zh: { label: '网页搜索', description: '管理 Tavily 和 Brave Search 的网页搜索能力。' }, en: { label: 'Web Search', description: 'Manage Tavily and Brave Search web search capability.' } },
   skill: { zh: { label: '技能', description: '查看本机已安装的 Codex、Claude Code 和项目技能。' }, en: { label: 'Skill', description: 'View installed Codex, Claude Code, and project skills.' } },
@@ -83,16 +83,6 @@ export const generalSettingSections: SettingSection[] = [
     rows: [
       { id: 'default-workspace-mode', label: 'Default workspace mode', helperText: 'Applies to future local conversations created from the sidebar.', controlType: 'segmented', status: 'working' },
       { id: 'theme', label: 'Theme', helperText: 'Switches the current workspace between light and dark appearance.', controlType: 'segmented', status: 'working' },
-    ],
-  },
-  {
-    id: 'runtime-status',
-    title: 'Runtime status',
-    description: 'Read-only visibility for the currently selected workspace runtime.',
-    categoryId: 'general',
-    rows: [
-      { id: 'backend-capability', label: 'Backend capability', helperText: 'Displays runtime availability without exposing secrets.', controlType: 'status', status: 'read_only' },
-      { id: 'provider-capability', label: 'Provider capability', helperText: 'Shows redacted provider id, family, model, and status when available.', controlType: 'status', status: 'read_only' },
     ],
   },
 ]

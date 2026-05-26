@@ -763,7 +763,7 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
     setSelectedThreadId(threadId)
   }, [])
 
-  const sendMessage = useCallback(async (content: string) => {
+  const sendMessage = useCallback(async (content: string, options?: { providerId?: string; model?: string }) => {
     const trimmed = content.trim()
     if (!trimmed) return
     const requestedThreadId = selectedThreadId
@@ -771,7 +771,7 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
     setBackendUnavailableAttempted(false)
     setCapabilitySignals({ backendUnavailable: false, modelSetupMissing: false, providerUnavailable: false, streamDisconnected: false })
     try {
-      const result = await apiClient.sendMessage(requestedThreadId, trimmed, selectedPersonaId || undefined)
+      const result = await apiClient.sendMessage(requestedThreadId, trimmed, selectedPersonaId || undefined, options)
       const nextThreads = await apiClient.listThreads()
       if (!shouldApplySendMessageResult({ requestedThreadId, currentSelectedThreadId: selectedThreadIdRef.current })) return
       setMessages(result.messages)

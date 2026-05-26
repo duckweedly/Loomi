@@ -106,7 +106,12 @@ type Dictionary = {
     stop: string
     retry: string
     regenerate: string
+    copy: string
+    model: string
+    modelUnavailable: string
     attach: string
+    pasteImage: string
+    attachmentPending: string
     chooseWorkspaceFolder: string
     workspaceRootHome: string
     workspaceRootSelected: (name: string) => string
@@ -150,18 +155,6 @@ type Dictionary = {
     themeHelper: string
     light: string
     dark: string
-    runtimeStatus: string
-    runtimeStatusDescription: string
-    backendCapability: string
-    backendCapabilityHelper: string
-    streamState: string
-    streamStateHelper: string
-    selectedThread: string
-    selectedThreadHelper: string
-    selectedRunStatus: string
-    selectedRunStatusHelper: string
-    providerCapability: string
-    providerCapabilityHelper: string
     providerConsoleTitle: string
     providerConsoleDescription: string
     providerConfiguredProviders: string
@@ -354,7 +347,12 @@ export const dictionaries: Record<Locale, Dictionary> = {
       stop: '停止',
       retry: '重试',
       regenerate: '重新生成',
+      copy: '复制',
+      model: '模型',
+      modelUnavailable: '无可用模型',
       attach: '附件',
+      pasteImage: '剪贴板图片',
+      attachmentPending: '随本条消息发送',
       chooseWorkspaceFolder: '选择目录',
       workspaceRootHome: '默认 Home',
       workspaceRootSelected: (name: string) => `目录：${name}`,
@@ -364,7 +362,7 @@ export const dictionaries: Record<Locale, Dictionary> = {
       providerUnavailableWarning: '模型 Provider 未配置或不可用',
       localCodexUnsupportedWarning: 'Local Codex 已启用，但暂不支持执行',
       localCodexUnavailableWarning: 'Local Codex 登录态不可用，请重新检测或配置 OpenAI-compatible provider',
-      openProviderSettings: 'Provider Settings',
+      openProviderSettings: '打开设置',
       stoppedDraft: '已停止生成，保留已生成内容',
       recoveringDraft: '恢复中…',
       modelDrafting: '模型正在生成回复',
@@ -389,7 +387,7 @@ export const dictionaries: Record<Locale, Dictionary> = {
       noThreadSelected: '未选择会话',
       noActiveRun: '无活动运行',
       general: '通用',
-      generalDescription: '当前会话的工作区默认值和运行状态可见性。',
+      generalDescription: '当前会话的基础偏好。',
       workspaceDefaults: '工作区默认值',
       workspaceDefaultsDescription: '只影响后续本地工作区动作的当前会话偏好。',
       defaultWorkspaceMode: '默认工作区模式',
@@ -398,18 +396,6 @@ export const dictionaries: Record<Locale, Dictionary> = {
       themeHelper: '切换当前工作区界面的明暗显示。',
       light: '浅色',
       dark: '深色',
-      runtimeStatus: '运行状态',
-      runtimeStatusDescription: '当前工作区运行状态的只读视图。',
-      backendCapability: '后端能力',
-      backendCapabilityHelper: '显示运行能力可用性，不暴露凭证。',
-      streamState: '流状态',
-      streamStateHelper: '显示当前运行事件流状态。',
-      selectedThread: '当前会话',
-      selectedThreadHelper: '显示打开设置时保留的工作区上下文。',
-      selectedRunStatus: '当前运行状态',
-      selectedRunStatusHelper: '显示当前运行状态，不修改运行。',
-      providerCapability: 'Provider 能力',
-      providerCapabilityHelper: '可用时只显示已脱敏的 provider id、family、model 和 status。',
       providerConsoleTitle: 'Provider Test Console',
       providerConsoleDescription: '读取后端已配置的 provider，并可安全触发一次连接测试。',
       providerConfiguredProviders: '已配置 Provider',
@@ -600,7 +586,12 @@ export const dictionaries: Record<Locale, Dictionary> = {
       stop: 'Stop',
       retry: 'Retry',
       regenerate: 'Regenerate',
+      copy: 'Copy',
+      model: 'Model',
+      modelUnavailable: 'No model',
       attach: 'Attach',
+      pasteImage: 'Clipboard image',
+      attachmentPending: 'queued for this message',
       chooseWorkspaceFolder: 'Choose folder',
       workspaceRootHome: 'Default Home',
       workspaceRootSelected: (name: string) => `Folder: ${name}`,
@@ -635,7 +626,7 @@ export const dictionaries: Record<Locale, Dictionary> = {
       noThreadSelected: 'No thread selected',
       noActiveRun: 'No active run',
       general: 'General',
-      generalDescription: 'Current-session workspace defaults and runtime visibility.',
+      generalDescription: 'Basic preferences for the current session.',
       workspaceDefaults: 'Workspace defaults',
       workspaceDefaultsDescription: 'Session-local preferences for future local workspace actions.',
       defaultWorkspaceMode: 'Default workspace mode',
@@ -644,18 +635,6 @@ export const dictionaries: Record<Locale, Dictionary> = {
       themeHelper: 'Switches the current workspace between light and dark appearance.',
       light: 'Light',
       dark: 'Dark',
-      runtimeStatus: 'Runtime status',
-      runtimeStatusDescription: 'Read-only visibility for the currently selected workspace runtime.',
-      backendCapability: 'Backend capability',
-      backendCapabilityHelper: 'Displays runtime availability without exposing credentials.',
-      streamState: 'Stream state',
-      streamStateHelper: 'Shows the selected run event stream state.',
-      selectedThread: 'Selected thread',
-      selectedThreadHelper: 'Shows the workspace context preserved while Settings is open.',
-      selectedRunStatus: 'Selected run status',
-      selectedRunStatusHelper: 'Shows the current run state without changing the run.',
-      providerCapability: 'Provider capability',
-      providerCapabilityHelper: 'Shows redacted provider id, family, model, and status when available.',
       providerConsoleTitle: 'Provider Test Console',
       providerConsoleDescription: 'Reads configured providers and safely triggers a connection test.',
       providerConfiguredProviders: 'Configured providers',

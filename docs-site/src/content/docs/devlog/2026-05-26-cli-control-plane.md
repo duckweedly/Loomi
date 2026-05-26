@@ -70,6 +70,61 @@ Later chat controls update:
 - Added `loomi chat` slash commands `/tools [group]`, `/approvals [run-id]`, and `/events [compact] [run-id]`.
 - Defaults use the most recent chat run id, so users can inspect tools, pending approvals, and compact event history without leaving the shell.
 
+Later run stop update:
+
+- Added `loomi runs status <run-id>` and chat `/run [run-id]` for current run status.
+- Added `loomi runs stop <run-id>` and chat `/stop [run-id]`.
+- Stop commands call the existing `/v1/runs/{runID}/stop` endpoint and render stopped/already-terminal results; no new runtime stop semantics were introduced.
+
+Later run attach/follow update:
+
+- Added `loomi runs attach <run-id>` for disconnected long-run resume: it renders the current run projection, replays persisted events after `--after`, and then streams new events from the last replayed sequence.
+- Added `loomi runs follow <run-id>` for future-only tailing: by default it reads the current last event sequence and starts SSE after that point; `--after` can override the resume point.
+- Reused the same compact/tools-only/json event rendering path as `loomi events tail`; no new backend endpoint or runtime semantics were introduced.
+
+Later MCP/LSP visibility update:
+
+- Added `loomi mcp servers` over the existing `/v1/mcp/servers` endpoint. Text output includes only safe status metadata and discovered candidate names; raw command, args, env, secrets, and host paths stay hidden.
+- Added `loomi lsp tools` as a focused view over `/v1/tools/catalog` filtered to LSP tools.
+- Kept LSP as approval-gated Work-mode tool execution inside runs; the CLI does not become a direct language-server client.
+
+Later artifact visibility update:
+
+- Added thread-scoped read-only artifact projection endpoints: `GET /v1/threads/:thread_id/artifacts` and `GET /v1/threads/:thread_id/artifacts/:artifact_id`.
+- Added `loomi artifacts list <thread-id>` and `loomi artifacts read <thread-id> <artifact-id>` over those endpoints.
+- Kept artifact creation behind approval-gated Work-mode tool calls; CLI reads bounded safe excerpts and does not expose a create/update/delete HTTP path.
+
+Later memory visibility update:
+
+- Added `loomi memory list`, `loomi memory search`, `loomi memory show`, and `loomi memory audit` over the existing safe memory APIs.
+- Commands support scope/source filters and JSON output for scripting.
+- Kept mutation out of the CLI slice: no memory write-proposal, approve, deny, delete, or direct create command was added.
+
+Later agent/browser visibility update:
+
+- Added `GET /v1/threads/:thread_id/agent-tasks` as a read-only projection of coordination-only agent task records.
+- Added `loomi agent tasks <thread-id>` and `loomi agent tools`.
+- Added `loomi browser tools` and `loomi browser events <run-id>` for browser catalog/event visibility.
+- Kept both surfaces bounded: no direct child model execution, external worker launch, or browser session control was added.
+
+Later doctor update:
+
+- Added `loomi doctor` for read-only local health checks across resolved config, API readiness, configured provider status, and tool catalog availability.
+- Doctor returns non-zero when API readiness fails, so scripts can detect a broken local control plane before starting dogfood runs.
+
+Later version update:
+
+- Added `loomi version` with text and JSON output.
+- Release builds can inject `version`, `commit`, and `date` via Go `-ldflags`; dev builds report `dev`, `unknown`, and `unknown`.
+
+Later local build update:
+
+- Added `scripts/build-cli.sh` to build the local CLI binary into `dist/loomi`.
+- The script detects git version and commit metadata, stamps UTC build time, supports `VERSION`, `COMMIT`, `DATE`, and `OUTPUT` overrides, and runs `dist/loomi version` after building.
+- Added `scripts/install-cli.sh` for a local install path. It defaults to `~/.local/bin/loomi`, supports `PREFIX` and `TARGET`, and refuses to replace an existing target unless `LOOMI_INSTALL_OVERWRITE=1` is set.
+- Added `loomi completion bash|zsh|fish` for shell completion scripts.
+- Kept the scripts local-only: they do not publish release artifacts.
+
 Focused validation:
 
 ```bash
@@ -86,4 +141,4 @@ go test ./cmd/loomi ./internal/cli -count=1
 Next CLI gaps:
 
 - Tool batch coverage beyond the current workspace/todo/patch/sandbox/web slices.
-- Richer long-running run controls such as stop/resume once the backing APIs are ready for CLI use.
+- Release packaging around the CLI binary.

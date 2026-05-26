@@ -543,6 +543,8 @@ func internalProviderToolName(name string) string {
 		return productdata.ToolNameLoadSkill
 	case "web_search":
 		return "web.search"
+	case "web.search", "search":
+		return productdata.ToolNameWebSearch
 	case "workspace_glob":
 		return productdata.ToolNameWorkspaceGlob
 	case "workspace_grep":

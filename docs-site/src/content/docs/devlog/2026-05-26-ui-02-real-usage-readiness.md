@@ -20,7 +20,9 @@ UI-02 closes the demo-looking gaps in the existing UI-01 shell:
 - Thread rename no longer uses a browser prompt; the selected row switches to an inline input with confirm/cancel controls.
 - Mode switching creates a first thread for the target mode when none exists, so Chat/Work tabs do not appear stuck on the previous mode.
 - Thread rows expose an explicit rename/delete menu.
-- Composer renders only the working text entry, run actions, and send button; unimplemented attachment, persona/provider selector, Work folder, and voice controls are removed.
+- Composer renders working text entry, Stop for active runs, attachment picker, pasted-image chips, available model selector, and send button.
+- Copy, retry, and regenerate moved to icon-only assistant message actions instead of living in the composer toolbar.
+- Attachment chips are draft-only UI metadata for now; runtime file/PDF/image parsing is deferred to a later file-ingestion slice.
 - Chat messages render basic safe Markdown for headings, lists, bold text, inline code, links, paragraphs, fenced code, and pipe tables.
 - Composer placeholder copy differs between Chat and Work.
 - Settings > Providers uses a management-list layout with provider search, All/Enabled/Local/Cloud filters, local provider cards, and an Add provider dialog for OpenAI-compatible provider save flow.
@@ -37,6 +39,8 @@ UI-02 closes the demo-looking gaps in the existing UI-01 shell:
 - Interaction polish now uses shared motion tokens for hover, press, focus, menu/modal entry, card/list entry, and active run pulses, with reduced-motion overrides for users who disable animation.
 - The app shell now uses two visual layers instead of structural divider lines: the sidebar reads as the base layer, while chat, settings, and right-side panels float above it as compact rounded cards.
 - Chat and right-side panels avoid nested card frames inside those outer panels; internal progress, preview, and composer regions render as content surfaces instead of stacked card shells.
+- The chat shell removes the extra full-panel inset frame: sidebar, main content, and right drawer now occupy the outer shell directly without their own large-card border, radius, margin, or shadow.
+- App identity assets now use the supplied gecko icon family across Dock, favicon/web manifest, Electron window icons, and titlebar mark; the Dock master is inset on a 1024 canvas so it matches neighboring macOS app icon scale instead of rendering oversized.
 
 ## Non-goals
 
@@ -58,7 +62,8 @@ Browser smoke must verify:
 
 - The old Mock/Real/runtime header is not visible in the chat canvas.
 - Chat and Work composers accept input.
-- Composer does not show unimplemented Work folder, attachment, persona/provider selector, or voice controls.
+- Composer shows available model selection, file attachment, and pasted-image affordances without voice controls.
+- Completed assistant messages show Copy and Regenerate below the answer; failed drafts show Retry below the failed assistant draft.
 - Thread rows can open rename/delete actions.
 - Basic Markdown and pipe tables render in assistant messages.
 - Sidebar does not show the duplicate search field or bottom new/search action cluster.
@@ -74,6 +79,8 @@ Browser smoke must verify:
 - Leaf-style shell polish is visible in both light and dark modes without reducing chat/work readability.
 - The shell no longer shows hard divider lines between sidebar/content or titlebar/content; the main and right panels read as rounded cards above the sidebar layer.
 - Chat and right-side panels do not introduce card-inside-card frames for progress, preview, or inner content groups.
+- Main chat content and right drawer fill the app shell without a visible nested full-panel frame on the left, top, or right edges.
+- Dock, favicon, web manifest, Electron window, and titlebar icons show the gecko identity with Dock visual padding intact.
 - Progress rail shows current-run recent activity without exposing raw ids/event names as primary text, and right-panel menu labels follow the active locale.
 - Console error count is 0.
 - Screenshot path is recorded.
