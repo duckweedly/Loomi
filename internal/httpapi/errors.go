@@ -33,7 +33,7 @@ func statusForError(err error) int {
 	switch productdata.ErrorCode(err) {
 	case productdata.CodeInvalidRequest:
 		return http.StatusBadRequest
-	case productdata.CodeThreadNotFound, productdata.CodeRunNotFound:
+	case productdata.CodeThreadNotFound, productdata.CodeRunNotFound, productdata.CodeMemoryNotFound, productdata.CodeArtifactNotFound:
 		return http.StatusNotFound
 	case productdata.CodeActiveRunExists:
 		return http.StatusConflict

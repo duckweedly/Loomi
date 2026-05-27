@@ -1,0 +1,292 @@
+import { describe, expect, test } from 'bun:test'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
+import type { Message, Run, Thread, WorkPlanProjection } from '../domain'
+import { deriveWorkPlanProjection } from '../workModeProjection'
+import { ChatCanvas } from './ChatCanvas'
+import { WorkPlanView } from './WorkPlanView'
+
+const projection: WorkPlanProjection = {
+  goal: 'Ship M16 work mode foundation',
+  status: 'running',
+  statusDetail: 'Rendering work progress',
+  steps: [{ id: 'step-1', title: 'Build projection', status: 'completed' }, { id: 'step-2', title: 'Render view', status: 'running' }],
+  todoSnapshot: { items: [{ id: 'todo-1', title: 'Find candidate files', status: 'completed' }, { id: 'todo-2', title: 'Read selected file', status: 'running', summary: 'Safe metadata only' }], updatedBy: 'runtime', updatedAtEventId: 'evt-todo', redactionApplied: true },
+  artifacts: [{ id: 'artifact-1', title: 'Work mode plan', type: 'markdown', sourceThreadId: 'thread-work', sourceRunId: 'run-work', summary: 'Safe metadata preview', createdAt: '2026-05-25', redactionApplied: true }],
+  recentEvents: [{ id: 'evt-1', title: '计划已更新', type: 'work.plan.updated', detail: 'Rendering work progress', time: 'Now', status: 'running' }],
+}
+
+describe('WorkPlanView', () => {
+  test('renders goal, steps, status, artifacts, and recent progress', () => {
+    const html = renderToStaticMarkup(createElement(WorkPlanView, { projection, loading: false, error: null }))
+
+    expect(html).toContain('Ship M16 work mode foundation')
+    expect(html).toContain('Plan queue')
+    expect(html).toContain('Active')
+    expect(html).toContain('Done')
+    expect(html).toContain('Needs attention')
+    expect(html).toContain('Build projection')
+    expect(html).toContain('Render view')
+    expect(html).toContain('Find candidate files')
+    expect(html).toContain('Read selected file')
+    expect(html).toContain('Safe metadata only')
+    expect(html).toContain('Updated by runtime')
+    expect(html).toContain('running')
+    expect(html).toContain('Work mode plan')
+    expect(html).toContain('Safe metadata preview')
+    expect(html).toContain('markdown · 2026-05-25')
+    expect(html).toContain('Redacted unsafe metadata')
+    expect(html).toContain('计划已更新')
+    expect(html).not.toContain('artifact-1')
+    expect(html).not.toContain('work.plan.updated')
+    expect(html).not.toContain('<button')
+    expect(html).not.toContain('Open artifact')
+    expect(html).not.toContain('Execute')
+    expect(html).not.toContain('Download')
+  })
+
+  test('renders Chinese UI labels without leaking raw artifact ids', () => {
+    const html = renderToStaticMarkup(createElement(WorkPlanView, { projection, loading: false, error: null, locale: 'zh' }))
+
+    expect(html).toContain('工作计划')
+    expect(html).toContain('计划队列')
+    expect(html).toContain('进行中')
+    expect(html).toContain('运行中')
+    expect(html).toContain('完成')
+    expect(html).toContain('待办')
+    expect(html).toContain('产物')
+    expect(html).toContain('最近进度')
+    expect(html).toContain('已隐藏敏感信息')
+    expect(html).not.toContain('artifact-1')
+    expect(html).not.toContain('Work plan</span>')
+    expect(html).not.toContain('Pending')
+  })
+
+  test('renders loading and error states clearly', () => {
+    const loadingHtml = renderToStaticMarkup(createElement(WorkPlanView, { projection, loading: true, error: null }))
+    const errorHtml = renderToStaticMarkup(createElement(WorkPlanView, { projection, loading: false, error: 'Run events failed' }))
+
+    expect(loadingHtml).toContain('Loading work plan')
+    expect(errorHtml).toContain('Work plan unavailable')
+    expect(errorHtml).toContain('Run events failed')
+  })
+
+  test('does not create an empty task panel from plain messages', () => {
+    const thread: Thread = { id: 'thread-work', title: 'Investigate real usage readiness', project: 'Loomi', mode: 'work', updatedAt: 'Now', lifecycleStatus: 'active', runStatus: 'completed' }
+    const messages: Message[] = [{ id: 'msg-1', threadId: thread.id, role: 'user', content: 'Make the UI feel real', createdAt: 'Now' }]
+    const emptyProjection = deriveWorkPlanProjection(thread, messages, null)
+
+    expect(emptyProjection).toBeNull()
+  })
+})
+
+describe('ChatCanvas Work mode integration', () => {
+  const workThread: Thread = { id: 'thread-work', title: 'Work thread', project: 'Loomi', mode: 'work', updatedAt: 'Now', lifecycleStatus: 'active', runStatus: 'running' }
+  const chatThread: Thread = { ...workThread, id: 'thread-chat', mode: 'chat' }
+  const messages: Message[] = [{ id: 'msg-1', threadId: workThread.id, role: 'user', content: 'Build Work mode UI', createdAt: 'Now' }]
+  const run: Run = {
+    id: 'run-work',
+    threadId: workThread.id,
+    status: 'running',
+    model: 'Mock',
+    context: 'local_simulated',
+    events: [{ id: 'evt-1', type: 'work.plan.updated', label: 'Work', detail: 'Projected from run events', time: 'Now', status: 'running', metadata: { work_goal: 'Projected goal', work_steps: [{ title: 'Projected step', status: 'running' }] } }],
+  }
+
+  test('keeps Work Plan View out of the main chat transcript for Work mode threads', () => {
+    const html = renderToStaticMarkup(createElement(ChatCanvas, {
+      sidebarCollapsed: false,
+      thread: workThread,
+      messages,
+      run,
+      loading: false,
+      error: null,
+      dataSourceMode: 'mock',
+      streamState: 'closed',
+      onSendMessage: () => {},
+      onStopRun: () => {},
+      locale: 'en',
+    }))
+
+    expect(html).not.toContain('Work plan')
+    expect(html).not.toContain('Projected goal')
+    expect(html).not.toContain('Projected step')
+    expect(html).toContain('<textarea class="composer-input" disabled=""')
+    expect(html).toContain('Stop</button>')
+  })
+
+  test('does not mount Work Plan View before real plan evidence exists', () => {
+    const html = renderToStaticMarkup(createElement(ChatCanvas, {
+      sidebarCollapsed: false,
+      thread: { ...workThread, runStatus: 'completed' },
+      messages,
+      run: null,
+      loading: false,
+      error: null,
+      dataSourceMode: 'mock',
+      streamState: 'closed',
+      onSendMessage: () => {},
+      onStopRun: () => {},
+      locale: 'zh',
+    }))
+
+    expect(html).not.toContain('工作计划')
+    expect(html).not.toContain('还没有计划信息')
+    expect(html).toContain('Build Work mode UI')
+  })
+
+  test('localizes Work mode confirmation copy in Chinese', () => {
+    const html = renderToStaticMarkup(createElement(ChatCanvas, {
+      sidebarCollapsed: false,
+      thread: workThread,
+      messages,
+      run: {
+        ...run,
+        status: 'blocked_on_tool_approval',
+        toolCalls: [{
+          id: 'tc-1',
+          toolCallId: 'tc-1',
+          name: 'workspace.read',
+          status: 'approval_required',
+          summary: 'Read src/App.tsx',
+          input: 'src/App.tsx',
+          output: '',
+        }],
+      },
+      loading: false,
+      error: null,
+      dataSourceMode: 'mock',
+      streamState: 'open',
+      onSendMessage: () => {},
+      onStopRun: () => {},
+      locale: 'zh',
+    }))
+
+    expect(html).toContain('等待你确认')
+    expect(html).toContain('停止</button>')
+    expect(html).not.toContain('工作计划')
+    expect(html).not.toContain('Waiting for your confirmation')
+  })
+
+  test('keeps Stop visible while Work mode is blocked on tool approval', () => {
+    const html = renderToStaticMarkup(createElement(ChatCanvas, {
+      sidebarCollapsed: false,
+      thread: workThread,
+      messages,
+      run: {
+        ...run,
+        status: 'blocked_on_tool_approval',
+        toolCalls: [{
+          id: 'tc-1',
+          toolCallId: 'tc-1',
+          name: 'workspace.read',
+          status: 'approval_required',
+          summary: 'Read src/App.tsx',
+          input: 'src/App.tsx',
+          output: '',
+        }],
+      },
+      loading: false,
+      error: null,
+      dataSourceMode: 'mock',
+      streamState: 'open',
+      onSendMessage: () => {},
+      onStopRun: () => {},
+      locale: 'en',
+    }))
+
+    expect(html).not.toContain('Work plan')
+    expect(html).toContain('Waiting for your confirmation')
+    expect(html).toContain('<textarea class="composer-input" disabled=""')
+    expect(html).toContain('Approve')
+    expect(html).toContain('Deny')
+    expect(html).toContain('Stop</button>')
+  })
+
+  test('allows Work mode Composer when provider is available and no run is active', () => {
+    const html = renderToStaticMarkup(createElement(ChatCanvas, {
+      sidebarCollapsed: false,
+      thread: { ...workThread, runStatus: 'completed' },
+      messages,
+      run: { ...run, status: 'completed', events: run.events },
+      loading: false,
+      error: null,
+      dataSourceMode: 'real_api',
+      streamState: 'closed',
+      providerCapabilities: [{ id: 'local_codex', family: 'openai_compatible', model: 'gpt-5.5', status: 'available', executionState: 'supported' }],
+      workspaceRootConfig: { configured: true, displayName: 'Downloads' },
+      onSendMessage: () => {},
+      onStopRun: () => {},
+      locale: 'en',
+    }))
+
+    expect(html).not.toContain('Work plan')
+    expect(html).toContain('<textarea class="composer-input"')
+    expect(html).not.toContain('<textarea class="composer-input" disabled=""')
+    expect(html).toContain('Folder: Downloads')
+    expect(html).not.toContain('M16 Work mode is read-only for plan and progress')
+  })
+
+  test('keeps Work mode Composer disabled for provider unavailable states', () => {
+    const html = renderToStaticMarkup(createElement(ChatCanvas, {
+      sidebarCollapsed: false,
+      thread: { ...workThread, runStatus: 'completed' },
+      messages,
+      run: { ...run, status: 'completed', events: run.events },
+      loading: false,
+      error: null,
+      dataSourceMode: 'real_api',
+      streamState: 'closed',
+      providerCapabilities: [],
+      onSendMessage: () => {},
+      onStopRun: () => {},
+      locale: 'en',
+    }))
+
+    expect(html).toContain('provider-warning')
+    expect(html).toContain('<textarea class="composer-input" disabled=""')
+  })
+
+  test('keeps Chat mode isolated from Work Plan View', () => {
+    const html = renderToStaticMarkup(createElement(ChatCanvas, {
+      sidebarCollapsed: false,
+      thread: chatThread,
+      messages: messages.map((message) => ({ ...message, threadId: chatThread.id })),
+      run: { ...run, threadId: chatThread.id },
+      loading: false,
+      error: null,
+      dataSourceMode: 'mock',
+      streamState: 'closed',
+      onSendMessage: () => {},
+      onStopRun: () => {},
+      locale: 'en',
+    }))
+
+    expect(deriveWorkPlanProjection(chatThread, messages, run)).toBeNull()
+    expect(html).not.toContain('Work plan')
+    expect(html).not.toContain('Projected goal')
+    expect(html).toContain('Build Work mode UI')
+    expect(html).toContain('<textarea class="composer-input" disabled=""')
+  })
+
+  test('keeps Chat mode Composer available when provider is available and no run is active', () => {
+    const html = renderToStaticMarkup(createElement(ChatCanvas, {
+      sidebarCollapsed: false,
+      thread: { ...chatThread, runStatus: 'completed' },
+      messages: messages.map((message) => ({ ...message, threadId: chatThread.id })),
+      run: { ...run, threadId: chatThread.id, status: 'completed', events: run.events },
+      loading: false,
+      error: null,
+      dataSourceMode: 'real_api',
+      streamState: 'closed',
+      providerCapabilities: [{ id: 'local_codex', family: 'openai_compatible', model: 'gpt-5.5', status: 'available', executionState: 'supported' }],
+      onSendMessage: () => {},
+      onStopRun: () => {},
+      locale: 'en',
+    }))
+
+    expect(html).not.toContain('Work plan')
+    expect(html).toContain('<textarea class="composer-input"')
+    expect(html).not.toContain('<textarea class="composer-input" disabled=""')
+  })
+})

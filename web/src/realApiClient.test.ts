@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { createClientMessageID, mapApiProviderCapability, mapApiRun, mapApiRunEvent, mapApiToolCall, mapApiWorkerQueueDiagnostics } from './realApiClient'
+import { createClientMessageID, mapApiLocalProviderDetection, mapApiMemoryAuditItem, mapApiMemoryEntry, mapApiProviderCapability, mapApiRun, mapApiRunEvent, mapApiToolCall, mapApiWorkerQueueDiagnostics, realApiClient, selectSendProvider } from './realApiClient'
 
 describe('createClientMessageID', () => {
   test('does not rely on Date.now alone', () => {
@@ -15,6 +15,373 @@ describe('createClientMessageID', () => {
     } finally {
       Date.now = originalNow
     }
+  })
+})
+
+describe('real API response validation', () => {
+  test('desktop dev defaults to the local API port when no env is supplied', async () => {
+    const source = await Bun.file(new URL('./realApiClient.ts', import.meta.url)).text()
+
+    expect(source).toContain("import.meta.env.DEV ? 'http://127.0.0.1:18080'")
+    expect(source).toContain('configuredApiBaseUrl || devApiBaseUrl')
+  })
+
+  test('listThreads reports invalid API bodies without a raw null property crash', async () => {
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async () => new Response('null', { status: 200, headers: { 'Content-Type': 'application/json' } })) as typeof fetch
+    try {
+      let error: unknown
+      try {
+        await realApiClient.listThreads()
+      } catch (err) {
+        error = err
+      }
+
+      expect(error).toBeInstanceOf(Error)
+      expect((error as { code?: string }).code).toBe('invalid_response')
+      expect((error as Error).message).toBe('Thread list response was invalid.')
+      expect((error as Error).message).not.toContain('Cannot read')
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test('listModelProviders reports invalid API bodies without pretending providers are missing', async () => {
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async () => new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } })) as typeof fetch
+    try {
+      let error: unknown
+      try {
+        await realApiClient.listModelProviders?.()
+      } catch (err) {
+        error = err
+      }
+
+      expect(error).toBeInstanceOf(Error)
+      expect((error as { code?: string }).code).toBe('invalid_response')
+      expect((error as Error).message).toBe('Provider list response was invalid.')
+      expect((error as Error).message).not.toContain('providers')
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test('MCP config writes use safe management endpoints', async () => {
+    const originalFetch = globalThis.fetch
+    const requests: Array<{ url: string; init?: RequestInit }> = []
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      requests.push({ url: String(input), init })
+      if (String(input).endsWith('/discover')) {
+        return new Response(JSON.stringify({ server: apiMCPServer('succeeded') }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      }
+      if (init?.method === 'DELETE') {
+        return new Response(JSON.stringify({ servers: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      }
+      return new Response(JSON.stringify({ server: apiMCPServer('not_discovered') }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    }) as typeof fetch
+    try {
+      await realApiClient.saveMCPServer?.({ slug: 'local-smoke', displayName: 'Local Smoke', enabled: true, transport: 'stdio', command: '/bin/mcp', args: ['--safe'], env: { MODE: 'test' }, timeoutMs: 5000 })
+      await realApiClient.discoverMCPServer?.('local-smoke')
+      await realApiClient.deleteMCPServer?.('local-smoke')
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+
+    expect(requests.map((request) => request.url)).toEqual(['/v1/mcp/servers', '/v1/mcp/servers/local-smoke/discover', '/v1/mcp/servers/local-smoke'])
+    expect(requests[0].init?.method).toBe('POST')
+    expect(String(requests[0].init?.body)).toContain('"display_name":"Local Smoke"')
+    expect(String(requests[0].init?.body)).toContain('"timeout_ms":5000')
+    expect(requests[1].init?.method).toBe('POST')
+    expect(requests[2].init?.method).toBe('DELETE')
+  })
+})
+
+function apiMCPServer(discoveryStatus: string) {
+  return {
+    server_safe_id: 'mcp:local-smoke',
+    server_slug: 'local-smoke',
+    display_name: 'Local Smoke',
+    transport: 'stdio',
+    enabled: true,
+    config_source: 'local',
+    discovery_status: discoveryStatus,
+    candidate_count: discoveryStatus === 'succeeded' ? 1 : 0,
+    candidate_names: discoveryStatus === 'succeeded' ? ['mcp.local-smoke.echo'] : [],
+    execution_mode: discoveryStatus === 'succeeded' ? 'approval_gated' : 'disabled',
+  }
+}
+
+describe('M14 memory management mapping', () => {
+  test('maps safe memory management fields without raw content', () => {
+    const entry = mapApiMemoryEntry({
+      id: 'mem_1',
+      title: 'Preference',
+      summary: 'Prefers short replies',
+      scope_type: 'thread',
+      scope_id: 'thr_1',
+      status: 'tombstoned',
+      safety_state: 'redacted',
+      source_thread_id: 'thr_1',
+      source_run_id: 'run_1',
+      source_event_id: 'evt_1',
+      source_type: 'run',
+      created_at: '2026-05-25T00:00:00Z',
+      updated_at: '2026-05-25T00:01:00Z',
+      deleted_at: '2026-05-25T00:02:00Z',
+      redaction_applied: true,
+    })
+
+    expect(entry).toMatchObject({
+      id: 'mem_1',
+      scopeType: 'thread',
+      scopeId: 'thr_1',
+      status: 'tombstoned',
+      safetyState: 'redacted',
+      sourceRunId: 'run_1',
+      sourceType: 'run',
+      deletedAt: '2026-05-25T00:02:00Z',
+      redactionApplied: true,
+    })
+    expect(JSON.stringify(entry)).not.toContain('content')
+  })
+
+  test('maps safe audit events without provider or tool payloads', () => {
+    const item = mapApiMemoryAuditItem({
+      id: 'evt_1',
+      event_type: 'memory_write_approved',
+      summary: 'Memory write approved',
+      thread_id: 'thr_1',
+      run_id: 'run_1',
+      memory_entry_id: 'mem_1',
+      memory_proposal_id: 'memprop_1',
+      status: 'approved',
+      scope_type: 'thread',
+      source_type: 'run',
+      redaction_applied: true,
+      occurred_at: '2026-05-25T00:00:00Z',
+    })
+
+    expect(item).toMatchObject({
+      eventType: 'memory_write_approved',
+      memoryEntryId: 'mem_1',
+      memoryProposalId: 'memprop_1',
+      redactionApplied: true,
+    })
+    expect(JSON.stringify(item)).not.toContain('provider')
+    expect(JSON.stringify(item)).not.toContain('/Users/')
+  })
+
+  test('maps terminal-run memory audit events for UI history', () => {
+    const item = mapApiMemoryAuditItem({
+      id: 'evt_terminal',
+      event_type: 'memory_snapshot_loaded',
+      summary: 'Snapshot loaded after terminal run',
+      thread_id: 'thread_1',
+      run_id: 'run_completed',
+      status: 'loaded',
+      scope_type: 'thread',
+      source_type: 'run',
+      redaction_applied: true,
+      occurred_at: '2026-05-25T00:00:00Z',
+    })
+
+    expect(item).toMatchObject({
+      eventType: 'memory_snapshot_loaded',
+      runId: 'run_completed',
+      status: 'loaded',
+      redactionApplied: true,
+    })
+  })
+
+  test('uses grounded snake_case memory scope filters', async () => {
+    const source = await Bun.file(new URL('./realApiClient.ts', import.meta.url)).text()
+
+    expect(source).toContain("params.set('source_thread_id'")
+    expect(source).toContain('source_thread_id:')
+    expect(source).not.toContain('workspace_id')
+  })
+
+  test('delete request body omits UI-only search fields', async () => {
+    const source = await Bun.file(new URL('./realApiClient.ts', import.meta.url)).text()
+    const deleteBody = source.slice(source.indexOf('function memoryDeleteRequestBody'), source.indexOf('export function mapApiRunEvent'))
+
+    expect(deleteBody).toContain('scope_type')
+    expect(deleteBody).toContain('source_run_id')
+    expect(deleteBody).not.toContain('limit')
+    expect(deleteBody).not.toContain('include_tombstoned')
+  })
+
+  test('audit request uses the unified memory filter query contract', async () => {
+    const originalFetch = globalThis.fetch
+    const requested: string[] = []
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      requested.push(String(input))
+      return new Response(JSON.stringify({ items: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    }) as typeof fetch
+    try {
+      await realApiClient.listMemoryAudit?.({ scopeType: 'thread', scopeId: 'thread_1', sourceThreadId: 'thread_1', sourceRunId: 'run_1', sourceType: 'run', includeTombstoned: true, limit: 9 })
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+
+    const url = new URL(requested[0], 'http://loomi.local')
+    expect(url.pathname).toBe('/v1/memory/audit')
+    expect(url.searchParams.get('scope_type')).toBe('thread')
+    expect(url.searchParams.get('scope_id')).toBe('thread_1')
+    expect(url.searchParams.get('source_thread_id')).toBe('thread_1')
+    expect(url.searchParams.get('source_run_id')).toBe('run_1')
+    expect(url.searchParams.get('source_type')).toBe('run')
+    expect(url.searchParams.get('limit')).toBe('9')
+    expect(url.searchParams.has('thread_id')).toBe(false)
+  })
+})
+
+describe('M18.5 local provider detection mapping', () => {
+  test('maps safe local provider detection fields without secrets', () => {
+    const detection = mapApiLocalProviderDetection({
+      provider_id: 'local_codex',
+      display_name: 'Local Codex',
+      provider_kind: 'codex',
+      auth_mode: 'oauth',
+      status: 'available',
+      model_candidates: ['gpt-5.5'],
+      source: 'local_config',
+      redaction_applied: true,
+      message: 'Detected but not enabled. Explicit opt-in is required before use.',
+    })
+
+    expect(detection).toEqual({
+      providerId: 'local_codex',
+      displayName: 'Local Codex',
+      providerKind: 'codex',
+      authMode: 'oauth',
+      status: 'available',
+      modelCandidates: ['gpt-5.5'],
+      source: 'local_config',
+      redactionApplied: true,
+      message: 'Detected but not enabled. Explicit opt-in is required before use.',
+    })
+    expect(JSON.stringify(detection)).not.toContain('access_token')
+    expect(JSON.stringify(detection)).not.toContain('sk-')
+  })
+
+  test('maps enabled local provider capability without secrets or paths', () => {
+    const provider = mapApiProviderCapability({
+      id: 'local_codex',
+      family: 'openai_compatible',
+      model: 'gpt-5.5',
+      status: 'available',
+      message: 'Local Codex enabled.',
+      local_provider: true,
+      session_local: true,
+      credential_reference: 'redacted',
+      execution_state: 'supported',
+    })
+
+    expect(provider).toMatchObject({
+      id: 'local_codex',
+      localProvider: true,
+      sessionLocal: true,
+      credentialReference: 'redacted',
+      executionState: 'supported',
+      status: 'available',
+    })
+    expect(JSON.stringify(provider)).not.toContain('access_token')
+    expect(JSON.stringify(provider)).not.toContain('/Users/')
+    expect(JSON.stringify(provider)).not.toContain('sk-')
+  })
+
+  test('calls the dedicated local provider detection endpoint', async () => {
+    const originalFetch = globalThis.fetch
+    const requested: string[] = []
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      requested.push(String(input))
+      return new Response(JSON.stringify({ providers: [], request_id: 'req_local' }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    }) as typeof fetch
+    try {
+      await realApiClient.listLocalProviderDetections?.()
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+
+    const url = new URL(requested[0], 'http://loomi.local')
+    expect(url.pathname).toBe('/v1/local-provider-detections')
+  })
+
+  test('calls dedicated memory provider detection endpoints', async () => {
+    const originalFetch = globalThis.fetch
+    const requested: string[] = []
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      requested.push(String(input))
+      return new Response(JSON.stringify({ detected: true, base_url: 'http://127.0.0.1:8282', message: 'detected', request_id: 'req_memory_detect' }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    }) as typeof fetch
+    try {
+      await realApiClient.detectNowledgeMemoryProvider?.()
+      await realApiClient.detectOpenVikingMemoryProvider?.()
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+
+    expect(new URL(requested[0], 'http://loomi.local').pathname).toBe('/v1/memory/provider/nowledge/detect')
+    expect(new URL(requested[1], 'http://loomi.local').pathname).toBe('/v1/memory/provider/openviking/detect')
+  })
+
+  test('calls explicit local provider enable and disable endpoints', async () => {
+    const originalFetch = globalThis.fetch
+    const requested: { url: string; method: string }[] = []
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      requested.push({ url: String(input), method: init?.method ?? 'GET' })
+      return new Response(JSON.stringify({
+        provider: {
+          id: 'local_codex',
+          family: 'openai_compatible',
+          model: 'gpt-5.5',
+          status: 'unavailable',
+          local_provider: true,
+          session_local: true,
+          credential_reference: 'redacted',
+          execution_state: 'unsupported',
+        },
+        request_id: 'req_local_enable',
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    }) as typeof fetch
+    try {
+      await realApiClient.enableLocalProvider?.('local_codex')
+      await realApiClient.disableLocalProvider?.('local_codex')
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+
+    expect(new URL(requested[0].url, 'http://loomi.local').pathname).toBe('/v1/local-provider-detections/local_codex/enable')
+    expect(requested[0].method).toBe('POST')
+    expect(new URL(requested[1].url, 'http://loomi.local').pathname).toBe('/v1/local-provider-detections/local_codex/enable')
+    expect(requested[1].method).toBe('DELETE')
+  })
+
+  test('calls workspace root endpoints for desktop folder authorization', async () => {
+    const originalFetch = globalThis.fetch
+    const requested: { url: string; method: string; body?: string }[] = []
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      requested.push({ url: String(input), method: init?.method ?? 'GET', body: init?.body?.toString() })
+      return new Response(JSON.stringify({
+        config: { configured: true, display_name: 'Downloads' },
+        request_id: 'req_workspace_root',
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    }) as typeof fetch
+    try {
+      const current = await realApiClient.getWorkspaceRoot?.()
+      const saved = await realApiClient.saveWorkspaceRoot?.({ path: '/Users/xuean/Downloads' })
+      expect(current?.displayName).toBe('Downloads')
+      expect(saved?.configured).toBe(true)
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+
+    expect(new URL(requested[0].url, 'http://loomi.local').pathname).toBe('/v1/workspace/root')
+    expect(requested[0].method).toBe('GET')
+    expect(new URL(requested[1].url, 'http://loomi.local').pathname).toBe('/v1/workspace/root')
+    expect(requested[1].method).toBe('POST')
+    expect(requested[1].body).toContain('/Users/xuean/Downloads')
   })
 })
 
@@ -329,7 +696,11 @@ describe('M4 run mapping', () => {
 
   test('exposes subscribeRunEvents for EventSource-compatible streaming', () => {
     const source = Bun.file(new URL('./realApiClient.ts', import.meta.url)).text()
-    return expect(source).resolves.toContain('subscribeRunEvents')
+    return Promise.all([
+      expect(source).resolves.toContain('subscribeRunEvents'),
+      expect(source).resolves.toContain('stream_closed'),
+      expect(source).resolves.toContain('onClosed?.()'),
+    ])
   })
 
   test('maps model delta final and error events into assistant draft signals', () => {
@@ -417,6 +788,29 @@ describe('M4 run mapping', () => {
     return expect(source).resolves.toContain("source: 'model_gateway'")
   })
 
+  test('real sendMessage checks provider and active run before creating a user message', async () => {
+    const source = await Bun.file(new URL('./realApiClient.ts', import.meta.url)).text()
+    const providerCheck = source.indexOf('const provider = options?.providerId')
+    const activeRunCheck = source.indexOf('const currentRun = await this.getThreadRun(threadId)')
+    const messageCreate = source.indexOf("requestJSON<{ message: ApiMessage }>(`/v1/threads/${threadId}/messages`")
+
+    expect(providerCheck).toBeGreaterThan(0)
+    expect(activeRunCheck).toBeGreaterThan(providerCheck)
+    expect(messageCreate).toBeGreaterThan(activeRunCheck)
+    expect(source).toContain("model: options?.model || provider.model")
+    expect(source).toContain('当前会话还有任务未结束，请先确认或停止当前任务。')
+  })
+
+  test('real sendMessage prefers supported local codex over saved custom provider', () => {
+    const provider = selectSendProvider([
+      { id: 'custom', family: 'openai_compatible', model: 'gpt-5.5', status: 'available' },
+      { id: 'local_codex', family: 'openai_compatible', model: 'gpt-5.5', status: 'available', localProvider: true, sessionLocal: true, credentialReference: 'redacted', executionState: 'supported' },
+    ])
+
+    expect(provider?.id).toBe('local_codex')
+    expect(provider?.model).toBe('gpt-5.5')
+  })
+
   test('exposes saveModelProvider for local desktop provider settings', () => {
     const source = Bun.file(new URL('./realApiClient.ts', import.meta.url)).text()
 
@@ -447,6 +841,16 @@ describe('M4 run mapping', () => {
     expect(backend.type).toBe('backend.unavailable')
     expect(backend.group).toBe('error')
     expect(backend.severity).toBe('error')
+  })
+
+  test('maps bounded loop metadata without duplicating loop fields in event detail', () => {
+    const tool = mapApiRunEvent({ id: 'evt-loop', run_id: 'run-1', thread_id: 'thread-1', sequence: 9, category: 'progress', type: 'tool_call_approval_required', summary: 'Tool approval required', content: null, metadata: { tool_call_id: 'tc_glob_1', tool_name: 'workspace.glob', tool_group: 'workspace', loop_index: 2, loop_max: 3 }, created_at: '2026-05-25T00:00:06Z' })
+    const todo = mapApiRunEvent({ id: 'evt-todo', run_id: 'run-1', thread_id: 'thread-1', sequence: 10, category: 'progress', type: 'work_todo_updated', summary: 'Todo updated', content: null, metadata: { updated_by: 'runtime' }, created_at: '2026-05-25T00:00:07Z' })
+
+    expect(tool).toMatchObject({ type: 'tool.call.approval_required', status: 'blocked_on_tool_approval', metadata: { loop_index: 2, loop_max: 3 } })
+    expect(tool.detail).not.toContain('loop_index')
+    expect(tool.detail).not.toContain('loop_max')
+    expect(todo).toMatchObject({ type: 'work.todo.updated', group: 'run-lifecycle' })
   })
 
   test('maps M6 queue worker and pipeline events into frontend statuses', () => {
@@ -489,11 +893,13 @@ describe('M4 run mapping', () => {
     expect(event.detail).not.toContain('You are')
   })
 
-  test('real client exposes persona list and sends persona_id when starting runs', () => {
+  test('real client exposes persona and installed skill list APIs', () => {
     const source = Bun.file(new URL('./realApiClient.ts', import.meta.url)).text()
 
     return source.then((text) => {
-      expect(text).toContain("requestJSON<{ personas: ApiPersona[] }>('/v1/personas')")
+      expect(text).toContain("requireArrayField<ApiPersona>(body, 'personas'")
+      expect(text).toContain("requireArrayField<ApiInstalledSkill>(body, 'skills'")
+      expect(text).toContain('source_label')
       expect(text).toContain('persona_id: input.personaId')
       expect(text).toContain('personaId')
     })

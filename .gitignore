@@ -15,6 +15,13 @@ dist/
 build/
 *.tsbuildinfo
 .playwright-mcp/
+.reference/
+.claude/
+.serena/
+.superpowers/
+.specify/integrations/.cache/
+docs-site/.dev/
+web/.serena/
 web/node_modules/
 web/dist/
 web/vite.config.js

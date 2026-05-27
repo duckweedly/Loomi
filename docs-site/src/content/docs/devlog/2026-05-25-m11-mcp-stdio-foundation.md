@@ -15,15 +15,23 @@ description: Implementation notes and validation for the M11 local MCP stdio dis
 - Mapped MCP discovery/tool availability frontend events into Timeline/debug groups.
 - Documented future MCP execution as M7 approval + audit only.
 
+## M11.5 Real Local Stdio Smoke Evidence
+
+- Added a repeatable local stdio smoke in `internal/runtime/mcp_discovery_test.go`.
+- The smoke launches the Go test binary as an enabled local stdio MCP fixture through the existing `StdioMCPDiscoveryRunner`.
+- The fixture accepts `initialize` and `tools/list`, returns one `echo` tool, and fails if `tools/call` is received.
+- The smoke intentionally includes sensitive-looking args, env, and stderr, then verifies the RunContext safe summary contains only safe MCP availability metadata.
+- Covered evidence: discovery/list-tools works for enabled local stdio config; MCP tools are not executed; candidates remain non-executable; env/args/stderr/token/private-path strings are absent from the safe summary.
+
 ## Validation
 
-Planned commands:
+Required commands for this evidence pass:
 
 ```bash
 go test ./internal/productdata ./internal/runtime ./internal/httpapi ./cmd/...
-bun test ./web/src/realApiClient.test.ts ./web/src/runtime/runtimeEventGroups.test.ts ./web/src/components/RunTimeline.runtime.test.ts
-bun run --cwd web build
+bun test ./web/src/realApiClient.test.ts ./web/src/runtime/realExecutionAdapter.test.ts ./web/src/runtime/runtimeEventGroups.test.ts ./web/src/components/RunTimeline.runtime.test.ts ./web/src/components/RunRail.runtime.test.ts
 bun run --cwd docs-site build
+git diff --check
 ```
 
 Record final evidence in `specs/016-mcp-stdio-foundation/quickstart.md`.

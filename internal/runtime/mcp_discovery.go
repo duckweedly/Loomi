@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -132,6 +134,42 @@ func DiscoverMCPTools(runner any, config MCPServerConfig) (MCPDiscoveryResult, e
 	return result, nil
 }
 
+func MCPDiscoveryEventMetadata(result MCPDiscoveryResult) map[string]any {
+	metadata := map[string]any{
+		"server_slug": result.ServerSlug,
+		"status":      string(result.Status),
+		"tool_count":  len(result.Candidates),
+	}
+	if result.ErrorCode != "" {
+		metadata["error_code"] = string(result.ErrorCode)
+	}
+	if result.Message != "" {
+		metadata["message"] = RedactMCPText(result.Message)
+	}
+	if result.Retryable {
+		metadata["retryable"] = true
+	}
+	if len(result.Candidates) == 0 {
+		return metadata
+	}
+	candidateNames := make([]string, 0, len(result.Candidates))
+	schemaHashes := make(map[string]any, len(result.Candidates))
+	for _, candidate := range result.Candidates {
+		if candidate.Name == "" {
+			continue
+		}
+		candidateNames = append(candidateNames, candidate.Name)
+		if candidate.SchemaHash != "" {
+			schemaHashes[candidate.Name] = candidate.SchemaHash
+		}
+	}
+	metadata["candidate_names"] = candidateNames
+	if len(schemaHashes) > 0 {
+		metadata["candidate_schema_hashes"] = schemaHashes
+	}
+	return metadata
+}
+
 func (StdioMCPDiscoveryRunner) ListTools(ctx context.Context, config MCPServerConfig) ([]byte, error) {
 	timeout := time.Duration(config.TimeoutMS) * time.Millisecond
 	if timeout <= 0 {
@@ -182,15 +220,64 @@ func envPairs(env map[string]string) []string {
 }
 
 func lastJSONFrameWithTools(output []byte) []byte {
-	parts := bytes.Split(output, []byte("\r\n\r\n"))
-	for i := len(parts) - 1; i >= 0; i-- {
-		part := bytes.TrimSpace(parts[i])
-		if len(part) == 0 || !bytes.Contains(part, []byte(`"tools"`)) {
+	frames := mcpJSONFrames(output)
+	for i := len(frames) - 1; i >= 0; i-- {
+		frame := bytes.TrimSpace(frames[i])
+		if len(frame) == 0 || !bytes.Contains(frame, []byte(`"tools"`)) {
 			continue
 		}
-		if idx := bytes.IndexByte(part, '{'); idx >= 0 {
-			return part[idx:]
-		}
+		return frame
 	}
 	return nil
+}
+
+func mcpJSONFrames(output []byte) [][]byte {
+	framed := parseMCPContentLengthFrames(output)
+	if len(framed) > 0 {
+		return framed
+	}
+	decoder := json.NewDecoder(bytes.NewReader(output))
+	frames := make([][]byte, 0, 2)
+	for {
+		var raw json.RawMessage
+		if err := decoder.Decode(&raw); err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return nil
+		}
+		frames = append(frames, raw)
+	}
+	return frames
+}
+
+func parseMCPContentLengthFrames(output []byte) [][]byte {
+	frames := make([][]byte, 0, 2)
+	remaining := output
+	for len(remaining) > 0 {
+		remaining = bytes.TrimLeft(remaining, "\r\n \t")
+		headerEnd := bytes.Index(remaining, []byte("\r\n\r\n"))
+		if headerEnd < 0 {
+			break
+		}
+		header := string(remaining[:headerEnd])
+		length := 0
+		for _, line := range strings.Split(header, "\r\n") {
+			key, value, ok := strings.Cut(line, ":")
+			if !ok || !strings.EqualFold(strings.TrimSpace(key), "Content-Length") {
+				continue
+			}
+			parsed, err := strconv.Atoi(strings.TrimSpace(value))
+			if err == nil && parsed > 0 {
+				length = parsed
+			}
+		}
+		payloadStart := headerEnd + len("\r\n\r\n")
+		if length <= 0 || len(remaining) < payloadStart+length {
+			break
+		}
+		frames = append(frames, bytes.TrimSpace(remaining[payloadStart:payloadStart+length]))
+		remaining = remaining[payloadStart+length:]
+	}
+	return frames
 }

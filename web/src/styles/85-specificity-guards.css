@@ -1,0 +1,68 @@
+/* Final specificity guard for the compact cute direction. */
+.app-shell[data-theme='light'] .main-region,
+.app-shell[data-theme='light'] .main-titlebar,
+.app-shell[data-theme='light'] .chat-shell,
+.app-shell[data-theme='light'] .message-list,
+.app-shell[data-theme='light'] .settings-shell,
+.app-shell[data-theme='light'] .settings-sidebar,
+.app-shell[data-theme='light'] .settings-content {
+  background: #fbfefd !important;
+}
+
+.app-shell[data-theme='dark'] .main-region,
+.app-shell[data-theme='dark'] .main-titlebar,
+.app-shell[data-theme='dark'] .chat-shell,
+.app-shell[data-theme='dark'] .message-list,
+.app-shell[data-theme='dark'] .settings-shell,
+.app-shell[data-theme='dark'] .settings-sidebar,
+.app-shell[data-theme='dark'] .settings-content {
+  background: #252a2c !important;
+}
+
+.workspace-grid:not(.right-tools-open) .main-region {
+  border-radius: 18px 22px 22px 18px !important;
+}
+
+.workspace-grid.right-tools-open .main-region {
+  border-radius: 18px 0 0 18px !important;
+}
+
+.app-shell[data-theme='dark'] .sidebar-settings-button,
+.app-shell[data-theme='dark'] .thread-create-button,
+.app-shell[data-theme='dark'] .sidebar-mode-row,
+.app-shell[data-theme='dark'] .sidebar-mode-row button,
+.app-shell[data-theme='dark'] .sidebar-mode-row button.selected,
+.app-shell[data-theme='dark'] .thread-card,
+.app-shell[data-theme='dark'] .thread-card.selected,
+.app-shell[data-theme='dark'] .composer,
+.app-shell[data-theme='dark'] .composer .ant-btn {
+  filter: none !important;
+}
+
+.app-shell[data-theme='dark'] .sidebar-settings-button {
+  border-width: 1px !important;
+  border-color: rgba(244, 247, 242, 0.08) !important;
+  border-radius: 14px !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.app-shell[data-theme='dark'] .sidebar-settings-button:hover {
+  background: rgba(143, 213, 139, 0.1) !important;
+}
+
+.app-shell[data-theme='dark'] .thread-card.selected {
+  border-color: rgba(143, 213, 139, 0.24) !important;
+  background: rgba(143, 213, 139, 0.12) !important;
+  box-shadow: inset 2px 0 0 rgba(143, 213, 139, 0.42) !important;
+}
+
+.app-shell[data-theme='dark'] .composer {
+  border-color: rgba(244, 247, 242, 0.1) !important;
+  background: rgba(42, 48, 50, 0.96) !important;
+  box-shadow: none !important;
+}
+
+.app-shell[data-theme='light'] .composer {
+  box-shadow: 0 10px 28px rgba(49, 94, 66, 0.055) !important;
+}

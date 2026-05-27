@@ -3,7 +3,7 @@ title: M10 Persona Skill Foundation
 description: Built-in persona sync, run persona resolution, and safe persona observability for the M10 foundation slice.
 ---
 
-M10 adds the smallest Persona/Skill foundation needed for real runs to execute with a durable persona choice. It does not add a marketplace, plugin install, MCP, Memory/RAG, Sandbox/Desktop Runtime, multi-agent orchestration, or broad skill packaging.
+M10 adds the smallest Persona/Skill foundation needed for real runs to execute with a durable persona choice and for Settings to show local installed skill manifests. It does not add a marketplace, plugin install, MCP execution, Memory/RAG, Sandbox/Desktop Runtime, multi-agent orchestration, or broad skill packaging.
 
 ## Data Boundary
 
@@ -49,6 +49,20 @@ The resolved snapshot is written to `run_persona_snapshots` when the run is crea
 - reasoning mode and budget summary for future runtime policy
 
 M10 only wires the route and tool allowlist into the current MVP runtime path. It does not execute arbitrary skills or install tool providers.
+
+## Installed Skill Discovery
+
+`GET /v1/skills` uses `runtime.DiscoverInstalledSkills` to scan fixed local roots for `SKILL.md` manifests:
+
+- project `.agents/skills`
+- project `.claude/skills`
+- user `.codex/skills`
+- user `.agents/skills`
+- user `.claude/skills`
+- Codex plugin cache skill folders
+- Claude Code plugin skill folders
+
+Discovery is read-only and bounded by depth and count. It extracts frontmatter `name` and `description`, or falls back to the first markdown heading and paragraph. The response may include the local manifest path for user inspection, but it must not include instruction bodies, secrets, or arbitrary file contents.
 
 ## Safe Observability
 

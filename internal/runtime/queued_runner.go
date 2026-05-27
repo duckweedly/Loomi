@@ -9,13 +9,27 @@ import (
 )
 
 type QueuedRunRouter struct {
-	Local   *LocalRunner
-	Gateway *Gateway
+	Local            *LocalRunner
+	Gateway          *Gateway
+	MCPExecutor      MCPToolExecutor
+	WebExecutor      WebToolExecutor
+	BrowserExecutor  BrowserToolExecutor
+	ArtifactService  productdata.ArtifactService
+	AgentTaskService productdata.AgentTaskService
+	MemoryService    productdata.Service
+}
+
+type MCPToolExecutor interface {
+	ExecuteMCPTool(context.Context, productdata.ToolCall) (map[string]any, error)
 }
 
 func (r QueuedRunRouter) Run(ctx context.Context, run productdata.Run, job productdata.BackgroundJob) error {
 	svc := r.service()
+	var prepared *productdata.RunContext
 	if svc != nil && job.ID != "" {
+		if terminal, err := runIsTerminal(ctx, svc, job.RunID); err != nil || terminal {
+			return err
+		}
 		state := &PipelineState{RunContext: productdata.RunContext{Run: run, Job: job}}
 		pipeline := Pipeline{Recorder: PipelineRecorder{Service: svc, Broadcaster: r.broadcaster()}}
 		if err := pipeline.Execute(ctx, state, []PipelineStage{
@@ -35,17 +49,27 @@ func (r QueuedRunRouter) Run(ctx context.Context, run productdata.Run, job produ
 		}
 		run = state.RunContext.Run
 		job = state.RunContext.Job
+		prepared = &state.RunContext
 	}
-	return r.dispatch(ctx, run, job)
+	return r.dispatch(ctx, run, job, prepared)
 }
 
-func (r QueuedRunRouter) dispatch(ctx context.Context, run productdata.Run, job productdata.BackgroundJob) error {
+func (r QueuedRunRouter) dispatch(ctx context.Context, run productdata.Run, job productdata.BackgroundJob, prepared *productdata.RunContext) error {
 	if toolCallID := metadataString(job.Metadata, "tool_call_id"); toolCallID != "" {
-		return r.runApprovedTool(ctx, run, toolCallID)
+		return r.runApprovedTool(ctx, run, toolCallID, prepared)
 	}
 	if run.Source == productdata.RunSourceModelGateway {
 		if r.Gateway != nil {
-			r.Gateway.run(ctx, run, gatewayInputFromJob(run, job))
+			r.Gateway.runWithContext(ctx, run, gatewayInputFromJob(run, job), prepared)
+			for {
+				toolCallID := r.nextAutoApprovedToolCall(ctx, run.ID)
+				if toolCallID == "" {
+					break
+				}
+				if err := r.runApprovedTool(ctx, run, toolCallID, prepared); err != nil {
+					return err
+				}
+			}
 			return r.gatewayResult(ctx, run.ID)
 		}
 		return nil
@@ -54,6 +78,36 @@ func (r QueuedRunRouter) dispatch(ctx context.Context, run productdata.Run, job 
 		return r.Local.Run(ctx, run, job)
 	}
 	return nil
+}
+
+func (r QueuedRunRouter) nextAutoApprovedToolCall(ctx context.Context, runID string) string {
+	if r.Gateway == nil || r.Gateway.Service == nil {
+		return ""
+	}
+	events, err := r.Gateway.Service.ListRunEvents(ctx, identity.LocalDevIdentity(), runID, 0)
+	if err != nil {
+		return ""
+	}
+	completed := map[string]bool{}
+	approved := []string{}
+	for _, event := range events {
+		toolCallID := metadataString(event.Metadata, "tool_call_id")
+		if toolCallID == "" {
+			continue
+		}
+		switch event.Type {
+		case productdata.EventToolCallSucceeded, productdata.EventToolCallFailed:
+			completed[toolCallID] = true
+		case productdata.EventToolCallApproved:
+			approved = append(approved, toolCallID)
+		}
+	}
+	for _, toolCallID := range approved {
+		if !completed[toolCallID] {
+			return toolCallID
+		}
+	}
+	return ""
 }
 
 func (r QueuedRunRouter) service() productdata.Service {
@@ -76,38 +130,129 @@ func (r QueuedRunRouter) broadcaster() *Broadcaster {
 	return nil
 }
 
-func (r QueuedRunRouter) runApprovedTool(ctx context.Context, run productdata.Run, toolCallID string) error {
+func (r QueuedRunRouter) runApprovedTool(ctx context.Context, run productdata.Run, toolCallID string, prepared *productdata.RunContext) error {
 	if r.Gateway == nil || r.Gateway.Service == nil {
+		return nil
+	}
+	if terminal, err := runIsTerminal(ctx, r.Gateway.Service, run.ID); err != nil || terminal {
+		return err
+	}
+	existing, err := r.Gateway.Service.GetToolCall(ctx, identity.LocalDevIdentity(), run.ThreadID, run.ID, toolCallID)
+	if err != nil {
+		return err
+	}
+	if existing.ExecutionStatus != productdata.ToolCallExecutionNotStarted {
 		return nil
 	}
 	call, _, err := r.Gateway.Service.StartToolCallExecution(ctx, identity.LocalDevIdentity(), run.ThreadID, run.ID, toolCallID)
 	if err != nil {
+		if terminal, terminalErr := runIsTerminal(ctx, r.Gateway.Service, run.ID); terminalErr != nil || terminal {
+			return terminalErr
+		}
 		return err
 	}
-	tool := CurrentTimeToolDefinition()
-	if call.ToolName != tool.Name {
-		_, _, _ = r.Gateway.Service.FailToolCallExecution(ctx, identity.LocalDevIdentity(), run.ThreadID, run.ID, toolCallID, "unsupported_tool", "Tool is not supported.")
-		return nil
+	enabledTools := []productdata.ToolResolution(nil)
+	if prepared != nil {
+		enabledTools = prepared.EnabledTools
 	}
-	args, err := tool.NormalizeArguments(call.ArgumentsSummary)
-	if err != nil {
-		_, _, _ = r.Gateway.Service.FailToolCallExecution(ctx, identity.LocalDevIdentity(), run.ThreadID, run.ID, toolCallID, "invalid_tool_arguments", err.Error())
-		return nil
-	}
-	result, err := tool.Execute(args)
+	catalog := toolCatalogForExecution(enabledTools)
+	broker := ToolBroker{Executor: DefaultToolExecutor{MCPExecutor: r.MCPExecutor, WorkspaceExecutor: WorkspaceToolExecutor{}, SandboxExecutor: SandboxToolExecutor{}, LSPExecutor: LSPToolExecutor{}, WebExecutor: r.WebExecutor, BrowserExecutor: r.BrowserExecutor, ArtifactExecutor: ArtifactToolExecutor{Artifacts: r.artifactService()}, AgentExecutor: AgentToolExecutor{Tasks: r.agentTaskService()}, MemoryExecutor: MemoryToolExecutor{Service: r.memoryService(), Ident: identity.LocalDevIdentity()}}}
+	result, err := broker.Execute(ctx, ToolInvocationFromCall(call, catalog, enabledTools))
 	if err != nil {
 		_, _, _ = r.Gateway.Service.FailToolCallExecution(ctx, identity.LocalDevIdentity(), run.ThreadID, run.ID, toolCallID, "tool_execution_failed", err.Error())
 		return nil
 	}
-	if _, _, err = r.Gateway.Service.CompleteToolCallSuccess(ctx, identity.LocalDevIdentity(), run.ThreadID, run.ID, toolCallID, result); err != nil {
+	if _, _, err = r.Gateway.Service.CompleteToolCallSuccess(ctx, identity.LocalDevIdentity(), run.ThreadID, run.ID, toolCallID, result.ResultSummary); err != nil {
 		return err
+	}
+	if result.ToolName == productdata.ToolNameTodoWrite {
+		if event, ok := appendProviderWorkTodoSnapshot(ctx, r.Gateway.Service, run, result.ResultSummary); ok && r.broadcaster() != nil {
+			r.broadcaster().Publish(event)
+		}
+	} else {
+		_, _ = appendWorkTodoSnapshot(ctx, r.Gateway.Service, run, "runtime")
 	}
 	input := r.gatewayContinuationInput(ctx, run, toolCallID)
 	if input.MessageID == "" || input.ProviderID == "" {
 		return productdata.NewError(productdata.CodeInvalidRequest, "Continuation context is missing.")
 	}
 	r.Gateway.ContinueAfterToolResult(ctx, run, input)
+	for {
+		nextToolCallID := r.nextAutoApprovedToolCall(ctx, run.ID)
+		if nextToolCallID == "" {
+			break
+		}
+		if err := r.runApprovedTool(ctx, run, nextToolCallID, prepared); err != nil {
+			return err
+		}
+	}
 	return r.gatewayResult(ctx, run.ID)
+}
+
+func (r QueuedRunRouter) artifactService() productdata.ArtifactService {
+	if r.ArtifactService != nil {
+		return r.ArtifactService
+	}
+	service := r.service()
+	if service == nil {
+		return nil
+	}
+	if svc, ok := service.(productdata.ArtifactService); ok {
+		return svc
+	}
+	return nil
+}
+
+func (r QueuedRunRouter) agentTaskService() productdata.AgentTaskService {
+	if r.AgentTaskService != nil {
+		return r.AgentTaskService
+	}
+	service := r.service()
+	if service == nil {
+		return nil
+	}
+	if svc, ok := service.(productdata.AgentTaskService); ok {
+		return svc
+	}
+	return nil
+}
+
+func (r QueuedRunRouter) memoryService() productdata.Service {
+	if r.MemoryService != nil {
+		return r.MemoryService
+	}
+	return r.service()
+}
+
+func toolCatalogForExecution(enabledTools []productdata.ToolResolution) []productdata.ToolCatalogEntry {
+	catalog := []productdata.ToolCatalogEntry{}
+	for _, tool := range enabledTools {
+		entry := productdata.ToolCatalogEntry{
+			Name:            tool.Name,
+			DisplayName:     tool.Name,
+			Source:          productdata.ToolCatalogSource(tool.Source),
+			Group:           productdata.ToolCatalogGroup(tool.Group),
+			InputSchemaHash: tool.InputSchemaHash,
+			RiskLevel:       productdata.ToolRiskLevel(tool.RiskLevel),
+			ApprovalPolicy:  productdata.ToolApprovalPolicy(tool.ApprovalPolicy),
+			Enabled:         true,
+			ExecutionState:  productdata.ToolExecutionState(tool.ExecutionState),
+		}
+		if entry.Source == "" {
+			entry.Source = productdata.ToolCatalogSourceBuiltin
+		}
+		if entry.Group == "" {
+			entry.Group = productdata.ToolCatalogGroupRuntime
+		}
+		if entry.RiskLevel == "" {
+			entry.RiskLevel = productdata.ToolRiskLow
+		}
+		if entry.ApprovalPolicy == "" {
+			entry.ApprovalPolicy = productdata.ToolApprovalAlwaysRequired
+		}
+		catalog = append(catalog, entry)
+	}
+	return catalog
 }
 
 func (r QueuedRunRouter) gatewayResult(ctx context.Context, runID string) error {
@@ -115,10 +260,21 @@ func (r QueuedRunRouter) gatewayResult(ctx context.Context, runID string) error 
 	if err != nil {
 		return err
 	}
-	if run.Status == productdata.RunStatusFailed || run.Status == productdata.RunStatusStopped {
+	if run.Status == productdata.RunStatusStopped {
+		return nil
+	}
+	if run.Status == productdata.RunStatusFailed {
 		return productdata.NewError(productdata.CodeInternalError, "Queued gateway run did not complete.")
 	}
 	return nil
+}
+
+func runIsTerminal(ctx context.Context, svc productdata.Service, runID string) (bool, error) {
+	run, err := svc.GetRun(ctx, identity.LocalDevIdentity(), runID)
+	if err != nil {
+		return false, err
+	}
+	return productdata.IsRunTerminal(run.Status), nil
 }
 
 func gatewayInputFromJob(run productdata.Run, job productdata.BackgroundJob) GatewayRunInput {

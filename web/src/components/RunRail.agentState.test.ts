@@ -7,6 +7,6 @@ describe('RunRail agent state integration', () => {
     const source = readFileSync(resolve(import.meta.dir, 'RunRail.tsx'), 'utf8')
 
     expect(source).toContain("import { AgentStateMotion } from './AgentStateMotion'")
-    expect(source).toContain('<AgentStateMotion run={run} compact />')
+    expect(source).toContain('<AgentStateMotion run={run} compact locale={locale} />')
   })
 })

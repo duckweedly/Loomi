@@ -34,6 +34,19 @@ func TestValidateMCPServerConfigRejectsRemoteAndUnsupportedTransports(t *testing
 	}
 }
 
+func TestMCPServerConfigsFromEnvLoadsLocalStdioConfigs(t *testing.T) {
+	t.Setenv("LOOMI_MCP_SERVERS_JSON", `[{"slug":"local-search","display_name":"Local Search","enabled":true,"transport":"stdio","command":"loomi-test-mcp","args":["--safe"],"env":{"TOKEN":"sk-secret"},"timeout_ms":1000}]`)
+
+	configs, err := MCPServerConfigsFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := configs["local-search"]
+	if config.Slug != "local-search" || config.Command != "loomi-test-mcp" || !config.Enabled {
+		t.Fatalf("config = %+v", config)
+	}
+}
+
 func TestMCPRedactionRemovesSensitiveConfigAndProcessOutput(t *testing.T) {
 	config := MCPServerConfig{
 		Slug:        "local-search",

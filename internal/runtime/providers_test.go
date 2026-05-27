@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/sheridiany/loomi/internal/config"
+	"github.com/sheridiany/loomi/internal/productdata"
 )
 
 func TestProviderConfigsFromConfig(t *testing.T) {
@@ -82,7 +83,7 @@ func TestHTTPProviderStreamsOpenAICompatibleTextAndToolEvents(t *testing.T) {
 
 	events := collectProviderEvents(t, provider)
 
-	if len(events) != 3 || events[0].Type != ProviderEventTextDelta || events[0].Text != "hi" || events[1].Type != ProviderEventToolCall || events[1].ToolName != "search" || events[2].Type != ProviderEventCompleted {
+	if len(events) != 3 || events[0].Type != ProviderEventTextDelta || events[0].Text != "hi" || events[1].Type != ProviderEventToolCall || events[1].ToolName != productdata.ToolNameWebSearch || events[2].Type != ProviderEventCompleted {
 		t.Fatalf("events = %+v", events)
 	}
 }
@@ -91,6 +92,7 @@ func TestHTTPProviderPreservesOpenAIToolArgumentsAsMetadata(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"id\":\"tc_1\",\"function\":{\"name\":\"runtime.get_current_time\",\"arguments\":\"{\\\"timezone\\\":\\\"Asia/Shanghai\\\"}\"}}]}}]}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
 	}))
 	defer server.Close()
 	provider := NewHTTPProvider(ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: server.URL + "/v1", APIKey: "secret-key", Model: "gpt-5.5", Enabled: true}, server.Client())
@@ -103,6 +105,45 @@ func TestHTTPProviderPreservesOpenAIToolArgumentsAsMetadata(t *testing.T) {
 	arguments, ok := events[0].Metadata["arguments_summary"].(map[string]any)
 	if !ok || arguments["timezone"] != "Asia/Shanghai" {
 		t.Fatalf("metadata = %+v", events[0].Metadata)
+	}
+}
+
+func TestHTTPProviderAccumulatesOpenAIToolArgumentsAcrossChunks(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"tc_search\",\"function\":{\"name\":\"web_search\",\"arguments\":\"{\\\"que\"}}]}}]}\n\n"))
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"ry\\\":\\\"今天最新 AI\\\"}\"}}]}}]}\n\n"))
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n"))
+	}))
+	defer server.Close()
+	provider := NewHTTPProvider(ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: server.URL + "/v1", APIKey: "secret-key", Model: "gpt-5.5", Enabled: true}, server.Client())
+
+	events := collectProviderEventsForRequest(t, provider, ProviderRequest{ThreadID: "thr_1", MessageID: "msg_1", Model: "gpt-5.5", Messages: []ProviderMessage{{Role: "user", Content: "search latest ai"}}, Tools: []ProviderToolDefinition{WebSearchProviderToolDefinition()}})
+
+	if len(events) != 1 || events[0].Type != ProviderEventToolCall || events[0].ToolName != "web.search" {
+		t.Fatalf("events = %+v", events)
+	}
+	if events[0].Metadata["tool_call_id"] != "tc_search" {
+		t.Fatalf("metadata = %+v", events[0].Metadata)
+	}
+	arguments, ok := events[0].Metadata["arguments_summary"].(map[string]any)
+	if !ok || arguments["query"] != "今天最新 AI" {
+		t.Fatalf("metadata = %+v", events[0].Metadata)
+	}
+}
+
+func TestHTTPProviderMapsCommonSearchFunctionAlias(t *testing.T) {
+	if got := internalProviderToolName("search"); got != productdata.ToolNameWebSearch {
+		t.Fatalf("internalProviderToolName(search) = %q", got)
+	}
+	if got := internalProviderToolName("web.search"); got != productdata.ToolNameWebSearch {
+		t.Fatalf("internalProviderToolName(web.search) = %q", got)
+	}
+	if got := internalProviderToolName("fetch"); got != productdata.ToolNameWebFetch {
+		t.Fatalf("internalProviderToolName(fetch) = %q", got)
+	}
+	if got := internalProviderToolName("web.fetch"); got != productdata.ToolNameWebFetch {
+		t.Fatalf("internalProviderToolName(web.fetch) = %q", got)
 	}
 }
 
@@ -147,6 +188,60 @@ func TestHTTPProviderSerializesOpenAIToolResultContinuation(t *testing.T) {
 	}
 }
 
+func TestHTTPProviderSendsSystemPromptAsOpenAISystemMessage(t *testing.T) {
+	var body struct {
+		Messages []map[string]any `json:"messages"`
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"done\"}}]}\n\n"))
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n"))
+	}))
+	defer server.Close()
+	provider := NewHTTPProvider(ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: server.URL + "/v1", APIKey: "secret-key", Model: "gpt-5.5", Enabled: true}, server.Client())
+
+	events := collectProviderEventsForRequest(t, provider, ProviderRequest{ThreadID: "thr_1", MessageID: "msg_1", Model: "gpt-5.5", SystemPrompt: "Use tools only when needed.", Messages: []ProviderMessage{{Role: "user", Content: "hello"}}})
+
+	if len(events) != 2 || events[1].Type != ProviderEventCompleted {
+		t.Fatalf("events = %+v", events)
+	}
+	if len(body.Messages) != 2 || body.Messages[0]["role"] != "system" || body.Messages[0]["content"] != "Use tools only when needed." {
+		t.Fatalf("messages = %+v", body.Messages)
+	}
+}
+
+func TestHTTPProviderSendsEnabledWebSearchToolSchema(t *testing.T) {
+	var body struct {
+		Tools []map[string]any `json:"tools"`
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"done\"}}]}\n\n"))
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n"))
+	}))
+	defer server.Close()
+	provider := NewHTTPProvider(ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: server.URL + "/v1", APIKey: "secret-key", Model: "gpt-5.5", Enabled: true}, server.Client())
+
+	events := collectProviderEventsForRequest(t, provider, ProviderRequest{ThreadID: "thr_1", MessageID: "msg_1", Model: "gpt-5.5", Messages: []ProviderMessage{{Role: "user", Content: "search latest news"}}, Tools: []ProviderToolDefinition{WebSearchProviderToolDefinition()}})
+
+	if len(events) != 2 || events[1].Type != ProviderEventCompleted {
+		t.Fatalf("events = %+v", events)
+	}
+	if len(body.Tools) != 1 || body.Tools[0]["type"] != "function" {
+		t.Fatalf("tools = %+v", body.Tools)
+	}
+	function, ok := body.Tools[0]["function"].(map[string]any)
+	if !ok || function["name"] != "web_search" {
+		t.Fatalf("function tool = %+v", body.Tools[0])
+	}
+}
+
 func TestHTTPProviderNormalizesStreamingErrors(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -159,6 +254,24 @@ func TestHTTPProviderNormalizesStreamingErrors(t *testing.T) {
 
 	if len(events) != 1 || events[0].Type != ProviderEventRateLimited {
 		t.Fatalf("events = %+v", events)
+	}
+}
+
+func TestHTTPProviderReportsRedactedHTTPErrorStatus(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":{"type":"invalid_request_error","code":"unsupported_parameter","message":"raw token secret should not appear"}}`))
+	}))
+	defer server.Close()
+	provider := NewHTTPProvider(ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: server.URL + "/v1", APIKey: "secret-key", Model: "gpt-5.5", Enabled: true}, server.Client())
+
+	events := collectProviderEvents(t, provider)
+
+	if len(events) != 1 || events[0].Type != ProviderEventError || events[0].Message != "Provider request failed with HTTP 400." {
+		t.Fatalf("events = %+v", events)
+	}
+	if events[0].Metadata["http_status"] != http.StatusBadRequest || events[0].Metadata["provider_error_type"] != "invalid_request_error" || events[0].Metadata["provider_error_code"] != "unsupported_parameter" {
+		t.Fatalf("metadata = %+v", events[0].Metadata)
 	}
 }
 

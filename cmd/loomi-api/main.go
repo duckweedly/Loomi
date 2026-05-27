@@ -50,13 +50,18 @@ func main() {
 		if _, err := product.SyncBuiltInPersonas(ctx, identityLocalDev(), productdata.BuiltInPersonas()); err != nil {
 			logger.Warn("built-in persona sync failed", "operation_id", opID, "error", err.Error())
 		}
+		applySavedWebSearchConfig(ctx, product, &cfg)
 	}
 	broadcaster := productruntime.NewBroadcaster()
-	providers := productruntime.NewHTTPProviders(productruntime.ProviderConfigsFromConfig(cfg), http.DefaultClient)
+	providerConfigs := append(productruntime.ProviderConfigsFromConfig(cfg), savedProviderConfigs(ctx, product)...)
+	providers := productruntime.NewHTTPProviders(providerConfigs, http.DefaultClient)
 	gateway := productruntime.NewGateway(product, broadcaster, providers)
 	localRunner := productruntime.NewLocalRunner(product, broadcaster)
+	mcpConfigs := mcpServerConfigs(ctx, product)
 	if product != nil && cfg.WorkerQueueEnabled && !cfg.WorkerQueuePaused {
-		worker := productruntime.NewWorker(product, broadcaster, productruntime.QueuedRunRouter{Local: localRunner, Gateway: gateway})
+		worker := productruntime.NewWorker(product, broadcaster, productruntime.QueuedRunRouter{Local: localRunner, Gateway: gateway, MCPExecutor: productruntime.StdioMCPToolExecutor{Configs: mcpConfigs, ConfigLoader: func(loaderCtx context.Context) (map[string]productruntime.MCPServerConfig, error) {
+			return mcpServerConfigs(loaderCtx, product), nil
+		}}, WebExecutor: productruntime.WebToolExecutor{TavilyAPIKey: cfg.TavilyAPIKey, BraveAPIKey: cfg.BraveSearchAPIKey}})
 		worker.LeaseSeconds = cfg.WorkerLeaseSeconds
 		worker.PollInterval = time.Duration(cfg.WorkerPollMillis) * time.Millisecond
 		worker.Start(context.Background())
@@ -79,4 +84,70 @@ func productServiceForPool(pool *pgxpool.Pool) productdata.Service {
 
 func identityLocalDev() identity.LocalIdentity {
 	return identity.LocalDevIdentity()
+}
+
+func savedProviderConfigs(ctx context.Context, product productdata.Service) []productruntime.ProviderConfig {
+	store, ok := product.(productdata.ModelProviderConfigStore)
+	if !ok {
+		return nil
+	}
+	saved, err := store.ListModelProviderConfigs(ctx, identityLocalDev())
+	if err != nil {
+		return nil
+	}
+	providers := make([]productruntime.ProviderConfig, 0, len(saved))
+	for _, provider := range saved {
+		providers = append(providers, productruntime.ProviderConfig{ID: provider.ID, Family: productruntime.ProviderFamily(provider.Family), BaseURL: provider.BaseURL, APIKey: provider.APIKey, Model: provider.Model, Enabled: provider.Enabled})
+	}
+	return providers
+}
+
+func applySavedWebSearchConfig(ctx context.Context, product productdata.Service, cfg *config.Config) {
+	store, ok := product.(productdata.ModelProviderConfigStore)
+	if !ok || cfg == nil {
+		return
+	}
+	saved, err := store.GetWebSearchConfig(ctx, identityLocalDev())
+	if err != nil {
+		return
+	}
+	if saved.TavilyAPIKey != "" {
+		cfg.TavilyAPIKey = saved.TavilyAPIKey
+		_ = os.Setenv("LOOMI_TAVILY_API_KEY", saved.TavilyAPIKey)
+	}
+	if saved.BraveAPIKey != "" {
+		cfg.BraveSearchAPIKey = saved.BraveAPIKey
+		_ = os.Setenv("LOOMI_BRAVE_SEARCH_API_KEY", saved.BraveAPIKey)
+	}
+}
+
+func mcpServerConfigs(ctx context.Context, product productdata.Service) map[string]productruntime.MCPServerConfig {
+	configs, err := productruntime.MCPServerConfigsFromEnv()
+	if err != nil || configs == nil {
+		configs = map[string]productruntime.MCPServerConfig{}
+	}
+	for slug, config := range savedMCPServerConfigs(ctx, product) {
+		configs[slug] = config
+	}
+	return configs
+}
+
+func savedMCPServerConfigs(ctx context.Context, product productdata.Service) map[string]productruntime.MCPServerConfig {
+	store, ok := product.(productdata.MCPServerConfigStore)
+	if !ok {
+		return nil
+	}
+	saved, err := store.ListMCPServerConfigs(ctx, identityLocalDev())
+	if err != nil {
+		return nil
+	}
+	configs := map[string]productruntime.MCPServerConfig{}
+	for _, record := range saved {
+		config := productruntime.MCPServerConfig{Slug: record.Slug, DisplayName: record.DisplayName, Enabled: record.Enabled, Transport: productruntime.MCPTransport(record.Transport), Command: record.Command, Args: record.Args, Env: record.Env, TimeoutMS: record.TimeoutMS}
+		validated, err := productruntime.ValidateMCPServerConfig(config)
+		if err == nil {
+			configs[validated.Slug] = validated
+		}
+	}
+	return configs
 }

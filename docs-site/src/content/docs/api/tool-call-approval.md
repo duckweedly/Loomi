@@ -3,7 +3,7 @@ title: M7 Tool Call Approval API
 description: Tool-call projection, event payloads, diagnostics fields, and Phase 2 API-facing contracts.
 ---
 
-M7 now supports the minimal approval execution loop for `runtime.get_current_time`: provider-requested calls are recorded, blocked for approval, approved or denied idempotently, executed by the worker after approval, and replayed through history-first SSE.
+M7 supports the minimal approval execution loop for `runtime.get_current_time`: provider-requested calls are recorded, blocked for approval, approved or denied idempotently, executed by the worker after approval, and replayed through history-first SSE. M12 reuses the same approval projection for already-discovered local stdio MCP tools.
 
 Local desktop Settings can also save one OpenAI-compatible `custom` model provider into the running local API process. That endpoint only returns redacted capability data and never echoes the API key.
 
@@ -55,7 +55,7 @@ The saved provider updates both `GET /v1/model-providers` and the in-process mod
 }
 ```
 
-A tool call is scoped by `thread_id`, `run_id`, and `tool_call_id`. The same `(run_id, tool_call_id)` request is idempotent and returns the existing projection without duplicating events. M7 MVP allows only one tool call per run.
+A tool call is scoped by `thread_id`, `run_id`, and `tool_call_id`. The same `(run_id, tool_call_id)` request is idempotent and returns the existing projection without duplicating events. M7 allowed only one tool call per run; M22 starts a bounded Work-mode continuation path where a run can record a later workspace read tool call after the previous call reaches a terminal execution state.
 
 ## Run status
 
@@ -86,6 +86,26 @@ Tool events are persisted as run events with redacted metadata:
 ```
 
 Frontend API mapping converts these backend types to dotted runtime types such as `tool.call.approval_required` and keeps safe metadata available for replaying a stable `ToolCall` view model.
+
+For MCP calls, the same event names include safe source metadata:
+
+```json
+{
+  "type": "tool_call_approval_required",
+  "category": "progress",
+  "metadata": {
+    "tool_call_id": "tc_mcp_1",
+    "tool_name": "mcp.local-search.search",
+    "tool_source": "mcp",
+    "server_slug": "local-search",
+    "arguments_summary": { "query": "status" },
+    "approval_status": "required",
+    "execution_status": "blocked"
+  }
+}
+```
+
+MCP approval is offered only when a prior discovery event lists the namespaced candidate and the selected persona allowed-tools snapshot resolves that same tool.
 
 `tool_call_succeeded` may include a redacted result for model continuation:
 
@@ -124,7 +144,22 @@ The provider-neutral continuation context uses in-memory roles:
 
 OpenAI-compatible providers serialize these as an assistant `tool_calls` message followed by a matching `tool` message. Loomi does not persist a durable `messages.role = tool` row for this MVP.
 
-The second model stream reuses existing run events with `metadata.model_phase = "continuation"`. If the continuation provider asks for another tool, runtime records `unsupported_tool_loop` and fails the run without executing another tool.
+The second model stream reuses existing run events with `metadata.model_phase = "continuation"`. For M22, continuation can request another enabled workspace read tool and runtime records it as a fresh approval-required tool call:
+
+```json
+{
+  "type": "tool_call_approval_required",
+  "category": "progress",
+  "metadata": {
+    "tool_call_id": "tc_read_2",
+    "tool_name": "workspace.read",
+    "approval_status": "required",
+    "execution_status": "blocked"
+  }
+}
+```
+
+Only one non-terminal tool call may exist in a run. Workspace continuation is capped at three accepted tool calls; exceeding the cap records `tool_loop_limit_reached` and fails the run without recording the extra call. Continuation requests for non-workspace tools, tools outside the run's enabled tool snapshot, or Chat-mode-only tools still record `unsupported_tool_loop` and fail without execution. Repeating an already-requested `tool_call_id` during continuation records `duplicate_tool_call_id` and does not duplicate approval-required events.
 
 ## Diagnostics
 
@@ -181,7 +216,7 @@ Approved worker execution writes:
 }
 ```
 
-Failures use `tool_call_failed` with redacted `error_code` and `error_message`, then `run_failed`.
+Failures use `tool_call_failed` with redacted `error_code` and `error_message`, then `run_failed`. MCP failures use safe codes such as `mcp_config_unavailable`, `mcp_stdio_timeout`, `mcp_stdio_exit`, `mcp_stdio_invalid_response`, or `mcp_tool_execution_failed`.
 
 ## Redaction and validation
 

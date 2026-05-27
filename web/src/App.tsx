@@ -1,6 +1,6 @@
-import { type CSSProperties, type PointerEvent } from 'react'
+import { type CSSProperties, type PointerEvent, useCallback } from 'react'
 import { ConfigProvider, ThemeProvider } from '@lobehub/ui'
-import { AlertCircle, PanelLeft, PanelRight, Search } from 'lucide-react'
+import { AlertCircle, PanelLeft, PanelRight, SquarePen } from 'lucide-react'
 import { motion } from 'motion/react'
 import { ChatCanvas } from './components/ChatCanvas'
 import { RunTimeline } from './components/RunTimeline'
@@ -29,6 +29,9 @@ export default function App() {
     capabilitySignals,
     selectedRuntimeScript,
     personas,
+    installedSkills,
+    skillsLoading,
+    skillsError,
     selectedPersonaId,
     selectRuntimeScript,
     setSelectedPersonaId,
@@ -44,10 +47,66 @@ export default function App() {
     retryRun,
     regenerateRun,
     providerCapabilities,
+    toolCatalog,
+    webSearchConfig,
+    webSearchSaveResult,
+    workspaceRootConfig,
+    workspaceRootSaveResult,
+    mcpServers,
+    mcpActionResult,
+    localProviderDetections,
+    localProviderDetectionError,
     providerCheckResults,
     providerSaveResult,
+    memoryEntries,
+    memoryQuery,
+    memoryFilters,
+    memoryLoading,
+    memoryError,
+    memoryDetail,
+    memoryDetailLoading,
+    memoryDetailError,
+    memoryAuditItems,
+    memoryAuditLoading,
+    memoryAuditError,
+    memoryWriteProposals,
+    memoryProposalsLoading,
+    memoryProposalsError,
+    memoryProviderStatus,
+    memoryErrors,
+    memoryProviderSaveResult,
+    memoryOverviewSnapshot,
+    memoryImpressionSnapshot,
+    memorySnapshotLoading,
+    pendingDeleteMemoryEntry,
+    approveMemoryWriteProposal,
+    updateMemoryWriteProposal,
+    denyMemoryWriteProposal,
     checkProvider,
+    detectLocalProviders,
+    enableLocalProvider,
+    disableLocalProvider,
     saveProvider,
+    saveWebSearchKeys,
+    refreshMemoryProviderStatus,
+    updateMemoryProvider,
+    detectNowledgeMemoryProvider,
+    detectOpenVikingMemoryProvider,
+    rebuildMemoryOverviewSnapshot,
+    rebuildMemoryImpressionSnapshot,
+    getMemoryContent,
+    chooseWorkspaceFolder,
+    saveMCPServer,
+    deleteMCPServer,
+    discoverMCPServer,
+    setMemorySearchQuery,
+    updateMemoryFilters,
+    openMemoryDetail,
+    closeMemoryDetail,
+    requestDeleteMemoryEntry,
+    cancelDeleteMemoryEntry,
+    createMemoryEntry,
+    deleteMemoryEntry,
   } = useWorkspaceState(shell.defaultWorkspaceMode)
 
   const dictionary = getDictionary(shell.locale)
@@ -59,7 +118,7 @@ export default function App() {
     runtimeSource: run?.context === 'model_gateway' ? 'model_gateway' : 'local_simulated',
     backendUnavailable: backendCapability === 'unavailable' || backendUnavailableAttempted || capabilitySignals.backendUnavailable,
     modelSetupMissing: capabilitySignals.modelSetupMissing,
-    providerUnavailable: capabilitySignals.providerUnavailable || providerUnavailableBeforeSend,
+    providerUnavailable: providerUnavailableBeforeSend,
     activeRun: Boolean(run && (run.status === 'pending' || run.status === 'queued' || run.status === 'running' || run.status === 'retrying' || run.status === 'recovering' || run.status === 'blocked_on_tool_approval' || run.status === 'stopping')),
     streamDisconnected: Boolean(run && (run.status === 'pending' || run.status === 'queued' || run.status === 'running' || run.status === 'retrying' || run.status === 'recovering' || run.status === 'blocked_on_tool_approval' || run.status === 'stopping') && (capabilitySignals.streamDisconnected || streamState === 'recoverable_error')),
     runRecovering: run?.status === 'recovering' || run?.assistantDraft?.status === 'recovering',
@@ -89,6 +148,16 @@ export default function App() {
     window.addEventListener('pointerup', handlePointerUp)
   }
 
+  const selectMode = useCallback((mode: 'chat' | 'work') => {
+    shell.closeSettings()
+    const threadId = threads.find((thread) => thread.mode === mode)?.id
+    if (threadId) {
+      selectThread(threadId)
+      return
+    }
+    void createThread(mode)
+  }, [createThread, selectThread, shell, threads])
+
   return (
     <ConfigProvider motion={motion}>
       <ThemeProvider
@@ -98,7 +167,7 @@ export default function App() {
           neutralColor: 'slate',
         }}
       >
-        <div className="app-shell" data-theme={shell.theme}>
+        <div className="app-shell" data-runtime={document.documentElement.dataset.runtime} data-theme={shell.theme}>
           <main className={workspaceClass} style={workspaceStyle}>
             {!shell.sidebarCollapsed && (
               <aside className="sidebar-shell glass-panel">
@@ -106,22 +175,21 @@ export default function App() {
                   <button className="titlebar-button" aria-label={dictionary.app.collapseSidebar} onClick={() => shell.setSidebarCollapsed(true)}>
                     <PanelLeft size={15} strokeWidth={1.7} />
                   </button>
-                  <button className="titlebar-button" aria-label={dictionary.app.search}>
-                    <Search size={14} strokeWidth={1.65} />
-                  </button>
                 </div>
                 <ThreadSidebar
                   collapsed={shell.sidebarCollapsed}
                   threads={visibleThreads}
                   selectedThreadId={selectedThreadId}
                   selectedMode={selectedMode}
+                  modeCopy={{ chat: dictionary.app.chat, work: dictionary.app.work }}
                   theme={shell.theme}
                   loading={loading}
                   error={error}
                   copy={dictionary.sidebar}
                   onRefresh={() => void refresh()}
                   onSelectThread={selectThread}
-                  onCreateThread={() => void createThread()}
+                  onSelectMode={selectMode}
+                  onCreateThread={() => void createThread(selectedMode)}
                   onRenameThread={(threadId, title) => void renameThread(threadId, title)}
                   onArchiveThread={(threadId) => void archiveThread(threadId)}
                   onToggleTheme={shell.toggleTheme}
@@ -134,30 +202,19 @@ export default function App() {
               <header className="main-titlebar">
                 <div className="titlebar-left">
                   {shell.sidebarCollapsed && (
-                    <button className="titlebar-button" aria-label={dictionary.app.openSidebar} onClick={() => shell.setSidebarCollapsed(false)}>
-                      <PanelRight size={15} strokeWidth={1.7} />
-                    </button>
+                    <>
+                      <button className="titlebar-button" aria-label={dictionary.app.openSidebar} onClick={() => shell.setSidebarCollapsed(false)}>
+                        <PanelRight size={15} strokeWidth={1.7} />
+                      </button>
+                      <button className="titlebar-button titlebar-create-thread" aria-label={selectedMode === 'work' ? dictionary.sidebar.newWork : dictionary.sidebar.newChat} onClick={() => void createThread(selectedMode)}>
+                        <SquarePen size={15} strokeWidth={1.7} />
+                      </button>
+                    </>
                   )}
                 </div>
-                <div className="titlebar-center mode-tabs">
-                  <button
-                    className={selectedThread?.mode === 'chat' ? 'selected' : undefined}
-                    onClick={() => {
-                      const threadId = threads.find((thread) => thread.mode === 'chat')?.id
-                      if (threadId) selectThread(threadId)
-                    }}
-                  >
-                    {dictionary.app.chat}
-                  </button>
-                  <button
-                    className={selectedThread?.mode === 'work' ? 'selected' : undefined}
-                    onClick={() => {
-                      const threadId = threads.find((thread) => thread.mode === 'work')?.id
-                      if (threadId) selectThread(threadId)
-                    }}
-                  >
-                    {dictionary.app.work}
-                  </button>
+                <div className="titlebar-center main-thread-title">
+                  <span className="titlebar-brand-icon" aria-hidden="true" />
+                  <span>{selectedThread?.title ?? 'Loomi'}</span>
                 </div>
                 <div className="titlebar-right">
                   <button
@@ -181,26 +238,83 @@ export default function App() {
                   locale={shell.locale}
                   selectedCategoryId={shell.settingsCategoryId}
                   defaultWorkspaceMode={shell.defaultWorkspaceMode}
-                  selectedRuntimeScript={selectedRuntimeScript}
-                  dataSourceMode={dataSourceMode}
+                  theme={shell.theme}
                   backendCapability={backendCapability}
-                  streamState={streamState}
-                  selectedThreadTitle={selectedThread?.title}
-                  selectedRunStatus={run?.status}
                   providerCapabilities={providerCapabilities}
+                  workspaceRootConfig={workspaceRootConfig}
+                  workspaceRootSaveResult={workspaceRootSaveResult}
+                  personas={personas}
+                  installedSkills={installedSkills}
+                  skillsLoading={skillsLoading}
+                  skillsError={skillsError}
+                  toolCatalog={toolCatalog}
+                  webSearchConfig={webSearchConfig}
+                  webSearchSaveResult={webSearchSaveResult}
+                  mcpServers={mcpServers}
+                  mcpActionResult={mcpActionResult}
+                  localProviderDetections={localProviderDetections}
+                  localProviderDetectionError={localProviderDetectionError}
+                  memoryEntries={memoryEntries}
+                  memoryQuery={memoryQuery}
+                  memoryFilters={memoryFilters}
+                  memoryLoading={memoryLoading}
+                  memoryError={memoryError}
+                  memoryDetail={memoryDetail}
+                  memoryDetailLoading={memoryDetailLoading}
+                  memoryDetailError={memoryDetailError}
+                  memoryAuditItems={memoryAuditItems}
+                  memoryAuditLoading={memoryAuditLoading}
+                  memoryAuditError={memoryAuditError}
+                  memoryWriteProposals={memoryWriteProposals}
+                  memoryProposalsLoading={memoryProposalsLoading}
+                  memoryProposalsError={memoryProposalsError}
+                  memoryProviderStatus={memoryProviderStatus}
+                  memoryErrors={memoryErrors}
+                  memoryProviderSaveResult={memoryProviderSaveResult}
+                  memoryOverviewSnapshot={memoryOverviewSnapshot}
+                  memoryImpressionSnapshot={memoryImpressionSnapshot}
+                  memorySnapshotLoading={memorySnapshotLoading}
+                  pendingDeleteMemoryEntry={pendingDeleteMemoryEntry}
                   providerCheckResults={providerCheckResults}
                   providerSaveResult={providerSaveResult}
                   providerDraftSettings={shell.providerDraftSettings}
                   onSelectLocale={shell.setLocale}
                   onSelectCategory={shell.setSettingsCategory}
                   onSelectDefaultWorkspaceMode={shell.setDefaultWorkspaceMode}
-                  onSelectRuntimeScript={selectRuntimeScript}
+                  onSelectTheme={(theme) => {
+                    if (theme !== shell.theme) shell.toggleTheme()
+                  }}
                   onProviderDraftSettingsChange={shell.setProviderDraftSettings}
                   onSaveProvider={(settings) => {
                     void saveProvider({ baseUrl: settings.baseUrl, model: settings.model, apiKey: settings.apiKey })
                     shell.setProviderDraftSettings({ ...settings, apiKey: '', apiKeySet: true })
                   }}
+                  onSaveWebSearchKeys={(input) => void saveWebSearchKeys(input)}
+                  onRefreshMemoryProviderStatus={() => void refreshMemoryProviderStatus()}
+                  onUpdateMemoryProvider={(input) => void updateMemoryProvider(input)}
+                  onDetectNowledgeMemoryProvider={detectNowledgeMemoryProvider}
+                  onDetectOpenVikingMemoryProvider={detectOpenVikingMemoryProvider}
+                  onRebuildMemoryOverviewSnapshot={() => void rebuildMemoryOverviewSnapshot()}
+                  onRebuildMemoryImpressionSnapshot={() => void rebuildMemoryImpressionSnapshot()}
+                  onGetMemoryContent={getMemoryContent}
+                  onSaveMCPServer={(input) => void saveMCPServer(input)}
+                  onDeleteMCPServer={(slug) => void deleteMCPServer(slug)}
+                  onDiscoverMCPServer={(slug) => void discoverMCPServer(slug)}
                   onCheckProvider={(providerId) => void checkProvider(providerId)}
+                  onDetectLocalProviders={() => void detectLocalProviders()}
+                  onEnableLocalProvider={(providerId) => void enableLocalProvider(providerId)}
+                  onDisableLocalProvider={(providerId) => void disableLocalProvider(providerId)}
+                  onMemoryQueryChange={setMemorySearchQuery}
+                  onMemoryFiltersChange={updateMemoryFilters}
+                  onOpenMemoryDetail={(entry) => void openMemoryDetail(entry)}
+                  onCloseMemoryDetail={closeMemoryDetail}
+                  onRequestDeleteMemoryEntry={requestDeleteMemoryEntry}
+                  onCancelDeleteMemoryEntry={cancelDeleteMemoryEntry}
+                  onCreateMemoryEntry={(input) => void createMemoryEntry(input)}
+                  onConfirmDeleteMemoryEntry={(entry) => void deleteMemoryEntry(entry)}
+                  onApproveMemoryProposal={(proposal) => void approveMemoryWriteProposal(proposal)}
+                  onUpdateMemoryProposal={(proposal, input) => void updateMemoryWriteProposal(proposal, input)}
+                  onDenyMemoryProposal={(proposal) => void denyMemoryWriteProposal(proposal)}
                   onBack={shell.closeSettings}
                 />
               ) : (
@@ -217,11 +331,14 @@ export default function App() {
                   backendUnavailableAttempted={backendUnavailableAttempted}
                   capabilitySignals={capabilitySignals}
                   providerCapabilities={providerCapabilities}
+                  workspaceRootConfig={workspaceRootConfig}
+                  workspaceRootSaveResult={workspaceRootSaveResult}
                   personas={personas}
                   selectedPersonaId={selectedPersonaId}
                   onSelectPersona={setSelectedPersonaId}
                   onOpenProviderSettings={() => shell.openSettings('providers')}
-                  onSendMessage={(content) => void sendMessage(content)}
+                  onChooseWorkspaceFolder={() => void chooseWorkspaceFolder()}
+                  onSendMessage={(content, options) => void sendMessage(content, options)}
                   onStopRun={() => void stopRun()}
                   onApproveToolCall={(toolCall) => approveToolCall(toolCall)}
                   onDenyToolCall={(toolCall) => denyToolCall(toolCall)}
@@ -238,7 +355,6 @@ export default function App() {
               rightToolsOpen={!shell.settingsOpen && shell.rightPanelOpen}
               selectedPanelId={shell.selectedRightPanelId}
               onSelectPanel={shell.openRightPanel}
-              onOpenArtifact={shell.openArtifact}
               onStopRun={() => void stopRun()}
               selectedRuntimeScript={selectedRuntimeScript}
               capabilityStatus={capabilityStatus}

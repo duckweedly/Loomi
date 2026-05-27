@@ -126,6 +126,21 @@ func TestRepositoryContractPreservesThreadPersonaOnMetadataUpdate(t *testing.T) 
 	}
 }
 
+func TestRepositoryContractRejectsUnknownThreadPersona(t *testing.T) {
+	var repo Repository = NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	if _, err := repo.CreateThread(context.Background(), ident, CreateThreadInput{Title: "Unknown persona", Mode: ThreadModeChat, PersonaID: "persona_unknown"}); err == nil || ErrorCode(err) != CodeInvalidRequest {
+		t.Fatalf("create err = %v", err)
+	}
+	thread, err := repo.CreateThread(context.Background(), ident, CreateThreadInput{Title: "Thread", Mode: ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.UpdateThread(context.Background(), ident, thread.ID, UpdateThreadInput{PersonaID: ptr("persona_unknown")}); err == nil || ErrorCode(err) != CodeInvalidRequest {
+		t.Fatalf("update err = %v", err)
+	}
+}
+
 func TestRepositoryContractCoversM7ToolCallRequestProjection(t *testing.T) {
 	var repo Repository = NewMemoryService()
 	ident := identity.LocalDevIdentity()
@@ -176,6 +191,36 @@ func TestRepositoryContractCoversM7ToolCallRequestProjection(t *testing.T) {
 	}
 	if diagnostics.BlockedToolApprovalCount != 1 {
 		t.Fatalf("BlockedToolApprovalCount = %d, want 1", diagnostics.BlockedToolApprovalCount)
+	}
+}
+
+func TestRepositoryContractCoversMCPToolCallRequestProjection(t *testing.T) {
+	var repo Repository = NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := repo.CreateThread(context.Background(), ident, CreateThreadInput{Title: "MCP projection", Mode: ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := repo.StartRun(context.Background(), ident, thread.ID, StartRunInput{Source: RunSourceModelGateway, MessageID: "msg_1", ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	call, events, err := repo.RecordToolCallRequest(context.Background(), ident, run.ID, RecordToolCallRequestInput{ToolCallID: "tc_mcp_1", ToolName: "mcp.local-search.search", CandidateSchemaHash: "sha256:test-local-search", ArgumentsSummary: map[string]any{"query": "status", "api_key": "sk-secret"}, ArgumentsHash: "hash_mcp", ApprovalStatus: ToolCallApprovalRequired, ExecutionStatus: ToolCallExecutionBlocked})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if call.ToolName != "mcp.local-search.search" || call.CandidateSchemaHash != "sha256:test-local-search" || call.ArgumentsSummary["api_key"] == "sk-secret" {
+		t.Fatalf("call = %+v", call)
+	}
+	if len(events) != 2 || events[1].Metadata["tool_source"] != ToolSourceMCP || events[1].Metadata["server_slug"] != "local-search" || events[1].Metadata["candidate_schema_hash"] != "sha256:test-local-search" {
+		t.Fatalf("events = %+v", events)
+	}
+	again, againEvents, err := repo.RecordToolCallRequest(context.Background(), ident, run.ID, RecordToolCallRequestInput{ToolCallID: "tc_mcp_1", ToolName: "mcp.local-search.search", CandidateSchemaHash: "sha256:test-local-search", ArgumentsSummary: map[string]any{"query": "status"}, ArgumentsHash: "hash_mcp", ApprovalStatus: ToolCallApprovalRequired, ExecutionStatus: ToolCallExecutionBlocked})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.ID != call.ID || len(againEvents) != 0 {
+		t.Fatalf("again=%+v events=%+v", again, againEvents)
 	}
 }
 
@@ -477,7 +522,7 @@ func TestPostgresRunEventsUseUniqueSequenceOrdering(t *testing.T) {
 	defer pool.Close()
 
 	repo := NewPostgresRepository(pool)
-	ident := identity.LocalDevIdentity()
+	ident := postgresTestIdentity()
 	thread, err := repo.CreateThread(ctx, ident, CreateThreadInput{Title: "Repository run events", Mode: ThreadModeChat})
 	if err != nil {
 		t.Fatal(err)
@@ -496,13 +541,170 @@ func TestPostgresRunEventsUseUniqueSequenceOrdering(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(events) != 3 {
+	if len(events) != 4 {
 		t.Fatalf("events = %+v", events)
 	}
 	for i, event := range events {
 		if event.Sequence != i+1 {
 			t.Fatalf("event[%d].Sequence = %d", i, event.Sequence)
 		}
+	}
+}
+
+func TestPostgresMemoryEntryScopeAndTerminalAudit(t *testing.T) {
+	databaseURL := os.Getenv("LOOMI_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("LOOMI_TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	repo := NewPostgresRepository(pool)
+	ident := postgresTestIdentity()
+	threadA, err := repo.CreateThread(ctx, ident, CreateThreadInput{Title: "PG Memory A", Mode: ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	threadB, err := repo.CreateThread(ctx, ident, CreateThreadInput{Title: "PG Memory B", Mode: ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := repo.StartRun(ctx, ident, threadA.ID, StartRunInput{ScriptName: "pg_terminal_memory_audit"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.AppendRunEvent(ctx, ident, run.ID, AppendRunEventInput{Category: RunEventCategoryFinal, Type: EventRunCompleted, Summary: "Run completed"}); err != nil {
+		t.Fatal(err)
+	}
+
+	proposal, err := repo.ProposeMemoryWrite(ctx, ident, ProposeMemoryWriteInput{ScopeType: MemoryScopeThread, ScopeID: threadA.ID, Title: "PG terminal", Content: "Keep terminal audit in PG", SourceThreadID: threadA.ID, SourceRunID: run.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision, err := repo.ApproveMemoryWrite(ctx, ident, proposal.ID, MemoryWriteDecisionInput{Reason: "approve"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.GetMemoryEntry(ctx, ident, decision.Entry.ID, MemoryEntryAccessInput{ScopeType: MemoryScopeThread, ScopeID: threadB.ID}); err == nil || ErrorCode(err) != CodeMemoryNotFound {
+		t.Fatalf("thread B read err = %v", err)
+	}
+	if _, err := repo.DeleteMemoryEntry(ctx, ident, decision.Entry.ID, DeleteMemoryEntryInput{Reason: "wrong thread", ScopeType: MemoryScopeThread, ScopeID: threadB.ID}); err == nil || ErrorCode(err) != CodeMemoryNotFound {
+		t.Fatalf("thread B delete err = %v", err)
+	}
+	if _, err := repo.GetMemoryEntry(ctx, ident, decision.Entry.ID, MemoryEntryAccessInput{ScopeType: MemoryScopeThread, ScopeID: threadA.ID}); err != nil {
+		t.Fatal(err)
+	}
+
+	denied, err := repo.ProposeMemoryWrite(ctx, ident, ProposeMemoryWriteInput{ScopeType: MemoryScopeThread, ScopeID: threadA.ID, Title: "PG deny", Content: "Deny once", SourceThreadID: threadA.ID, SourceRunID: run.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.DenyMemoryWrite(ctx, ident, denied.ID, MemoryWriteDecisionInput{Reason: "deny"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.DenyMemoryWrite(ctx, ident, denied.ID, MemoryWriteDecisionInput{Reason: "retry deny"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.DeleteMemoryEntry(ctx, ident, decision.Entry.ID, DeleteMemoryEntryInput{Reason: "delete", ScopeType: MemoryScopeThread, ScopeID: threadA.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.DeleteMemoryEntry(ctx, ident, decision.Entry.ID, DeleteMemoryEntryInput{Reason: "retry delete", ScopeType: MemoryScopeThread, ScopeID: threadA.ID}); err != nil {
+		t.Fatal(err)
+	}
+
+	audit, err := repo.ListMemoryAudit(ctx, ident, MemoryAuditInput{SourceRunID: run.ID, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	counts := map[string]int{}
+	for _, item := range audit.Items {
+		counts[item.EventType]++
+	}
+	if counts[EventMemoryWriteProposed] != 2 || counts[EventMemoryWriteApproved] != 1 || counts[EventMemoryWriteDenied] != 1 || counts["memory_deleted"] != 1 {
+		t.Fatalf("audit counts = %+v items=%+v", counts, audit.Items)
+	}
+}
+
+func TestPostgresArtifactsAndAgentTasksUseThreadScope(t *testing.T) {
+	databaseURL := os.Getenv("LOOMI_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("LOOMI_TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	repo := NewPostgresRepository(pool)
+	var _ ArtifactService = repo
+	var _ AgentTaskService = repo
+	ident := postgresTestIdentity()
+	threadA, err := repo.CreateThread(ctx, ident, CreateThreadInput{Title: "PG runtime A", Mode: ThreadModeWork})
+	if err != nil {
+		t.Fatal(err)
+	}
+	threadB, err := repo.CreateThread(ctx, ident, CreateThreadInput{Title: "PG runtime B", Mode: ThreadModeWork})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := repo.StartRun(ctx, ident, threadA.ID, StartRunInput{ScriptName: "pg_artifact_agent_scope"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	artifact, err := repo.CreateArtifact(ctx, ident, CreateArtifactInput{ThreadID: threadA.ID, RunID: run.ID, Title: " Notes ", Content: "hello postgres artifact", MaxBytes: 1024})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if artifact.ThreadID != threadA.ID || artifact.Title != "Notes" || artifact.ContentBytes != len("hello postgres artifact") {
+		t.Fatalf("artifact = %+v", artifact)
+	}
+	read, err := repo.ReadArtifact(ctx, ident, ReadArtifactInput{ThreadID: threadA.ID, ArtifactID: artifact.ID, MaxBytes: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if read.TextExcerpt != "hello" || !read.Truncated || read.Content != "hello postgres artifact" {
+		t.Fatalf("read = %+v", read)
+	}
+	list, err := repo.ListArtifacts(ctx, ident, ListArtifactsInput{ThreadID: threadA.ID, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 || list[0].ID != artifact.ID || list[0].Content != "" {
+		t.Fatalf("list = %+v", list)
+	}
+	if _, err := repo.ReadArtifact(ctx, ident, ReadArtifactInput{ThreadID: threadB.ID, ArtifactID: artifact.ID}); err == nil || ErrorCode(err) != CodeArtifactNotFound {
+		t.Fatalf("cross-thread artifact err = %v", err)
+	}
+
+	task, err := repo.SpawnAgentTask(ctx, ident, SpawnAgentTaskInput{ThreadID: threadA.ID, RunID: run.ID, Role: "reviewer", Goal: "Review PG path"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tasks, err := repo.ListAgentTasks(ctx, ident, ListAgentTasksInput{ThreadID: threadA.ID, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 1 || tasks[0].ID != task.ID || tasks[0].Goal != "Review PG path" {
+		t.Fatalf("tasks = %+v", tasks)
+	}
+	completed, err := repo.CompleteAgentTask(ctx, ident, CompleteAgentTaskInput{ThreadID: threadA.ID, TaskID: task.ID, ResultSummary: "PG path works"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if completed.Status != AgentTaskStatusCompleted || completed.ResultSummary != "PG path works" {
+		t.Fatalf("completed = %+v", completed)
+	}
+	if _, err := repo.CompleteAgentTask(ctx, ident, CompleteAgentTaskInput{ThreadID: threadB.ID, TaskID: task.ID, ResultSummary: "Wrong thread"}); err == nil || ErrorCode(err) != CodeInvalidRequest {
+		t.Fatalf("cross-thread task err = %v", err)
 	}
 }
 
@@ -520,7 +722,7 @@ func TestPostgresPreservesThreadPersonaOnMetadataUpdate(t *testing.T) {
 	defer pool.Close()
 
 	repo := NewPostgresRepository(pool)
-	ident := identity.LocalDevIdentity()
+	ident := postgresTestIdentity()
 	persona := syncContractPersona(t, repo, ident, "postgres-thread-persona-"+NewThreadID())
 	thread, err := repo.CreateThread(ctx, ident, CreateThreadInput{Title: "Postgres persona thread", Mode: ThreadModeChat, PersonaID: persona.ID})
 	if err != nil {
@@ -570,6 +772,48 @@ func TestPostgresPreservesThreadPersonaOnMetadataUpdate(t *testing.T) {
 	if context.Run.ID != run.ID || context.Persona.ID != persona.ID || context.Persona.ResolvedFrom != PersonaResolvedFromThread {
 		t.Fatalf("context persona = %+v", context.Persona)
 	}
+}
+
+func TestPostgresRejectsUnknownThreadPersona(t *testing.T) {
+	databaseURL := os.Getenv("LOOMI_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("LOOMI_TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	repo := NewPostgresRepository(pool)
+	ident := postgresTestIdentity()
+	if _, err := repo.CreateThread(ctx, ident, CreateThreadInput{Title: "Unknown postgres persona", Mode: ThreadModeChat, PersonaID: "persona_unknown"}); err == nil || ErrorCode(err) != CodeInvalidRequest {
+		t.Fatalf("create err = %v", err)
+	}
+	thread, err := repo.CreateThread(ctx, ident, CreateThreadInput{Title: "Postgres thread", Mode: ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.UpdateThread(ctx, ident, thread.ID, UpdateThreadInput{PersonaID: ptr("persona_unknown")}); err == nil || ErrorCode(err) != CodeInvalidRequest {
+		t.Fatalf("update err = %v", err)
+	}
+	persona := syncContractPersona(t, repo, ident, "postgres-inactive-thread-persona-"+NewThreadID())
+	if _, err := pool.Exec(ctx, `update personas set is_active=false where id=$1`, persona.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.CreateThread(ctx, ident, CreateThreadInput{Title: "Inactive postgres persona", Mode: ThreadModeChat, PersonaID: persona.ID}); err == nil || ErrorCode(err) != CodeInvalidRequest {
+		t.Fatalf("inactive create err = %v", err)
+	}
+	if _, err := repo.UpdateThread(ctx, ident, thread.ID, UpdateThreadInput{PersonaID: ptr(persona.ID)}); err == nil || ErrorCode(err) != CodeInvalidRequest {
+		t.Fatalf("inactive update err = %v", err)
+	}
+}
+
+func postgresTestIdentity() identity.LocalIdentity {
+	id := "user_" + NewThreadID()
+	return identity.LocalIdentity{UserID: id, DisplayName: "Postgres Test", Source: "test"}
 }
 
 func syncContractPersona(t *testing.T, repo Repository, ident identity.LocalIdentity, slug string) Persona {

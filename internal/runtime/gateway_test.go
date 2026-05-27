@@ -2,6 +2,13 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -40,6 +47,87 @@ func TestGatewayPersistsProviderDeltasAndCompletion(t *testing.T) {
 	}
 	if len(messages) != 2 || messages[1].Role != productdata.MessageRoleAssistant || messages[1].Content != "hello" {
 		t.Fatalf("messages = %+v", messages)
+	}
+}
+
+func TestLocalCodexProviderProducesAssistantMessageThroughGateway(t *testing.T) {
+	providerServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/responses" {
+			t.Fatalf("path = %s", r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer access-runtime-secret" {
+			t.Fatalf("authorization header = %q", r.Header.Get("Authorization"))
+		}
+		if r.Header.Get("ChatGPT-Account-ID") != "account_runtime" {
+			t.Fatalf("account header = %q", r.Header.Get("ChatGPT-Account-ID"))
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"Local \"}\n\n"))
+		_, _ = w.Write([]byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"Codex\"}\n\n"))
+		_, _ = w.Write([]byte("data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\"}}\n\n"))
+	}))
+	t.Cleanup(providerServer.Close)
+	home := t.TempDir()
+	writeRuntimeGatewayTestFile(t, filepath.Join(home, ".codex", "auth.json"), `{"auth_mode":"chatgpt","tokens":{"access_token":"access-runtime-secret","refresh_token":"refresh-runtime-secret","account_id":"account_runtime"},"base_url":"`+providerServer.URL+`/v1","model":"gpt-local-fixture"}`)
+	svc := productdata.NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, productdata.CreateThreadInput{Title: "Gateway", Mode: productdata.ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _, err := svc.CreateMessage(context.Background(), ident, thread.ID, productdata.CreateMessageInput{Content: "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, productdata.StartRunInput{Source: productdata.RunSourceModelGateway, MessageID: message.ID, ProviderID: "local_codex", Model: "gpt-local-fixture"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := NewLocalCodexProvider(LocalProviderDetectionInput{HomeDir: home, Env: map[string]string{}})
+
+	NewGateway(svc, nil, []Provider{provider}).run(context.Background(), run, GatewayRunInput{ThreadID: thread.ID, MessageID: message.ID, ProviderID: "local_codex"})
+
+	messages, err := svc.ListMessages(context.Background(), ident, thread.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 2 || messages[1].Content != "Local Codex" {
+		t.Fatalf("messages = %+v", messages)
+	}
+	events, err := svc.ListRunEvents(context.Background(), ident, run.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := runtimeGatewayEventsJSON(t, events) + runtimeGatewayMessagesJSON(t, messages)
+	for _, forbidden := range []string{"access-runtime-secret", "refresh-runtime-secret", home, "Authorization"} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("leaked %q: %s", forbidden, body)
+		}
+	}
+}
+
+func TestRunSystemPromptGuidesWorkModeToWorkspaceTools(t *testing.T) {
+	chat := runSystemPrompt(&productdata.RunContext{Thread: productdata.Thread{Mode: productdata.ThreadModeChat}})
+	if strings.Contains(chat, "File and folder tasks are tool-first") {
+		t.Fatalf("chat prompt contains work-only policy: %s", chat)
+	}
+	work := runSystemPrompt(&productdata.RunContext{Thread: productdata.Thread{Mode: productdata.ThreadModeWork}})
+	for _, expected := range []string{"workspace_glob", "workspace_grep", "workspace_read", "Do not tell the user to run shell commands", "use \".\" for it and do not repeat the root folder name"} {
+		if !strings.Contains(work, expected) {
+			t.Fatalf("work prompt missing %q: %s", expected, work)
+		}
+	}
+}
+
+func TestGatewayRemoveProviderPreventsSelection(t *testing.T) {
+	gateway := NewGateway(productdata.NewMemoryService(), nil, []Provider{
+		StaticProvider{ProviderConfig: ProviderConfig{ID: "local_codex", Family: ProviderFamilyOpenAICompatible, APIKey: "redacted", Model: "gpt-local-fixture", Enabled: true}},
+	})
+
+	gateway.RemoveProvider("local_codex")
+
+	if _, err := gateway.selectProvider("local_codex"); err == nil {
+		t.Fatal("expected removed provider to be unavailable")
 	}
 }
 
@@ -95,6 +183,89 @@ func TestGatewayRecordsApprovalRequiredCurrentTimeToolCall(t *testing.T) {
 	}
 }
 
+func TestGatewayAutoApprovesWebSearchToolCall(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, productdata.CreateThreadInput{Title: "Gateway", Mode: productdata.ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _, err := svc.CreateMessage(context.Background(), ident, thread.ID, productdata.CreateMessageInput{Content: "search ai news"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, productdata.StartRunInput{Source: productdata.RunSourceModelGateway, MessageID: message.ID, ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.AppendRunEvent(context.Background(), ident, run.ID, productdata.AppendRunEventInput{Category: productdata.RunEventCategoryProgress, Type: productdata.EventPipelineStepCompleted, Summary: "Pipeline step completed", Metadata: map[string]any{"step": string(productdata.PipelineStepResolveTools), "enabled_tools": []string{productdata.ToolNameWebSearch}}}); err != nil {
+		t.Fatal(err)
+	}
+	provider := StaticProvider{ProviderConfig: ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: "https://example.test/v1", APIKey: "key", Model: "model", Enabled: true}, Events: []ProviderEvent{{Type: ProviderEventToolCall, ToolName: productdata.ToolNameWebSearch, Metadata: map[string]any{"tool_call_id": "tc_search_1", "arguments_summary": map[string]any{"query": "latest ai news", "provider": "brave", "limit": 5}}}}}
+
+	NewGateway(svc, nil, []Provider{provider}).run(context.Background(), run, GatewayRunInput{ThreadID: thread.ID, MessageID: message.ID, ProviderID: "custom"})
+
+	got, err := svc.GetRun(context.Background(), ident, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != productdata.RunStatusQueued {
+		t.Fatalf("run = %+v", got)
+	}
+	call, err := svc.GetToolCall(context.Background(), ident, thread.ID, run.ID, "tc_search_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if call.ToolName != productdata.ToolNameWebSearch || call.ApprovalStatus != productdata.ToolCallApprovalApproved || call.ExecutionStatus != productdata.ToolCallExecutionNotStarted {
+		t.Fatalf("call = %+v", call)
+	}
+	events, err := svc.ListRunEvents(context.Background(), ident, run.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if events[len(events)-1].Type != productdata.EventToolCallApproved {
+		t.Fatalf("events = %+v", events)
+	}
+}
+
+func TestGatewayAutoApprovesChatWebFetchToolCall(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, productdata.CreateThreadInput{Title: "Gateway", Mode: productdata.ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _, err := svc.CreateMessage(context.Background(), ident, thread.ID, productdata.CreateMessageInput{Content: "Analyze https://example.com/repo"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, productdata.StartRunInput{Source: productdata.RunSourceModelGateway, MessageID: message.ID, ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.AppendRunEvent(context.Background(), ident, run.ID, productdata.AppendRunEventInput{Category: productdata.RunEventCategoryProgress, Type: productdata.EventPipelineStepCompleted, Summary: "Pipeline step completed", Metadata: map[string]any{"step": string(productdata.PipelineStepResolveTools), "enabled_tools": []string{productdata.ToolNameWebFetch}}}); err != nil {
+		t.Fatal(err)
+	}
+	provider := StaticProvider{ProviderConfig: ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: "https://example.test/v1", APIKey: "key", Model: "model", Enabled: true}, Events: []ProviderEvent{{Type: ProviderEventToolCall, ToolName: productdata.ToolNameWebFetch, Metadata: map[string]any{"tool_call_id": "tc_fetch_1", "arguments_summary": map[string]any{"url": "https://example.com/repo", "max_bytes": 4096}}}}}
+
+	NewGateway(svc, nil, []Provider{provider}).run(context.Background(), run, GatewayRunInput{ThreadID: thread.ID, MessageID: message.ID, ProviderID: "custom"})
+
+	got, err := svc.GetRun(context.Background(), ident, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != productdata.RunStatusQueued {
+		t.Fatalf("run = %+v", got)
+	}
+	call, err := svc.GetToolCall(context.Background(), ident, thread.ID, run.ID, "tc_fetch_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if call.ToolName != productdata.ToolNameWebFetch || call.ApprovalStatus != productdata.ToolCallApprovalApproved || call.ExecutionStatus != productdata.ToolCallExecutionNotStarted {
+		t.Fatalf("call = %+v", call)
+	}
+}
+
 func TestGatewayRejectsInvalidToolArgumentsWithoutFabricatingDefaults(t *testing.T) {
 	svc := productdata.NewMemoryService()
 	ident := identity.LocalDevIdentity()
@@ -122,6 +293,155 @@ func TestGatewayRejectsInvalidToolArgumentsWithoutFabricatingDefaults(t *testing
 		t.Fatal(err)
 	}
 	if got.Status != productdata.RunStatusFailed {
+		t.Fatalf("run = %+v", got)
+	}
+}
+
+func TestGatewayRejectsWorkspaceMutationToolInChatMode(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("LOOMI_WORKSPACE_ROOT", root)
+	svc := productdata.NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, productdata.CreateThreadInput{Title: "Gateway", Mode: productdata.ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _, err := svc.CreateMessage(context.Background(), ident, thread.ID, productdata.CreateMessageInput{Content: "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, productdata.StartRunInput{Source: productdata.RunSourceModelGateway, MessageID: message.ID, ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := StaticProvider{ProviderConfig: ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: "https://example.test/v1", APIKey: "key", Model: "model", Enabled: true}, Events: []ProviderEvent{{Type: ProviderEventToolCall, ToolName: productdata.ToolNameWorkspaceWriteFile, Metadata: map[string]any{"tool_call_id": "tc_write_chat", "arguments_summary": map[string]any{"path": "chat.txt", "content": "chat\n"}}}}}
+
+	NewGateway(svc, nil, []Provider{provider}).run(context.Background(), run, GatewayRunInput{ThreadID: thread.ID, MessageID: message.ID, ProviderID: "custom"})
+
+	if _, err := svc.GetToolCall(context.Background(), ident, thread.ID, run.ID, "tc_write_chat"); err == nil {
+		t.Fatal("workspace mutation tool call was recorded in chat mode")
+	}
+	if _, err := os.Stat(filepath.Join(root, "chat.txt")); err == nil {
+		t.Fatal("workspace mutation wrote file in chat mode")
+	}
+	got, err := svc.GetRun(context.Background(), ident, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != productdata.RunStatusFailed || got.ErrorCode == nil || *got.ErrorCode != "tool_call_rejected" {
+		t.Fatalf("run = %+v", got)
+	}
+}
+
+func TestGatewayRejectsSandboxExecCommandInChatMode(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("LOOMI_WORKSPACE_ROOT", root)
+	svc := productdata.NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, productdata.CreateThreadInput{Title: "Gateway", Mode: productdata.ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _, err := svc.CreateMessage(context.Background(), ident, thread.ID, productdata.CreateMessageInput{Content: "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, productdata.StartRunInput{Source: productdata.RunSourceModelGateway, MessageID: message.ID, ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := StaticProvider{ProviderConfig: ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: "https://example.test/v1", APIKey: "key", Model: "model", Enabled: true}, Events: []ProviderEvent{{Type: ProviderEventToolCall, ToolName: productdata.ToolNameSandboxExecCommand, Metadata: map[string]any{"tool_call_id": "tc_exec_chat", "arguments_summary": map[string]any{"argv": []any{"touch", "chat-exec.txt"}}}}}}
+
+	NewGateway(svc, nil, []Provider{provider}).run(context.Background(), run, GatewayRunInput{ThreadID: thread.ID, MessageID: message.ID, ProviderID: "custom"})
+
+	if _, err := svc.GetToolCall(context.Background(), ident, thread.ID, run.ID, "tc_exec_chat"); err == nil {
+		t.Fatal("sandbox exec tool call was recorded in chat mode")
+	}
+	if _, err := os.Stat(filepath.Join(root, "chat-exec.txt")); err == nil {
+		t.Fatal("sandbox exec command ran in chat mode")
+	}
+	got, err := svc.GetRun(context.Background(), ident, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != productdata.RunStatusFailed || got.ErrorCode == nil || *got.ErrorCode != "tool_call_rejected" {
+		t.Fatalf("run = %+v", got)
+	}
+}
+
+func TestGatewayRejectsLSPToolInChatMode(t *testing.T) {
+	root := createLSPFixture(t)
+	t.Setenv("LOOMI_WORKSPACE_ROOT", root)
+	svc := productdata.NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	if _, err := svc.SyncBuiltInPersonas(context.Background(), ident, productdata.BuiltInPersonas()); err != nil {
+		t.Fatal(err)
+	}
+	thread, err := svc.CreateThread(context.Background(), ident, productdata.CreateThreadInput{Title: "Gateway", Mode: productdata.ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _, err := svc.CreateMessage(context.Background(), ident, thread.ID, productdata.CreateMessageInput{Content: "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, productdata.StartRunInput{Source: productdata.RunSourceModelGateway, MessageID: message.ID, ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := StaticProvider{ProviderConfig: ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: "https://example.test/v1", APIKey: "key", Model: "model", Enabled: true}, Events: []ProviderEvent{{Type: ProviderEventToolCall, ToolName: productdata.ToolNameLSPSymbols, Metadata: map[string]any{"tool_call_id": "tc_lsp_chat", "arguments_summary": map[string]any{"path": "src/main.go", "query": "Tool"}}}}}
+
+	NewGateway(svc, nil, []Provider{provider}).run(context.Background(), run, GatewayRunInput{ThreadID: thread.ID, MessageID: message.ID, ProviderID: "custom"})
+
+	if _, err := svc.GetToolCall(context.Background(), ident, thread.ID, run.ID, "tc_lsp_chat"); err == nil {
+		t.Fatal("lsp tool call was recorded in chat mode")
+	}
+	got, err := svc.GetRun(context.Background(), ident, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != productdata.RunStatusFailed || got.ErrorCode == nil || *got.ErrorCode != "tool_call_rejected" {
+		t.Fatalf("run = %+v", got)
+	}
+}
+
+func TestGatewayRejectsAgentToolInChatMode(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	if _, err := svc.SyncBuiltInPersonas(context.Background(), ident, productdata.BuiltInPersonas()); err != nil {
+		t.Fatal(err)
+	}
+	thread, err := svc.CreateThread(context.Background(), ident, productdata.CreateThreadInput{Title: "Gateway", Mode: productdata.ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _, err := svc.CreateMessage(context.Background(), ident, thread.ID, productdata.CreateMessageInput{Content: "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, productdata.StartRunInput{Source: productdata.RunSourceModelGateway, MessageID: message.ID, ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := StaticProvider{ProviderConfig: ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: "https://example.test/v1", APIKey: "key", Model: "model", Enabled: true}, Events: []ProviderEvent{{Type: ProviderEventToolCall, ToolName: productdata.ToolNameAgentSpawn, Metadata: map[string]any{"tool_call_id": "tc_agent_chat", "arguments_summary": map[string]any{"role": "reviewer", "goal": "Review chat"}}}}}
+
+	NewGateway(svc, nil, []Provider{provider}).run(context.Background(), run, GatewayRunInput{ThreadID: thread.ID, MessageID: message.ID, ProviderID: "custom"})
+
+	if _, err := svc.GetToolCall(context.Background(), ident, thread.ID, run.ID, "tc_agent_chat"); err == nil {
+		t.Fatal("agent tool call was recorded in chat mode")
+	}
+	tasks, err := svc.ListAgentTasks(context.Background(), ident, productdata.ListAgentTasksInput{ThreadID: thread.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 0 {
+		t.Fatalf("agent tasks created in chat mode: %+v", tasks)
+	}
+	got, err := svc.GetRun(context.Background(), ident, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != productdata.RunStatusFailed || got.ErrorCode == nil || *got.ErrorCode != "tool_call_rejected" {
 		t.Fatalf("run = %+v", got)
 	}
 }
@@ -242,6 +562,40 @@ func TestGatewayBuildsContinuationContextFromToolResultEvents(t *testing.T) {
 	}
 }
 
+func TestGatewayBuildsMCPContinuationContextFromRedactedToolResult(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, productdata.CreateThreadInput{Title: "MCP continuation", Mode: productdata.ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _, err := svc.CreateMessage(context.Background(), ident, thread.ID, productdata.CreateMessageInput{Content: "Search"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, productdata.StartRunInput{Source: productdata.RunSourceModelGateway, MessageID: message.ID, ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.AppendRunEvent(context.Background(), ident, run.ID, productdata.AppendRunEventInput{Category: productdata.RunEventCategoryProgress, Type: productdata.EventToolCallRequested, Summary: "Tool call requested", Metadata: map[string]any{"tool_call_id": "tc_mcp_1", "tool_name": "mcp.local-search.search", "tool_source": "mcp", "arguments_summary": map[string]any{"query": "status"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.AppendRunEvent(context.Background(), ident, run.ID, productdata.AppendRunEventInput{Category: productdata.RunEventCategoryProgress, Type: productdata.EventToolCallSucceeded, Summary: "Tool call succeeded", Metadata: map[string]any{"tool_call_id": "tc_mcp_1", "tool_name": "mcp.local-search.search", "tool_source": "mcp", "result_summary": map[string]any{"raw": "sk-secret"}, "result_for_model_redacted": map[string]any{"summary": "safe"}}}); err != nil {
+		t.Fatal(err)
+	}
+	provider := &capturingProvider{config: ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: "https://example.test/v1", APIKey: "key", Model: "model", Enabled: true}}
+
+	NewGateway(svc, nil, []Provider{provider}).ContinueAfterToolResult(context.Background(), run, GatewayContinuationInput{ThreadID: thread.ID, MessageID: message.ID, ProviderID: "custom", ToolCallID: "tc_mcp_1"})
+
+	if len(provider.request.Messages) != 3 {
+		t.Fatalf("messages = %+v", provider.request.Messages)
+	}
+	toolResult := provider.request.Messages[2]
+	if toolResult.Role != ProviderMessageRoleToolResult || toolResult.ToolName != "mcp.local-search.search" || !strings.Contains(toolResult.Content, "safe") || strings.Contains(toolResult.Content, "sk-secret") {
+		t.Fatalf("tool result = %+v", toolResult)
+	}
+}
+
 func TestGatewayContinuesAfterToolResultAndPersistsFinalAssistant(t *testing.T) {
 	svc := productdata.NewMemoryService()
 	ident := identity.LocalDevIdentity()
@@ -339,6 +693,501 @@ func TestGatewayFailsWhenContinuationRequestsAnotherTool(t *testing.T) {
 	}
 }
 
+func TestGatewayContinuationRequestsSecondWorkspaceToolForApproval(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, productdata.CreateThreadInput{Title: "Workspace loop", Mode: productdata.ThreadModeWork})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _, err := svc.CreateMessage(context.Background(), ident, thread.ID, productdata.CreateMessageInput{Content: "Inspect workspace"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, productdata.StartRunInput{Source: productdata.RunSourceModelGateway, MessageID: message.ID, ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	enabled := []string{productdata.ToolNameCurrentTime, productdata.ToolNameWorkspaceGlob, productdata.ToolNameWorkspaceGrep, productdata.ToolNameWorkspaceRead}
+	if _, err := svc.AppendRunEvent(context.Background(), ident, run.ID, productdata.AppendRunEventInput{Category: productdata.RunEventCategoryProgress, Type: productdata.EventPipelineStepCompleted, Summary: "Pipeline step completed", Metadata: map[string]any{"step": string(productdata.PipelineStepResolveTools), "enabled_tools": enabled}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.AppendRunEvent(context.Background(), ident, run.ID, productdata.AppendRunEventInput{Category: productdata.RunEventCategoryProgress, Type: productdata.EventToolCallRequested, Summary: "Tool call requested", Metadata: map[string]any{"tool_call_id": "tc_glob_1", "tool_name": productdata.ToolNameWorkspaceGlob, "arguments_summary": map[string]any{"pattern": "*.go", "limit": 10}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.AppendRunEvent(context.Background(), ident, run.ID, productdata.AppendRunEventInput{Category: productdata.RunEventCategoryProgress, Type: productdata.EventToolCallSucceeded, Summary: "Tool call succeeded", Metadata: map[string]any{"tool_call_id": "tc_glob_1", "tool_name": productdata.ToolNameWorkspaceGlob, "result_summary": map[string]any{"matches": []any{"internal/runtime/gateway.go"}}}}); err != nil {
+		t.Fatal(err)
+	}
+	provider := &capturingProvider{config: ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: "https://example.test/v1", APIKey: "key", Model: "model", Enabled: true}, events: []ProviderEvent{{Type: ProviderEventToolCall, ToolName: productdata.ToolNameWorkspaceRead, Metadata: map[string]any{"tool_call_id": "tc_read_2", "arguments_summary": map[string]any{"path": "internal/runtime/gateway.go", "limit": 512}}}}}
+
+	NewGateway(svc, nil, []Provider{provider}).ContinueAfterToolResult(context.Background(), run, GatewayContinuationInput{ThreadID: thread.ID, MessageID: message.ID, ProviderID: "custom", Model: "model", ToolCallID: "tc_glob_1"})
+
+	got, err := svc.GetRun(context.Background(), ident, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != productdata.RunStatusQueued {
+		t.Fatalf("run = %+v", got)
+	}
+	call, err := svc.GetToolCall(context.Background(), ident, thread.ID, run.ID, "tc_read_2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if call.ToolName != productdata.ToolNameWorkspaceRead || call.ApprovalStatus != productdata.ToolCallApprovalApproved || call.ExecutionStatus != productdata.ToolCallExecutionNotStarted {
+		t.Fatalf("call = %+v", call)
+	}
+	messages, err := svc.ListMessages(context.Background(), ident, thread.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 1 {
+		t.Fatalf("messages = %+v", messages)
+	}
+}
+
+func TestGatewayContinuationStopsAtWorkspaceToolLoopLimit(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, productdata.CreateThreadInput{Title: "Workspace limit", Mode: productdata.ThreadModeWork})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _, err := svc.CreateMessage(context.Background(), ident, thread.ID, productdata.CreateMessageInput{Content: "Inspect workspace"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, productdata.StartRunInput{Source: productdata.RunSourceModelGateway, MessageID: message.ID, ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	enabled := []string{productdata.ToolNameWorkspaceGlob, productdata.ToolNameWorkspaceGrep, productdata.ToolNameWorkspaceRead}
+	if _, err := svc.AppendRunEvent(context.Background(), ident, run.ID, productdata.AppendRunEventInput{Category: productdata.RunEventCategoryProgress, Type: productdata.EventPipelineStepCompleted, Summary: "Pipeline step completed", Metadata: map[string]any{"step": string(productdata.PipelineStepResolveTools), "enabled_tools": enabled}}); err != nil {
+		t.Fatal(err)
+	}
+	for index := 0; index < productdata.DefaultMaxBoundedToolCallsPerRun; index++ {
+		toolCallID := fmt.Sprintf("tc_%d", index+1)
+		if _, err := svc.AppendRunEvent(context.Background(), ident, run.ID, productdata.AppendRunEventInput{Category: productdata.RunEventCategoryProgress, Type: productdata.EventToolCallRequested, Summary: "Tool call requested", Metadata: map[string]any{"tool_call_id": toolCallID, "tool_name": productdata.ToolNameWorkspaceRead, "arguments_summary": map[string]any{"path": "safe.txt", "limit": 128}, "loop_index": index + 1}}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := svc.AppendRunEvent(context.Background(), ident, run.ID, productdata.AppendRunEventInput{Category: productdata.RunEventCategoryProgress, Type: productdata.EventToolCallSucceeded, Summary: "Tool call succeeded", Metadata: map[string]any{"tool_call_id": toolCallID, "tool_name": productdata.ToolNameWorkspaceRead, "result_summary": map[string]any{"path": "safe.txt", "truncated": false}}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	overLimitToolCallID := fmt.Sprintf("tc_%d", productdata.DefaultMaxBoundedToolCallsPerRun+1)
+	provider := &capturingProvider{config: ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: "https://example.test/v1", APIKey: "key", Model: "model", Enabled: true}, events: []ProviderEvent{{Type: ProviderEventToolCall, ToolName: productdata.ToolNameWorkspaceRead, Metadata: map[string]any{"tool_call_id": overLimitToolCallID, "arguments_summary": map[string]any{"path": "safe.txt", "limit": 128}}}}}
+
+	NewGateway(svc, nil, []Provider{provider}).ContinueAfterToolResult(context.Background(), run, GatewayContinuationInput{ThreadID: thread.ID, MessageID: message.ID, ProviderID: "custom", Model: "model", ToolCallID: fmt.Sprintf("tc_%d", productdata.DefaultMaxBoundedToolCallsPerRun)})
+
+	got, err := svc.GetRun(context.Background(), ident, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != productdata.RunStatusFailed || got.ErrorCode == nil || *got.ErrorCode != "tool_loop_limit_reached" {
+		t.Fatalf("run = %+v", got)
+	}
+	if _, err := svc.GetToolCall(context.Background(), ident, thread.ID, run.ID, overLimitToolCallID); err == nil {
+		t.Fatalf("over-limit tool call was recorded")
+	}
+}
+
+func TestGatewayContinuationOmitsToolsAtLoopLimitSoProviderCanFinalize(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, productdata.CreateThreadInput{Title: "Workspace limit final", Mode: productdata.ThreadModeWork})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _, err := svc.CreateMessage(context.Background(), ident, thread.ID, productdata.CreateMessageInput{Content: "Inspect workspace"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, productdata.StartRunInput{Source: productdata.RunSourceModelGateway, MessageID: message.ID, ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	enabled := []string{productdata.ToolNameWorkspaceRead}
+	if _, err := svc.AppendRunEvent(context.Background(), ident, run.ID, productdata.AppendRunEventInput{Category: productdata.RunEventCategoryProgress, Type: productdata.EventPipelineStepCompleted, Summary: "Pipeline step completed", Metadata: map[string]any{"step": string(productdata.PipelineStepResolveTools), "enabled_tools": enabled}}); err != nil {
+		t.Fatal(err)
+	}
+	for index := 0; index < productdata.DefaultMaxBoundedToolCallsPerRun; index++ {
+		toolCallID := fmt.Sprintf("tc_%d", index+1)
+		if _, err := svc.AppendRunEvent(context.Background(), ident, run.ID, productdata.AppendRunEventInput{Category: productdata.RunEventCategoryProgress, Type: productdata.EventToolCallRequested, Summary: "Tool call requested", Metadata: map[string]any{"tool_call_id": toolCallID, "tool_name": productdata.ToolNameWorkspaceRead, "arguments_summary": map[string]any{"path": "safe.txt", "limit": 128}, "loop_index": index + 1}}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := svc.AppendRunEvent(context.Background(), ident, run.ID, productdata.AppendRunEventInput{Category: productdata.RunEventCategoryProgress, Type: productdata.EventToolCallSucceeded, Summary: "Tool call succeeded", Metadata: map[string]any{"tool_call_id": toolCallID, "tool_name": productdata.ToolNameWorkspaceRead, "result_summary": map[string]any{"path": "safe.txt", "truncated": false}}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	provider := &capturingProvider{config: ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: "https://example.test/v1", APIKey: "key", Model: "model", Enabled: true}, events: []ProviderEvent{{Type: ProviderEventCompleted, Text: "Final answer from gathered tool results."}}}
+
+	NewGateway(svc, nil, []Provider{provider}).ContinueAfterToolResult(context.Background(), run, GatewayContinuationInput{ThreadID: thread.ID, MessageID: message.ID, ProviderID: "custom", Model: "model", ToolCallID: fmt.Sprintf("tc_%d", productdata.DefaultMaxBoundedToolCallsPerRun)})
+
+	if len(provider.request.Tools) != 0 {
+		t.Fatalf("continuation tools = %+v", provider.request.Tools)
+	}
+	got, err := svc.GetRun(context.Background(), ident, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != productdata.RunStatusCompleted {
+		t.Fatalf("run = %+v", got)
+	}
+	messages, err := svc.ListMessages(context.Background(), ident, thread.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 2 || messages[1].Content != "Final answer from gathered tool results." {
+		t.Fatalf("messages = %+v", messages)
+	}
+}
+
+func TestGatewayContinuationOmitsWorkspaceGlobAfterSuccessfulListing(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, productdata.CreateThreadInput{Title: "Workspace listing", Mode: productdata.ThreadModeWork})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _, err := svc.CreateMessage(context.Background(), ident, thread.ID, productdata.CreateMessageInput{Content: "List files"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, productdata.StartRunInput{Source: productdata.RunSourceModelGateway, MessageID: message.ID, ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	enabled := []string{productdata.ToolNameWorkspaceGlob, productdata.ToolNameWorkspaceGrep, productdata.ToolNameWorkspaceRead}
+	if _, err := svc.AppendRunEvent(context.Background(), ident, run.ID, productdata.AppendRunEventInput{Category: productdata.RunEventCategoryProgress, Type: productdata.EventPipelineStepCompleted, Summary: "Pipeline step completed", Metadata: map[string]any{"step": string(productdata.PipelineStepResolveTools), "enabled_tools": enabled}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.AppendRunEvent(context.Background(), ident, run.ID, productdata.AppendRunEventInput{Category: productdata.RunEventCategoryProgress, Type: productdata.EventToolCallRequested, Summary: "Tool call requested", Metadata: map[string]any{"tool_call_id": "tc_glob", "tool_name": productdata.ToolNameWorkspaceGlob, "arguments_summary": map[string]any{"pattern": "**/*", "limit": 500}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.AppendRunEvent(context.Background(), ident, run.ID, productdata.AppendRunEventInput{Category: productdata.RunEventCategoryProgress, Type: productdata.EventToolCallSucceeded, Summary: "Tool call succeeded", Metadata: map[string]any{"tool_call_id": "tc_glob", "tool_name": productdata.ToolNameWorkspaceGlob, "result_summary": map[string]any{"count": 3, "truncated": false}}}); err != nil {
+		t.Fatal(err)
+	}
+	provider := &capturingProvider{config: ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: "https://example.test/v1", APIKey: "key", Model: "model", Enabled: true}, events: []ProviderEvent{{Type: ProviderEventCompleted, Text: "Final answer."}}}
+
+	NewGateway(svc, nil, []Provider{provider}).ContinueAfterToolResult(context.Background(), run, GatewayContinuationInput{ThreadID: thread.ID, MessageID: message.ID, ProviderID: "custom", Model: "model", ToolCallID: "tc_glob"})
+
+	for _, tool := range provider.request.Tools {
+		if tool.Name == productdata.ToolNameWorkspaceGlob {
+			t.Fatalf("workspace.glob should be omitted after successful listing: %+v", provider.request.Tools)
+		}
+	}
+	if !providerHasTool(provider.request.Tools, productdata.ToolNameWorkspaceRead) || !providerHasTool(provider.request.Tools, productdata.ToolNameWorkspaceGrep) {
+		t.Fatalf("continuation should still expose read/grep tools: %+v", provider.request.Tools)
+	}
+}
+
+func TestGatewayExposesCodeAgentToolsToProvider(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, productdata.CreateThreadInput{Title: "Code tools", Mode: productdata.ThreadModeWork})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _, err := svc.CreateMessage(context.Background(), ident, thread.ID, productdata.CreateMessageInput{Content: "Patch and verify"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, productdata.StartRunInput{Source: productdata.RunSourceModelGateway, MessageID: message.ID, ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	enabled := []string{productdata.ToolNameLoadTools, productdata.ToolNameLoadSkill, productdata.ToolNameWorkspaceRead, productdata.ToolNameWorkspaceEdit, productdata.ToolNameWorkspacePatchPreview, productdata.ToolNameWorkspacePatchApply, productdata.ToolNameSandboxExecCommand, productdata.ToolNameSandboxStartProcess, productdata.ToolNameSandboxContinueProcess, productdata.ToolNameSandboxTerminateProcess, productdata.ToolNameLSPSymbols, productdata.ToolNameLSPDefinition, productdata.ToolNameLSPHover, productdata.ToolNameWebSearch, productdata.ToolNameBrowserOpen, productdata.ToolNameBrowserScreenshot, productdata.ToolNameBrowserType, productdata.ToolNameBrowserPress, productdata.ToolNameMemorySearch, productdata.ToolNameMemoryList, productdata.ToolNameMemoryRead, productdata.ToolNameMemoryWrite, productdata.ToolNameMemoryEdit, productdata.ToolNameMemoryForget, productdata.ToolNameMemoryContext, productdata.ToolNameMemoryTimeline, productdata.ToolNameMemoryConnections, productdata.ToolNameMemoryThreadSearch, productdata.ToolNameMemoryThreadFetch, productdata.ToolNameMemoryStatus, productdata.ToolNameNotebookRead, productdata.ToolNameNotebookWrite, productdata.ToolNameNotebookEdit, productdata.ToolNameNotebookForget, productdata.ToolNameTodoWrite}
+	if _, err := svc.AppendRunEvent(context.Background(), ident, run.ID, productdata.AppendRunEventInput{Category: productdata.RunEventCategoryProgress, Type: productdata.EventPipelineStepCompleted, Summary: "Pipeline step completed", Metadata: map[string]any{"step": string(productdata.PipelineStepResolveTools), "enabled_tools": enabled}}); err != nil {
+		t.Fatal(err)
+	}
+
+	tools := NewGateway(svc, nil, nil).providerToolsForRun(context.Background(), run.ID)
+	names := []string{}
+	for _, tool := range tools {
+		names = append(names, tool.ProviderName)
+		if tool.ProviderName == "" || len(tool.Parameters) == 0 {
+			t.Fatalf("tool missing provider schema: %+v", tool)
+		}
+	}
+	want := []string{"tool_load_tools", "skill_load_skill", "workspace_read", "workspace_edit", "workspace_patch_preview", "workspace_patch_apply", "sandbox_exec_command", "sandbox_start_process", "sandbox_continue_process", "sandbox_terminate_process", "lsp_symbols", "lsp_definition", "lsp_hover", "web_search", "browser_open", "browser_screenshot", "browser_type", "browser_press", "memory_search", "memory_list", "memory_read", "memory_write", "memory_edit", "memory_forget", "memory_context", "memory_timeline", "memory_connections", "memory_thread_search", "memory_thread_fetch", "memory_status", "notebook_read", "notebook_write", "notebook_edit", "notebook_forget", "todo_write"}
+	if strings.Join(names, ",") != strings.Join(want, ",") {
+		t.Fatalf("provider tools = %+v", names)
+	}
+	if internalProviderToolName("tool_load_tools") != productdata.ToolNameLoadTools || providerToolName(productdata.ToolNameLoadSkill) != "skill_load_skill" || internalProviderToolName("workspace_edit") != productdata.ToolNameWorkspaceEdit || internalProviderToolName("workspace_patch_preview") != productdata.ToolNameWorkspacePatchPreview || providerToolName(productdata.ToolNameWorkspacePatchApply) != "workspace_patch_apply" || providerToolName(productdata.ToolNameSandboxExecCommand) != "sandbox_exec_command" || internalProviderToolName("sandbox_start_process") != productdata.ToolNameSandboxStartProcess || internalProviderToolName("browser_type") != productdata.ToolNameBrowserType || providerToolName(productdata.ToolNameLSPDefinition) != "lsp_definition" || internalProviderToolName("memory_search") != productdata.ToolNameMemorySearch || internalProviderToolName("memory_thread_fetch") != productdata.ToolNameMemoryThreadFetch || providerToolName(productdata.ToolNameMemoryStatus) != "memory_status" || internalProviderToolName("notebook_write") != productdata.ToolNameNotebookWrite || providerToolName(productdata.ToolNameNotebookForget) != "notebook_forget" || internalProviderToolName("todo_write") != productdata.ToolNameTodoWrite {
+		t.Fatalf("provider tool name mapping failed")
+	}
+}
+
+func TestRunSystemPromptIncludesSafeMemoryAndNotebookSnapshots(t *testing.T) {
+	prompt := runSystemPrompt(&productdata.RunContext{
+		Persona: productdata.PersonaSnapshot{SystemPrompt: "Use safe context."},
+		Thread:  productdata.Thread{Mode: productdata.ThreadModeWork},
+		MemorySnapshot: productdata.MemorySnapshot{Entries: []productdata.MemorySearchResult{{
+			Title:      "Preference",
+			Summary:    "Keep memory concise.",
+			SourceType: "manual",
+		}, {
+			Title:      "Notebook duplicate",
+			Summary:    "Should only appear in notebook block.",
+			SourceType: "notebook",
+		}}},
+		NotebookSnapshot: productdata.MemorySnapshot{Entries: []productdata.MemorySearchResult{{
+			Title:      "Project notebook",
+			Summary:    "Use structured notes for durable facts.",
+			SourceType: "notebook",
+		}}},
+	})
+	if !strings.Contains(prompt, "<memory>\n- Preference: Keep memory concise.\n</memory>") {
+		t.Fatalf("prompt missing memory block: %s", prompt)
+	}
+	if strings.Contains(prompt, "Notebook duplicate") {
+		t.Fatalf("memory block should not include notebook entries: %s", prompt)
+	}
+	if !strings.Contains(prompt, "<notebook>\n- Project notebook: Use structured notes for durable facts.\n</notebook>") {
+		t.Fatalf("prompt missing notebook block: %s", prompt)
+	}
+	if strings.Contains(prompt, "sk-") || strings.Contains(prompt, "/Users/") {
+		t.Fatalf("prompt leaked unsafe content: %s", prompt)
+	}
+}
+
+func TestGatewayEnrichesPromptMemorySnapshotFromExternalProvider(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, productdata.CreateThreadInput{Title: "External memory", Mode: productdata.ThreadModeWork})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, productdata.StartRunInput{Source: productdata.RunSourceModelGateway, ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/search/find" {
+			t.Fatalf("path = %s", r.URL.Path)
+		}
+		if r.Header.Get("X-API-Key") != "root-secret" {
+			t.Fatalf("missing openviking root key")
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"result": map[string]any{"memories": []map[string]any{{"uri": "viking://user/user_local_dev/memories/pref", "abstract": "Preference\nUse provider memory before answering.", "score": 0.9, "match_reason": "query"}}}})
+	}))
+	defer server.Close()
+	if _, err := svc.SaveMemoryProviderConfig(context.Background(), ident, productdata.MemoryProviderConfig{Enabled: true, Provider: productdata.MemoryProviderOpenViking, OpenViking: productdata.OpenVikingMemoryConfig{BaseURL: server.URL, RootAPIKey: "root-secret", EmbeddingModel: "embed", VLMModel: "vlm"}}); err != nil {
+		t.Fatal(err)
+	}
+	prepared := &productdata.RunContext{Run: run, Thread: thread}
+	enriched := NewGateway(svc, nil, nil).withExternalMemorySnapshot(context.Background(), prepared, []ProviderMessage{{Role: "user", Content: "What should I remember?"}})
+	prompt := runSystemPrompt(enriched)
+	if !strings.Contains(prompt, "<memory>\n- Preference: Use provider memory before answering.\n</memory>") {
+		t.Fatalf("prompt missing external memory: %s", prompt)
+	}
+	if len(prepared.MemorySnapshot.Entries) != 0 {
+		t.Fatalf("original prepared context should not be mutated: %+v", prepared.MemorySnapshot)
+	}
+	events, err := svc.ListRunEvents(context.Background(), ident, run.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, event := range events {
+		if event.Type == productdata.EventMemoryExternalSnapshotLoaded {
+			found = true
+			if event.Metadata["provider"] != string(productdata.MemoryProviderOpenViking) || fmt.Sprint(event.Metadata["entry_count"]) != "1" {
+				t.Fatalf("external snapshot metadata = %+v", event.Metadata)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("external snapshot event not recorded: %+v", events)
+	}
+}
+
+func TestGatewayEnrichesPromptMemorySnapshotFromNowledgeProvider(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, productdata.CreateThreadInput{Title: "Nowledge external memory", Mode: productdata.ThreadModeWork})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, productdata.StartRunInput{Source: productdata.RunSourceModelGateway, ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/memories/search" {
+			t.Fatalf("path = %s", r.URL.Path)
+		}
+		if r.URL.Query().Get("query") != "Recall project preference" || r.URL.Query().Get("limit") != "5" {
+			t.Fatalf("query = %s", r.URL.RawQuery)
+		}
+		if r.Header.Get("Authorization") != "Bearer nowledge-secret" || r.Header.Get("x-nmem-api-key") != "nowledge-secret" {
+			t.Fatalf("missing nowledge auth headers")
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"memories": []map[string]any{{"id": "pref", "title": "Preference", "content": "Use Nowledge memory before answering.", "score": 0.88, "relevance_reason": "query"}}})
+	}))
+	defer server.Close()
+	if _, err := svc.SaveMemoryProviderConfig(context.Background(), ident, productdata.MemoryProviderConfig{Enabled: true, Provider: productdata.MemoryProviderNowledge, Nowledge: productdata.NowledgeMemoryConfig{BaseURL: server.URL, APIKey: "nowledge-secret", RequestTimeoutMS: 30000}}); err != nil {
+		t.Fatal(err)
+	}
+	prepared := &productdata.RunContext{Run: run, Thread: thread}
+	enriched := NewGateway(svc, nil, nil).withExternalMemorySnapshot(context.Background(), prepared, []ProviderMessage{{Role: "user", Content: "Recall project preference"}})
+	prompt := runSystemPrompt(enriched)
+	if !strings.Contains(prompt, "<memory>\n- Preference: Use Nowledge memory before answering.\n</memory>") {
+		t.Fatalf("prompt missing nowledge memory: %s", prompt)
+	}
+	if strings.Contains(prompt, "nowledge-secret") {
+		t.Fatalf("prompt leaked nowledge secret: %s", prompt)
+	}
+	events, err := svc.ListRunEvents(context.Background(), ident, run.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, event := range events {
+		if event.Type == productdata.EventMemoryExternalSnapshotLoaded {
+			found = true
+			if event.Metadata["provider"] != string(productdata.MemoryProviderNowledge) || fmt.Sprint(event.Metadata["entry_count"]) != "1" {
+				t.Fatalf("nowledge external snapshot metadata = %+v", event.Metadata)
+			}
+			if _, ok := event.Metadata["query"]; ok {
+				t.Fatalf("nowledge external snapshot leaked unsafe metadata = %+v", event.Metadata)
+			}
+			if _, ok := event.Metadata["content"]; ok {
+				t.Fatalf("nowledge external snapshot leaked unsafe metadata = %+v", event.Metadata)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("nowledge external snapshot event not recorded: %+v", events)
+	}
+}
+
+func TestGatewayRecordsExternalMemorySnapshotFailureForRecentErrors(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, productdata.CreateThreadInput{Title: "External memory failure", Mode: productdata.ThreadModeWork})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, productdata.StartRunInput{Source: productdata.RunSourceModelGateway, ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "sk-secret upstream trace", http.StatusBadGateway)
+	}))
+	defer server.Close()
+	if _, err := svc.SaveMemoryProviderConfig(context.Background(), ident, productdata.MemoryProviderConfig{Enabled: true, Provider: productdata.MemoryProviderNowledge, Nowledge: productdata.NowledgeMemoryConfig{BaseURL: server.URL, APIKey: "nowledge-secret", RequestTimeoutMS: 30000}}); err != nil {
+		t.Fatal(err)
+	}
+	prepared := &productdata.RunContext{Run: run, Thread: thread}
+	enriched := NewGateway(svc, nil, nil).withExternalMemorySnapshot(context.Background(), prepared, []ProviderMessage{{Role: "user", Content: "Recall failure path"}})
+	if enriched != prepared {
+		t.Fatalf("failure should keep original prepared context")
+	}
+	errors, err := svc.ListMemoryProviderErrors(context.Background(), ident, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(errors) != 1 || errors[0].Code != productdata.EventMemoryExternalSnapshotFailed || errors[0].Provider != productdata.MemoryProviderNowledge || errors[0].RunID != run.ID {
+		t.Fatalf("recent provider errors = %+v", errors)
+	}
+	encoded, _ := json.Marshal(errors)
+	if strings.Contains(string(encoded), "nowledge-secret") || strings.Contains(string(encoded), "sk-secret") || strings.Contains(string(encoded), "Recall failure path") {
+		t.Fatalf("recent provider error leaked unsafe data: %s", string(encoded))
+	}
+}
+
+func TestGatewayContinuationRejectsRepeatedWorkspaceToolCallID(t *testing.T) {
+	svc, ident, thread, message, run := setupWorkspaceContinuationRun(t)
+	completeWorkspaceReadToolCall(t, svc, ident, thread.ID, run.ID, "tc_1")
+	provider := &capturingProvider{config: ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: "https://example.test/v1", APIKey: "key", Model: "model", Enabled: true}, events: []ProviderEvent{{Type: ProviderEventToolCall, ToolName: productdata.ToolNameWorkspaceRead, Metadata: map[string]any{"tool_call_id": "tc_1", "arguments_summary": map[string]any{"path": "safe.txt", "limit": 128}}}}}
+
+	NewGateway(svc, nil, []Provider{provider}).ContinueAfterToolResult(context.Background(), run, GatewayContinuationInput{ThreadID: thread.ID, MessageID: message.ID, ProviderID: "custom", Model: "model", ToolCallID: "tc_1"})
+
+	got, err := svc.GetRun(context.Background(), ident, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != productdata.RunStatusFailed || got.ErrorCode == nil || *got.ErrorCode != "duplicate_tool_call_id" {
+		t.Fatalf("run = %+v", got)
+	}
+	events, err := svc.ListRunEvents(context.Background(), ident, run.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var approvalRequired int
+	for _, event := range events {
+		if event.Type == productdata.EventToolCallApprovalRequired {
+			approvalRequired++
+		}
+	}
+	if approvalRequired != 1 {
+		t.Fatalf("approvalRequired = %d, events = %+v", approvalRequired, events)
+	}
+}
+
+func TestGatewayContinuationRejectsSecondPendingWorkspaceToolCall(t *testing.T) {
+	svc, ident, thread, message, run := setupWorkspaceContinuationRun(t)
+	completeWorkspaceReadToolCall(t, svc, ident, thread.ID, run.ID, "tc_1")
+	if _, _, err := svc.RecordToolCallRequest(context.Background(), ident, run.ID, productdata.RecordToolCallRequestInput{ToolCallID: "tc_pending", ToolName: productdata.ToolNameWorkspaceRead, ArgumentsSummary: map[string]any{"path": "safe.txt", "limit": 128}, ApprovalStatus: productdata.ToolCallApprovalRequired, ExecutionStatus: productdata.ToolCallExecutionBlocked}); err != nil {
+		t.Fatal(err)
+	}
+	provider := &capturingProvider{config: ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: "https://example.test/v1", APIKey: "key", Model: "model", Enabled: true}, events: []ProviderEvent{{Type: ProviderEventToolCall, ToolName: productdata.ToolNameWorkspaceRead, Metadata: map[string]any{"tool_call_id": "tc_3", "arguments_summary": map[string]any{"path": "safe.txt", "limit": 128}}}}}
+
+	NewGateway(svc, nil, []Provider{provider}).ContinueAfterToolResult(context.Background(), run, GatewayContinuationInput{ThreadID: thread.ID, MessageID: message.ID, ProviderID: "custom", Model: "model", ToolCallID: "tc_1"})
+
+	got, err := svc.GetRun(context.Background(), ident, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != productdata.RunStatusFailed || got.ErrorCode == nil || *got.ErrorCode != "tool_call_rejected" {
+		t.Fatalf("run = %+v", got)
+	}
+	if _, err := svc.GetToolCall(context.Background(), ident, thread.ID, run.ID, "tc_3"); err == nil {
+		t.Fatalf("second pending tool call was recorded")
+	}
+}
+
+func TestGatewayContinuationRejectsWorkspaceToolOutsideEnabledSnapshot(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, productdata.CreateThreadInput{Title: "Workspace loop", Mode: productdata.ThreadModeWork})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _, err := svc.CreateMessage(context.Background(), ident, thread.ID, productdata.CreateMessageInput{Content: "Inspect workspace"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, productdata.StartRunInput{Source: productdata.RunSourceModelGateway, MessageID: message.ID, ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.AppendRunEvent(context.Background(), ident, run.ID, productdata.AppendRunEventInput{Category: productdata.RunEventCategoryProgress, Type: productdata.EventPipelineStepCompleted, Summary: "Pipeline step completed", Metadata: map[string]any{"step": string(productdata.PipelineStepResolveTools), "enabled_tools": []string{productdata.ToolNameWorkspaceGlob}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.AppendRunEvent(context.Background(), ident, run.ID, productdata.AppendRunEventInput{Category: productdata.RunEventCategoryProgress, Type: productdata.EventToolCallRequested, Summary: "Tool call requested", Metadata: map[string]any{"tool_call_id": "tc_glob_1", "tool_name": productdata.ToolNameWorkspaceGlob, "arguments_summary": map[string]any{"pattern": "*.go", "limit": 10}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.AppendRunEvent(context.Background(), ident, run.ID, productdata.AppendRunEventInput{Category: productdata.RunEventCategoryProgress, Type: productdata.EventToolCallSucceeded, Summary: "Tool call succeeded", Metadata: map[string]any{"tool_call_id": "tc_glob_1", "tool_name": productdata.ToolNameWorkspaceGlob, "result_summary": map[string]any{"matches": []any{"internal/runtime/gateway.go"}}}}); err != nil {
+		t.Fatal(err)
+	}
+	provider := &capturingProvider{config: ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: "https://example.test/v1", APIKey: "key", Model: "model", Enabled: true}, events: []ProviderEvent{{Type: ProviderEventToolCall, ToolName: productdata.ToolNameWorkspaceRead, Metadata: map[string]any{"tool_call_id": "tc_read_2", "arguments_summary": map[string]any{"path": "internal/runtime/gateway.go", "limit": 512}}}}}
+
+	NewGateway(svc, nil, []Provider{provider}).ContinueAfterToolResult(context.Background(), run, GatewayContinuationInput{ThreadID: thread.ID, MessageID: message.ID, ProviderID: "custom", Model: "model", ToolCallID: "tc_glob_1"})
+
+	got, err := svc.GetRun(context.Background(), ident, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != productdata.RunStatusFailed || got.ErrorCode == nil || *got.ErrorCode != "unsupported_tool_loop" {
+		t.Fatalf("run = %+v", got)
+	}
+	if _, err := svc.GetToolCall(context.Background(), ident, thread.ID, run.ID, "tc_read_2"); err == nil {
+		t.Fatalf("disabled workspace tool call was recorded")
+	}
+}
+
 func TestGatewayFailsContinuationProviderErrorWithoutFinalAssistant(t *testing.T) {
 	svc := productdata.NewMemoryService()
 	ident := identity.LocalDevIdentity()
@@ -400,6 +1249,15 @@ type capturingProvider struct {
 	config  ProviderConfig
 	request ProviderRequest
 	events  []ProviderEvent
+}
+
+func providerHasTool(tools []ProviderToolDefinition, name string) bool {
+	for _, tool := range tools {
+		if tool.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *capturingProvider) Config() ProviderConfig { return p.config }
@@ -596,4 +1454,71 @@ func waitForTerminalRun(t *testing.T, svc productdata.Service, runID string) pro
 		t.Fatal(err)
 	}
 	return run
+}
+
+func setupWorkspaceContinuationRun(t *testing.T) (*productdata.MemoryService, identity.LocalIdentity, productdata.Thread, productdata.Message, productdata.Run) {
+	t.Helper()
+	svc := productdata.NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, productdata.CreateThreadInput{Title: "Workspace loop", Mode: productdata.ThreadModeWork})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _, err := svc.CreateMessage(context.Background(), ident, thread.ID, productdata.CreateMessageInput{Content: "Inspect workspace"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, productdata.StartRunInput{Source: productdata.RunSourceModelGateway, MessageID: message.ID, ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	enabled := []string{productdata.ToolNameWorkspaceGlob, productdata.ToolNameWorkspaceGrep, productdata.ToolNameWorkspaceRead}
+	if _, err := svc.AppendRunEvent(context.Background(), ident, run.ID, productdata.AppendRunEventInput{Category: productdata.RunEventCategoryProgress, Type: productdata.EventPipelineStepCompleted, Summary: "Pipeline step completed", Metadata: map[string]any{"step": string(productdata.PipelineStepResolveTools), "enabled_tools": enabled}}); err != nil {
+		t.Fatal(err)
+	}
+	return svc, ident, thread, message, run
+}
+
+func completeWorkspaceReadToolCall(t *testing.T, svc productdata.Service, ident identity.LocalIdentity, threadID string, runID string, toolCallID string) {
+	t.Helper()
+	if _, _, err := svc.RecordToolCallRequest(context.Background(), ident, runID, productdata.RecordToolCallRequestInput{ToolCallID: toolCallID, ToolName: productdata.ToolNameWorkspaceRead, ArgumentsSummary: map[string]any{"path": "safe.txt", "limit": 128}, ApprovalStatus: productdata.ToolCallApprovalRequired, ExecutionStatus: productdata.ToolCallExecutionBlocked}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.ApproveToolCall(context.Background(), ident, threadID, runID, toolCallID); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.StartToolCallExecution(context.Background(), ident, threadID, runID, toolCallID); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.CompleteToolCallSuccess(context.Background(), ident, threadID, runID, toolCallID, map[string]any{"path": "safe.txt", "truncated": false}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writeRuntimeGatewayTestFile(t *testing.T, path string, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func runtimeGatewayEventsJSON(t *testing.T, events []productdata.RunEvent) string {
+	t.Helper()
+	raw, err := json.Marshal(events)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
+}
+
+func runtimeGatewayMessagesJSON(t *testing.T, messages []productdata.Message) string {
+	t.Helper()
+	raw, err := json.Marshal(messages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
 }

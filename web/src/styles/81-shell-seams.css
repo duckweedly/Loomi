@@ -1,0 +1,46 @@
+/* Shell seam hard constraints: keep surfaces unified without losing the soft panel corners. */
+.app-shell::before,
+.app-shell::after {
+  z-index: 0;
+}
+
+.workspace-grid {
+  position: relative;
+  z-index: 1;
+}
+
+.main-region {
+  border: 0 !important;
+  background: var(--main-surface) !important;
+}
+
+.workspace-grid:not(.right-tools-open) .main-region {
+  border-radius: 16px 26px 26px 16px !important;
+}
+
+.workspace-grid.right-tools-open .main-region {
+  border-radius: 16px 0 0 16px !important;
+}
+
+.right-tool-drawer {
+  border: 0 !important;
+  border-radius: 0 26px 26px 0 !important;
+  background: var(--main-surface) !important;
+}
+
+.main-titlebar,
+.chat-shell,
+.message-list,
+.settings-shell,
+.settings-sidebar,
+.settings-content {
+  background: var(--main-surface) !important;
+}
+
+.main-titlebar::before,
+.main-titlebar::after,
+.chat-shell::before,
+.message-list::before,
+.message-list::after {
+  display: none !important;
+}

@@ -51,6 +51,8 @@ describe('localized backend capability copy', () => {
 })
 
 const availableProvider: ProviderCapability = { id: 'custom', family: 'openai_compatible', model: 'gpt-5.5', status: 'available' }
+const supportedLocalProvider: ProviderCapability = { id: 'local_codex', family: 'openai_compatible', model: 'gpt-5', status: 'available', localProvider: true, sessionLocal: true, credentialReference: 'redacted', executionState: 'supported' }
+const unsupportedLocalProvider: ProviderCapability = { ...supportedLocalProvider, status: 'unavailable', executionState: 'unsupported' }
 const unavailableProvider: ProviderCapability = { ...availableProvider, status: 'unavailable' }
 const misconfiguredProvider: ProviderCapability = { ...availableProvider, status: 'misconfigured' }
 
@@ -61,6 +63,8 @@ describe('provider availability warning', () => {
     expect(shouldShowProviderUnavailableWarning('real_api', [unavailableProvider, availableProvider])).toBe(false)
     expect(shouldShowProviderUnavailableWarning('model_gateway', [])).toBe(true)
     expect(shouldShowProviderUnavailableWarning('model_gateway', [availableProvider])).toBe(false)
+    expect(shouldShowProviderUnavailableWarning('real_api', [supportedLocalProvider])).toBe(false)
+    expect(shouldShowProviderUnavailableWarning('real_api', [unsupportedLocalProvider])).toBe(true)
     expect(shouldShowProviderUnavailableWarning('mock', [])).toBe(false)
   })
 })

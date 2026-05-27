@@ -13,9 +13,9 @@ describe('SettingsView navigation contract', () => {
     expect(source).toContain('t.back')
   })
 
-  test('groups categories into primary, Agent Core, and management sections', () => {
-    expect(getSettingsCategoriesByGroup('primary').map((category) => category.label)).toEqual(['General', 'Appearance'])
-    expect(getSettingsCategoriesByGroup('agent_core').map((category) => category.label)).toEqual(['Providers', 'Connectors', 'Plugins', 'Skill', 'MCP', 'Notebook', 'Memory', 'Activity Recorder', 'Context'])
-    expect(getSettingsCategoriesByGroup('management').map((category) => category.label)).toEqual(['Safety', 'Tools', 'Routes', 'About', 'Advanced'])
+  test('groups categories into productized settings sections', () => {
+    expect(getSettingsCategoriesByGroup('primary').map((category) => category.label)).toEqual(['General'])
+    expect(getSettingsCategoriesByGroup('agent_core').map((category) => category.label)).toEqual(['Model Connections', 'Web Search', 'Skill', 'MCP', 'Memory & Context'])
+    expect(getSettingsCategoriesByGroup('management').map((category) => category.label)).toEqual(['Tool Permissions', 'About'])
   })
 })

@@ -6,12 +6,15 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/sheridiany/loomi/internal/config"
 	"github.com/sheridiany/loomi/internal/identity"
 	"github.com/sheridiany/loomi/internal/productdata"
+	productruntime "github.com/sheridiany/loomi/internal/runtime"
 )
 
 func TestGetMeReturnsLocalUser(t *testing.T) {
@@ -88,6 +91,90 @@ func TestPersonaHandlersListBuiltInPersonasAndThreadSelection(t *testing.T) {
 	}
 }
 
+func TestSkillHandlerListsInstalledSkills(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	writeHTTPAPISkill(t, home+"/.codex/skills/review/SKILL.md", "---\nname: review\ndescription: Review code.\n---\nSECRET_CANARY")
+	writeHTTPAPISkill(t, workspace+"/.agents/skills/project-skill/SKILL.md", "# project-skill\n\nProject skill.")
+	srv := NewServerWithProduct(config.Config{AppEnv: "local"}, fakeChecker{}, productdata.NewMemoryService())
+	srv.skillDiscoveryInput = productruntime.SkillDiscoveryInput{HomeDir: home, WorkspaceDir: workspace}
+
+	list := requestJSON(t, srv, http.MethodGet, "/v1/skills", "")
+	if list.Code != http.StatusOK {
+		t.Fatalf("list status=%d body=%s", list.Code, list.Body.String())
+	}
+	body := list.Body.String()
+	for _, expected := range []string{`"name":"review"`, `"source":"codex"`, `"name":"project-skill"`, `"source":"project"`} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("body missing %q: %s", expected, body)
+		}
+	}
+	if strings.Contains(body, "SECRET_CANARY") {
+		t.Fatalf("body leaked skill body: %s", body)
+	}
+}
+
+func TestWorkspaceRootEndpointPersistsSelectedFolder(t *testing.T) {
+	t.Setenv("LOOMI_WORKSPACE_ROOT", "")
+	root := t.TempDir()
+	svc := productdata.NewMemoryService()
+	srv := NewServerWithProduct(config.Config{AppEnv: "local"}, fakeChecker{}, svc)
+
+	save := requestJSON(t, srv, http.MethodPost, "/v1/workspace/root", `{"path":"`+root+`"}`)
+	if save.Code != http.StatusOK || !strings.Contains(save.Body.String(), `"configured":true`) || !strings.Contains(save.Body.String(), filepath.Base(root)) {
+		t.Fatalf("save status=%d body=%s", save.Code, save.Body.String())
+	}
+	if got := os.Getenv("LOOMI_WORKSPACE_ROOT"); got == "" {
+		t.Fatal("workspace root was not applied to runtime process")
+	}
+
+	if err := os.Unsetenv("LOOMI_WORKSPACE_ROOT"); err != nil {
+		t.Fatal(err)
+	}
+	nextServer := NewServerWithProduct(config.Config{AppEnv: "local"}, fakeChecker{}, svc)
+	if got := os.Getenv("LOOMI_WORKSPACE_ROOT"); got == "" {
+		t.Fatal("persisted workspace root was not restored when the server started")
+	}
+	load := requestJSON(t, nextServer, http.MethodGet, "/v1/workspace/root", "")
+	if load.Code != http.StatusOK || !strings.Contains(load.Body.String(), `"configured":true`) || !strings.Contains(load.Body.String(), filepath.Base(root)) {
+		t.Fatalf("load status=%d body=%s", load.Code, load.Body.String())
+	}
+	if got := os.Getenv("LOOMI_WORKSPACE_ROOT"); got == "" {
+		t.Fatal("persisted workspace root was not restored into runtime process")
+	}
+}
+
+func TestThreadPersonaHandlersRejectUnknownPersona(t *testing.T) {
+	srv := NewServerWithProduct(config.Config{AppEnv: "local"}, fakeChecker{}, productdata.NewMemoryService())
+	create := requestJSON(t, srv, http.MethodPost, "/v1/threads", `{"title":"Thread","mode":"chat","persona_id":"persona_unknown"}`)
+	if create.Code != http.StatusBadRequest {
+		t.Fatalf("create status=%d body=%s", create.Code, create.Body.String())
+	}
+	if !strings.Contains(create.Body.String(), "invalid_request") || strings.Contains(strings.ToLower(create.Body.String()), "foreign key") || strings.Contains(strings.ToLower(create.Body.String()), "sql") {
+		t.Fatalf("create body leaked details: %s", create.Body.String())
+	}
+
+	thread := requestJSON(t, srv, http.MethodPost, "/v1/threads", `{"title":"Thread","mode":"chat"}`)
+	threadID := decodeThreadID(t, thread.Body.Bytes())
+	patch := requestJSON(t, srv, http.MethodPatch, "/v1/threads/"+threadID, `{"persona_id":"persona_unknown"}`)
+	if patch.Code != http.StatusBadRequest {
+		t.Fatalf("patch status=%d body=%s", patch.Code, patch.Body.String())
+	}
+	if !strings.Contains(patch.Body.String(), "invalid_request") || strings.Contains(strings.ToLower(patch.Body.String()), "foreign key") || strings.Contains(strings.ToLower(patch.Body.String()), "sql") {
+		t.Fatalf("patch body leaked details: %s", patch.Body.String())
+	}
+}
+
+func writeHTTPAPISkill(t *testing.T, path string, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestMessageHandlers(t *testing.T) {
 	srv := NewServerWithProduct(config.Config{AppEnv: "local"}, fakeChecker{}, productdata.NewMemoryService())
 	create := requestJSON(t, srv, http.MethodPost, "/v1/threads", `{"title":"Thread","mode":"chat"}`)
@@ -131,7 +218,7 @@ func TestAPIPreflightAllowsBrowserWrites(t *testing.T) {
 			if res.Header().Get("Access-Control-Allow-Origin") != origin {
 				t.Fatalf("allow origin = %q", res.Header().Get("Access-Control-Allow-Origin"))
 			}
-			if res.Header().Get("Access-Control-Allow-Methods") != "GET, POST, PATCH, OPTIONS" {
+			if res.Header().Get("Access-Control-Allow-Methods") != "GET, POST, PUT, PATCH, DELETE, OPTIONS" {
 				t.Fatalf("allow methods = %q", res.Header().Get("Access-Control-Allow-Methods"))
 			}
 			if res.Header().Get("Access-Control-Allow-Headers") != "Content-Type" {

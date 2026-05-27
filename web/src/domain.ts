@@ -27,6 +27,225 @@ export type ProviderCapability = {
   model: string
   status: BackendCapabilityState
   message?: string | null
+  localProvider?: boolean
+  sessionLocal?: boolean
+  credentialReference?: 'redacted' | string
+  executionState?: 'supported' | 'unsupported' | string
+}
+
+export type LocalProviderDetection = {
+  providerId: 'local_claude_code' | 'local_codex' | string
+  displayName: string
+  providerKind: 'claude_code' | 'codex' | string
+  authMode: 'api_key' | 'oauth' | 'unknown'
+  status: 'available' | 'unavailable' | 'needs_login' | 'unsupported' | 'disabled'
+  modelCandidates: string[]
+  source: 'local_config' | 'env' | 'keychain_unchecked' | 'unknown'
+  redactionApplied: boolean
+  message?: string | null
+}
+
+export type ToolCatalogItem = {
+  name: string
+  displayName: string
+  description: string
+  source: 'builtin' | 'mcp'
+  group: 'runtime' | 'mcp' | 'workspace' | 'artifact' | 'sandbox' | 'lsp' | 'web' | 'browser' | 'agent' | 'memory'
+  inputSchemaHash?: string
+  riskLevel: 'low' | 'medium' | 'high'
+  approvalPolicy: 'always_required' | 'read_only' | 'disabled'
+  enabled: boolean
+  executionState: 'executable' | 'disabled' | 'not_discovered' | 'not_allowed' | 'non_executable'
+  safeMetadata?: Record<string, unknown>
+}
+
+export type WebSearchConfig = {
+  hasTavilyKey: boolean
+  hasBraveKey: boolean
+  enabled: boolean
+}
+
+export type MemoryProviderState = 'disabled' | 'available' | 'unconfigured' | 'healthy' | 'unhealthy' | 'degraded'
+
+export type MemoryProviderStatus = {
+  enabled: boolean
+  provider: 'local' | 'semantic' | 'openviking' | 'nowledge' | string
+  label: string
+  state: MemoryProviderState
+  configured: boolean
+  commitAfterRun: boolean
+  checkedAt?: string | null
+  openviking?: OpenVikingMemoryProviderConfig
+  nowledge?: NowledgeMemoryProviderConfig
+  diagnostic: {
+    code: string
+    message: string
+  }
+}
+
+export type OpenVikingMemoryProviderConfig = {
+  baseUrl?: string
+  rootApiKey?: string
+  rootApiKeySet?: boolean
+  embeddingSelector?: string
+  embeddingProvider?: string
+  embeddingModel?: string
+  embeddingApiKey?: string
+  embeddingApiKeySet?: boolean
+  embeddingApiBase?: string
+  embeddingDimension?: number
+  vlmSelector?: string
+  vlmProvider?: string
+  vlmModel?: string
+  vlmApiKey?: string
+  vlmApiKeySet?: boolean
+  vlmApiBase?: string
+  rerankSelector?: string
+  rerankProvider?: string
+  rerankModel?: string
+  rerankApiKey?: string
+  rerankApiKeySet?: boolean
+  rerankApiBase?: string
+}
+
+export type NowledgeMemoryProviderConfig = {
+  baseUrl?: string
+  apiKey?: string
+  apiKeySet?: boolean
+  requestTimeoutMs?: number
+}
+
+export type MemoryProviderUpdate = {
+  enabled: boolean
+  provider: 'local' | 'semantic' | 'openviking' | 'nowledge' | string
+  commitAfterRun: boolean
+  semanticEndpoint?: string
+  openviking?: OpenVikingMemoryProviderConfig
+  nowledge?: NowledgeMemoryProviderConfig
+}
+
+export type MemorySnapshotHit = {
+  uri: string
+  entryId: string
+  title: string
+  abstract: string
+  isLeaf: boolean
+  updatedAt: string
+}
+
+export type MemoryOverviewSnapshot = {
+  memoryBlock: string
+  hits: MemorySnapshotHit[]
+  updatedAt: string
+  rebuilt: boolean
+}
+
+export type MemoryImpressionSnapshot = {
+  impression: string
+  updatedAt: string
+  rebuilt: boolean
+}
+
+export type MemoryErrorEvent = {
+  code: string
+  message: string
+  provider: string
+  state: string
+  checkedAt?: string
+  runId?: string
+  eventType?: string
+}
+
+export type WorkspaceRootConfig = {
+  configured: boolean
+  displayName: string
+}
+
+export type MCPServerStatus = {
+  serverSafeId: string
+  serverSlug: string
+  displayName: string
+  transport: 'stdio' | string
+  enabled: boolean
+  configSource: 'local' | string
+  discoveryStatus: 'not_discovered' | 'disabled' | 'succeeded' | 'failed' | 'rejected' | string
+  candidateCount: number
+  candidateNames: string[]
+  executionMode: 'disabled' | 'approval_gated' | string
+  redactedErrorCode?: string
+  lastDiscoveredAt?: string
+}
+
+export type MCPServerConfigInput = {
+  slug: string
+  displayName: string
+  enabled: boolean
+  transport: 'stdio'
+  command: string
+  args: string[]
+  env: Record<string, string>
+  timeoutMs: number
+}
+
+export type MemoryEntry = {
+  id: string
+  title: string
+  summary: string
+  scopeType: 'user' | 'thread'
+  scopeId?: string
+  status: 'approved' | 'tombstoned' | 'disabled'
+  safetyState?: 'safe' | 'redacted' | 'blocked'
+  sourceThreadId?: string
+  sourceRunId?: string
+  sourceEventId?: string
+  sourceType?: 'manual' | 'thread' | 'run'
+  createdAt: string
+  updatedAt: string
+  deletedAt?: string
+  redactionApplied: boolean
+}
+
+export type MemoryFilters = {
+  scopeType?: 'user' | 'thread' | ''
+  scopeId?: string
+  sourceThreadId?: string
+  sourceRunId?: string
+  sourceType?: 'any' | 'manual' | 'thread' | 'run'
+  includeTombstoned?: boolean
+  limit?: number
+}
+
+export type MemoryAuditItem = {
+  id: string
+  eventType: 'memory_snapshot_loaded' | 'memory_write_proposed' | 'memory_write_approved' | 'memory_write_denied' | 'memory_deleted'
+  summary: string
+  threadId?: string
+  runId?: string
+  memoryEntryId?: string
+  memoryProposalId?: string
+  status?: string
+  scopeType?: string
+  sourceType?: string
+  redactionApplied: boolean
+  occurredAt: string
+}
+
+export type MemoryWriteProposal = {
+  id: string
+  title: string
+  summary: string
+  scopeType: 'user' | 'thread'
+  scopeId: string
+  status: 'pending' | 'approved' | 'denied'
+  safetyState?: 'safe' | 'redacted' | 'blocked'
+  sourceThreadId?: string
+  sourceRunId?: string
+  sourceEventId?: string
+  createdEntryId?: string
+  createdAt: string
+  decidedAt?: string
+  decisionReason?: string
+  redactionApplied: boolean
 }
 
 export type Persona = {
@@ -36,6 +255,17 @@ export type Persona = {
   description: string
   activeVersion: string
   isDefault: boolean
+}
+
+export type InstalledSkill = {
+  id: string
+  name: string
+  description: string
+  source: 'project' | 'codex' | 'claude_code' | 'agents' | 'plugin_cache' | string
+  sourceLabel: string
+  package?: string
+  path: string
+  installed: boolean
 }
 
 export type ChatCanvasState =
@@ -61,6 +291,62 @@ export type Thread = {
   updatedAt: string
   lifecycleStatus?: 'active' | 'archived'
   runStatus: RunStatus
+}
+
+export type WorkStepStatus = 'pending' | 'running' | 'completed' | 'blocked' | 'failed'
+
+export type WorkStep = {
+  id: string
+  title: string
+  status: WorkStepStatus
+  summary?: string
+}
+
+export type WorkTodoItem = {
+  id: string
+  title: string
+  status: WorkStepStatus
+  summary?: string
+  redactionApplied?: boolean
+}
+
+export type WorkTodoSnapshot = {
+  items: WorkTodoItem[]
+  updatedBy?: 'provider' | 'runtime' | 'user'
+  updatedAtEventId: string
+  redactionApplied: boolean
+}
+
+export type WorkArtifactReference = {
+  id: string
+  title: string
+  type: string
+  sourceThreadId?: string
+  sourceRunId?: string
+  summary: string
+  createdAt?: string
+  updatedAt?: string
+  redactionApplied?: boolean
+}
+
+export type WorkProgressEvent = {
+  id: string
+  title?: string
+  type: string
+  detail: string
+  time: string
+  status: RunStatus
+}
+
+export type WorkPlanProjection = {
+  goal: string
+  steps: WorkStep[]
+  todoSnapshot?: WorkTodoSnapshot
+  status: RunStatus | 'empty'
+  statusDetail: string
+  artifacts: WorkArtifactReference[]
+  recentEvents: WorkProgressEvent[]
+  emptyReason?: string
 }
 
 export type ToolCallApprovalStatus = 'not_required' | 'required' | 'approved' | 'denied' | 'cancelled'
@@ -183,6 +469,7 @@ export type RuntimeScriptStep = {
   status: RuntimeStatus
   group?: RuntimeEventGroup
   severity?: RuntimeEventSeverity
+  metadata?: Record<string, unknown>
   usage?: RuntimeUsage
   assistantDelta?: string
 }

@@ -7,21 +7,13 @@ export type SettingRowStatus = 'working' | 'mock' | 'disabled' | 'read_only'
 
 export type SettingsCategoryId =
   | 'general'
-  | 'appearance'
   | 'providers'
-  | 'connectors'
-  | 'plugins'
+  | 'web-search'
   | 'skill'
   | 'mcp'
-  | 'notebook'
   | 'memory'
-  | 'activity-recorder'
-  | 'context'
-  | 'safety'
   | 'tools'
-  | 'routes'
   | 'about'
-  | 'advanced'
 
 export type SettingsCategory = {
   id: SettingsCategoryId
@@ -50,46 +42,30 @@ export type SettingSection = {
 
 export const settingsCategoryGroups: Record<SettingsCategoryGroup, Record<Locale, string>> = {
   primary: { zh: '工作区', en: 'Workspace' },
-  agent_core: { zh: 'Agent Core', en: 'Agent Core' },
-  management: { zh: '管理', en: 'Management' },
+  agent_core: { zh: '模型与上下文', en: 'Models & Context' },
+  management: { zh: '能力与安全', en: 'Capabilities & Safety' },
 }
 
 const categoryCopy: Record<SettingsCategoryId, Record<Locale, Pick<SettingsCategory, 'label' | 'description'>>> = {
-  general: { zh: { label: '通用', description: '当前会话的工作区默认值和运行状态可见性。' }, en: { label: 'General', description: 'Current-session workspace defaults and runtime visibility.' } },
-  appearance: { zh: { label: '外观', description: '后续里程碑的主题和显示预览。' }, en: { label: 'Appearance', description: 'Theme and display previews for a later milestone.' } },
-  providers: { zh: { label: 'Providers', description: '保存本地 provider，并显示已脱敏模型能力。' }, en: { label: 'Providers', description: 'Save a local provider and view redacted model capability.' } },
-  connectors: { zh: { label: '连接器', description: '未来外部连接设置的预览区域。' }, en: { label: 'Connectors', description: 'Preview area for future external connection settings.' } },
-  plugins: { zh: { label: '插件', description: '未来插件控制的预览区域。' }, en: { label: 'Plugins', description: 'Preview area for future plugin controls.' } },
-  skill: { zh: { label: '技能', description: '未来技能控制的预览区域。' }, en: { label: 'Skill', description: 'Preview area for future skill controls.' } },
-  mcp: { zh: { label: 'MCP', description: '未来 MCP server 控制的预览区域。' }, en: { label: 'MCP', description: 'Preview area for future MCP server controls.' } },
-  notebook: { zh: { label: 'Notebook', description: '未来 notebook 设置的预览区域。' }, en: { label: 'Notebook', description: 'Preview area for future notebook settings.' } },
-  memory: { zh: { label: 'Memory', description: '未来记忆和检索设置的预览区域。' }, en: { label: 'Memory', description: 'Preview area for future memory and retrieval settings.' } },
-  'activity-recorder': { zh: { label: '活动记录', description: '未来桌面活动记录 opt-in 的预览区域。' }, en: { label: 'Activity Recorder', description: 'Preview area for future opt-in desktop activity capture.' } },
-  context: { zh: { label: '上下文', description: '未来上下文组装控制的预览区域。' }, en: { label: 'Context', description: 'Preview area for future context assembly controls.' } },
-  safety: { zh: { label: '安全', description: '未来权限和审计控制的预览区域。' }, en: { label: 'Safety', description: 'Preview area for future permission and audit controls.' } },
-  tools: { zh: { label: '工具', description: '未来工具权限设置的预览区域。' }, en: { label: 'Tools', description: 'Preview area for future tool permission settings.' } },
-  routes: { zh: { label: '路由', description: '未来模型和 worker 路由控制的预览区域。' }, en: { label: 'Routes', description: 'Preview area for future model and worker routing controls.' } },
+  general: { zh: { label: '通用', description: '当前会话的基础偏好。' }, en: { label: 'General', description: 'Basic preferences for the current session.' } },
+  providers: { zh: { label: '模型连接', description: '管理模型供应商、可用模型与本地执行通道。' }, en: { label: 'Model Connections', description: 'Manage model providers, available models, and local execution channels.' } },
+  'web-search': { zh: { label: '网页搜索', description: '管理 Tavily 和 Brave Search 的网页搜索能力。' }, en: { label: 'Web Search', description: 'Manage Tavily and Brave Search web search capability.' } },
+  skill: { zh: { label: '技能', description: '查看本机已安装的 Codex、Claude Code 和项目技能。' }, en: { label: 'Skill', description: 'View installed Codex, Claude Code, and project skills.' } },
+  mcp: { zh: { label: 'MCP', description: '管理本地 stdio MCP server 配置、保存状态和连接测试。' }, en: { label: 'MCP', description: 'Manage local stdio MCP server config, saved state, and connection tests.' } },
+  memory: { zh: { label: '记忆与上下文', description: '审批记忆提案、查看运行上下文并管理安全记忆。' }, en: { label: 'Memory & Context', description: 'Review memory proposals, inspect runtime context, and manage safe memory.' } },
+  tools: { zh: { label: '工具权限', description: '只读查看 builtin 和 MCP 工具目录、安全策略和执行状态。' }, en: { label: 'Tool Permissions', description: 'Read-only catalog for builtin and MCP tools, safety policy, and execution state.' } },
   about: { zh: { label: '关于', description: '已知本地应用状态和占位构建信息。' }, en: { label: 'About', description: 'Known local app state plus placeholder build metadata.' } },
-  advanced: { zh: { label: '高级', description: '未来诊断和底层选项的预览区域。' }, en: { label: 'Advanced', description: 'Preview area for future diagnostics and low-level options.' } },
 }
 
 const categoryStructure: Omit<SettingsCategory, 'label' | 'description'>[] = [
   { id: 'general', group: 'primary', status: 'working' },
-  { id: 'appearance', group: 'primary', status: 'mock' },
   { id: 'providers', group: 'agent_core', status: 'mixed' },
-  { id: 'connectors', group: 'agent_core', status: 'mock' },
-  { id: 'plugins', group: 'agent_core', status: 'mock' },
-  { id: 'skill', group: 'agent_core', status: 'mock' },
-  { id: 'mcp', group: 'agent_core', status: 'mock' },
-  { id: 'notebook', group: 'agent_core', status: 'mock' },
-  { id: 'memory', group: 'agent_core', status: 'mock' },
-  { id: 'activity-recorder', group: 'agent_core', status: 'mock' },
-  { id: 'context', group: 'agent_core', status: 'mock' },
-  { id: 'safety', group: 'management', status: 'mock' },
-  { id: 'tools', group: 'management', status: 'mock' },
-  { id: 'routes', group: 'management', status: 'mock' },
+  { id: 'web-search', group: 'agent_core', status: 'mixed' },
+  { id: 'skill', group: 'agent_core', status: 'read_only' },
+  { id: 'mcp', group: 'agent_core', status: 'working' },
+  { id: 'memory', group: 'agent_core', status: 'working' },
+  { id: 'tools', group: 'management', status: 'read_only' },
   { id: 'about', group: 'management', status: 'mixed' },
-  { id: 'advanced', group: 'management', status: 'mock' },
 ]
 
 export const settingsCategories: SettingsCategory[] = categoryStructure.map((category) => ({ ...category, ...categoryCopy[category.id].en }))
@@ -106,30 +82,10 @@ export const generalSettingSections: SettingSection[] = [
     categoryId: 'general',
     rows: [
       { id: 'default-workspace-mode', label: 'Default workspace mode', helperText: 'Applies to future local conversations created from the sidebar.', controlType: 'segmented', status: 'working' },
-      { id: 'mock-runtime-scenario', label: 'Mock runtime scenario', helperText: 'Applies only to future mock sends and does not mutate active runs.', controlType: 'segmented', status: 'working' },
-    ],
-  },
-  {
-    id: 'runtime-status',
-    title: 'Runtime status',
-    description: 'Read-only visibility for the currently selected workspace runtime.',
-    categoryId: 'general',
-    rows: [
-      { id: 'data-source-mode', label: 'Data source mode', helperText: 'Shows whether the frontend is using mock data or the local API.', controlType: 'status', status: 'read_only' },
-      { id: 'backend-capability', label: 'Backend capability', helperText: 'Displays runtime availability without exposing secrets.', controlType: 'status', status: 'read_only' },
-      { id: 'provider-capability', label: 'Provider capability', helperText: 'Shows redacted provider id, family, model, and status when available.', controlType: 'status', status: 'read_only' },
+      { id: 'theme', label: 'Theme', helperText: 'Switches the current workspace between light and dark appearance.', controlType: 'segmented', status: 'working' },
     ],
   },
 ]
-
-export const placeholderSettingRows: SettingRow[] = [
-  { id: 'preview-toggle', label: 'Preview control', helperText: 'Mock only. This control is not connected to providers, tools, files, or backend writes.', controlType: 'placeholder', status: 'disabled', value: null },
-  { id: 'not-connected', label: 'Connection state', helperText: 'Not connected in M5.5. Future settings will require a separate implementation plan.', controlType: 'status', status: 'mock', value: 'Preview only' },
-]
-
-export const placeholderCategoryIds = settingsCategories
-  .filter((category) => category.status === 'mock')
-  .map((category) => category.id)
 
 export function getSettingsCategory(categoryId: SettingsCategoryId, locale: Locale = 'en') {
   return getLocalizedSettingsCategories(locale).find((category) => category.id === categoryId) ?? getLocalizedSettingsCategories(locale)[0]

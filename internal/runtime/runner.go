@@ -102,6 +102,7 @@ func (r *LocalRunner) run(ctx context.Context, run productdata.Run, job productd
 			r.Broadcaster.Publish(event)
 		}
 	}
+	_ = proposePostRunMemory(ctx, r.Service, identity.LocalDevIdentity(), run.ID)
 	return nil
 }
 

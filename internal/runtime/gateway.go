@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/sheridiany/loomi/internal/identity"
 	"github.com/sheridiany/loomi/internal/productdata"
@@ -16,6 +17,7 @@ import (
 type Gateway struct {
 	Service     productdata.Service
 	Broadcaster *Broadcaster
+	mu          sync.RWMutex
 	Providers   []Provider
 }
 
@@ -45,8 +47,28 @@ func (g *Gateway) SaveProviderConfig(provider ProviderConfig) ProviderConfig {
 	provider.ID = "custom"
 	provider.Family = ProviderFamilyOpenAICompatible
 	provider.Enabled = true
+	g.mu.Lock()
+	defer g.mu.Unlock()
 	g.Providers = replaceProvider(g.Providers, NewHTTPProvider(provider, http.DefaultClient))
 	return provider
+}
+
+func (g *Gateway) SaveProvider(provider Provider) {
+	if g == nil || provider == nil {
+		return
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.Providers = replaceProvider(g.Providers, provider)
+}
+
+func (g *Gateway) RemoveProvider(providerID string) {
+	if g == nil || strings.TrimSpace(providerID) == "" {
+		return
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.Providers = removeProvider(g.Providers, providerID)
 }
 
 func (g *Gateway) RunAsync(_ context.Context, run productdata.Run, input GatewayRunInput) {
@@ -57,6 +79,10 @@ func (g *Gateway) RunAsync(_ context.Context, run productdata.Run, input Gateway
 }
 
 func (g *Gateway) run(ctx context.Context, run productdata.Run, input GatewayRunInput) {
+	g.runWithContext(ctx, run, input, nil)
+}
+
+func (g *Gateway) runWithContext(ctx context.Context, run productdata.Run, input GatewayRunInput, prepared *productdata.RunContext) {
 	provider, err := g.selectProvider(input.ProviderID)
 	if err != nil {
 		g.fail(ctx, run.ID, "provider_misconfigured", "Provider configuration is incomplete.")
@@ -72,7 +98,8 @@ func (g *Gateway) run(ctx context.Context, run productdata.Run, input GatewayRun
 		g.fail(ctx, run.ID, "invalid_request", "Model request context could not be loaded.")
 		return
 	}
-	g.streamProviderResponse(ctx, run, provider, ProviderRequest{ThreadID: input.ThreadID, MessageID: input.MessageID, Messages: messages, Model: selectedModel(input.Model, provider.Config().Model)}, "initial", true)
+	prepared = g.withExternalMemorySnapshot(ctx, prepared, messages)
+	g.streamProviderResponse(ctx, run, provider, ProviderRequest{ThreadID: input.ThreadID, MessageID: input.MessageID, SystemPrompt: runSystemPrompt(prepared), Messages: messages, Model: selectedModel(input.Model, provider.Config().Model), Tools: g.providerToolsForRun(ctx, run.ID)}, "initial", true)
 }
 
 func (g *Gateway) ContinueAfterToolResult(ctx context.Context, run productdata.Run, input GatewayContinuationInput) {
@@ -91,7 +118,7 @@ func (g *Gateway) ContinueAfterToolResult(ctx context.Context, run productdata.R
 		g.fail(ctx, run.ID, "tool_result_context_unavailable", "Tool result context could not be loaded.")
 		return
 	}
-	g.streamProviderResponse(ctx, run, provider, ProviderRequest{ThreadID: input.ThreadID, MessageID: input.MessageID, Messages: messages, Model: selectedModel(input.Model, provider.Config().Model)}, "continuation", false)
+	g.streamProviderResponse(ctx, run, provider, ProviderRequest{ThreadID: input.ThreadID, MessageID: input.MessageID, Messages: messages, Model: selectedModel(input.Model, provider.Config().Model), Tools: g.providerToolsForContinuation(ctx, run.ID)}, "continuation", false)
 }
 
 func (g *Gateway) streamProviderResponse(ctx context.Context, run productdata.Run, provider Provider, request ProviderRequest, modelPhase string, allowToolCalls bool) {
@@ -134,15 +161,29 @@ func (g *Gateway) streamProviderResponse(ctx context.Context, run productdata.Ru
 			if !g.append(ctx, run.ID, productdata.AppendRunEventInput{Category: productdata.RunEventCategoryMessage, Type: "model_output_completed", Summary: "Model output completed", Content: &content, Metadata: mergePhaseMetadata(provider.Config(), event.Metadata, modelPhase)}) {
 				return
 			}
-			g.append(ctx, run.ID, productdata.AppendRunEventInput{Category: productdata.RunEventCategoryFinal, Type: "run_completed", Summary: "Run completed", Metadata: providerMetadata(provider.Config())})
+			if g.append(ctx, run.ID, productdata.AppendRunEventInput{Category: productdata.RunEventCategoryFinal, Type: "run_completed", Summary: "Run completed", Metadata: providerMetadata(provider.Config())}) {
+				_ = proposePostRunMemory(ctx, g.Service, identity.LocalDevIdentity(), run.ID)
+			}
 			return
 		case ProviderEventToolCall:
 			if !allowToolCalls {
-				g.fail(ctx, run.ID, "unsupported_tool_loop", "Additional tool calls are not supported in this run.")
-				return
+				if g.continuationToolCallIDExists(ctx, run.ID, event) {
+					g.fail(ctx, run.ID, "duplicate_tool_call_id", "Tool call id was already used in this run.")
+					return
+				}
+				if g.continuationToolLimitReached(ctx, run, event) {
+					g.failWithMetadata(ctx, run.ID, "tool_loop_limit_reached", "Tool loop limit reached.", map[string]any{"loop_count": productdata.DefaultMaxBoundedToolCallsPerRun, "max_tool_calls": productdata.DefaultMaxBoundedToolCallsPerRun})
+					return
+				}
+				if !g.canRequestContinuationTool(ctx, run, event) {
+					g.fail(ctx, run.ID, "unsupported_tool_loop", "Additional tool calls are not supported in this run.")
+					return
+				}
 			}
-			if !g.recordToolCallRequest(ctx, run, event) {
-				g.fail(ctx, run.ID, "tool_call_rejected", "Tool request could not be accepted.")
+			_, err := g.recordToolCallRequest(ctx, run, event)
+			if err != nil {
+				g.failWithMetadata(ctx, run.ID, "tool_call_rejected", "Tool request could not be accepted.", map[string]any{"tool_name": event.ToolName, "arguments_summary": toolArgumentsSummary(event.Metadata), "error_code": string(productdata.ErrorCode(err)), "error_message": productdata.RedactEventText(err.Error())})
+				return
 			}
 			return
 		case ProviderEventRefusal:
@@ -152,16 +193,16 @@ func (g *Gateway) streamProviderResponse(ctx context.Context, run productdata.Ru
 			g.fail(ctx, run.ID, "provider_timeout", "Provider request timed out.")
 			return
 		case ProviderEventRateLimited:
-			g.fail(ctx, run.ID, "provider_rate_limited", "Provider rate limit reached.")
+			g.failWithMetadata(ctx, run.ID, "provider_rate_limited", "Provider rate limit reached.", event.Metadata)
 			return
 		case ProviderEventEmptyResponse:
 			g.fail(ctx, run.ID, "empty_response", "Model returned an empty response.")
 			return
 		case ProviderEventMisconfigured:
-			g.fail(ctx, run.ID, "provider_misconfigured", fallbackMessage(event.Message, "Provider configuration is incomplete."))
+			g.failWithMetadata(ctx, run.ID, "provider_misconfigured", fallbackMessage(event.Message, "Provider configuration is incomplete."), event.Metadata)
 			return
 		case ProviderEventError:
-			g.fail(ctx, run.ID, fallbackMessage(event.ErrorCode, "provider_error"), fallbackMessage(event.Message, "Provider request failed."))
+			g.failWithMetadata(ctx, run.ID, fallbackMessage(event.ErrorCode, "provider_error"), fallbackMessage(event.Message, "Provider request failed."), event.Metadata)
 			return
 		}
 	}
@@ -169,6 +210,8 @@ func (g *Gateway) streamProviderResponse(ctx context.Context, run productdata.Ru
 }
 
 func (g *Gateway) selectProvider(providerID string) (Provider, error) {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
 	for _, provider := range g.Providers {
 		if provider.Config().ID == providerID {
 			return provider, nil
@@ -187,6 +230,16 @@ func replaceProvider(providers []Provider, provider Provider) []Provider {
 		}
 	}
 	return append(providers, provider)
+}
+
+func removeProvider(providers []Provider, providerID string) []Provider {
+	next := make([]Provider, 0, len(providers))
+	for _, provider := range providers {
+		if provider.Config().ID != providerID {
+			next = append(next, provider)
+		}
+	}
+	return next
 }
 
 func (g *Gateway) loadRequestMessages(ctx context.Context, threadID string, triggerMessageID string) ([]ProviderMessage, error) {
@@ -246,30 +299,377 @@ func (g *Gateway) append(ctx context.Context, runID string, input productdata.Ap
 	return true
 }
 
-func (g *Gateway) recordToolCallRequest(ctx context.Context, run productdata.Run, event ProviderEvent) bool {
+func (g *Gateway) recordToolCallRequest(ctx context.Context, run productdata.Run, event ProviderEvent) (bool, error) {
 	toolCallID := metadataString(event.Metadata, "tool_call_id")
 	if toolCallID == "" {
 		toolCallID = "tc_1"
 	}
 	arguments := toolArgumentsSummary(event.Metadata)
-	_, events, err := g.Service.RecordToolCallRequest(ctx, identity.LocalDevIdentity(), run.ID, productdata.RecordToolCallRequestInput{ToolCallID: toolCallID, ToolName: event.ToolName, ArgumentsSummary: arguments, ArgumentsHash: argumentsHash(arguments), ApprovalStatus: productdata.ToolCallApprovalRequired, ExecutionStatus: productdata.ToolCallExecutionBlocked})
+	candidateSchemaHash := ""
+	if IsMCPToolName(event.ToolName) {
+		var allowed bool
+		allowed, candidateSchemaHash = g.mcpToolAllowedForRun(ctx, run.ID, event.ToolName)
+		if !allowed {
+			return false, productdata.NewError(productdata.CodeInvalidRequest, "MCP tool is not allowed for this run.")
+		}
+	} else if (productdata.IsDiscoveryToolName(event.ToolName) || productdata.IsWorkspaceToolName(event.ToolName) || productdata.IsSandboxToolName(event.ToolName) || productdata.IsLSPToolName(event.ToolName) || productdata.IsWebToolName(event.ToolName) || productdata.IsBrowserToolName(event.ToolName) || productdata.IsArtifactToolName(event.ToolName) || productdata.IsAgentToolName(event.ToolName) || productdata.IsTodoToolName(event.ToolName)) && !g.scopedToolAllowedForRun(ctx, run.ID, event.ToolName) {
+		return false, productdata.NewError(productdata.CodeInvalidRequest, "Tool is not allowed for this run.")
+	}
+	approvalStatus := productdata.ToolCallApprovalRequired
+	executionStatus := productdata.ToolCallExecutionBlocked
+	if autoApproveToolCall(event.ToolName) {
+		approvalStatus = productdata.ToolCallApprovalApproved
+		executionStatus = productdata.ToolCallExecutionNotStarted
+	}
+	_, events, err := g.Service.RecordToolCallRequest(ctx, identity.LocalDevIdentity(), run.ID, productdata.RecordToolCallRequestInput{ToolCallID: toolCallID, ToolName: event.ToolName, CandidateSchemaHash: candidateSchemaHash, ArgumentsSummary: arguments, ArgumentsHash: argumentsHash(arguments), ApprovalStatus: approvalStatus, ExecutionStatus: executionStatus})
 	if err != nil {
-		return false
+		return false, err
+	}
+	if todo, ok := appendWorkTodoSnapshot(ctx, g.Service, run, "runtime"); ok {
+		events = append(events, todo)
 	}
 	if g.Broadcaster != nil {
 		for _, recorded := range events {
 			g.Broadcaster.Publish(recorded)
 		}
 	}
-	return true
+	return autoApproveToolCall(event.ToolName), nil
+}
+
+func autoApproveToolCall(toolName string) bool {
+	return toolName == productdata.ToolNameWebSearch || toolName == productdata.ToolNameWebFetch || productdata.IsDiscoveryToolName(toolName) || productdata.IsWorkspaceReadOnlyToolName(toolName)
+}
+
+func (g *Gateway) canRequestContinuationTool(ctx context.Context, run productdata.Run, event ProviderEvent) bool {
+	if event.ToolName == "" || !g.continuationToolNameSupported(event.ToolName) {
+		return false
+	}
+	if !g.scopedToolAllowedForRun(ctx, run.ID, event.ToolName) {
+		return false
+	}
+	events, err := g.Service.ListRunEvents(ctx, identity.LocalDevIdentity(), run.ID, 0)
+	if err != nil {
+		return false
+	}
+	return acceptedToolCallCount(events) < productdata.DefaultMaxBoundedToolCallsPerRun
+}
+
+func acceptedToolCallCount(events []productdata.RunEvent) int {
+	seen := map[string]bool{}
+	for _, event := range events {
+		if event.Type != productdata.EventToolCallRequested {
+			continue
+		}
+		toolCallID := metadataString(event.Metadata, "tool_call_id")
+		if toolCallID == "" || seen[toolCallID] {
+			continue
+		}
+		seen[toolCallID] = true
+	}
+	return len(seen)
+}
+
+func (g *Gateway) continuationToolLimitReached(ctx context.Context, run productdata.Run, event ProviderEvent) bool {
+	if event.ToolName == "" || !g.continuationToolNameSupported(event.ToolName) {
+		return false
+	}
+	if !g.scopedToolAllowedForRun(ctx, run.ID, event.ToolName) {
+		return false
+	}
+	events, err := g.Service.ListRunEvents(ctx, identity.LocalDevIdentity(), run.ID, 0)
+	if err != nil {
+		return false
+	}
+	return acceptedToolCallCount(events) >= productdata.DefaultMaxBoundedToolCallsPerRun
+}
+
+func (g *Gateway) continuationToolNameSupported(toolName string) bool {
+	return productdata.IsDiscoveryToolName(toolName) ||
+		productdata.IsWorkspaceToolName(toolName) ||
+		productdata.IsSandboxToolName(toolName) ||
+		productdata.IsLSPToolName(toolName) ||
+		productdata.IsWebToolName(toolName) ||
+		productdata.IsBrowserToolName(toolName) ||
+		productdata.IsArtifactToolName(toolName) ||
+		productdata.IsAgentToolName(toolName) ||
+		productdata.IsTodoToolName(toolName)
+}
+
+func (g *Gateway) providerToolsForRun(ctx context.Context, runID string) []ProviderToolDefinition {
+	if g == nil || g.Service == nil {
+		return nil
+	}
+	events, err := g.Service.ListRunEvents(ctx, identity.LocalDevIdentity(), runID, 0)
+	if err != nil {
+		return nil
+	}
+	return providerToolsFromEvents(events)
+}
+
+func (g *Gateway) providerToolsForContinuation(ctx context.Context, runID string) []ProviderToolDefinition {
+	if g == nil || g.Service == nil {
+		return nil
+	}
+	events, err := g.Service.ListRunEvents(ctx, identity.LocalDevIdentity(), runID, 0)
+	if err != nil || acceptedToolCallCount(events) >= productdata.DefaultMaxBoundedToolCallsPerRun {
+		return nil
+	}
+	tools := providerToolsFromEvents(events)
+	if workspaceGlobSucceeded(events) {
+		tools = omitProviderTool(tools, productdata.ToolNameWorkspaceGlob)
+	}
+	return tools
+}
+
+func providerToolsFromEvents(events []productdata.RunEvent) []ProviderToolDefinition {
+	enabled := map[string]bool{}
+	ordered := []string{}
+	for _, event := range events {
+		for _, name := range metadataStringList(event.Metadata, "enabled_tools") {
+			if !enabled[name] {
+				ordered = append(ordered, name)
+			}
+			enabled[name] = true
+		}
+	}
+	tools := make([]ProviderToolDefinition, 0, len(ordered))
+	for _, name := range ordered {
+		tool, ok := builtinProviderToolDefinition(name)
+		if !ok {
+			continue
+		}
+		tools = append(tools, tool)
+	}
+	return tools
+}
+
+func workspaceGlobSucceeded(events []productdata.RunEvent) bool {
+	for _, event := range events {
+		if event.Type == productdata.EventToolCallSucceeded && metadataString(event.Metadata, "tool_name") == productdata.ToolNameWorkspaceGlob {
+			return true
+		}
+	}
+	return false
+}
+
+func omitProviderTool(tools []ProviderToolDefinition, name string) []ProviderToolDefinition {
+	if name == "" || len(tools) == 0 {
+		return tools
+	}
+	filtered := tools[:0]
+	for _, tool := range tools {
+		if tool.Name != name {
+			filtered = append(filtered, tool)
+		}
+	}
+	return filtered
+}
+
+func builtinProviderToolDefinition(name string) (ProviderToolDefinition, bool) {
+	switch name {
+	case productdata.ToolNameLoadTools:
+		return providerTool(name, "Return safe descriptions for currently enabled Loomi tools by name or keyword.", map[string]any{"queries": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "maxItems": 5}, "names": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "maxItems": 20}, "limit": integerSchema(1, 30)}, []string{}), true
+	case productdata.ToolNameLoadSkill:
+		return providerTool(name, "Return a safe installed skill summary by name without loading the instruction body.", map[string]any{"name": stringSchema("Installed skill name or keyword."), "limit": integerSchema(1, 20)}, []string{"name"}), true
+	case productdata.ToolNameWorkspaceGlob:
+		return providerTool(name, "Find files under the selected workspace root. Use path \".\" for the selected folder; do not repeat the root folder name.", map[string]any{"pattern": stringSchema("Glob pattern."), "path": stringSchema("Optional relative directory from the selected workspace root. Use . for the root."), "limit": integerSchema(1, 500)}, []string{"pattern"}), true
+	case productdata.ToolNameWorkspaceGrep:
+		return providerTool(name, "Search text files under the selected workspace root. Use path \".\" for the selected folder; do not repeat the root folder name.", map[string]any{"query": stringSchema("Search query."), "path": stringSchema("Optional relative directory from the selected workspace root. Use . for the root."), "include": stringSchema("Optional file glob."), "case_sensitive": map[string]any{"type": "boolean"}, "limit": integerSchema(1, 500)}, []string{"query"}), true
+	case productdata.ToolNameWorkspaceRead:
+		return providerTool(name, "Read a bounded UTF-8 slice from one file under the selected workspace root. Paths are relative to that root.", map[string]any{"path": stringSchema("Relative file path from the selected workspace root; do not repeat the root folder name."), "offset": integerSchema(0, 1000000), "limit": integerSchema(1, 1000000), "max_bytes": integerSchema(1, 131072)}, []string{"path"}), true
+	case productdata.ToolNameWorkspaceWriteFile:
+		return providerTool(name, "Create a new bounded UTF-8 text file under the workspace root.", map[string]any{"path": stringSchema("Relative file path."), "content": stringSchema("File content."), "max_bytes": integerSchema(1, 131072)}, []string{"path", "content"}), true
+	case productdata.ToolNameWorkspaceEdit:
+		return providerTool(name, "Apply one bounded replacement in a workspace file after reading it.", map[string]any{"path": stringSchema("Relative file path."), "old_text": stringSchema("Existing text to replace exactly once."), "new_text": stringSchema("Replacement text."), "max_bytes": integerSchema(1, 131072)}, []string{"path", "old_text", "new_text"}), true
+	case productdata.ToolNameWorkspacePatchPreview:
+		return providerTool(name, "Preview one bounded replacement in a workspace file after reading it.", map[string]any{"path": stringSchema("Relative file path."), "old_text": stringSchema("Existing text to replace exactly once."), "new_text": stringSchema("Replacement text."), "max_bytes": integerSchema(1, 131072)}, []string{"path", "old_text", "new_text"}), true
+	case productdata.ToolNameWorkspacePatchApply:
+		return providerTool(name, "Apply one previously previewed bounded replacement in a workspace file.", map[string]any{"path": stringSchema("Relative file path."), "old_text": stringSchema("Existing text to replace exactly once."), "new_text": stringSchema("Replacement text."), "max_bytes": integerSchema(1, 131072)}, []string{"path", "old_text", "new_text"}), true
+	case productdata.ToolNameSandboxExecCommand:
+		return providerTool(name, "Run one approved argv-form read or validation command under the workspace root.", map[string]any{"argv": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "minItems": 1}, "cwd": stringSchema("Optional relative working directory."), "timeout_ms": integerSchema(1000, 30000), "max_output_bytes": integerSchema(1, 32768)}, []string{"argv"}), true
+	case productdata.ToolNameSandboxStartProcess:
+		return providerTool(name, "Start one approved argv-form read or validation process under the workspace root.", map[string]any{"argv": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "minItems": 1}, "cwd": stringSchema("Optional relative working directory."), "timeout_ms": integerSchema(1000, 120000), "max_output_bytes": integerSchema(1, 65536), "stdin": map[string]any{"type": "boolean"}}, []string{"argv"}), true
+	case productdata.ToolNameSandboxContinueProcess:
+		return providerTool(name, "Read current output/status for one run-scoped sandbox process, optionally writing bounded stdin.", map[string]any{"process_id": stringSchema("Sandbox process id returned by sandbox.start_process."), "cursor": integerSchema(0, 65536), "stdin_text": stringSchema("Optional bounded stdin text for stdin-enabled processes."), "input_seq": integerSchema(1, 1000000), "close_stdin": map[string]any{"type": "boolean"}}, []string{"process_id"}), true
+	case productdata.ToolNameSandboxTerminateProcess:
+		return providerTool(name, "Terminate one run-scoped sandbox process.", map[string]any{"process_id": stringSchema("Sandbox process id returned by sandbox.start_process.")}, []string{"process_id"}), true
+	case productdata.ToolNameLSPDiagnostics:
+		return providerTool(name, "Read bounded diagnostics for a workspace source file.", map[string]any{"path": stringSchema("Relative source file path."), "language": stringSchema("Optional language id."), "limit": integerSchema(1, 100)}, []string{"path"}), true
+	case productdata.ToolNameLSPSymbols:
+		return providerTool(name, "Read bounded symbol summaries for a workspace source file.", map[string]any{"path": stringSchema("Relative source file path."), "query": stringSchema("Optional symbol query."), "language": stringSchema("Optional language id."), "limit": integerSchema(1, 100)}, []string{"path"}), true
+	case productdata.ToolNameLSPReferences:
+		return providerTool(name, "Read bounded references for a source position.", map[string]any{"path": stringSchema("Relative source file path."), "line": integerSchema(1, 1000000), "column": integerSchema(1, 1000000), "include_declaration": map[string]any{"type": "boolean"}, "limit": integerSchema(1, 100)}, []string{"path", "line", "column"}), true
+	case productdata.ToolNameLSPDefinition:
+		return providerTool(name, "Find a bounded best-effort definition for a source position.", map[string]any{"path": stringSchema("Relative source file path."), "line": integerSchema(1, 1000000), "column": integerSchema(1, 1000000), "language": stringSchema("Optional language id."), "limit": integerSchema(1, 100)}, []string{"path", "line", "column"}), true
+	case productdata.ToolNameLSPHover:
+		return providerTool(name, "Read a bounded best-effort hover summary for a source position.", map[string]any{"path": stringSchema("Relative source file path."), "line": integerSchema(1, 1000000), "column": integerSchema(1, 1000000), "language": stringSchema("Optional language id.")}, []string{"path", "line", "column"}), true
+	case productdata.ToolNameWebSearch:
+		return WebSearchProviderToolDefinition(), true
+	case productdata.ToolNameWebFetch:
+		return providerTool(name, "Fetch one bounded public HTTP(S) URL and return a safe text summary.", map[string]any{"url": stringSchema("Public HTTP(S) URL."), "max_bytes": integerSchema(1, 131072), "timeout_ms": integerSchema(1000, 30000)}, []string{"url"}), true
+	case productdata.ToolNameBrowserOpen:
+		return providerTool(name, "Open one bounded public HTTP(S) page in a run-scoped browser session.", map[string]any{"url": stringSchema("Public HTTP(S) URL."), "max_bytes": integerSchema(1, 131072), "timeout_ms": integerSchema(1000, 30000)}, []string{"url"}), true
+	case productdata.ToolNameBrowserSnapshot:
+		return providerTool(name, "Return the current safe snapshot for a run-scoped browser session.", map[string]any{"session_id": stringSchema("Browser session id.")}, []string{"session_id"}), true
+	case productdata.ToolNameBrowserClickLink:
+		return providerTool(name, "Navigate one safe link from a run-scoped browser session.", map[string]any{"session_id": stringSchema("Browser session id."), "link_index": integerSchema(0, 100), "max_bytes": integerSchema(1, 131072), "timeout_ms": integerSchema(1000, 30000)}, []string{"session_id", "link_index"}), true
+	case productdata.ToolNameBrowserScreenshot:
+		return providerTool(name, "Return a bounded text screenshot summary for a run-scoped browser session.", map[string]any{"session_id": stringSchema("Browser session id.")}, []string{"session_id"}), true
+	case productdata.ToolNameBrowserType:
+		return providerTool(name, "Record bounded text into a discovered input target in a run-scoped browser session.", map[string]any{"session_id": stringSchema("Browser session id."), "target": stringSchema("Input target from browser snapshot."), "text": stringSchema("Text to type.")}, []string{"session_id", "target", "text"}), true
+	case productdata.ToolNameBrowserPress:
+		return providerTool(name, "Record one bounded key press in a run-scoped browser session.", map[string]any{"session_id": stringSchema("Browser session id."), "key": map[string]any{"type": "string", "enum": []string{"Enter", "Escape", "Tab", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"}}}, []string{"session_id", "key"}), true
+	case productdata.ToolNameMemorySearch:
+		return providerTool(name, "Search approved Loomi memory summaries in the current safe scope.", map[string]any{"query": stringSchema("Memory search query."), "limit": integerSchema(1, 20), "scope_type": stringSchema("Optional memory scope type."), "scope_id": stringSchema("Optional memory scope id."), "source_thread_id": stringSchema("Optional source thread id."), "source_run_id": stringSchema("Optional source run id."), "source_type": stringSchema("Optional source type filter.")}, []string{"query"}), true
+	case productdata.ToolNameMemoryList:
+		return providerTool(name, "List approved Loomi memory summaries in the current safe scope.", map[string]any{"limit": integerSchema(1, 20), "scope_type": stringSchema("Optional memory scope type."), "scope_id": stringSchema("Optional memory scope id."), "source_thread_id": stringSchema("Optional source thread id."), "source_run_id": stringSchema("Optional source run id."), "source_type": stringSchema("Optional source type filter.")}, []string{}), true
+	case productdata.ToolNameMemoryRead:
+		return providerTool(name, "Read one approved Loomi memory summary without raw content.", map[string]any{"entry_id": stringSchema("Memory entry id."), "scope_type": stringSchema("Optional memory scope type."), "scope_id": stringSchema("Optional memory scope id."), "source_thread_id": stringSchema("Optional source thread id."), "source_run_id": stringSchema("Optional source run id.")}, []string{"entry_id"}), true
+	case productdata.ToolNameMemoryWrite:
+		return providerTool(name, "Create one approval-gated Loomi memory write proposal.", map[string]any{"title": stringSchema("Short memory title."), "content": stringSchema("Memory content to propose."), "scope_type": stringSchema("Optional memory scope type."), "scope_id": stringSchema("Optional memory scope id."), "source_thread_id": stringSchema("Optional source thread id."), "source_run_id": stringSchema("Optional source run id."), "source_event_id": stringSchema("Optional source event id."), "idempotency_key": stringSchema("Optional idempotency key.")}, []string{"title", "content"}), true
+	case productdata.ToolNameMemoryEdit:
+		return providerTool(name, "Edit a pending Loomi memory proposal or create an approval-gated replacement proposal.", map[string]any{"proposal_id": stringSchema("Optional pending proposal id."), "entry_id": stringSchema("Optional existing memory entry id."), "title": stringSchema("Short memory title."), "content": stringSchema("Replacement safe memory content."), "scope_type": stringSchema("Optional memory scope type."), "scope_id": stringSchema("Optional memory scope id."), "source_thread_id": stringSchema("Optional source thread id."), "source_run_id": stringSchema("Optional source run id."), "source_event_id": stringSchema("Optional source event id."), "idempotency_key": stringSchema("Optional idempotency key.")}, []string{"title", "content"}), true
+	case productdata.ToolNameMemoryForget:
+		return providerTool(name, "Tombstone one approved Loomi memory entry through the audited memory boundary.", map[string]any{"entry_id": stringSchema("Memory entry id."), "reason": stringSchema("Optional safe deletion reason."), "scope_type": stringSchema("Optional memory scope type."), "scope_id": stringSchema("Optional memory scope id."), "source_thread_id": stringSchema("Optional source thread id."), "source_run_id": stringSchema("Optional source run id.")}, []string{"entry_id"}), true
+	case productdata.ToolNameMemoryContext:
+		return providerTool(name, "Return Loomi memory provider status plus bounded relevant memory summaries.", map[string]any{"query": stringSchema("Optional memory query."), "limit": integerSchema(1, 20), "scope_type": stringSchema("Optional memory scope type."), "scope_id": stringSchema("Optional memory scope id."), "source_thread_id": stringSchema("Optional source thread id."), "source_run_id": stringSchema("Optional source run id."), "source_type": stringSchema("Optional source type filter.")}, []string{}), true
+	case productdata.ToolNameMemoryTimeline:
+		return providerTool(name, "List safe Loomi memory audit timeline items.", map[string]any{"limit": integerSchema(1, 50), "source_thread_id": stringSchema("Optional source thread id."), "source_run_id": stringSchema("Optional source run id."), "source_type": stringSchema("Optional event type filter.")}, []string{}), true
+	case productdata.ToolNameMemoryConnections:
+		return providerTool(name, "Return bounded related Loomi memory summaries for one entry or query.", map[string]any{"entry_id": stringSchema("Optional memory entry id."), "query": stringSchema("Optional related memory query."), "limit": integerSchema(1, 20), "scope_type": stringSchema("Optional memory scope type."), "scope_id": stringSchema("Optional memory scope id."), "source_thread_id": stringSchema("Optional source thread id."), "source_run_id": stringSchema("Optional source run id.")}, []string{}), true
+	case productdata.ToolNameMemoryThreadSearch:
+		return providerTool(name, "Search local thread and message history with safe excerpts.", map[string]any{"query": stringSchema("Thread search query."), "limit": integerSchema(1, 20)}, []string{"query"}), true
+	case productdata.ToolNameMemoryThreadFetch:
+		return providerTool(name, "Fetch safe local thread message excerpts.", map[string]any{"thread_id": stringSchema("Thread id."), "limit": integerSchema(1, 50)}, []string{"thread_id"}), true
+	case productdata.ToolNameMemoryStatus:
+		return providerTool(name, "Return Loomi memory provider readiness and configuration state.", map[string]any{}, []string{}), true
+	case productdata.ToolNameNotebookRead:
+		return providerTool(name, "Read one approved structured Loomi notebook entry without raw unsafe content.", map[string]any{"entry_id": stringSchema("Notebook entry id."), "scope_type": stringSchema("Optional notebook scope type."), "scope_id": stringSchema("Optional notebook scope id."), "source_thread_id": stringSchema("Optional source thread id."), "source_run_id": stringSchema("Optional source run id.")}, []string{"entry_id"}), true
+	case productdata.ToolNameNotebookWrite:
+		return providerTool(name, "Write one approval-gated structured Loomi notebook entry.", map[string]any{"title": stringSchema("Short notebook title."), "content": stringSchema("Notebook content to store."), "scope_type": stringSchema("Optional notebook scope type."), "scope_id": stringSchema("Optional notebook scope id."), "source_thread_id": stringSchema("Optional source thread id."), "source_run_id": stringSchema("Optional source run id.")}, []string{"title", "content"}), true
+	case productdata.ToolNameNotebookEdit:
+		return providerTool(name, "Replace one structured Loomi notebook entry by tombstoning the old entry and writing the new entry.", map[string]any{"entry_id": stringSchema("Notebook entry id."), "title": stringSchema("Short notebook title."), "content": stringSchema("Replacement notebook content."), "scope_type": stringSchema("Optional notebook scope type."), "scope_id": stringSchema("Optional notebook scope id."), "source_thread_id": stringSchema("Optional source thread id."), "source_run_id": stringSchema("Optional source run id.")}, []string{"entry_id", "title", "content"}), true
+	case productdata.ToolNameNotebookForget:
+		return providerTool(name, "Tombstone one structured Loomi notebook entry through the audited memory boundary.", map[string]any{"entry_id": stringSchema("Notebook entry id."), "reason": stringSchema("Optional safe deletion reason."), "scope_type": stringSchema("Optional notebook scope type."), "scope_id": stringSchema("Optional notebook scope id."), "source_thread_id": stringSchema("Optional source thread id."), "source_run_id": stringSchema("Optional source run id.")}, []string{"entry_id"}), true
+	case productdata.ToolNameTodoWrite:
+		itemSchema := map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"id": stringSchema("Stable todo id."), "title": stringSchema("Short todo title."), "status": map[string]any{"type": "string", "enum": []string{"pending", "running", "completed", "blocked", "failed"}}, "summary": stringSchema("Optional safe progress summary.")}, "required": []string{"id", "title", "status"}}
+		return providerTool(name, "Replace the current Work plan todo snapshot with bounded safe todo items.", map[string]any{"items": map[string]any{"type": "array", "items": itemSchema, "minItems": 1, "maxItems": productdata.MaxWorkTodoItems}}, []string{"items"}), true
+	default:
+		return ProviderToolDefinition{}, false
+	}
+}
+
+func providerTool(name string, description string, properties map[string]any, required []string) ProviderToolDefinition {
+	return ProviderToolDefinition{
+		Name:         name,
+		ProviderName: providerToolName(name),
+		Description:  description,
+		Parameters: map[string]any{
+			"type":                 "object",
+			"additionalProperties": false,
+			"properties":           properties,
+			"required":             required,
+		},
+	}
+}
+
+func stringSchema(description string) map[string]any {
+	return map[string]any{"type": "string", "description": description}
+}
+
+func integerSchema(min int, max int) map[string]any {
+	return map[string]any{"type": "integer", "minimum": min, "maximum": max}
+}
+
+func (g *Gateway) continuationToolCallIDExists(ctx context.Context, runID string, event ProviderEvent) bool {
+	toolCallID := metadataString(event.Metadata, "tool_call_id")
+	if toolCallID == "" {
+		return false
+	}
+	events, err := g.Service.ListRunEvents(ctx, identity.LocalDevIdentity(), runID, 0)
+	if err != nil {
+		return false
+	}
+	for _, runEvent := range events {
+		if runEvent.Type != productdata.EventToolCallRequested {
+			continue
+		}
+		if metadataString(runEvent.Metadata, "tool_call_id") == toolCallID {
+			return true
+		}
+	}
+	return false
+}
+
+func (g *Gateway) workspaceToolAllowedForRun(ctx context.Context, runID string, toolName string) bool {
+	return g.scopedToolAllowedForRun(ctx, runID, toolName)
+}
+
+func (g *Gateway) scopedToolAllowedForRun(ctx context.Context, runID string, toolName string) bool {
+	events, err := g.Service.ListRunEvents(ctx, identity.LocalDevIdentity(), runID, 0)
+	if err != nil {
+		return false
+	}
+	for _, event := range events {
+		for _, name := range metadataStringList(event.Metadata, "enabled_tools") {
+			if name == toolName {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (g *Gateway) mcpToolAllowedForRun(ctx context.Context, runID string, toolName string) (bool, string) {
+	events, err := g.Service.ListRunEvents(ctx, identity.LocalDevIdentity(), runID, 0)
+	if err != nil {
+		return false, ""
+	}
+	discovered := false
+	allowed := false
+	candidateSchemaHash := ""
+	for _, event := range events {
+		if event.Type == "mcp_discovery_succeeded" && metadataString(event.Metadata, "status") == "succeeded" {
+			for _, name := range metadataStringList(event.Metadata, "candidate_names", "mcp_candidate_names") {
+				if name == toolName {
+					discovered = true
+					candidateSchemaHash = mcpCandidateSchemaHash(event.Metadata, toolName)
+				}
+			}
+		}
+		for _, name := range metadataStringList(event.Metadata, "enabled_tools") {
+			if name == toolName {
+				allowed = true
+			}
+		}
+	}
+	return discovered && allowed && candidateSchemaHash != "", candidateSchemaHash
+}
+
+func mcpCandidateSchemaHash(metadata map[string]any, toolName string) string {
+	for _, key := range []string{"candidate_schema_hashes", "schema_hashes"} {
+		hashes, ok := metadata[key].(map[string]any)
+		if !ok {
+			continue
+		}
+		if hash, ok := hashes[toolName].(string); ok && strings.TrimSpace(hash) != "" {
+			return strings.TrimSpace(hash)
+		}
+	}
+	for _, key := range []string{"candidate_schema_hash", "schema_hash"} {
+		if hash := metadataString(metadata, key); hash != "" {
+			return hash
+		}
+	}
+	return ""
 }
 
 func argumentsHash(arguments map[string]any) string {
-	value := "timezone=UTC"
-	if timezone, ok := arguments["timezone"].(string); ok {
-		value = "timezone=" + timezone
+	raw, err := json.Marshal(productdata.RedactEventMetadata(arguments))
+	if err != nil {
+		raw = []byte("{}")
 	}
-	sum := sha256.Sum256([]byte(value))
+	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:])
 }
 
@@ -282,8 +682,12 @@ func toolArgumentsSummary(metadata map[string]any) map[string]any {
 }
 
 func (g *Gateway) fail(ctx context.Context, runID string, code string, message string) {
-	_ = g.append(ctx, runID, productdata.AppendRunEventInput{Category: productdata.RunEventCategoryError, Type: code, Summary: message, ErrorCode: code, ErrorMessage: message})
-	_ = g.append(ctx, runID, productdata.AppendRunEventInput{Category: productdata.RunEventCategoryFinal, Type: "run_failed", Summary: message, ErrorCode: code, ErrorMessage: message})
+	g.failWithMetadata(ctx, runID, code, message, nil)
+}
+
+func (g *Gateway) failWithMetadata(ctx context.Context, runID string, code string, message string, metadata map[string]any) {
+	_ = g.append(ctx, runID, productdata.AppendRunEventInput{Category: productdata.RunEventCategoryError, Type: code, Summary: message, ErrorCode: code, ErrorMessage: message, Metadata: metadata})
+	_ = g.append(ctx, runID, productdata.AppendRunEventInput{Category: productdata.RunEventCategoryFinal, Type: "run_failed", Summary: message, ErrorCode: code, ErrorMessage: message, Metadata: metadata})
 }
 
 func (g *Gateway) currentStatus(ctx context.Context, runID string) productdata.RunStatus {
@@ -357,11 +761,80 @@ func metadataMap(metadata map[string]any, key string) map[string]any {
 	return map[string]any{}
 }
 
+func metadataStringList(metadata map[string]any, keys ...string) []string {
+	var values []string
+	for _, key := range keys {
+		switch typed := metadata[key].(type) {
+		case []string:
+			values = append(values, typed...)
+		case []any:
+			for _, item := range typed {
+				if text, ok := item.(string); ok {
+					values = append(values, strings.TrimSpace(text))
+				}
+			}
+		}
+	}
+	return values
+}
+
 func selectedModel(override string, configured string) string {
 	if override != "" {
 		return override
 	}
 	return configured
+}
+
+func runSystemPrompt(prepared *productdata.RunContext) string {
+	base := "You are Loomi, a careful local assistant. Answer naturally and concisely."
+	if prepared != nil && strings.TrimSpace(prepared.Persona.SystemPrompt) != "" {
+		base = strings.TrimSpace(prepared.Persona.SystemPrompt)
+	}
+	policy := "\n\nTool policy:\n- Use tools only when they are needed. Do not use tools for greetings, small talk, or stable general knowledge.\n- Use web_search for current events, latest information, news, prices, or external facts that may have changed.\n- Use web_fetch when the user gives a public URL or when search results need one source opened for analysis.\n- Do not call workspace, sandbox, LSP, browser, artifact, todo, or agent tools in Chat mode. Use those only when the current tool list truly exposes them for a Work run.\n- If a useful tool is not available, answer with the limitation and the next best safe option. Do not fabricate tool calls or tool results.\n- Final user-facing output must be natural language, not JSON or a tool protocol transcript."
+	if prepared != nil && prepared.Thread.Mode == productdata.ThreadModeWork {
+		policy += "\n\nWork mode policy:\n- This is a Work run. File and folder tasks are tool-first: inspect/list/search/classify/summarize files with workspace_glob, workspace_grep, and workspace_read before answering.\n- For folder listing or classification, start with one broad workspace_glob request using path \".\" and a sufficient limit, then summarize the visible results; do not repeat the same listing unless the user asks for a narrower folder or the result was explicitly truncated.\n- For content search, start with workspace_grep. Read specific files with workspace_read only after you have a relative path.\n- Do not tell the user to run shell commands, paste directory listings, export files, or grant oral permission when workspace tools are available. Request the tool and continue from the result.\n- Do not use sandbox commands for file reads, globbing, grep, cat/head/tail/ls-style listing, or simple classification. Use sandbox commands only for build/test/lint or commands that truly need a process.\n- Workspace tool paths are always relative to the selected workspace root. The selected folder is already the root; use \".\" for it and do not repeat the root folder name such as Downloads, Desktop, or Documents in tool paths.\n- If a requested path is outside the selected root, ask the user to choose that folder in the UI.\n- Final output should summarize the work clearly and omit raw tool protocol details."
+	}
+	return base + memoryPromptContext(prepared) + policy
+}
+
+func memoryPromptContext(prepared *productdata.RunContext) string {
+	if prepared == nil {
+		return ""
+	}
+	var builder strings.Builder
+	appendSnapshotBlock := func(tag string, snapshot productdata.MemorySnapshot, include func(productdata.MemorySearchResult) bool) {
+		wrote := false
+		for _, entry := range snapshot.Entries {
+			if !include(entry) {
+				continue
+			}
+			if !wrote {
+				builder.WriteString("\n\n<")
+				builder.WriteString(tag)
+				builder.WriteString(">\n")
+				wrote = true
+			}
+			builder.WriteString("- ")
+			builder.WriteString(productdata.RedactEventText(strings.TrimSpace(entry.Title)))
+			if strings.TrimSpace(entry.Summary) != "" {
+				builder.WriteString(": ")
+				builder.WriteString(productdata.RedactEventText(strings.TrimSpace(entry.Summary)))
+			}
+			builder.WriteString("\n")
+		}
+		if wrote {
+			builder.WriteString("</")
+			builder.WriteString(tag)
+			builder.WriteString(">")
+		}
+	}
+	appendSnapshotBlock("memory", prepared.MemorySnapshot, func(entry productdata.MemorySearchResult) bool {
+		return entry.SourceType != "notebook"
+	})
+	appendSnapshotBlock("notebook", prepared.NotebookSnapshot, func(entry productdata.MemorySearchResult) bool {
+		return entry.SourceType == "notebook"
+	})
+	return builder.String()
 }
 
 func fallbackMessage(value string, fallback string) string {

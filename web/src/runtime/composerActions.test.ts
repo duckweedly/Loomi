@@ -28,7 +28,7 @@ describe('composer actions', () => {
   })
 
   test('blocks send continue retry and regenerate while a selected run is active', () => {
-    for (const status of ['pending', 'queued', 'running', 'retrying', 'recovering'] as const) {
+    for (const status of ['pending', 'queued', 'running', 'retrying', 'recovering', 'blocked_on_tool_approval', 'stopping'] as const) {
       expect(deriveComposerActions({ threadSelected: true, text: 'hello', run: { ...run, status }, messages: [assistantMessage] })).toMatchObject({
         canSend: false,
         canContinue: false,
@@ -46,13 +46,22 @@ describe('composer actions', () => {
       canRegenerate: false,
       disabledReason: 'provider-unavailable',
     })
+    expect(deriveComposerActions({ threadSelected: true, text: 'hello', run: { ...run, status: 'blocked_on_tool_approval' }, messages: [], providerUnavailable: true })).toMatchObject({
+      canSend: false,
+      canContinue: false,
+      canStop: true,
+      disabledReason: 'provider-unavailable',
+    })
   })
 
   test('enables stop retry and regenerate from the correct state matrix context', () => {
+    expect(deriveComposerActions({ threadSelected: true, text: '', run: { ...run, status: 'pending' }, messages: [] }).canStop).toBe(true)
     expect(deriveComposerActions({ threadSelected: true, text: '', run: { ...run, status: 'queued' }, messages: [] }).canStop).toBe(true)
     expect(deriveComposerActions({ threadSelected: true, text: '', run: { ...run, status: 'running' }, messages: [] }).canStop).toBe(true)
     expect(deriveComposerActions({ threadSelected: true, text: '', run: { ...run, status: 'retrying' }, messages: [] }).canStop).toBe(true)
     expect(deriveComposerActions({ threadSelected: true, text: '', run: { ...run, status: 'recovering' }, messages: [] }).canStop).toBe(true)
+    expect(deriveComposerActions({ threadSelected: true, text: '', run: { ...run, status: 'blocked_on_tool_approval' }, messages: [] }).canStop).toBe(true)
+    expect(deriveComposerActions({ threadSelected: true, text: '', run: { ...run, status: 'stopping' }, messages: [] }).canStop).toBe(true)
     expect(deriveComposerActions({ threadSelected: true, text: '', run: { ...run, status: 'failed' }, messages: [] }).canRetry).toBe(true)
     expect(deriveComposerActions({ threadSelected: true, text: '', run, messages: [assistantMessage] }).canRegenerate).toBe(true)
     expect(deriveComposerActions({ threadSelected: true, text: '', run: { ...run, status: 'cancelled' }, messages: [assistantMessage] }).canRegenerate).toBe(true)

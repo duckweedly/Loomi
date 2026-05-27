@@ -1,1 +1,9 @@
-// Reserved for future safe desktop APIs. M1 exposes no Electron bridge.
+const { contextBridge, ipcRenderer } = require('electron')
+
+window.addEventListener('DOMContentLoaded', () => {
+  document.documentElement.dataset.runtime = 'electron'
+})
+
+contextBridge.exposeInMainWorld('loomiDesktop', {
+  selectWorkspaceFolder: () => ipcRenderer.invoke('loomi:select-workspace-folder'),
+})

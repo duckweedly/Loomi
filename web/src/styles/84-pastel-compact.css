@@ -1,0 +1,300 @@
+/* Pastel compact direction: cute green identity, restrained desktop density. */
+.app-shell {
+  --loomi-bg: #f6fbf8;
+  --loomi-sidebar: #eef7f2;
+  --loomi-surface: #fbfefd;
+  --loomi-surface-soft: #f4faf7;
+  --loomi-line: rgba(44, 78, 58, 0.11);
+  --loomi-line-strong: rgba(44, 78, 58, 0.18);
+  --loomi-green: #54c982;
+  --loomi-green-soft: rgba(84, 201, 130, 0.14);
+  --loomi-blue-soft: rgba(158, 216, 244, 0.16);
+  --loomi-coral: #ff756d;
+  --loomi-text: #163023;
+  --loomi-muted: #6c8396;
+  --loomi-shadow: 0 10px 30px rgba(49, 94, 66, 0.06);
+  --bg-root: var(--loomi-bg);
+  --material-sidebar: rgba(238, 247, 242, 0.96);
+  --main-surface: var(--loomi-surface);
+  --material-composer: rgba(251, 254, 253, 0.96);
+  --accent: var(--loomi-green);
+  --accent-2: #68cbb9;
+  --text-primary: var(--loomi-text);
+  --text-secondary: rgba(22, 48, 35, 0.68);
+  --text-muted: rgba(108, 131, 150, 0.72);
+  --border-subtle: var(--loomi-line);
+  --border-strong: var(--loomi-line-strong);
+  --composer-placeholder: rgba(108, 131, 150, 0.72);
+}
+
+.app-shell[data-theme='dark'] {
+  --loomi-bg: #202426;
+  --loomi-sidebar: #24292b;
+  --loomi-surface: #252a2c;
+  --loomi-surface-soft: #2a3032;
+  --loomi-line: rgba(232, 248, 237, 0.09);
+  --loomi-line-strong: rgba(232, 248, 237, 0.15);
+  --loomi-green: #8fd58b;
+  --loomi-green-soft: rgba(143, 213, 139, 0.12);
+  --loomi-blue-soft: rgba(128, 198, 178, 0.08);
+  --loomi-text: #f4f7f2;
+  --loomi-muted: rgba(211, 224, 218, 0.58);
+  --loomi-shadow: none;
+  --bg-root: var(--loomi-bg);
+  --material-sidebar: rgba(36, 41, 43, 0.96);
+  --main-surface: var(--loomi-surface);
+  --material-composer: rgba(42, 48, 50, 0.96);
+  --accent: var(--loomi-green);
+  --accent-2: #80c6b2;
+  --text-primary: var(--loomi-text);
+  --text-secondary: rgba(244, 247, 242, 0.7);
+  --text-muted: var(--loomi-muted);
+  --border-subtle: var(--loomi-line);
+  --border-strong: var(--loomi-line-strong);
+  --composer-placeholder: rgba(211, 224, 218, 0.5);
+}
+
+.workspace-grid {
+  background: var(--material-sidebar) !important;
+}
+
+.main-region,
+.right-tool-drawer {
+  background: var(--main-surface) !important;
+  box-shadow: var(--loomi-shadow) !important;
+}
+
+.main-region {
+  border-radius: 18px 22px 22px 18px !important;
+}
+
+.workspace-grid.right-tools-open .main-region {
+  border-radius: 18px 0 0 18px !important;
+}
+
+.right-tool-drawer {
+  border-left: 1px solid var(--border-subtle) !important;
+  border-radius: 0 22px 22px 0 !important;
+}
+
+.main-titlebar,
+.chat-shell,
+.message-list,
+.settings-shell,
+.settings-sidebar,
+.settings-content {
+  background: var(--main-surface) !important;
+}
+
+.sidebar-shell {
+  background: var(--material-sidebar) !important;
+}
+
+.sidebar-divider {
+  height: 1px !important;
+  background: var(--border-subtle) !important;
+}
+
+.sidebar-mode-row,
+.settings-segmented-control,
+.provider-filter-tabs,
+.mode-tabs {
+  border-width: 1px !important;
+  border-color: var(--border-subtle) !important;
+  border-radius: 18px !important;
+  background: color-mix(in srgb, var(--main-surface) 62%, transparent) !important;
+  box-shadow: none !important;
+}
+
+.sidebar-mode-row button,
+.settings-segmented-control button,
+.provider-filter-tabs button,
+.mode-tabs button {
+  min-height: 34px;
+  border-radius: 14px !important;
+  box-shadow: none !important;
+  transform: none !important;
+}
+
+.sidebar-mode-row button.selected,
+.settings-segmented-control button.selected,
+.provider-filter-tabs button.selected,
+.mode-tabs button.selected {
+  background: var(--loomi-green-soft) !important;
+  color: var(--text-primary) !important;
+  box-shadow: none !important;
+}
+
+.thread-create-button,
+.titlebar-button,
+.thread-row > .thread-action,
+.message-actions button,
+.composer-icon-action,
+.composer-action,
+.provider-card-test,
+.provider-secondary-action,
+.provider-cancel-button,
+.provider-test-button,
+.provider-save-button,
+.tool-actions button,
+.tools-catalog-badges button,
+.settings-icon-button {
+  border-width: 1px !important;
+  border-color: var(--border-subtle) !important;
+  background: color-mix(in srgb, var(--main-surface) 68%, transparent) !important;
+  box-shadow: none !important;
+}
+
+.thread-create-button:hover,
+.titlebar-button:hover,
+.thread-row > .thread-action:hover,
+.message-actions button:hover,
+.composer-icon-action:hover,
+.composer-action:hover,
+.provider-card-test:hover,
+.provider-secondary-action:hover,
+.provider-cancel-button:hover,
+.provider-test-button:hover,
+.tool-actions button:hover {
+  background: var(--loomi-green-soft) !important;
+  transform: none !important;
+}
+
+.thread-card {
+  border-width: 1px !important;
+  border-color: transparent !important;
+  border-radius: 14px !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.thread-card:hover {
+  border-color: var(--border-subtle) !important;
+  background: color-mix(in srgb, var(--main-surface) 48%, transparent) !important;
+}
+
+.thread-card.selected {
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--border-subtle)) !important;
+  background: var(--loomi-green-soft) !important;
+  box-shadow: inset 2px 0 0 color-mix(in srgb, var(--accent) 58%, transparent) !important;
+}
+
+.thread-title {
+  font-weight: 680 !important;
+}
+
+.run-dot {
+  width: 7px !important;
+  height: 7px !important;
+  box-shadow: none !important;
+}
+
+.composer {
+  min-height: 104px !important;
+  border-width: 1px !important;
+  border-color: var(--border-subtle) !important;
+  border-radius: 18px !important;
+  background: color-mix(in srgb, var(--material-composer) 96%, transparent) !important;
+  box-shadow: 0 14px 36px rgba(38, 77, 54, 0.06) !important;
+}
+
+.app-shell[data-theme='dark'] .composer {
+  box-shadow: none !important;
+}
+
+.composer:focus-within {
+  transform: none !important;
+  border-color: color-mix(in srgb, var(--accent) 32%, var(--border-subtle)) !important;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 10%, transparent) !important;
+}
+
+.composer-model-select {
+  border-width: 1px !important;
+  border-color: var(--border-subtle) !important;
+  background: color-mix(in srgb, var(--loomi-surface-soft) 84%, transparent) !important;
+  box-shadow: none !important;
+}
+
+.composer .ant-btn,
+.provider-add-button,
+.provider-save-modal-button,
+.tool-actions button.primary {
+  border: 0 !important;
+  background: var(--accent) !important;
+  color: var(--accent-contrast) !important;
+  box-shadow: none !important;
+}
+
+.composer .ant-btn:hover:not(:disabled),
+.provider-add-button:hover,
+.provider-save-modal-button:hover,
+.tool-actions button.primary:hover {
+  transform: none !important;
+  filter: brightness(1.03);
+}
+
+.message-avatar {
+  border-width: 1px !important;
+  border-color: var(--border-subtle) !important;
+  box-shadow: none !important;
+}
+
+.message-row.assistant .message-avatar {
+  background:
+    radial-gradient(circle at 34% 26%, rgba(255, 255, 255, 0.78), transparent 32%),
+    linear-gradient(145deg, color-mix(in srgb, var(--accent) 18%, white), color-mix(in srgb, var(--accent-2) 18%, white)) !important;
+  box-shadow: none !important;
+}
+
+.message-row.user .message-bubble {
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--border-subtle)) !important;
+}
+
+.settings-card,
+.provider-management-card,
+.provider-console-card,
+.provider-console-empty,
+.tool-card,
+.work-plan-view,
+.memory-provider-panel,
+.memory-entry button,
+.memory-stat,
+.memory-detail-panel,
+.memory-delete-confirmation,
+.memory-audit-item,
+.message-row.assistant-draft .message-bubble,
+.message-markdown pre,
+.message-table-wrap,
+.tool-grid div,
+.tool-stack {
+  border-width: 1px !important;
+  border-color: var(--border-subtle) !important;
+  border-radius: 16px !important;
+  background: color-mix(in srgb, var(--loomi-surface-soft) 74%, transparent) !important;
+  box-shadow: none !important;
+}
+
+.provider-modal,
+.thread-menu,
+.right-panel-menu,
+.provider-kind-menu {
+  border-width: 1px !important;
+  border-color: var(--border-subtle) !important;
+  border-radius: 16px !important;
+  background: var(--main-surface) !important;
+  box-shadow: 0 18px 44px rgba(30, 54, 42, 0.1) !important;
+}
+
+.app-shell[data-theme='dark'] .provider-modal,
+.app-shell[data-theme='dark'] .thread-menu,
+.app-shell[data-theme='dark'] .right-panel-menu,
+.app-shell[data-theme='dark'] .provider-kind-menu {
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.2) !important;
+}
+
+.sidebar-footer,
+.app-shell[data-theme='dark'] .sidebar-footer,
+.chat-shell::after,
+.app-shell[data-theme='dark'] .chat-shell::after {
+  background: transparent !important;
+}

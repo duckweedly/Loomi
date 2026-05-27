@@ -1,0 +1,267 @@
+/* Brand refinement pass: keep the gecko/leaf identity soft, continuous, and less engineer-paneled. */
+.app-shell {
+  --accent: #68bd72;
+  --accent-2: #79c9a5;
+  --accent-contrast: #17351e;
+  --leaf-mint: #e5f6d5;
+  --main-surface: #fffdf5;
+  --material-sidebar: rgba(248, 245, 231, 0.92);
+  --material-composer: rgba(255, 253, 245, 0.94);
+  --border-subtle: rgba(101, 86, 56, 0.12);
+  --border-strong: rgba(101, 86, 56, 0.22);
+  --text-muted: rgba(99, 86, 60, 0.56);
+  --brand-soft-shadow: rgba(70, 61, 39, 0.14);
+  --brand-panel-shadow: 0 22px 56px color-mix(in srgb, var(--brand-soft-shadow) 52%, transparent);
+  --brand-press-shadow: 0 3px 0 color-mix(in srgb, var(--leaf-bark) 18%, transparent);
+  --brand-focus-ring: 0 0 0 4px color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.app-shell[data-theme='dark'] {
+  --accent: #94d089;
+  --accent-2: #80c6b2;
+  --accent-contrast: #102414;
+  --main-surface: #242528;
+  --material-sidebar: rgba(43, 44, 47, 0.96);
+  --material-composer: rgba(47, 48, 51, 0.95);
+  --border-subtle: rgba(255, 255, 255, 0.075);
+  --border-strong: rgba(255, 255, 255, 0.14);
+  --text-secondary: rgba(247, 247, 240, 0.7);
+  --text-muted: rgba(247, 247, 240, 0.46);
+  --brand-soft-shadow: rgba(0, 0, 0, 0.32);
+  --brand-panel-shadow: 0 22px 56px rgba(0, 0, 0, 0.26);
+  --brand-press-shadow: 0 3px 0 rgba(0, 0, 0, 0.28);
+}
+
+.workspace-grid {
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--material-sidebar) 96%, white), var(--material-sidebar)) !important;
+}
+
+.app-shell[data-theme='dark'] .workspace-grid {
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--material-sidebar) 92%, #343538), var(--material-sidebar)) !important;
+}
+
+.main-region {
+  border-radius: 24px 30px 30px 24px !important;
+  box-shadow: var(--brand-panel-shadow), inset 0 1px 0 var(--glass-highlight) !important;
+  transition:
+    border-radius 240ms var(--motion-soft),
+    box-shadow 240ms var(--motion-soft),
+    background 180ms ease !important;
+}
+
+.workspace-grid:not(.right-tools-open) .main-region {
+  border-radius: 24px 30px 30px 24px !important;
+}
+
+.workspace-grid.right-tools-open .main-region {
+  border-radius: 24px 0 0 24px !important;
+}
+
+.right-tool-drawer {
+  border-radius: 0 30px 30px 0 !important;
+  box-shadow: var(--brand-panel-shadow), inset 0 1px 0 var(--glass-highlight) !important;
+}
+
+.sidebar-resizer {
+  opacity: 0 !important;
+}
+
+.main-titlebar {
+  color: var(--text-secondary);
+}
+
+.main-thread-title {
+  color: color-mix(in srgb, var(--text-secondary) 86%, var(--text-primary));
+}
+
+.titlebar-brand-icon {
+  color: color-mix(in srgb, var(--accent) 46%, var(--text-secondary));
+}
+
+.titlebar-button {
+  opacity: 0.86;
+}
+
+.titlebar-button:hover {
+  opacity: 1;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.sidebar-mode-row {
+  border-color: color-mix(in srgb, var(--border-subtle) 72%, transparent);
+  background: color-mix(in srgb, var(--main-surface) 22%, transparent);
+  box-shadow: inset 0 1px 0 var(--glass-highlight), var(--brand-press-shadow);
+}
+
+.sidebar-mode-row button.selected,
+.mode-tabs button.selected,
+.settings-segmented-control button.selected,
+.provider-filter-tabs button.selected {
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--main-surface) 82%, var(--leaf-mint)), color-mix(in srgb, var(--leaf-mint) 42%, var(--main-surface)));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.34), var(--brand-press-shadow);
+}
+
+.app-shell[data-theme='dark'] .sidebar-mode-row button.selected,
+.app-shell[data-theme='dark'] .mode-tabs button.selected,
+.app-shell[data-theme='dark'] .settings-segmented-control button.selected,
+.app-shell[data-theme='dark'] .provider-filter-tabs button.selected {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.135), rgba(255, 255, 255, 0.075));
+}
+
+.thread-card,
+.thread-rename-form {
+  border-width: 1px;
+  border-radius: 16px;
+  box-shadow: none;
+}
+
+.thread-card.selected {
+  border-color: color-mix(in srgb, var(--accent) 42%, transparent);
+  background: color-mix(in srgb, var(--accent) 16%, var(--main-surface));
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--accent) 74%, transparent);
+}
+
+.app-shell[data-theme='dark'] .thread-card.selected {
+  background: color-mix(in srgb, var(--accent) 18%, var(--main-surface));
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--accent) 72%, transparent);
+}
+
+.thread-card:hover {
+  border-color: color-mix(in srgb, var(--accent) 22%, var(--border-subtle));
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.message-list {
+  scroll-behavior: smooth;
+}
+
+.message-row {
+  animation: island-surface-in 220ms var(--motion-soft) both;
+}
+
+.message-avatar {
+  position: relative;
+  overflow: hidden;
+  border-width: 1px;
+  border-radius: 999px;
+  background:
+    radial-gradient(circle at 36% 28%, rgba(255, 255, 255, 0.72), transparent 34%),
+    linear-gradient(145deg, color-mix(in srgb, var(--leaf-mint) 62%, var(--main-surface)), color-mix(in srgb, var(--accent) 18%, var(--main-surface)));
+  color: transparent;
+  box-shadow: 0 3px 8px color-mix(in srgb, var(--brand-soft-shadow) 44%, transparent);
+}
+
+.message-row.user .message-avatar::before {
+  position: absolute;
+  inset: 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--leaf-bark) 48%, var(--accent));
+  content: '';
+}
+
+.message-row.assistant .message-avatar {
+  background:
+    radial-gradient(circle at 34% 26%, rgba(255, 255, 255, 0.7), transparent 34%),
+    linear-gradient(145deg, color-mix(in srgb, var(--accent) 34%, white), color-mix(in srgb, var(--accent-2) 36%, white));
+}
+
+.message-row.assistant .message-avatar::before {
+  position: absolute;
+  inset: 6px;
+  background: var(--accent-contrast);
+  content: '';
+  mask: url('/icons/loomi-topbar-currentColor.svg') center / contain no-repeat;
+  -webkit-mask: url('/icons/loomi-topbar-currentColor.svg') center / contain no-repeat;
+}
+
+.message-row.user .message-bubble {
+  border-left-width: 3px;
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--border-subtle));
+}
+
+.composer {
+  min-height: 112px;
+  border-width: 1px;
+  border-radius: 22px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--material-composer) 94%, transparent), color-mix(in srgb, var(--material-composer) 82%, transparent));
+  box-shadow:
+    inset 0 1px 0 var(--glass-highlight),
+    0 18px 46px color-mix(in srgb, var(--brand-soft-shadow) 54%, transparent);
+  transition:
+    transform 180ms var(--motion-soft),
+    border-color 160ms ease,
+    box-shadow 180ms var(--motion-soft),
+    background 180ms ease;
+}
+
+.composer:focus-within {
+  transform: translateY(-2px);
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--border-subtle));
+  box-shadow:
+    inset 0 1px 0 var(--glass-highlight),
+    0 22px 54px color-mix(in srgb, var(--brand-soft-shadow) 58%, transparent),
+    var(--brand-focus-ring);
+}
+
+.composer-toolbar {
+  border-top-color: color-mix(in srgb, var(--border-subtle) 70%, transparent);
+}
+
+.composer-icon-action,
+.composer-action,
+.composer-model-select {
+  border-width: 1px;
+  box-shadow: none;
+}
+
+.composer .ant-btn {
+  border-width: 0;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.48),
+    0 5px 12px color-mix(in srgb, var(--accent) 24%, transparent);
+}
+
+.composer .ant-btn:hover:not(:disabled) {
+  transform: translateY(-1px) scale(1.03);
+}
+
+.settings-shell {
+  animation: island-surface-in 180ms var(--motion-soft) both;
+}
+
+.settings-content {
+  padding-top: 34px;
+}
+
+.settings-content-header h1 {
+  letter-spacing: 0;
+}
+
+.settings-card {
+  border-width: 1px;
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--main-surface) 92%, var(--leaf-mint) 3%);
+  box-shadow: inset 0 1px 0 var(--glass-highlight), 0 10px 26px color-mix(in srgb, var(--brand-soft-shadow) 28%, transparent);
+}
+
+.setting-row + .setting-row,
+.settings-card-head {
+  border-width: 1px;
+}
+
+.right-panel-menu {
+  border-width: 1px;
+  border-radius: 18px;
+}
+
+.right-panel-empty-icon {
+  border-radius: 999px;
+  background:
+    radial-gradient(circle at 34% 28%, rgba(255, 255, 255, 0.56), transparent 36%),
+    color-mix(in srgb, var(--accent) 14%, var(--main-surface));
+}

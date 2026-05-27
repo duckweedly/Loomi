@@ -15,6 +15,7 @@ type Dictionary = {
   }
   sidebar: {
     newChat: string
+    newWork: string
     projects: string
     scheduled: string
     threads: string
@@ -23,12 +24,14 @@ type Dictionary = {
     update: string
     current: string
     open: string
+    threadActions: string
     light: string
     dark: string
     archiveThread: string
     renameThread: string
     loadingThreads: string
     retry: string
+    searchThreads: string
     emptyThreads: (mode: string) => string
   }
   runtime: {
@@ -103,9 +106,21 @@ type Dictionary = {
     stop: string
     retry: string
     regenerate: string
+    copy: string
+    model: string
+    modelUnavailable: string
     attach: string
+    pasteImage: string
+    attachmentPending: string
+    chooseWorkspaceFolder: string
+    workspaceRootHome: string
+    workspaceRootSelected: (name: string) => string
     messageLoomi: string
+    describeTask: string
+    workReadOnlyComposer: string
     providerUnavailableWarning: string
+    localCodexUnsupportedWarning: string
+    localCodexUnavailableWarning: string
     openProviderSettings: string
     stoppedDraft: string
     recoveringDraft: string
@@ -136,24 +151,10 @@ type Dictionary = {
     workspaceDefaultsDescription: string
     defaultWorkspaceMode: string
     defaultWorkspaceModeHelper: string
-    mockRuntimeScenario: string
-    mockRuntimeScenarioHelper: string
-    success: string
-    failure: string
-    runtimeStatus: string
-    runtimeStatusDescription: string
-    dataSourceMode: string
-    dataSourceModeHelper: string
-    backendCapability: string
-    backendCapabilityHelper: string
-    streamState: string
-    streamStateHelper: string
-    selectedThread: string
-    selectedThreadHelper: string
-    selectedRunStatus: string
-    selectedRunStatusHelper: string
-    providerCapability: string
-    providerCapabilityHelper: string
+    theme: string
+    themeHelper: string
+    light: string
+    dark: string
     providerConsoleTitle: string
     providerConsoleDescription: string
     providerConfiguredProviders: string
@@ -162,6 +163,23 @@ type Dictionary = {
     providerConsoleEnvGuide: string
     providerTestConnection: string
     providerChecking: string
+    providerAdd: string
+    providerSearchPlaceholder: string
+    providerFilterLabel: string
+    providerFilterAll: string
+    providerFilterEnabled: string
+    providerFilterLocal: string
+    providerFilterCloud: string
+    providerName: string
+    providerType: string
+    providerAdvancedOptions: string
+    providerHeaders: string
+    providerHeaderName: string
+    providerHeaderValue: string
+    providerAddHeader: string
+    cancel: string
+    close: string
+    remove: string
     providerCheckResult: (status: string, message?: string) => string
     providerLocalDraftTitle: string
     providerLocalDraftDescription: string
@@ -178,6 +196,22 @@ type Dictionary = {
     providerApiKeyHelper: string
     providerConfigured: string
     providerNotConfigured: string
+    localProviderAutodetectTitle: string
+    localProviderAutodetectDescription: string
+    localProviderDetected: string
+    localProviderNotDetected: string
+    localProviderNeedsLogin: string
+    localProviderUnsupported: string
+    localProviderExplicitOptIn: string
+    localProviderNoSecrets: string
+    localProviderDetectAction: string
+    localProviderDetectionIdle: string
+    localProviderEnableForSession: string
+    localProviderDisableForSession: string
+    localProviderSessionLocal: string
+    localProviderCredentialRedacted: string
+    localProviderExecutionUnsupported: string
+    localProviderExecutionSupported: string
     aboutLocalApp: string
     aboutLocalAppDescription: string
     appName: string
@@ -207,6 +241,7 @@ export const dictionaries: Record<Locale, Dictionary> = {
     },
     sidebar: {
       newChat: '新对话',
+      newWork: '新工作',
       projects: '项目',
       scheduled: '计划任务',
       threads: '会话',
@@ -215,12 +250,14 @@ export const dictionaries: Record<Locale, Dictionary> = {
       update: '更新',
       current: '当前',
       open: '打开',
+      threadActions: '会话操作',
       light: '浅色',
       dark: '深色',
-      archiveThread: '归档会话',
+      archiveThread: '删除会话',
       renameThread: '重命名会话',
       loadingThreads: '加载会话中',
       retry: '重试',
+      searchThreads: '搜索会话',
       emptyThreads: (mode) => `暂无 ${mode} 会话`,
     },
     runtime: {
@@ -310,9 +347,21 @@ export const dictionaries: Record<Locale, Dictionary> = {
       stop: '停止',
       retry: '重试',
       regenerate: '重新生成',
+      copy: '复制',
+      model: '模型',
+      modelUnavailable: '无可用模型',
       attach: '附件',
+      pasteImage: '剪贴板图片',
+      attachmentPending: '随本条消息发送',
+      chooseWorkspaceFolder: '选择目录',
+      workspaceRootHome: '默认 Home',
+      workspaceRootSelected: (name: string) => `目录：${name}`,
       messageLoomi: '给 Loomi 发消息',
+      describeTask: '描述你要 Loomi 完成的任务',
+      workReadOnlyComposer: 'M16 Work mode 只读展示计划和进度',
       providerUnavailableWarning: '模型 Provider 未配置或不可用',
+      localCodexUnsupportedWarning: 'Local Codex 已启用，但暂不支持执行',
+      localCodexUnavailableWarning: 'Local Codex 登录态不可用，请重新检测或配置 OpenAI-compatible provider',
       openProviderSettings: '打开设置',
       stoppedDraft: '已停止生成，保留已生成内容',
       recoveringDraft: '恢复中…',
@@ -338,29 +387,15 @@ export const dictionaries: Record<Locale, Dictionary> = {
       noThreadSelected: '未选择会话',
       noActiveRun: '无活动运行',
       general: '通用',
-      generalDescription: '当前会话的工作区默认值和运行状态可见性。',
+      generalDescription: '当前会话的基础偏好。',
       workspaceDefaults: '工作区默认值',
       workspaceDefaultsDescription: '只影响后续本地工作区动作的当前会话偏好。',
       defaultWorkspaceMode: '默认工作区模式',
       defaultWorkspaceModeHelper: '影响之后从侧边栏创建的本地会话。',
-      mockRuntimeScenario: 'Mock 运行场景',
-      mockRuntimeScenarioHelper: '只影响之后的 mock 发送，不修改正在运行的任务。',
-      success: '成功',
-      failure: '失败',
-      runtimeStatus: '运行状态',
-      runtimeStatusDescription: '当前工作区运行状态的只读视图。',
-      dataSourceMode: '数据源模式',
-      dataSourceModeHelper: '显示前端正在使用 mock 数据还是本地 API。',
-      backendCapability: '后端能力',
-      backendCapabilityHelper: '显示运行能力可用性，不暴露凭证。',
-      streamState: '流状态',
-      streamStateHelper: '显示当前运行事件流状态。',
-      selectedThread: '当前会话',
-      selectedThreadHelper: '显示打开设置时保留的工作区上下文。',
-      selectedRunStatus: '当前运行状态',
-      selectedRunStatusHelper: '显示当前运行状态，不修改运行。',
-      providerCapability: 'Provider 能力',
-      providerCapabilityHelper: '可用时只显示已脱敏的 provider id、family、model 和 status。',
+      theme: '主题',
+      themeHelper: '切换当前工作区界面的明暗显示。',
+      light: '浅色',
+      dark: '深色',
       providerConsoleTitle: 'Provider Test Console',
       providerConsoleDescription: '读取后端已配置的 provider，并可安全触发一次连接测试。',
       providerConfiguredProviders: '已配置 Provider',
@@ -369,6 +404,23 @@ export const dictionaries: Record<Locale, Dictionary> = {
       providerConsoleEnvGuide: '保存一个本地 OpenAI-compatible provider 后即可测试连接。',
       providerTestConnection: '测试连接',
       providerChecking: '测试中',
+      providerAdd: '添加供应商',
+      providerSearchPlaceholder: '搜索供应商...',
+      providerFilterLabel: '供应商筛选',
+      providerFilterAll: '全部',
+      providerFilterEnabled: '已启用',
+      providerFilterLocal: '本地',
+      providerFilterCloud: '云端',
+      providerName: '供应商名称',
+      providerType: '类型',
+      providerAdvancedOptions: '高级选项',
+      providerHeaders: 'Headers',
+      providerHeaderName: 'Header 名称',
+      providerHeaderValue: 'Header 值',
+      providerAddHeader: '添加 Header',
+      cancel: '取消',
+      close: '关闭',
+      remove: '移除',
       providerCheckResult: (status, message) => `${status === 'success' ? '成功' : status === 'failed' ? '失败' : '测试中'}${message ? ` · ${message}` : ''}`,
       providerLocalDraftTitle: '本地 Provider',
       providerLocalDraftDescription: '保存 OpenAI-compatible provider 到本地 API 进程，用于真实模型调用；密钥只提交给后端，不会在界面回显。',
@@ -385,6 +437,22 @@ export const dictionaries: Record<Locale, Dictionary> = {
       providerApiKeyHelper: '密钥只发送给本地 API 保存到当前进程，不会从接口返回或在界面回显。',
       providerConfigured: '已填写',
       providerNotConfigured: '未填写',
+      localProviderAutodetectTitle: '本地 Provider 自动检测',
+      localProviderAutodetectDescription: '只检测 Claude Code / Codex 登录态或密钥是否可能可用；不会启用、读取明文或发起模型调用。',
+      localProviderDetected: 'detected',
+      localProviderNotDetected: 'not detected',
+      localProviderNeedsLogin: 'needs login',
+      localProviderUnsupported: 'unsupported',
+      localProviderExplicitOptIn: 'requires explicit opt-in before use',
+      localProviderNoSecrets: 'no secrets shown',
+      localProviderDetectAction: '检测本机 Provider',
+      localProviderDetectionIdle: '点击检测后才会读取本机 Provider 可用性摘要。',
+      localProviderEnableForSession: '本会话启用',
+      localProviderDisableForSession: '禁用本会话',
+      localProviderSessionLocal: 'session-local',
+      localProviderCredentialRedacted: 'credential redacted',
+      localProviderExecutionUnsupported: 'Local Codex is enabled but execution is not supported yet',
+      localProviderExecutionSupported: 'execution supported',
       aboutLocalApp: '本地应用状态',
       aboutLocalAppDescription: '显示已知本地状态；构建和账号信息仍是占位。',
       appName: '应用',
@@ -392,7 +460,7 @@ export const dictionaries: Record<Locale, Dictionary> = {
       appVersion: '版本',
       appVersionHelper: 'M5.5 暂不读取构建版本。',
       appStatus: '状态',
-      appStatusHelper: '当前数据源和后端能力的组合状态。',
+      appStatusHelper: '真实 API 和后端能力的组合状态。',
       previewControl: '预览控件',
       previewControlHelper: 'Mock only。该控件未连接 provider、工具、文件或后端写入。',
       connectionState: '连接状态',
@@ -412,6 +480,7 @@ export const dictionaries: Record<Locale, Dictionary> = {
     },
     sidebar: {
       newChat: 'New Chat',
+      newWork: 'New Work',
       projects: 'Projects',
       scheduled: 'Scheduled',
       threads: 'Threads',
@@ -420,12 +489,14 @@ export const dictionaries: Record<Locale, Dictionary> = {
       update: 'Update',
       current: 'Current',
       open: 'Open',
+      threadActions: 'Thread actions',
       light: 'Light',
       dark: 'Dark',
-      archiveThread: 'Archive thread',
+      archiveThread: 'Delete thread',
       renameThread: 'Rename thread',
       loadingThreads: 'Loading threads',
       retry: 'Retry',
+      searchThreads: 'Search threads',
       emptyThreads: (mode) => `No ${mode} threads`,
     },
     runtime: {
@@ -515,10 +586,22 @@ export const dictionaries: Record<Locale, Dictionary> = {
       stop: 'Stop',
       retry: 'Retry',
       regenerate: 'Regenerate',
+      copy: 'Copy',
+      model: 'Model',
+      modelUnavailable: 'No model',
       attach: 'Attach',
+      pasteImage: 'Clipboard image',
+      attachmentPending: 'queued for this message',
+      chooseWorkspaceFolder: 'Choose folder',
+      workspaceRootHome: 'Default Home',
+      workspaceRootSelected: (name: string) => `Folder: ${name}`,
       messageLoomi: 'Message Loomi',
+      describeTask: 'Describe the task for Loomi',
+      workReadOnlyComposer: 'M16 Work mode is read-only for plan and progress',
       providerUnavailableWarning: 'Model provider is not configured or unavailable',
-      openProviderSettings: 'Open Settings',
+      localCodexUnsupportedWarning: 'Local Codex is enabled but execution is not supported yet',
+      localCodexUnavailableWarning: 'Local Codex login is unavailable. Detect again or configure an OpenAI-compatible provider',
+      openProviderSettings: 'Provider Settings',
       stoppedDraft: 'Generation stopped; generated content was preserved',
       recoveringDraft: 'Recovering…',
       modelDrafting: 'Model is drafting a reply',
@@ -543,29 +626,15 @@ export const dictionaries: Record<Locale, Dictionary> = {
       noThreadSelected: 'No thread selected',
       noActiveRun: 'No active run',
       general: 'General',
-      generalDescription: 'Current-session workspace defaults and runtime visibility.',
+      generalDescription: 'Basic preferences for the current session.',
       workspaceDefaults: 'Workspace defaults',
       workspaceDefaultsDescription: 'Session-local preferences for future local workspace actions.',
       defaultWorkspaceMode: 'Default workspace mode',
       defaultWorkspaceModeHelper: 'Applies to future local conversations created from the sidebar.',
-      mockRuntimeScenario: 'Mock runtime scenario',
-      mockRuntimeScenarioHelper: 'Applies only to future mock sends and does not mutate active runs.',
-      success: 'Success',
-      failure: 'Failure',
-      runtimeStatus: 'Runtime status',
-      runtimeStatusDescription: 'Read-only visibility for the currently selected workspace runtime.',
-      dataSourceMode: 'Data source mode',
-      dataSourceModeHelper: 'Shows whether the frontend is using mock data or the local API.',
-      backendCapability: 'Backend capability',
-      backendCapabilityHelper: 'Displays runtime availability without exposing credentials.',
-      streamState: 'Stream state',
-      streamStateHelper: 'Shows the selected run event stream state.',
-      selectedThread: 'Selected thread',
-      selectedThreadHelper: 'Shows the workspace context preserved while Settings is open.',
-      selectedRunStatus: 'Selected run status',
-      selectedRunStatusHelper: 'Shows the current run state without changing the run.',
-      providerCapability: 'Provider capability',
-      providerCapabilityHelper: 'Shows redacted provider id, family, model, and status when available.',
+      theme: 'Theme',
+      themeHelper: 'Switches the current workspace between light and dark appearance.',
+      light: 'Light',
+      dark: 'Dark',
       providerConsoleTitle: 'Provider Test Console',
       providerConsoleDescription: 'Reads configured providers and safely triggers a connection test.',
       providerConfiguredProviders: 'Configured providers',
@@ -574,6 +643,23 @@ export const dictionaries: Record<Locale, Dictionary> = {
       providerConsoleEnvGuide: 'Save a local OpenAI-compatible provider to test the connection.',
       providerTestConnection: 'Test connection',
       providerChecking: 'Checking',
+      providerAdd: 'Add provider',
+      providerSearchPlaceholder: 'Search providers...',
+      providerFilterLabel: 'Provider filters',
+      providerFilterAll: 'All',
+      providerFilterEnabled: 'Enabled',
+      providerFilterLocal: 'Local',
+      providerFilterCloud: 'Cloud',
+      providerName: 'Provider name',
+      providerType: 'Type',
+      providerAdvancedOptions: 'Advanced options',
+      providerHeaders: 'Headers',
+      providerHeaderName: 'Header name',
+      providerHeaderValue: 'Header value',
+      providerAddHeader: 'Add Header',
+      cancel: 'Cancel',
+      close: 'Close',
+      remove: 'Remove',
       providerCheckResult: (status, message) => `${status === 'success' ? 'Success' : status === 'failed' ? 'Failed' : 'Checking'}${message ? ` · ${message}` : ''}`,
       providerLocalDraftTitle: 'Local provider',
       providerLocalDraftDescription: 'Save an OpenAI-compatible provider into the local API process for real model calls. Keys are submitted to the backend and never echoed in the UI.',
@@ -590,6 +676,22 @@ export const dictionaries: Record<Locale, Dictionary> = {
       providerApiKeyHelper: 'The key is sent only to the local API and is never returned or echoed in the UI.',
       providerConfigured: 'Set',
       providerNotConfigured: 'Not set',
+      localProviderAutodetectTitle: 'Local provider autodetect',
+      localProviderAutodetectDescription: 'Detects whether Claude Code or Codex may be usable locally; it does not enable providers, show secrets, or start model calls.',
+      localProviderDetected: 'detected',
+      localProviderNotDetected: 'not detected',
+      localProviderNeedsLogin: 'needs login',
+      localProviderUnsupported: 'unsupported',
+      localProviderExplicitOptIn: 'requires explicit opt-in before use',
+      localProviderNoSecrets: 'no secrets shown',
+      localProviderDetectAction: 'Detect local providers',
+      localProviderDetectionIdle: 'Run detection to inspect local provider availability.',
+      localProviderEnableForSession: 'Enable for this session',
+      localProviderDisableForSession: 'Disable for this session',
+      localProviderSessionLocal: 'session-local',
+      localProviderCredentialRedacted: 'credential redacted',
+      localProviderExecutionUnsupported: 'Local Codex is enabled but execution is not supported yet',
+      localProviderExecutionSupported: 'execution supported',
       aboutLocalApp: 'Local app status',
       aboutLocalAppDescription: 'Shows known local state; build and account metadata remain placeholders.',
       appName: 'Application',
@@ -597,7 +699,7 @@ export const dictionaries: Record<Locale, Dictionary> = {
       appVersion: 'Version',
       appVersionHelper: 'M5.5 does not read build metadata yet.',
       appStatus: 'Status',
-      appStatusHelper: 'Combined current data source and backend capability.',
+      appStatusHelper: 'Combined Real API and backend capability status.',
       previewControl: 'Preview control',
       previewControlHelper: 'Mock only. This control is not connected to providers, tools, files, or backend writes.',
       connectionState: 'Connection state',

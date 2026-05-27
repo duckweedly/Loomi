@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { Message, Run, Thread } from './domain'
-import { createWorkspaceSettingsState, mergeRunEvents, redactProviderCheckMessage, shouldApplyRunStreamEvent, getWorkspaceRefreshThreadId, shouldApplySendMessageResult, shouldApplyWorkspaceRefresh, shouldSelectWorkspaceRefreshThread } from './state'
+import { createWorkspaceSettingsState, mergeRunEvents, redactProviderCheckMessage, shouldApplyLatestRequest, shouldApplyRunStreamEvent, getWorkspaceRefreshThreadId, shouldApplySendMessageResult, shouldApplyWorkspaceRefresh, shouldSelectWorkspaceRefreshThread } from './state'
 
 const threadA: Thread = {
   id: 'thread-a',
@@ -59,6 +59,30 @@ describe('provider check state helpers', () => {
     expect(source).toContain('checkProvider')
     expect(source).toContain('apiClient.checkModelProvider')
     expect(source).toContain('redactProviderCheckMessage')
+  })
+
+  test('local provider detections require an explicit action and stay separate from configured providers', async () => {
+    const source = await Bun.file(new URL('./state.ts', import.meta.url)).text()
+
+    expect(source).toContain('localProviderDetections')
+    expect(source).toContain('detectLocalProviders')
+    expect(source).toContain('enableLocalProvider')
+    expect(source).toContain('disableLocalProvider')
+    expect(source).toContain('apiClient.listLocalProviderDetections')
+    expect(source).toContain('setLocalProviderDetections')
+    expect(source).not.toContain('apiClient.listLocalProviderDetections()\\n      .then')
+    expect(source).not.toContain('setProviderCapabilities(localProviderDetections')
+  })
+
+  test('local provider enablement refreshes configured providers without exposing secrets', async () => {
+    const source = await Bun.file(new URL('./state.ts', import.meta.url)).text()
+
+    expect(source).toContain('apiClient.enableLocalProvider')
+    expect(source).toContain('apiClient.disableLocalProvider')
+    expect(source).toContain('setProviderCapabilities')
+    expect(source).toContain('redactProviderCapabilityMessage')
+    expect(source).not.toContain('access_token')
+    expect(source).not.toContain('refresh_token')
   })
 })
 
@@ -131,6 +155,8 @@ describe('run stream state helpers', () => {
       expect(source).resolves.toContain('apiClient.subscribeRunEvents'),
       expect(source).resolves.toContain('recoverable_error'),
       expect(source).resolves.toContain('mergeRunEvents'),
+      expect(source).resolves.toContain('reconcileActiveRun'),
+      expect(source).resolves.toContain('window.setInterval'),
       expect(source).resolves.not.toContain('run?.events.length'),
     ])
   })
@@ -145,5 +171,23 @@ describe('run stream state helpers', () => {
 
     expect(merged.map((event) => event.id)).toEqual(['evt-10', 'evt-2'])
     expect(merged.at(-1)?.status).toBe('running')
+  })
+})
+
+describe('memory request freshness', () => {
+  test('rejects older memory list audit and detail responses after a newer request starts', () => {
+    expect(shouldApplyLatestRequest(1, 2)).toBe(false)
+    expect(shouldApplyLatestRequest(2, 2)).toBe(true)
+  })
+
+  test('state hook guards memory list audit and detail async results', async () => {
+    const source = await Bun.file(new URL('./state.ts', import.meta.url)).text()
+
+    expect(source).toContain('memoryEntriesRequestRef')
+    expect(source).toContain('memoryAuditRequestRef')
+    expect(source).toContain('memoryDetailRequestRef')
+    expect(source).toContain('shouldApplyLatestRequest(requestID, memoryEntriesRequestRef.current)')
+    expect(source).toContain('shouldApplyLatestRequest(requestID, memoryAuditRequestRef.current)')
+    expect(source).toContain('shouldApplyLatestRequest(requestID, memoryDetailRequestRef.current)')
   })
 })

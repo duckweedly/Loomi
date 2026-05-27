@@ -8,6 +8,7 @@ import (
 	"github.com/sheridiany/loomi/internal/diagnostics"
 	"github.com/sheridiany/loomi/internal/identity"
 	"github.com/sheridiany/loomi/internal/productdata"
+	productruntime "github.com/sheridiany/loomi/internal/runtime"
 )
 
 type identityResponse struct {
@@ -28,6 +29,11 @@ type threadListResponse struct {
 type personaListResponse struct {
 	Personas  []productdata.Persona `json:"personas"`
 	RequestID string                `json:"request_id"`
+}
+
+type skillListResponse struct {
+	Skills    []productruntime.InstalledSkill `json:"skills"`
+	RequestID string                          `json:"request_id"`
 }
 
 type messageResponse struct {
@@ -112,6 +118,14 @@ func (s *Server) handleThreadByID(w http.ResponseWriter, r *http.Request) {
 		s.handleThreadMessages(w, r, threadID)
 		return
 	}
+	if suffix == "artifacts" || strings.HasPrefix(suffix, "artifacts/") {
+		s.handleThreadArtifacts(w, r, threadID, suffix)
+		return
+	}
+	if suffix == "agent-tasks" {
+		s.handleThreadAgentTasks(w, r, threadID, suffix)
+		return
+	}
 	if suffix == "runs" || suffix == "runs/current" {
 		s.handleThreadRuns(w, r, threadID)
 		return
@@ -174,6 +188,22 @@ func (s *Server) handlePersonas(w http.ResponseWriter, r *http.Request) {
 		personas = []productdata.Persona{}
 	}
 	writeJSON(w, http.StatusOK, personaListResponse{Personas: personas, RequestID: diagnostics.NewRequestID()})
+}
+
+func (s *Server) handleSkills(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeMethodNotAllowed(w, "GET")
+		return
+	}
+	skills, err := productruntime.DiscoverInstalledSkills(s.skillDiscoveryInput)
+	if err != nil {
+		writeAPIError(w, productdata.NewError(productdata.CodeInternalError, "Skill discovery failed."))
+		return
+	}
+	if skills == nil {
+		skills = []productruntime.InstalledSkill{}
+	}
+	writeJSON(w, http.StatusOK, skillListResponse{Skills: skills, RequestID: diagnostics.NewRequestID()})
 }
 
 func (s *Server) handleArchiveThread(w http.ResponseWriter, r *http.Request, threadID string) {

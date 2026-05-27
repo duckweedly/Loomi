@@ -1,0 +1,74 @@
+openapi: 3.0.3
+info:
+  title: Loomi Memory Provider Foundation
+  version: 0.1.0
+paths:
+  /v1/memory/provider:
+    get:
+      summary: Get memory provider configuration and safe status
+      responses:
+        "200":
+          description: Current memory provider state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MemoryProviderStatus"
+    put:
+      summary: Update memory provider preferences
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MemoryProviderUpdate"
+      responses:
+        "200":
+          description: Updated memory provider state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MemoryProviderStatus"
+components:
+  schemas:
+    MemoryProviderUpdate:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+        provider:
+          type: string
+          enum: [local, semantic]
+        commit_after_run:
+          type: boolean
+        semantic_endpoint:
+          type: string
+      additionalProperties: false
+    MemoryProviderStatus:
+      type: object
+      required: [enabled, provider, label, state, configured, diagnostic]
+      properties:
+        enabled:
+          type: boolean
+        provider:
+          type: string
+        label:
+          type: string
+        state:
+          type: string
+          enum: [disabled, available, unconfigured, healthy, unhealthy, degraded]
+        configured:
+          type: boolean
+        commit_after_run:
+          type: boolean
+        checked_at:
+          type: string
+          format: date-time
+          nullable: true
+        diagnostic:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+            message:
+              type: string

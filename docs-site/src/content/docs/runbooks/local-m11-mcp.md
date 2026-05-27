@@ -19,10 +19,24 @@ This runbook validates the M11 minimal slice:
 
 ```bash
 go test ./internal/productdata ./internal/runtime ./internal/httpapi ./cmd/...
-bun test ./web/src/realApiClient.test.ts ./web/src/runtime/runtimeEventGroups.test.ts ./web/src/components/RunTimeline.runtime.test.ts
-bun run --cwd web build
+bun test ./web/src/realApiClient.test.ts ./web/src/runtime/realExecutionAdapter.test.ts ./web/src/runtime/runtimeEventGroups.test.ts ./web/src/components/RunTimeline.runtime.test.ts ./web/src/components/RunRail.runtime.test.ts
 bun run --cwd docs-site build
+git diff --check
 ```
+
+## Real Local Stdio Smoke
+
+`internal/runtime/mcp_discovery_test.go` includes `TestDiscoverMCPToolsRunsLocalStdioListToolsSmokeWithoutLeaks`, a repeatable local stdio fixture smoke.
+
+The smoke launches the Go test binary itself as an enabled local stdio MCP server fixture. The fixture reads Loomi's MCP stdin frames, fails if it receives `tools/call`, and responds only to `tools/list` with one `echo` tool. The config intentionally includes sensitive-looking args, env, and fixture stderr; the assertion verifies the RunContext safe summary contains only safe MCP availability fields such as `mcp.local-smoke.echo`, disabled execution state, and discovery counts.
+
+Expected evidence:
+
+- enabled local stdio config can discover/list-tools through the real stdio runner
+- no MCP tool execution request is sent
+- discovered tool is projected as `mcp.local-smoke.echo`
+- execution remains disabled/non-executable
+- safe summary does not include env values, args, stderr text, token-like values, or private paths
 
 ## Backend Checks
 

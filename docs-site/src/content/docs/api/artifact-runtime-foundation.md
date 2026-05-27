@@ -1,0 +1,86 @@
+---
+title: Artifact Runtime Tool API
+description: Catalog, arguments, and result contract for M28 artifact tools.
+---
+
+## Catalog Entries
+
+`GET /v1/tools/catalog` includes:
+
+```json
+{
+  "name": "artifact.create_text",
+  "source": "builtin",
+  "group": "artifact",
+  "risk_level": "medium",
+  "approval_policy": "always_required",
+  "execution_state": "executable",
+  "safe_metadata": {
+    "scope": "artifact",
+    "read_only": false,
+    "non_executable": true,
+    "arguments": ["title", "content", "max_bytes"]
+  }
+}
+```
+
+`artifact.read` and `artifact.list` use `read_only = true`.
+
+## Arguments
+
+`artifact.create_text`:
+
+```json
+{
+  "title": "Implementation Notes",
+  "content": "Bounded UTF-8 text",
+  "max_bytes": 32768
+}
+```
+
+`artifact.read`:
+
+```json
+{
+  "artifact_id": "art_...",
+  "max_bytes": 4096
+}
+```
+
+`artifact.list`:
+
+```json
+{
+  "limit": 20
+}
+```
+
+## Result Summary
+
+```json
+{
+  "tool": "artifact.create_text",
+  "scope": "artifact",
+  "operation": "create_text",
+  "artifact_id": "art_...",
+  "title": "Implementation Notes",
+  "artifact_type": "text",
+  "content_bytes": 1200,
+  "text_excerpt": "Bounded UTF-8 text",
+  "truncated": false,
+  "redaction_applied": false
+}
+```
+
+Events and continuation context persist safe summaries only. They do not include raw unbounded content, executable controls, credentials, local paths, or raw provider payloads.
+
+## Read-only HTTP Projection
+
+The CLI and UI may inspect persisted artifacts through thread-scoped read-only endpoints:
+
+- `GET /v1/threads/:thread_id/artifacts?limit=20`
+- `GET /v1/threads/:thread_id/artifacts/:artifact_id?max_bytes=4096`
+
+Responses return safe artifact fields only: id, thread/run ids, title, type, content byte count, bounded `text_excerpt`, truncation flag, and timestamps. List responses do not include a raw `content` field. Cross-thread reads return `artifact_not_found`.
+
+There is intentionally no HTTP create/update/delete endpoint in this slice. Artifact creation remains an approval-gated Work-mode tool call.

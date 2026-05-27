@@ -6,7 +6,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { Composer } from './Composer'
 
 describe('Composer interactions', () => {
-  test('renders retry and regenerate controls when enabled', () => {
+  test('keeps retry and regenerate out of the input composer', () => {
     const html = renderToStaticMarkup(createElement(Composer, {
       threadSelected: true,
       run: { id: 'run-a', threadId: 'thread-a', status: 'failed', model: 'Mock', context: 'M3.5 mock', events: [] },
@@ -17,8 +17,8 @@ describe('Composer interactions', () => {
       onRegenerate: () => {},
     }))
 
-    expect(html).toContain('Retry')
-    expect(html).toContain('Regenerate')
+    expect(html).not.toContain('Retry')
+    expect(html).not.toContain('Regenerate')
   })
 
   test('renders stop control for an active run', () => {
@@ -60,26 +60,56 @@ describe('Composer interactions', () => {
     const source = readFileSync(resolve(import.meta.dir, 'Composer.tsx'), 'utf8')
 
     expect(source).toContain('deriveComposerActions({ threadSelected, text: value, run, messages, providerUnavailable })')
-    expect(source).toContain('if (composerDisabled || !canSubmit || !content) return')
+    expect(source).toContain('if (composerDisabled || !canSubmit || (!content && !hasAttachments)) return')
   })
 
-  test('renders persona selector with the active version label', () => {
+  test('renders attachment and model affordances without unused persona or voice controls', () => {
     const html = renderToStaticMarkup(createElement(Composer, {
       threadSelected: true,
       run: undefined,
       messages: [],
-      personas: [
-        { id: 'persona-default', slug: 'loomi-default', name: 'Default', description: 'General Loomi persona', activeVersion: '2026-05-25.1', isDefault: true },
-      ],
-      selectedPersonaId: 'persona-default',
-      onSelectPersona: () => {},
+      modelOptions: [{ key: 'custom:gpt-5.5', providerId: 'custom', model: 'gpt-5.5', label: 'gpt-5.5 · openai_compatible' }],
       onSubmit: () => {},
       onStop: () => {},
       onRetry: () => {},
       onRegenerate: () => {},
     }))
 
-    expect(html).toContain('aria-label="Persona"')
-    expect(html).toContain('Default v2026-05-25.1')
+    expect(html).not.toContain('aria-label="Persona"')
+    expect(html).toContain('composer-model-select')
+    expect(html).toContain('gpt-5.5 · openai_compatible')
+    expect(html).toContain('type="file"')
+    expect(html).toContain('accept="image/*,.pdf')
+    expect(html).not.toContain('lucide-mic')
+  })
+
+  test('renders mode-specific placeholder and honest folder limitation state', () => {
+    const chatHtml = renderToStaticMarkup(createElement(Composer, {
+      mode: 'chat',
+      threadSelected: true,
+      run: null,
+      messages: [],
+      onSubmit: () => {},
+    }))
+    const workHtml = renderToStaticMarkup(createElement(Composer, {
+      mode: 'work',
+      threadSelected: true,
+      run: null,
+      messages: [],
+      dataSourceMode: 'mock',
+      workspaceFolderStatus: 'Default Home',
+      onSubmit: () => {},
+      onChooseWorkspaceFolder: () => {},
+    }))
+
+    expect(chatHtml).toContain('placeholder="Message Loomi"')
+    expect(chatHtml).not.toContain('No folder selected')
+    expect(chatHtml).not.toContain('Work tools limited')
+    expect(workHtml).toContain('placeholder="Describe the task for Loomi"')
+    expect(workHtml).not.toContain('No folder selected')
+    expect(workHtml).not.toContain('Work tools limited')
+    expect(workHtml).not.toContain('Mock demo mode')
+    expect(workHtml).toContain('选择目录')
+    expect(workHtml).toContain('Default Home')
   })
 })

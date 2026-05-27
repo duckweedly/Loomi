@@ -18,6 +18,7 @@ export function mapRuntimeEventGroup(event: RunEvent): RuntimeEventGroup {
   if (isErrorEvent(event)) return 'error'
   if (event.group) return event.group
   if (event.type.startsWith('model.') || event.type.startsWith('assistant.')) return 'model-stream'
+  if (event.type.startsWith('tool.call.')) return 'tool-call'
   if (event.type.startsWith('worker.') || event.type.startsWith('job.') || event.type.startsWith('pipeline.')) return 'worker-job'
   if (event.type.startsWith('mcp.discovery.') || event.type.startsWith('mcp.tools.')) return 'worker-job'
   if (event.type.startsWith('worker_') || event.type.startsWith('job_') || event.type === 'lease_renewed' || event.type.includes('worker')) return 'worker-job'

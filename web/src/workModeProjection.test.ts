@@ -1,0 +1,263 @@
+import { describe, expect, test } from 'bun:test'
+import type { Message, Run, Thread } from './domain'
+import { deriveWorkPlanProjection, safeWorkMetadataPreview } from './workModeProjection'
+
+const workThread: Thread = { id: 'thread-work', title: 'Ship M16', project: 'Loomi', mode: 'work', updatedAt: 'Now', lifecycleStatus: 'active', runStatus: 'running' }
+const chatThread: Thread = { ...workThread, id: 'thread-chat', mode: 'chat' }
+const messages: Message[] = [{ id: 'msg-1', threadId: workThread.id, role: 'user', content: 'Ship the Work mode foundation', createdAt: 'Now' }]
+
+describe('deriveWorkPlanProjection', () => {
+  test('projects a seeded work thread plan from safe event metadata', () => {
+    const run: Run = {
+      id: 'run-work',
+      threadId: workThread.id,
+      status: 'running',
+      model: 'Model gateway',
+      context: 'model_gateway',
+      events: [{
+        id: 'evt-plan',
+        runId: 'run-work',
+        threadId: workThread.id,
+        sequence: 1,
+        type: 'work.plan.updated',
+        label: 'Work',
+        detail: 'Plan updated',
+        time: 'Now',
+        status: 'running',
+        metadata: {
+          work_goal: 'Deliver Work Plan View',
+          work_steps: [{ id: 'step-1', title: 'Project plan', status: 'completed' }, { id: 'step-2', title: 'Render view', status: 'running' }],
+          work_artifacts: [{ id: 'artifact-1', title: 'M16 plan', type: 'markdown', source_run_id: 'run-work', summary: 'Safe preview', created_at: '2026-05-25' }],
+        },
+      }],
+    }
+
+    const projection = deriveWorkPlanProjection(workThread, messages, run)
+
+    expect(projection?.goal).toBe('Deliver Work Plan View')
+    expect(projection?.steps.map((step) => `${step.title}:${step.status}`)).toEqual(['Project plan:completed', 'Render view:running'])
+    expect(projection?.artifacts[0]).toMatchObject({ title: 'M16 plan', type: 'markdown', sourceRunId: 'run-work', summary: 'Safe preview' })
+    expect(projection?.artifacts[0].redactionApplied).toBe(false)
+    expect(projection?.recentEvents[0].detail).toBe('Plan updated')
+  })
+
+  test('does not project chat mode even when events contain work metadata', () => {
+    const run: Run = { id: 'run-chat', threadId: chatThread.id, status: 'running', model: 'Mock', context: 'local_simulated', events: [{ id: 'evt-chat', type: 'work.plan.updated', label: 'Work', detail: 'Should not render', time: 'Now', status: 'running' }] }
+
+    expect(deriveWorkPlanProjection(chatThread, [], run)).toBeNull()
+  })
+
+  test('replays the latest safe todo snapshot from run event metadata', () => {
+    const run: Run = {
+      id: 'run-work',
+      threadId: workThread.id,
+      status: 'running',
+      model: 'Mock',
+      context: 'local_simulated',
+      events: [
+        {
+          id: 'evt-todo-1',
+          type: 'work.todo.updated',
+          label: 'Todo',
+          detail: 'Todo proposed',
+          time: '10:00',
+          status: 'running',
+          metadata: {
+            todo_items: [
+              { id: 'todo-1', title: 'Find candidate files', status: 'running' },
+              { id: 'todo-2', title: 'Read selected file', status: 'pending' },
+            ],
+            updated_by: 'provider',
+            redaction_applied: false,
+          },
+        },
+        {
+          id: 'evt-todo-2',
+          type: 'work.todo.updated',
+          label: 'Todo',
+          detail: 'Todo advanced',
+          time: '10:01',
+          status: 'running',
+          metadata: {
+            todo_items: [
+              { id: 'todo-1', title: 'Find candidate files', status: 'completed' },
+              { id: 'todo-2', title: 'Read selected file', status: 'running', summary: 'Reading safe metadata only' },
+            ],
+            updated_by: 'runtime',
+            redaction_applied: false,
+          },
+        },
+      ],
+    }
+
+    const projection = deriveWorkPlanProjection(workThread, messages, run)
+
+    expect(projection?.todoSnapshot).toMatchObject({
+      updatedBy: 'runtime',
+      updatedAtEventId: 'evt-todo-2',
+      redactionApplied: false,
+    })
+    expect(projection?.todoSnapshot?.items.map((item) => `${item.title}:${item.status}`)).toEqual(['Find candidate files:completed', 'Read selected file:running'])
+    expect(projection?.todoSnapshot?.items[1].summary).toBe('Reading safe metadata only')
+  })
+
+  test('keeps todo snapshots work-only and strips unsafe todo metadata', () => {
+    const run: Run = {
+      id: 'run-work',
+      threadId: workThread.id,
+      status: 'running',
+      model: 'Mock',
+      context: 'local_simulated',
+      events: [{
+        id: 'evt-todo-secret',
+        type: 'work.todo.updated',
+        label: 'Todo',
+        detail: 'Todo updated with unsafe metadata',
+        time: '10:00',
+        status: 'running',
+        metadata: {
+          todo_items: [{
+            id: 'todo-secret',
+            title: 'Open /Users/xuean/private.md with sk-super-secret-token',
+            status: 'running',
+            summary: 'Run curl https://example.test/private',
+            command: 'bash /tmp/run.sh',
+            file_path: '/Users/xuean/private.md',
+          }],
+          updated_by: 'provider',
+          redaction_applied: false,
+          browser_url: 'https://example.test/private',
+        },
+      }],
+    }
+
+    expect(deriveWorkPlanProjection(chatThread, [], { ...run, threadId: chatThread.id })).toBeNull()
+
+    const projection = deriveWorkPlanProjection(workThread, messages, run)
+    const serialized = JSON.stringify(projection?.todoSnapshot)
+
+    expect(serialized).not.toContain('sk-super-secret-token')
+    expect(serialized).not.toContain('/Users/xuean/private.md')
+    expect(serialized).not.toContain('bash /tmp/run.sh')
+    expect(serialized).not.toContain('https://example.test/private')
+    expect(serialized).not.toContain('command')
+    expect(serialized).not.toContain('file_path')
+    expect(projection?.todoSnapshot?.items[0]).toMatchObject({
+      id: '[redacted]',
+      title: '[redacted]',
+      status: 'running',
+      summary: '[redacted]',
+      redactionApplied: true,
+    })
+    expect(projection?.todoSnapshot?.redactionApplied).toBe(true)
+  })
+
+  test('event replay drives current progress without a separate queue', () => {
+    const initialRun: Run = { id: 'run-work', threadId: workThread.id, status: 'running', model: 'Mock', context: 'local_simulated', events: [] }
+    const replayedRun: Run = {
+      ...initialRun,
+      status: 'completed',
+      events: [
+        { id: 'evt-1', type: 'work.plan.updated', label: 'Work', detail: 'Step started', time: '10:00', status: 'running', metadata: { work_steps: [{ title: 'Replay event', status: 'running' }] } },
+        { id: 'evt-2', type: 'run.completed', label: 'Run', detail: 'Work complete', time: '10:01', status: 'completed' },
+      ],
+    }
+
+    expect(deriveWorkPlanProjection(workThread, messages, initialRun)).toBeNull()
+    const projection = deriveWorkPlanProjection(workThread, messages, replayedRun)
+    expect(projection?.status).toBe('completed')
+    expect(projection?.statusDetail).toBe('Step started')
+    expect(projection?.steps[0].status).toBe('running')
+  })
+
+  test('redacts secret-looking metadata and executable hints in allowed artifact values', () => {
+    const run: Run = {
+      id: 'run-work',
+      threadId: workThread.id,
+      status: 'completed',
+      model: 'Mock',
+      context: 'local_simulated',
+      events: [{
+        id: 'evt-secret',
+        type: 'work.artifact.linked',
+        label: 'Artifact',
+        detail: 'Linked sk-super-secret-token',
+        time: 'Now',
+        status: 'completed',
+        metadata: {
+          work_artifacts: [{
+            title: 'Report sk-super-secret-token',
+            type: 'open /tmp/report.md',
+            summary: 'Open browser at https://example.test/private',
+            created_at: '/Users/xuean/private.md',
+            updated_at: '2026-05-25',
+            command: 'open /tmp/private',
+            file_path: '/Users/xuean/private.md',
+          }],
+        },
+      }],
+    }
+
+    const projection = deriveWorkPlanProjection(workThread, messages, run)
+    const serialized = JSON.stringify(projection)
+
+    expect(serialized).not.toContain('sk-super-secret-token')
+    expect(serialized).not.toContain('https://example.test/private')
+    expect(serialized).not.toContain('open /tmp/private')
+    expect(serialized).not.toContain('/Users/xuean/private.md')
+    expect(projection?.artifacts[0].title).toBe('[redacted]')
+    expect(projection?.artifacts[0].type).toBe('[redacted]')
+    expect(projection?.artifacts[0].summary).toBe('[redacted]')
+    expect(projection?.artifacts[0].createdAt).toBe('[redacted]')
+    expect(projection?.artifacts[0].updatedAt).toBe('2026-05-25')
+    expect(projection?.artifacts[0].redactionApplied).toBe(true)
+    expect(safeWorkMetadataPreview({ token: 'sk-super-secret-token', title: 'Safe note', source: 'https://example.test/private', command: 'run this' })).toBe('token: [redacted] · title: Safe note · source: [redacted]')
+  })
+
+  test('projects M17 local seed metadata with redaction marker and recent progress', () => {
+    const run: Run = {
+      id: 'run-m17',
+      threadId: workThread.id,
+      status: 'running',
+      model: 'Local simulated',
+      context: 'local_simulated',
+      events: [{
+        id: 'evt-m17',
+        runId: 'run-m17',
+        threadId: workThread.id,
+        sequence: 3,
+        type: 'work.plan.updated',
+        label: 'progress',
+        detail: 'M17 Work artifact evidence linked',
+        time: '2026-05-25T00:00:00Z',
+        status: 'running',
+        metadata: {
+          work_goal: 'Close out M17 Work artifact evidence with repeatable real event replay',
+          work_steps: [{ id: 'm17-step-seed', title: 'Create local evidence seed', status: 'completed' }],
+          work_artifacts: [{
+            id: 'm17-artifact-evidence',
+            title: 'M17 Work artifact evidence',
+            type: 'markdown',
+            source_thread_id: workThread.id,
+            source_run_id: 'run-m17',
+            summary: 'Safe metadata-only artifact evidence from local seed.',
+            created_at: '2026-05-25T00:00:00Z',
+            updated_at: '2026-05-25T00:00:00Z',
+            redaction_applied: true,
+            command: '[redacted]',
+            private_path: '[redacted]',
+          }],
+        },
+      }],
+    }
+
+    const projection = deriveWorkPlanProjection(workThread, messages, run)
+
+    expect(projection?.goal).toContain('M17 Work artifact evidence')
+    expect(projection?.steps[0]).toMatchObject({ id: 'm17-step-seed', title: 'Create local evidence seed', status: 'completed' })
+    expect(projection?.artifacts[0]).toMatchObject({ id: 'm17-artifact-evidence', sourceThreadId: workThread.id, sourceRunId: 'run-m17', redactionApplied: true })
+    expect(JSON.stringify(projection)).not.toContain('command')
+    expect(JSON.stringify(projection)).not.toContain('private_path')
+    expect(projection?.recentEvents[0].detail).toBe('M17 Work artifact evidence linked')
+  })
+})

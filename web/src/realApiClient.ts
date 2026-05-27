@@ -1,12 +1,19 @@
 import type { ApiClient } from './apiClient'
-import type { Message, Persona, ProviderCapability, ProviderFamily, Run, RunEvent, RunSource, RunStatus, Thread, ToolCall, WorkerQueueDiagnostics, WorkerQueueStatus, WorkerStatus } from './domain'
-import { isRuntimeTerminal } from './runtime/executionAdapter'
+import type { InstalledSkill, LocalProviderDetection, MCPServerConfigInput, MCPServerStatus, MemoryAuditItem, MemoryEntry, MemoryErrorEvent, MemoryFilters, MemoryImpressionSnapshot, MemoryOverviewSnapshot, MemoryProviderStatus, MemoryProviderUpdate, MemoryWriteProposal, Message, Persona, ProviderCapability, ProviderFamily, Run, RunEvent, RunSource, RunStatus, Thread, ToolCall, ToolCatalogItem, WebSearchConfig, WorkerQueueDiagnostics, WorkerQueueStatus, WorkerStatus, WorkspaceRootConfig } from './domain'
+import { isRuntimeActive, isRuntimeTerminal } from './runtime/executionAdapter'
 import { applyRealRunEvent } from './runtime/realExecutionAdapter'
 
-const apiBaseUrl = (import.meta.env.VITE_LOOMI_API_BASE_URL ?? '').replace(/\/$/, '')
+const configuredApiBaseUrl = import.meta.env.VITE_LOOMI_API_BASE_URL ?? ''
+const devApiBaseUrl = import.meta.env.DEV ? 'http://127.0.0.1:18080' : ''
+const apiBaseUrl = (configuredApiBaseUrl || devApiBaseUrl).replace(/\/$/, '')
 
 export function hasRealApiBase() {
   return apiBaseUrl.length > 0
+}
+
+export function selectSendProvider(providers: ProviderCapability[] = []) {
+  return providers.find((candidate) => candidate.id === 'local_codex' && candidate.status === 'available' && candidate.executionState === 'supported')
+    ?? providers.find((candidate) => candidate.status === 'available')
 }
 
 type ApiThread = {
@@ -26,6 +33,17 @@ type ApiPersona = {
   description: string
   active_version: string
   is_default: boolean
+}
+
+type ApiInstalledSkill = {
+  id: string
+  name: string
+  description: string
+  source: InstalledSkill['source']
+  source_label: string
+  package?: string
+  path: string
+  installed: boolean
 }
 
 type ApiMessage = {
@@ -59,6 +77,22 @@ export type ApiProviderCapability = {
   model: string
   status: ProviderCapability['status']
   message?: string | null
+  local_provider?: boolean
+  session_local?: boolean
+  credential_reference?: string | null
+  execution_state?: string | null
+}
+
+export type ApiLocalProviderDetection = {
+  provider_id: string
+  display_name: string
+  provider_kind: string
+  auth_mode: LocalProviderDetection['authMode']
+  status: LocalProviderDetection['status']
+  model_candidates: string[]
+  source: LocalProviderDetection['source']
+  redaction_applied: boolean
+  message?: string | null
 }
 
 export type ApiWorkerQueueDiagnostics = {
@@ -86,6 +120,165 @@ export type ApiToolCall = {
   result_summary?: Record<string, unknown> | null
   error_code?: string | null
   error_message?: string | null
+}
+
+export type ApiToolCatalogItem = {
+  name: string
+  display_name: string
+  description: string
+  source: ToolCatalogItem['source']
+  group: ToolCatalogItem['group']
+  input_schema_hash?: string | null
+  risk_level: ToolCatalogItem['riskLevel']
+  approval_policy: ToolCatalogItem['approvalPolicy']
+  enabled: boolean
+  execution_state: ToolCatalogItem['executionState']
+  safe_metadata?: Record<string, unknown> | null
+}
+
+export type ApiWebSearchConfig = {
+  has_tavily_key: boolean
+  has_brave_key: boolean
+  enabled: boolean
+}
+
+export type ApiWorkspaceRootConfig = {
+  configured: boolean
+  display_name: string
+}
+
+export type ApiMCPServerStatus = {
+  server_safe_id: string
+  server_slug: string
+  display_name: string
+  transport: string
+  enabled: boolean
+  config_source: string
+  discovery_status: string
+  candidate_count: number
+  candidate_names: string[]
+  execution_mode: string
+  redacted_error_code?: string | null
+  last_discovered_at?: string | null
+}
+
+export type ApiMemoryEntry = {
+  id: string
+  title: string
+  summary: string
+  scope_type: 'user' | 'thread'
+  scope_id?: string | null
+  status?: 'approved' | 'tombstoned' | 'disabled'
+  safety_state?: 'safe' | 'redacted' | 'blocked'
+  source_thread_id?: string | null
+  source_run_id?: string | null
+  source_event_id?: string | null
+  source_type?: 'manual' | 'thread' | 'run' | null
+  created_at: string
+  updated_at: string
+  deleted_at?: string | null
+  redaction_applied?: boolean
+}
+
+export type ApiMemoryAuditItem = {
+  id: string
+  event_type: MemoryAuditItem['eventType']
+  summary: string
+  thread_id?: string | null
+  run_id?: string | null
+  memory_entry_id?: string | null
+  memory_proposal_id?: string | null
+  status?: string | null
+  scope_type?: string | null
+  source_type?: string | null
+  redaction_applied?: boolean
+  occurred_at: string
+}
+
+export type ApiMemoryProviderStatus = {
+  enabled: boolean
+  provider: string
+  label: string
+  state: MemoryProviderStatus['state']
+  configured: boolean
+  commit_after_run: boolean
+  checked_at?: string | null
+  openviking?: {
+    base_url?: string
+    root_api_key_set?: boolean
+    embedding_selector?: string
+    embedding_provider?: string
+    embedding_model?: string
+    embedding_api_key_set?: boolean
+    embedding_api_base?: string
+    embedding_dimension?: number
+    vlm_selector?: string
+    vlm_provider?: string
+    vlm_model?: string
+    vlm_api_key_set?: boolean
+    vlm_api_base?: string
+    rerank_selector?: string
+    rerank_provider?: string
+    rerank_model?: string
+    rerank_api_key_set?: boolean
+    rerank_api_base?: string
+  }
+  nowledge?: {
+    base_url?: string
+    api_key_set?: boolean
+    request_timeout_ms?: number
+  }
+  diagnostic: {
+    code: string
+    message: string
+  }
+}
+
+type ApiMemoryOverviewSnapshot = {
+  memory_block: string
+  hits?: {
+    uri: string
+    entry_id: string
+    title: string
+    abstract: string
+    is_leaf: boolean
+    updated_at: string
+  }[]
+  updated_at: string
+  rebuilt: boolean
+}
+
+type ApiMemoryImpressionSnapshot = {
+  impression: string
+  updated_at: string
+  rebuilt: boolean
+}
+
+type ApiMemoryErrorEvent = {
+  code: string
+  message: string
+  provider: string
+  state: string
+  checked_at?: string
+  run_id?: string | null
+  event_type?: string | null
+}
+
+export type ApiMemoryWriteProposal = {
+  id: string
+  title: string
+  summary: string
+  scope_type: 'user' | 'thread'
+  scope_id: string
+  status: MemoryWriteProposal['status']
+  safety_state?: MemoryWriteProposal['safetyState']
+  source_thread_id?: string | null
+  source_run_id?: string | null
+  source_event_id?: string | null
+  created_entry_id?: string | null
+  created_at: string
+  decided_at?: string | null
+  decision_reason?: string | null
 }
 
 type ApiRunEvent = {
@@ -124,6 +317,13 @@ async function requestJSON<T>(path: string, init?: RequestInit): Promise<T> {
   return body as T
 }
 
+function requireArrayField<T>(body: unknown, field: string, message: string): T[] {
+  if (!body || typeof body !== 'object' || !Array.isArray((body as Record<string, unknown>)[field])) {
+    throw new ApiRequestError(message, 'invalid_response', 502)
+  }
+  return (body as Record<string, T[]>)[field]
+}
+
 function mapThread(thread: ApiThread): Thread {
   return {
     id: thread.id,
@@ -156,6 +356,67 @@ function mapPersona(persona: ApiPersona): Persona {
     description: persona.description,
     activeVersion: persona.active_version,
     isDefault: persona.is_default,
+  }
+}
+
+function mapInstalledSkill(skill: ApiInstalledSkill): InstalledSkill {
+  return {
+    id: skill.id,
+    name: skill.name,
+    description: skill.description,
+    source: skill.source,
+    sourceLabel: skill.source_label,
+    package: skill.package,
+    path: skill.path,
+    installed: skill.installed,
+  }
+}
+
+function mapApiToolCatalogItem(tool: ApiToolCatalogItem): ToolCatalogItem {
+  return {
+    name: tool.name,
+    displayName: tool.display_name,
+    description: tool.description,
+    source: tool.source,
+    group: tool.group,
+    inputSchemaHash: tool.input_schema_hash ?? undefined,
+    riskLevel: tool.risk_level,
+    approvalPolicy: tool.approval_policy,
+    enabled: tool.enabled,
+    executionState: tool.execution_state,
+    safeMetadata: tool.safe_metadata ?? undefined,
+  }
+}
+
+function mapApiWebSearchConfig(config: ApiWebSearchConfig): WebSearchConfig {
+  return {
+    hasTavilyKey: config.has_tavily_key,
+    hasBraveKey: config.has_brave_key,
+    enabled: config.enabled,
+  }
+}
+
+function mapApiWorkspaceRootConfig(config: ApiWorkspaceRootConfig): WorkspaceRootConfig {
+  return {
+    configured: config.configured,
+    displayName: config.display_name,
+  }
+}
+
+function mapApiMCPServerStatus(server: ApiMCPServerStatus): MCPServerStatus {
+  return {
+    serverSafeId: server.server_safe_id,
+    serverSlug: server.server_slug,
+    displayName: server.display_name,
+    transport: server.transport,
+    enabled: server.enabled,
+    configSource: server.config_source,
+    discoveryStatus: server.discovery_status,
+    candidateCount: server.candidate_count,
+    candidateNames: server.candidate_names ?? [],
+    executionMode: server.execution_mode,
+    redactedErrorCode: server.redacted_error_code ?? undefined,
+    lastDiscoveredAt: server.last_discovered_at ?? undefined,
   }
 }
 
@@ -208,7 +469,7 @@ export function mapApiRun(run: ApiRun, events: RunEvent[] = []): Run {
 }
 
 function metadataString(metadata: Record<string, unknown>) {
-  const usageKeys = new Set(['input_tokens', 'output_tokens', 'total_tokens'])
+  const usageKeys = new Set(['input_tokens', 'output_tokens', 'total_tokens', 'loop_index', 'loop_max'])
   return Object.entries(metadata)
     .filter(([key, value]) => !usageKeys.has(key) && (typeof value === 'string' || typeof value === 'number'))
     .map(([key, value]) => `${key}: ${value}`)
@@ -251,6 +512,7 @@ function canonicalRunEventType(event: ApiRunEvent) {
     tool_call_succeeded: 'tool.call.succeeded',
     tool_call_failed: 'tool.call.failed',
     tool_call_cancelled: 'tool.call.cancelled',
+    work_todo_updated: 'work.todo.updated',
     run_completed: 'run.completed',
     run_failed: 'run.failed',
     run_stopped: 'run.stopped',
@@ -283,6 +545,24 @@ export function mapApiProviderCapability(provider: ApiProviderCapability): Provi
     baseUrl: provider.base_url ?? null,
     model: provider.model,
     status: provider.status,
+    message: provider.message ?? null,
+    localProvider: provider.local_provider ?? false,
+    sessionLocal: provider.session_local ?? false,
+    credentialReference: provider.credential_reference ?? undefined,
+    executionState: provider.execution_state ?? undefined,
+  }
+}
+
+export function mapApiLocalProviderDetection(provider: ApiLocalProviderDetection): LocalProviderDetection {
+  return {
+    providerId: provider.provider_id,
+    displayName: provider.display_name,
+    providerKind: provider.provider_kind,
+    authMode: provider.auth_mode,
+    status: provider.status,
+    modelCandidates: provider.model_candidates,
+    source: provider.source,
+    redactionApplied: provider.redaction_applied,
     message: provider.message ?? null,
   }
 }
@@ -317,6 +597,160 @@ export function mapApiToolCall(call: ApiToolCall): ToolCall {
     resultSummary: call.result_summary ?? null,
     errorCode: call.error_code ?? null,
     errorMessage: call.error_message ?? null,
+  }
+}
+
+export function mapApiMemoryEntry(entry: ApiMemoryEntry): MemoryEntry {
+  return {
+    id: entry.id,
+    title: entry.title,
+    summary: entry.summary,
+    scopeType: entry.scope_type,
+    scopeId: entry.scope_id ?? undefined,
+    status: entry.status ?? 'approved',
+    safetyState: entry.safety_state ?? undefined,
+    sourceThreadId: entry.source_thread_id ?? undefined,
+    sourceRunId: entry.source_run_id ?? undefined,
+    sourceEventId: entry.source_event_id ?? undefined,
+    sourceType: entry.source_type ?? undefined,
+    createdAt: entry.created_at,
+    updatedAt: entry.updated_at,
+    deletedAt: entry.deleted_at ?? undefined,
+    redactionApplied: Boolean(entry.redaction_applied),
+  }
+}
+
+export function mapApiMemoryAuditItem(item: ApiMemoryAuditItem): MemoryAuditItem {
+  return {
+    id: item.id,
+    eventType: item.event_type,
+    summary: item.summary,
+    threadId: item.thread_id ?? undefined,
+    runId: item.run_id ?? undefined,
+    memoryEntryId: item.memory_entry_id ?? undefined,
+    memoryProposalId: item.memory_proposal_id ?? undefined,
+    status: item.status ?? undefined,
+    scopeType: item.scope_type ?? undefined,
+    sourceType: item.source_type ?? undefined,
+    redactionApplied: Boolean(item.redaction_applied),
+    occurredAt: item.occurred_at,
+  }
+}
+
+export function mapApiMemoryProviderStatus(status: ApiMemoryProviderStatus): MemoryProviderStatus {
+  return {
+    enabled: status.enabled,
+    provider: status.provider,
+    label: status.label,
+    state: status.state,
+    configured: status.configured,
+    commitAfterRun: status.commit_after_run,
+    checkedAt: status.checked_at ?? undefined,
+    openviking: status.openviking ? {
+      baseUrl: status.openviking.base_url,
+      rootApiKeySet: status.openviking.root_api_key_set,
+      embeddingSelector: status.openviking.embedding_selector,
+      embeddingProvider: status.openviking.embedding_provider,
+      embeddingModel: status.openviking.embedding_model,
+      embeddingApiKeySet: status.openviking.embedding_api_key_set,
+      embeddingApiBase: status.openviking.embedding_api_base,
+      embeddingDimension: status.openviking.embedding_dimension,
+      vlmSelector: status.openviking.vlm_selector,
+      vlmProvider: status.openviking.vlm_provider,
+      vlmModel: status.openviking.vlm_model,
+      vlmApiKeySet: status.openviking.vlm_api_key_set,
+      vlmApiBase: status.openviking.vlm_api_base,
+      rerankSelector: status.openviking.rerank_selector,
+      rerankProvider: status.openviking.rerank_provider,
+      rerankModel: status.openviking.rerank_model,
+      rerankApiKeySet: status.openviking.rerank_api_key_set,
+      rerankApiBase: status.openviking.rerank_api_base,
+    } : undefined,
+    nowledge: status.nowledge ? {
+      baseUrl: status.nowledge.base_url,
+      apiKeySet: status.nowledge.api_key_set,
+      requestTimeoutMs: status.nowledge.request_timeout_ms,
+    } : undefined,
+    diagnostic: {
+      code: status.diagnostic?.code ?? 'unknown',
+      message: status.diagnostic?.message ?? 'Memory provider status unavailable.',
+    },
+  }
+}
+
+export function mapApiMemoryOverviewSnapshot(snapshot: ApiMemoryOverviewSnapshot): MemoryOverviewSnapshot {
+  return {
+    memoryBlock: snapshot.memory_block,
+    hits: (snapshot.hits ?? []).map((hit) => ({ uri: hit.uri, entryId: hit.entry_id, title: hit.title, abstract: hit.abstract, isLeaf: hit.is_leaf, updatedAt: hit.updated_at })),
+    updatedAt: snapshot.updated_at,
+    rebuilt: Boolean(snapshot.rebuilt),
+  }
+}
+
+export function mapApiMemoryImpressionSnapshot(snapshot: ApiMemoryImpressionSnapshot): MemoryImpressionSnapshot {
+  return { impression: snapshot.impression, updatedAt: snapshot.updated_at, rebuilt: Boolean(snapshot.rebuilt) }
+}
+
+export function mapApiMemoryErrorEvent(event: ApiMemoryErrorEvent): MemoryErrorEvent {
+  return { code: event.code, message: event.message, provider: event.provider, state: event.state, checkedAt: event.checked_at, runId: event.run_id ?? undefined, eventType: event.event_type ?? undefined }
+}
+
+export function mapApiMemoryWriteProposal(proposal: ApiMemoryWriteProposal): MemoryWriteProposal {
+  return {
+    id: proposal.id,
+    title: proposal.title,
+    summary: proposal.summary,
+    scopeType: proposal.scope_type,
+    scopeId: proposal.scope_id,
+    status: proposal.status,
+    safetyState: proposal.safety_state,
+    sourceThreadId: proposal.source_thread_id ?? undefined,
+    sourceRunId: proposal.source_run_id ?? undefined,
+    sourceEventId: proposal.source_event_id ?? undefined,
+    createdEntryId: proposal.created_entry_id ?? undefined,
+    createdAt: proposal.created_at,
+    decidedAt: proposal.decided_at ?? undefined,
+    decisionReason: proposal.decision_reason ?? undefined,
+    redactionApplied: proposal.safety_state === 'redacted' || proposal.safety_state === 'blocked',
+  }
+}
+
+function memoryQueryString(filters: MemoryFilters = {}, query = '') {
+  const params = new URLSearchParams()
+  if (query.trim()) params.set('q', query.trim())
+  if (filters.scopeType) params.set('scope_type', filters.scopeType)
+  if (filters.scopeId?.trim()) params.set('scope_id', filters.scopeId.trim())
+  if (filters.sourceThreadId?.trim()) params.set('source_thread_id', filters.sourceThreadId.trim())
+  if (filters.sourceRunId?.trim()) params.set('source_run_id', filters.sourceRunId.trim())
+  if (filters.sourceType && filters.sourceType !== 'any') params.set('source_type', filters.sourceType)
+  if (filters.includeTombstoned) params.set('include_tombstoned', 'true')
+  if (filters.limit) params.set('limit', String(filters.limit))
+  const encoded = params.toString()
+  return encoded ? `?${encoded}` : ''
+}
+
+function memoryFilterRequestFields(filters: MemoryFilters = {}) {
+  return {
+    scope_type: filters.scopeType || undefined,
+    scope_id: filters.scopeId?.trim() || undefined,
+    source_thread_id: filters.sourceThreadId?.trim() || undefined,
+    source_run_id: filters.sourceRunId?.trim() || undefined,
+    source_type: filters.sourceType && filters.sourceType !== 'any' ? filters.sourceType : undefined,
+    include_tombstoned: filters.includeTombstoned || undefined,
+    limit: filters.limit || undefined,
+  }
+}
+
+function memorySearchRequestBody(query: string, filters: MemoryFilters = {}) {
+  return { query, ...memoryFilterRequestFields({ limit: 20, ...filters }) }
+}
+
+function memoryDeleteRequestBody(filters: MemoryFilters = {}) {
+  return {
+    scope_type: filters.scopeType || undefined,
+    scope_id: filters.scopeId?.trim() || undefined,
+    source_thread_id: filters.sourceThreadId?.trim() || undefined,
+    source_run_id: filters.sourceRunId?.trim() || undefined,
   }
 }
 
@@ -396,13 +830,13 @@ export const realApiClient: ApiClient = {
   mode: 'real_api',
 
   async listThreads() {
-    const body = await requestJSON<{ threads: ApiThread[] }>('/v1/threads')
-    return body.threads.map(mapThread)
+    const body = await requestJSON<unknown>('/v1/threads')
+    return requireArrayField<ApiThread>(body, 'threads', 'Thread list response was invalid.').map(mapThread)
   },
 
   async getThreadMessages(threadId: string) {
-    const body = await requestJSON<{ messages: ApiMessage[] }>(`/v1/threads/${threadId}/messages`)
-    return body.messages.map(mapMessage)
+    const body = await requestJSON<unknown>(`/v1/threads/${threadId}/messages`)
+    return requireArrayField<ApiMessage>(body, 'messages', 'Message list response was invalid.').map(mapMessage)
   },
 
   async getThreadRun(threadId: string) {
@@ -416,18 +850,92 @@ export const realApiClient: ApiClient = {
   },
 
   async getRunEvents(runId: string) {
-    const body = await requestJSON<{ events: ApiRunEvent[] }>(`/v1/runs/${runId}/events`)
-    return body.events.map(mapApiRunEvent)
+    const body = await requestJSON<unknown>(`/v1/runs/${runId}/events`)
+    return requireArrayField<ApiRunEvent>(body, 'events', 'Run event response was invalid.').map(mapApiRunEvent)
   },
 
   async listPersonas() {
-    const body = await requestJSON<{ personas: ApiPersona[] }>('/v1/personas')
-    return body.personas.map(mapPersona)
+    const body = await requestJSON<unknown>('/v1/personas')
+    return requireArrayField<ApiPersona>(body, 'personas', 'Persona list response was invalid.').map(mapPersona)
+  },
+
+  async listSkills() {
+    const body = await requestJSON<unknown>('/v1/skills')
+    return requireArrayField<ApiInstalledSkill>(body, 'skills', 'Skill list response was invalid.').map(mapInstalledSkill)
   },
 
   async listModelProviders() {
-    const body = await requestJSON<{ providers: ApiProviderCapability[] }>('/v1/model-providers')
-    return body.providers.map(mapApiProviderCapability)
+    const body = await requestJSON<unknown>('/v1/model-providers')
+    return requireArrayField<ApiProviderCapability>(body, 'providers', 'Provider list response was invalid.').map(mapApiProviderCapability)
+  },
+
+  async listToolCatalog() {
+    const body = await requestJSON<unknown>('/v1/tools/catalog')
+    return requireArrayField<ApiToolCatalogItem>(body, 'tools', 'Tool catalog response was invalid.').map(mapApiToolCatalogItem)
+  },
+
+  async getWebSearchConfig() {
+    const body = await requestJSON<{ config: ApiWebSearchConfig }>('/v1/web-search/config')
+    return mapApiWebSearchConfig(body.config)
+  },
+
+  async saveWebSearchKeys(input: { tavilyApiKey?: string; braveApiKey?: string }) {
+    const body = await requestJSON<{ config: ApiWebSearchConfig }>('/v1/web-search/config', {
+      method: 'POST',
+      body: JSON.stringify({ tavily_api_key: input.tavilyApiKey ?? '', brave_api_key: input.braveApiKey ?? '' }),
+    })
+    return mapApiWebSearchConfig(body.config)
+  },
+
+  async getWorkspaceRoot() {
+    const body = await requestJSON<{ config: ApiWorkspaceRootConfig }>('/v1/workspace/root')
+    return mapApiWorkspaceRootConfig(body.config)
+  },
+
+  async saveWorkspaceRoot(input: { path: string }) {
+    const body = await requestJSON<{ config: ApiWorkspaceRootConfig }>('/v1/workspace/root', {
+      method: 'POST',
+      body: JSON.stringify({ path: input.path }),
+    })
+    return mapApiWorkspaceRootConfig(body.config)
+  },
+
+  async listMCPServers() {
+    const body = await requestJSON<unknown>('/v1/mcp/servers')
+    return requireArrayField<ApiMCPServerStatus>(body, 'servers', 'MCP server response was invalid.').map(mapApiMCPServerStatus)
+  },
+
+  async saveMCPServer(input: MCPServerConfigInput) {
+    const body = await requestJSON<{ server: ApiMCPServerStatus }>('/v1/mcp/servers', {
+      method: 'POST',
+      body: JSON.stringify({ slug: input.slug, display_name: input.displayName, enabled: input.enabled, transport: input.transport, command: input.command, args: input.args, env: input.env, timeout_ms: input.timeoutMs }),
+    })
+    return mapApiMCPServerStatus(body.server)
+  },
+
+  async deleteMCPServer(slug: string) {
+    const body = await requestJSON<unknown>(`/v1/mcp/servers/${encodeURIComponent(slug)}`, { method: 'DELETE' })
+    return requireArrayField<ApiMCPServerStatus>(body, 'servers', 'MCP server response was invalid.').map(mapApiMCPServerStatus)
+  },
+
+  async discoverMCPServer(slug: string) {
+    const body = await requestJSON<{ server: ApiMCPServerStatus }>(`/v1/mcp/servers/${encodeURIComponent(slug)}/discover`, { method: 'POST' })
+    return mapApiMCPServerStatus(body.server)
+  },
+
+  async listLocalProviderDetections() {
+    const body = await requestJSON<unknown>('/v1/local-provider-detections')
+    return requireArrayField<ApiLocalProviderDetection>(body, 'providers', 'Local provider detection response was invalid.').map(mapApiLocalProviderDetection)
+  },
+
+  async enableLocalProvider(providerId: string) {
+    const body = await requestJSON<{ provider: ApiProviderCapability }>(`/v1/local-provider-detections/${encodeURIComponent(providerId)}/enable`, { method: 'POST' })
+    return mapApiProviderCapability(body.provider)
+  },
+
+  async disableLocalProvider(providerId: string) {
+    const body = await requestJSON<{ provider: ApiProviderCapability }>(`/v1/local-provider-detections/${encodeURIComponent(providerId)}/enable`, { method: 'DELETE' })
+    return mapApiProviderCapability(body.provider)
   },
 
   async checkModelProvider(providerId: string) {
@@ -466,6 +974,146 @@ export const realApiClient: ApiClient = {
     return mapApiToolCall(body.tool_call)
   },
 
+  async listMemoryEntries(filters = {}) {
+    const body = await requestJSON<unknown>(`/v1/memory${memoryQueryString(filters)}`)
+    return requireArrayField<ApiMemoryEntry>(body, 'items', 'Memory list response was invalid.').map(mapApiMemoryEntry)
+  },
+
+  async createMemoryEntry(input: { title: string; content: string; scopeType?: 'user' | 'thread'; scopeId?: string }) {
+    const body = await requestJSON<{ entry: ApiMemoryEntry }>('/v1/memory/entries', {
+      method: 'POST',
+      body: JSON.stringify({ title: input.title, content: input.content, scope_type: input.scopeType ?? 'user', scope_id: input.scopeId ?? '' }),
+    })
+    return mapApiMemoryEntry(body.entry)
+  },
+
+  async searchMemory(query: string, filters = {}) {
+    const body = await requestJSON<unknown>('/v1/memory/search', {
+      method: 'POST',
+      body: JSON.stringify(memorySearchRequestBody(query, filters)),
+    })
+    return requireArrayField<ApiMemoryEntry>(body, 'items', 'Memory search response was invalid.').map(mapApiMemoryEntry)
+  },
+
+  async getMemoryEntry(entryId: string, filters = {}) {
+    const body = await requestJSON<{ entry: ApiMemoryEntry }>(`/v1/memory/entries/${entryId}${memoryQueryString(filters)}`)
+    return mapApiMemoryEntry(body.entry)
+  },
+
+  async deleteMemoryEntry(entryId: string, filters = {}) {
+    await requestJSON<{ status: string }>(`/v1/memory/entries/${entryId}`, { method: 'DELETE', body: JSON.stringify(memoryDeleteRequestBody(filters)) })
+  },
+
+  async listMemoryAudit(filters = {}) {
+    const body = await requestJSON<unknown>(`/v1/memory/audit${memoryQueryString(filters)}`)
+    return requireArrayField<ApiMemoryAuditItem>(body, 'items', 'Memory audit response was invalid.').map(mapApiMemoryAuditItem)
+  },
+
+  async listMemoryWriteProposals(filters = {}) {
+    const separator = memoryQueryString(filters).includes('?') ? '&' : '?'
+    const body = await requestJSON<unknown>(`/v1/memory/write-proposals${memoryQueryString(filters)}${separator}status=pending`)
+    return requireArrayField<ApiMemoryWriteProposal>(body, 'items', 'Memory proposal response was invalid.').map(mapApiMemoryWriteProposal)
+  },
+
+  async updateMemoryWriteProposal(proposalId: string, input: { title: string; summary: string }) {
+    const body = await requestJSON<{ proposal: ApiMemoryWriteProposal }>(`/v1/memory/write-proposals/${proposalId}`, { method: 'PATCH', body: JSON.stringify(input) })
+    return mapApiMemoryWriteProposal(body.proposal)
+  },
+
+  async approveMemoryWriteProposal(proposalId: string) {
+    const body = await requestJSON<{ proposal: ApiMemoryWriteProposal }>(`/v1/memory/write-proposals/${proposalId}/approve`, { method: 'POST', body: JSON.stringify({ reason: 'approved in settings' }) })
+    return mapApiMemoryWriteProposal(body.proposal)
+  },
+
+  async denyMemoryWriteProposal(proposalId: string) {
+    const body = await requestJSON<{ proposal: ApiMemoryWriteProposal }>(`/v1/memory/write-proposals/${proposalId}/deny`, { method: 'POST', body: JSON.stringify({ reason: 'denied in settings' }) })
+    return mapApiMemoryWriteProposal(body.proposal)
+  },
+
+  async getMemoryProviderStatus() {
+    const body = await requestJSON<{ status: ApiMemoryProviderStatus }>('/v1/memory/provider')
+    return mapApiMemoryProviderStatus(body.status)
+  },
+
+  async listMemoryErrors() {
+    const body = await requestJSON<{ errors: ApiMemoryErrorEvent[] }>('/v1/memory/errors')
+    return (body.errors ?? []).map(mapApiMemoryErrorEvent)
+  },
+
+  async detectNowledgeMemoryProvider() {
+    const body = await requestJSON<{ detected: boolean; base_url?: string; message: string }>('/v1/memory/provider/nowledge/detect')
+    return { detected: Boolean(body.detected), baseUrl: body.base_url, message: body.message }
+  },
+
+  async detectOpenVikingMemoryProvider() {
+    const body = await requestJSON<{ detected: boolean; base_url?: string; message: string }>('/v1/memory/provider/openviking/detect')
+    return { detected: Boolean(body.detected), baseUrl: body.base_url, message: body.message }
+  },
+
+  async updateMemoryProvider(input: MemoryProviderUpdate) {
+    const body = await requestJSON<{ status: ApiMemoryProviderStatus }>('/v1/memory/provider', {
+      method: 'PUT',
+      body: JSON.stringify({
+        enabled: input.enabled,
+        provider: input.provider,
+        commit_after_run: input.commitAfterRun,
+        semantic_endpoint: input.semanticEndpoint ?? '',
+        openviking: input.openviking ? {
+          base_url: input.openviking.baseUrl ?? '',
+          root_api_key: input.openviking.rootApiKey ?? '',
+          embedding_selector: input.openviking.embeddingSelector ?? '',
+          embedding_provider: input.openviking.embeddingProvider ?? '',
+          embedding_model: input.openviking.embeddingModel ?? '',
+          embedding_api_key: input.openviking.embeddingApiKey ?? '',
+          embedding_api_base: input.openviking.embeddingApiBase ?? '',
+          embedding_dimension: input.openviking.embeddingDimension ?? 0,
+          vlm_selector: input.openviking.vlmSelector ?? '',
+          vlm_provider: input.openviking.vlmProvider ?? '',
+          vlm_model: input.openviking.vlmModel ?? '',
+          vlm_api_key: input.openviking.vlmApiKey ?? '',
+          vlm_api_base: input.openviking.vlmApiBase ?? '',
+          rerank_selector: input.openviking.rerankSelector ?? '',
+          rerank_provider: input.openviking.rerankProvider ?? '',
+          rerank_model: input.openviking.rerankModel ?? '',
+          rerank_api_key: input.openviking.rerankApiKey ?? '',
+          rerank_api_base: input.openviking.rerankApiBase ?? '',
+        } : undefined,
+        nowledge: input.nowledge ? {
+          base_url: input.nowledge.baseUrl ?? '',
+          api_key: input.nowledge.apiKey ?? '',
+          request_timeout_ms: input.nowledge.requestTimeoutMs ?? 0,
+        } : undefined,
+      }),
+    })
+    return mapApiMemoryProviderStatus(body.status)
+  },
+
+  async getMemoryOverviewSnapshot() {
+    const body = await requestJSON<{ snapshot: ApiMemoryOverviewSnapshot }>('/v1/memory/snapshot')
+    return mapApiMemoryOverviewSnapshot(body.snapshot)
+  },
+
+  async rebuildMemoryOverviewSnapshot() {
+    const body = await requestJSON<{ snapshot: ApiMemoryOverviewSnapshot }>('/v1/memory/snapshot/rebuild', { method: 'POST' })
+    return mapApiMemoryOverviewSnapshot(body.snapshot)
+  },
+
+  async getMemoryImpressionSnapshot() {
+    const body = await requestJSON<{ impression: ApiMemoryImpressionSnapshot }>('/v1/memory/impression')
+    return mapApiMemoryImpressionSnapshot(body.impression)
+  },
+
+  async rebuildMemoryImpressionSnapshot() {
+    const body = await requestJSON<{ impression: ApiMemoryImpressionSnapshot }>('/v1/memory/impression/rebuild', { method: 'POST' })
+    return mapApiMemoryImpressionSnapshot(body.impression)
+  },
+
+  async getMemoryContent(uri: string, layer: 'overview' | 'read' = 'overview') {
+    const params = new URLSearchParams({ uri, layer })
+    const body = await requestJSON<{ content: string }>(`/v1/memory/content?${params.toString()}`)
+    return body.content ?? ''
+  },
+
   async startRun(threadId: string, input: { messageId?: string; source?: RunSource; providerId?: string; model?: string; personaId?: string } = {}) {
     const body = await requestJSON<{ run: ApiRun }>(`/v1/threads/${threadId}/runs`, {
       method: 'POST',
@@ -476,7 +1124,7 @@ export const realApiClient: ApiClient = {
     return loadRunWithEvents(body.run)
   },
 
-  subscribeRunEvents(runId: string, afterSequence: number, onEvent: (event: RunEvent) => void, onError: () => void) {
+  subscribeRunEvents(runId: string, afterSequence: number, onEvent: (event: RunEvent) => void, onError: () => void, onClosed?: () => void) {
     const url = `${apiBaseUrl}/v1/runs/${runId}/events/stream?after_sequence=${afterSequence}`
     const source = new EventSource(url)
     source.addEventListener('run_event', (raw) => {
@@ -487,6 +1135,10 @@ export const realApiClient: ApiClient = {
         onError()
         source.close()
       }
+    })
+    source.addEventListener('stream_closed', () => {
+      onClosed?.()
+      source.close()
     })
     source.onerror = () => {
       onError()
@@ -516,17 +1168,26 @@ export const realApiClient: ApiClient = {
     return mapThread(body.thread)
   },
 
-  async sendMessage(threadId: string, content: string, personaId?: string) {
+  async sendMessage(threadId: string, content: string, personaId?: string, options?: { providerId?: string; model?: string }) {
+    const providers = await this.listModelProviders?.()
+    const provider = options?.providerId
+      ? providers?.find((candidate) => candidate.id === options.providerId && candidate.status === 'available') ?? selectSendProvider(providers)
+      : selectSendProvider(providers)
+    if (!provider) throw new ApiRequestError('Model provider is unavailable.', 'provider_unavailable', 503)
+    try {
+      const currentRun = await this.getThreadRun(threadId)
+      if (isRuntimeActive(currentRun.status)) throw new ApiRequestError('当前会话还有任务未结束，请先确认或停止当前任务。', 'active_run_exists', 409)
+    } catch (err) {
+      if (err instanceof ApiRequestError && err.code === 'active_run_exists') throw err
+      if (err instanceof ApiRequestError && err.status !== 404) throw err
+    }
     const created = await requestJSON<{ message: ApiMessage }>(`/v1/threads/${threadId}/messages`, {
       method: 'POST',
       body: JSON.stringify({ content, client_message_id: createClientMessageID() }),
     })
     let run: Run | undefined
     try {
-      const providers = await this.listModelProviders?.()
-      const provider = providers?.find((candidate) => candidate.status === 'available')
-      if (!provider) throw new ApiRequestError('Model provider is unavailable.', 'provider_unavailable', 503)
-      run = await this.startRun?.(threadId, { messageId: created.message.id, source: 'model_gateway', providerId: provider.id, model: provider.model, personaId })
+      run = await this.startRun?.(threadId, { messageId: created.message.id, source: 'model_gateway', providerId: provider.id, model: options?.model || provider.model, personaId })
     } catch (err) {
       if (!(err instanceof ApiRequestError) || err.code !== 'active_run_exists') throw err
       run = await this.getThreadRun(threadId)

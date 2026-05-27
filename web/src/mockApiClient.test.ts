@@ -2,6 +2,22 @@ import { describe, expect, test } from 'bun:test'
 import { mockApiClient, setMockRuntimeScript } from './mockApiClient'
 
 describe('mockApiClient thread runs', () => {
+  test('rebuilds mock memory snapshots for settings preview', async () => {
+    const overview = await mockApiClient.rebuildMemoryOverviewSnapshot?.()
+    const impression = await mockApiClient.rebuildMemoryImpressionSnapshot?.()
+
+    expect(overview).toMatchObject({ rebuilt: true, hits: [] })
+    expect(impression).toMatchObject({ rebuilt: true })
+    expect(impression?.impression).toContain('No approved memories')
+  })
+
+  test('returns safe mock memory content by snapshot uri', async () => {
+    const entry = await mockApiClient.createMemoryEntry?.({ title: 'Manual note', content: 'Remember compact manual memory' })
+    const content = await mockApiClient.getMemoryContent?.(`memory://${entry?.id}`, 'read')
+
+    expect(content).toContain('Remember compact manual memory')
+  })
+
   test('creates a retrievable idle run for a new mock thread', async () => {
     const thread = await mockApiClient.createThread?.('New thread', 'chat')
 
@@ -40,7 +56,7 @@ describe('mockApiClient thread runs', () => {
     const eventTypes: string[] = []
 
     mockApiClient.subscribeRunEvents?.(run!.id, 0, (event) => eventTypes.push(event.type), () => {})
-    await new Promise((resolve) => setTimeout(resolve, 220))
+    await new Promise((resolve) => setTimeout(resolve, 850))
     const storedRun = await mockApiClient.getThreadRun(thread!.id)
 
     expect(run?.status).toBe('running')
@@ -77,7 +93,7 @@ describe('mockApiClient thread runs', () => {
     setMockRuntimeScript('success')
     const completed = await mockApiClient.sendMessage(second!.id, 'succeed now')
     mockApiClient.subscribeRunEvents?.(completed.run.id, 0, () => {}, () => {})
-    await new Promise((resolve) => setTimeout(resolve, 220))
+    await new Promise((resolve) => setTimeout(resolve, 850))
 
     expect(failed.run.status).toBe('running')
     expect((await mockApiClient.getThreadRun(first!.id)).status).toBe('failed')

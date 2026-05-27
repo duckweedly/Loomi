@@ -4,7 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"sort"
+	"strconv"
 	"strings"
+	"time"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -19,8 +24,343 @@ func NewPostgresRepository(pool *pgxpool.Pool) *PostgresRepository {
 	return &PostgresRepository{Pool: pool}
 }
 
+type modelProviderConfigScanner interface {
+	Scan(dest ...any) error
+}
+
+type webSearchConfigScanner interface {
+	Scan(dest ...any) error
+}
+
+type workspaceRootConfigScanner interface {
+	Scan(dest ...any) error
+}
+
+type memoryProviderConfigScanner interface {
+	Scan(dest ...any) error
+}
+
+type mcpServerConfigScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanModelProviderConfig(row modelProviderConfigScanner) (ModelProviderConfig, error) {
+	var provider ModelProviderConfig
+	err := row.Scan(&provider.ID, &provider.UserID, &provider.Family, &provider.BaseURL, &provider.APIKey, &provider.Model, &provider.Enabled)
+	return provider, err
+}
+
+func scanWebSearchConfig(row webSearchConfigScanner) (WebSearchConfig, error) {
+	var config WebSearchConfig
+	err := row.Scan(&config.UserID, &config.TavilyAPIKey, &config.BraveAPIKey)
+	return config, err
+}
+
+func scanWorkspaceRootConfig(row workspaceRootConfigScanner) (WorkspaceRootConfig, error) {
+	var config WorkspaceRootConfig
+	err := row.Scan(&config.UserID, &config.Path)
+	return config, err
+}
+
+func scanMemoryProviderConfig(row memoryProviderConfigScanner) (MemoryProviderConfig, error) {
+	var config MemoryProviderConfig
+	err := row.Scan(
+		&config.UserID,
+		&config.Enabled,
+		&config.Provider,
+		&config.CommitAfterRun,
+		&config.SemanticEndpoint,
+		&config.OpenViking.BaseURL,
+		&config.OpenViking.RootAPIKey,
+		&config.OpenViking.EmbeddingSelector,
+		&config.OpenViking.EmbeddingProvider,
+		&config.OpenViking.EmbeddingModel,
+		&config.OpenViking.EmbeddingAPIKey,
+		&config.OpenViking.EmbeddingAPIBase,
+		&config.OpenViking.EmbeddingDimension,
+		&config.OpenViking.VLMSelector,
+		&config.OpenViking.VLMProvider,
+		&config.OpenViking.VLMModel,
+		&config.OpenViking.VLMAPIKey,
+		&config.OpenViking.VLMAPIBase,
+		&config.OpenViking.RerankSelector,
+		&config.OpenViking.RerankProvider,
+		&config.OpenViking.RerankModel,
+		&config.OpenViking.RerankAPIKey,
+		&config.OpenViking.RerankAPIBase,
+		&config.Nowledge.BaseURL,
+		&config.Nowledge.APIKey,
+		&config.Nowledge.RequestTimeoutMS,
+		&config.Diagnostic,
+		&config.UpdatedAt,
+	)
+	config.OpenViking.RootAPIKeySet = config.OpenViking.RootAPIKey != ""
+	config.OpenViking.EmbeddingAPIKeySet = config.OpenViking.EmbeddingAPIKey != ""
+	config.OpenViking.VLMAPIKeySet = config.OpenViking.VLMAPIKey != ""
+	config.OpenViking.RerankAPIKeySet = config.OpenViking.RerankAPIKey != ""
+	config.Nowledge.APIKeySet = config.Nowledge.APIKey != ""
+	return config, err
+}
+
+func scanMCPServerConfig(row mcpServerConfigScanner) (MCPServerConfigRecord, error) {
+	var record MCPServerConfigRecord
+	var argsRaw []byte
+	var envRaw []byte
+	if err := row.Scan(&record.UserID, &record.Slug, &record.DisplayName, &record.Enabled, &record.Transport, &record.Command, &argsRaw, &envRaw, &record.TimeoutMS); err != nil {
+		return MCPServerConfigRecord{}, err
+	}
+	_ = json.Unmarshal(argsRaw, &record.Args)
+	_ = json.Unmarshal(envRaw, &record.Env)
+	if record.Args == nil {
+		record.Args = []string{}
+	}
+	if record.Env == nil {
+		record.Env = map[string]string{}
+	}
+	return record, nil
+}
+
 func (r *PostgresRepository) CurrentIdentity(ctx context.Context, ident identity.LocalIdentity) (User, error) {
 	return r.ensureUser(ctx, ident)
+}
+
+func (r *PostgresRepository) SaveModelProviderConfig(ctx context.Context, ident identity.LocalIdentity, input ModelProviderConfig) (ModelProviderConfig, error) {
+	user, err := r.ensureUser(ctx, ident)
+	if err != nil {
+		return ModelProviderConfig{}, err
+	}
+	provider := normalizeModelProviderConfig(input)
+	if provider.ID == "" || provider.Model == "" || provider.APIKey == "" {
+		return ModelProviderConfig{}, NewError(CodeProviderMisconfigured, "Provider configuration is incomplete.")
+	}
+	provider.UserID = user.ID
+	row := r.Pool.QueryRow(ctx, `insert into model_provider_configs (id, user_id, family, base_url, api_key, model, enabled) values ($1, $2, $3, $4, $5, $6, $7) on conflict (user_id, id) do update set family=excluded.family, base_url=excluded.base_url, api_key=excluded.api_key, model=excluded.model, enabled=excluded.enabled, updated_at=now() returning id, user_id, family, base_url, api_key, model, enabled`, provider.ID, provider.UserID, provider.Family, provider.BaseURL, provider.APIKey, provider.Model, provider.Enabled)
+	return scanModelProviderConfig(row)
+}
+
+func (r *PostgresRepository) ListModelProviderConfigs(ctx context.Context, ident identity.LocalIdentity) ([]ModelProviderConfig, error) {
+	user, err := r.ensureUser(ctx, ident)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := r.Pool.Query(ctx, `select id, user_id, family, base_url, api_key, model, enabled from model_provider_configs where user_id=$1 order by id asc`, user.ID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	providers := []ModelProviderConfig{}
+	for rows.Next() {
+		provider, err := scanModelProviderConfig(rows)
+		if err != nil {
+			return nil, err
+		}
+		providers = append(providers, provider)
+	}
+	return providers, rows.Err()
+}
+
+func (r *PostgresRepository) SaveWebSearchConfig(ctx context.Context, ident identity.LocalIdentity, input WebSearchConfig) (WebSearchConfig, error) {
+	user, err := r.ensureUser(ctx, ident)
+	if err != nil {
+		return WebSearchConfig{}, err
+	}
+	next := normalizeWebSearchConfig(input)
+	row := r.Pool.QueryRow(ctx, `insert into web_search_configs (user_id, tavily_api_key, brave_api_key) values ($1, $2, $3) on conflict (user_id) do update set tavily_api_key=case when excluded.tavily_api_key<>'' then excluded.tavily_api_key else web_search_configs.tavily_api_key end, brave_api_key=case when excluded.brave_api_key<>'' then excluded.brave_api_key else web_search_configs.brave_api_key end, updated_at=now() returning user_id, tavily_api_key, brave_api_key`, user.ID, next.TavilyAPIKey, next.BraveAPIKey)
+	return scanWebSearchConfig(row)
+}
+
+func (r *PostgresRepository) GetWebSearchConfig(ctx context.Context, ident identity.LocalIdentity) (WebSearchConfig, error) {
+	user, err := r.ensureUser(ctx, ident)
+	if err != nil {
+		return WebSearchConfig{}, err
+	}
+	config, err := scanWebSearchConfig(r.Pool.QueryRow(ctx, `select user_id, tavily_api_key, brave_api_key from web_search_configs where user_id=$1`, user.ID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return WebSearchConfig{UserID: user.ID}, nil
+	}
+	return config, err
+}
+
+func (r *PostgresRepository) SaveWorkspaceRootConfig(ctx context.Context, ident identity.LocalIdentity, input WorkspaceRootConfig) (WorkspaceRootConfig, error) {
+	user, err := r.ensureUser(ctx, ident)
+	if err != nil {
+		return WorkspaceRootConfig{}, err
+	}
+	next := normalizeWorkspaceRootConfig(input)
+	if next.Path == "" {
+		return WorkspaceRootConfig{}, NewError(CodeInvalidRequest, "Workspace folder is required.")
+	}
+	row := r.Pool.QueryRow(ctx, `insert into workspace_root_configs (user_id, root_path) values ($1, $2) on conflict (user_id) do update set root_path=excluded.root_path, updated_at=now() returning user_id, root_path`, user.ID, next.Path)
+	return scanWorkspaceRootConfig(row)
+}
+
+func (r *PostgresRepository) GetWorkspaceRootConfig(ctx context.Context, ident identity.LocalIdentity) (WorkspaceRootConfig, error) {
+	user, err := r.ensureUser(ctx, ident)
+	if err != nil {
+		return WorkspaceRootConfig{}, err
+	}
+	config, err := scanWorkspaceRootConfig(r.Pool.QueryRow(ctx, `select user_id, root_path from workspace_root_configs where user_id=$1`, user.ID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return WorkspaceRootConfig{UserID: user.ID}, nil
+	}
+	return config, err
+}
+
+func (r *PostgresRepository) SaveMemoryProviderConfig(ctx context.Context, ident identity.LocalIdentity, input MemoryProviderConfig) (MemoryProviderConfig, error) {
+	user, err := r.ensureUser(ctx, ident)
+	if err != nil {
+		return MemoryProviderConfig{}, err
+	}
+	next := normalizeMemoryProviderConfig(input, time.Now())
+	row := r.Pool.QueryRow(ctx, `insert into memory_provider_configs (user_id, enabled, provider, commit_after_run, semantic_endpoint, openviking_base_url, openviking_root_api_key, openviking_embedding_selector, openviking_embedding_provider, openviking_embedding_model, openviking_embedding_api_key, openviking_embedding_api_base, openviking_embedding_dimension, openviking_vlm_selector, openviking_vlm_provider, openviking_vlm_model, openviking_vlm_api_key, openviking_vlm_api_base, openviking_rerank_selector, openviking_rerank_provider, openviking_rerank_model, openviking_rerank_api_key, openviking_rerank_api_base, nowledge_base_url, nowledge_api_key, nowledge_request_timeout_ms, diagnostic) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27) on conflict (user_id) do update set enabled=excluded.enabled, provider=excluded.provider, commit_after_run=excluded.commit_after_run, semantic_endpoint=excluded.semantic_endpoint, openviking_base_url=excluded.openviking_base_url, openviking_root_api_key=case when excluded.openviking_root_api_key<>'' then excluded.openviking_root_api_key else memory_provider_configs.openviking_root_api_key end, openviking_embedding_selector=excluded.openviking_embedding_selector, openviking_embedding_provider=excluded.openviking_embedding_provider, openviking_embedding_model=excluded.openviking_embedding_model, openviking_embedding_api_key=case when excluded.openviking_embedding_api_key<>'' then excluded.openviking_embedding_api_key else memory_provider_configs.openviking_embedding_api_key end, openviking_embedding_api_base=excluded.openviking_embedding_api_base, openviking_embedding_dimension=excluded.openviking_embedding_dimension, openviking_vlm_selector=excluded.openviking_vlm_selector, openviking_vlm_provider=excluded.openviking_vlm_provider, openviking_vlm_model=excluded.openviking_vlm_model, openviking_vlm_api_key=case when excluded.openviking_vlm_api_key<>'' then excluded.openviking_vlm_api_key else memory_provider_configs.openviking_vlm_api_key end, openviking_vlm_api_base=excluded.openviking_vlm_api_base, openviking_rerank_selector=excluded.openviking_rerank_selector, openviking_rerank_provider=excluded.openviking_rerank_provider, openviking_rerank_model=excluded.openviking_rerank_model, openviking_rerank_api_key=case when excluded.openviking_rerank_api_key<>'' then excluded.openviking_rerank_api_key else memory_provider_configs.openviking_rerank_api_key end, openviking_rerank_api_base=excluded.openviking_rerank_api_base, nowledge_base_url=excluded.nowledge_base_url, nowledge_api_key=case when excluded.nowledge_api_key<>'' then excluded.nowledge_api_key else memory_provider_configs.nowledge_api_key end, nowledge_request_timeout_ms=excluded.nowledge_request_timeout_ms, diagnostic=excluded.diagnostic, updated_at=now() returning user_id, enabled, provider, commit_after_run, coalesce(semantic_endpoint,''), coalesce(openviking_base_url,''), coalesce(openviking_root_api_key,''), coalesce(openviking_embedding_selector,''), coalesce(openviking_embedding_provider,''), coalesce(openviking_embedding_model,''), coalesce(openviking_embedding_api_key,''), coalesce(openviking_embedding_api_base,''), coalesce(openviking_embedding_dimension,0), coalesce(openviking_vlm_selector,''), coalesce(openviking_vlm_provider,''), coalesce(openviking_vlm_model,''), coalesce(openviking_vlm_api_key,''), coalesce(openviking_vlm_api_base,''), coalesce(openviking_rerank_selector,''), coalesce(openviking_rerank_provider,''), coalesce(openviking_rerank_model,''), coalesce(openviking_rerank_api_key,''), coalesce(openviking_rerank_api_base,''), coalesce(nowledge_base_url,''), coalesce(nowledge_api_key,''), coalesce(nowledge_request_timeout_ms,0), diagnostic, updated_at`, user.ID, next.Enabled, next.Provider, next.CommitAfterRun, next.SemanticEndpoint, next.OpenViking.BaseURL, next.OpenViking.RootAPIKey, next.OpenViking.EmbeddingSelector, next.OpenViking.EmbeddingProvider, next.OpenViking.EmbeddingModel, next.OpenViking.EmbeddingAPIKey, next.OpenViking.EmbeddingAPIBase, next.OpenViking.EmbeddingDimension, next.OpenViking.VLMSelector, next.OpenViking.VLMProvider, next.OpenViking.VLMModel, next.OpenViking.VLMAPIKey, next.OpenViking.VLMAPIBase, next.OpenViking.RerankSelector, next.OpenViking.RerankProvider, next.OpenViking.RerankModel, next.OpenViking.RerankAPIKey, next.OpenViking.RerankAPIBase, next.Nowledge.BaseURL, next.Nowledge.APIKey, next.Nowledge.RequestTimeoutMS, next.Diagnostic)
+	return scanMemoryProviderConfig(row)
+}
+
+func (r *PostgresRepository) GetMemoryProviderStatus(ctx context.Context, ident identity.LocalIdentity) (MemoryProviderStatus, error) {
+	config, err := r.GetMemoryProviderConfig(ctx, ident)
+	if err != nil {
+		return MemoryProviderStatus{}, err
+	}
+	return memoryProviderStatus(config, time.Now()), nil
+}
+
+func (r *PostgresRepository) GetMemoryProviderConfig(ctx context.Context, ident identity.LocalIdentity) (MemoryProviderConfig, error) {
+	user, err := r.ensureUser(ctx, ident)
+	if err != nil {
+		return MemoryProviderConfig{}, err
+	}
+	config, err := scanMemoryProviderConfig(r.Pool.QueryRow(ctx, `select user_id, enabled, provider, commit_after_run, coalesce(semantic_endpoint,''), coalesce(openviking_base_url,''), coalesce(openviking_root_api_key,''), coalesce(openviking_embedding_selector,''), coalesce(openviking_embedding_provider,''), coalesce(openviking_embedding_model,''), coalesce(openviking_embedding_api_key,''), coalesce(openviking_embedding_api_base,''), coalesce(openviking_embedding_dimension,0), coalesce(openviking_vlm_selector,''), coalesce(openviking_vlm_provider,''), coalesce(openviking_vlm_model,''), coalesce(openviking_vlm_api_key,''), coalesce(openviking_vlm_api_base,''), coalesce(openviking_rerank_selector,''), coalesce(openviking_rerank_provider,''), coalesce(openviking_rerank_model,''), coalesce(openviking_rerank_api_key,''), coalesce(openviking_rerank_api_base,''), coalesce(nowledge_base_url,''), coalesce(nowledge_api_key,''), coalesce(nowledge_request_timeout_ms,0), coalesce(diagnostic,''), updated_at from memory_provider_configs where user_id=$1`, user.ID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		config = defaultMemoryProviderConfig(user.ID, time.Now())
+		err = nil
+	}
+	if err != nil {
+		return MemoryProviderConfig{}, err
+	}
+	return config, nil
+}
+
+func (r *PostgresRepository) ListMemoryProviderErrors(ctx context.Context, ident identity.LocalIdentity, limit int) ([]MemoryProviderErrorEvent, error) {
+	user, err := r.ensureUser(ctx, ident)
+	if err != nil {
+		return nil, err
+	}
+	items := []MemoryProviderErrorEvent{}
+	config, err := r.GetMemoryProviderConfig(ctx, ident)
+	if err != nil {
+		return nil, err
+	}
+	status := memoryProviderStatus(config, time.Now())
+	if status.Diagnostic.Code != "" && status.Diagnostic.Code != "ok" {
+		checkedAt := time.Now()
+		if status.CheckedAt != nil {
+			checkedAt = *status.CheckedAt
+		}
+		items = append(items, MemoryProviderErrorEvent{Code: status.Diagnostic.Code, Message: status.Diagnostic.Message, Provider: status.Provider, State: status.State, CheckedAt: checkedAt})
+	}
+	rows, err := r.Pool.Query(ctx, `select id, run_id, thread_id, user_id, sequence, category, type, summary, content, metadata, created_at from run_events where user_id=$1 and type in ($2,$3) order by created_at desc, id desc limit $4`, user.ID, EventMemoryExternalSnapshotFailed, "memory_provider_commit_failed", limitMemoryProviderErrorQueryLimit(limit))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		event, err := scanRunEvent(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, memoryProviderErrorFromRunEvent(event))
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	sort.SliceStable(items, func(i, j int) bool {
+		return items[i].CheckedAt.After(items[j].CheckedAt)
+	})
+	return limitMemoryProviderErrors(items, limit), nil
+}
+
+func (r *PostgresRepository) GetMemoryOverviewSnapshot(ctx context.Context, ident identity.LocalIdentity) (MemoryOverviewSnapshot, error) {
+	return r.memoryOverviewSnapshot(ctx, ident, false)
+}
+
+func (r *PostgresRepository) RebuildMemoryOverviewSnapshot(ctx context.Context, ident identity.LocalIdentity) (MemoryOverviewSnapshot, error) {
+	return r.memoryOverviewSnapshot(ctx, ident, true)
+}
+
+func (r *PostgresRepository) GetMemoryImpressionSnapshot(ctx context.Context, ident identity.LocalIdentity) (MemoryImpressionSnapshot, error) {
+	return r.memoryImpressionSnapshot(ctx, ident, false)
+}
+
+func (r *PostgresRepository) RebuildMemoryImpressionSnapshot(ctx context.Context, ident identity.LocalIdentity) (MemoryImpressionSnapshot, error) {
+	return r.memoryImpressionSnapshot(ctx, ident, true)
+}
+
+func (r *PostgresRepository) memoryOverviewSnapshot(ctx context.Context, ident identity.LocalIdentity, rebuilt bool) (MemoryOverviewSnapshot, error) {
+	output, err := r.SearchMemory(ctx, ident, MemorySearchInput{Limit: 7, Purpose: "snapshot"})
+	if err != nil {
+		return MemoryOverviewSnapshot{}, err
+	}
+	return buildMemoryOverviewSnapshot(semanticMemorySnapshotItems(output.Items), time.Now(), rebuilt), nil
+}
+
+func (r *PostgresRepository) memoryImpressionSnapshot(ctx context.Context, ident identity.LocalIdentity, rebuilt bool) (MemoryImpressionSnapshot, error) {
+	output, err := r.SearchMemory(ctx, ident, MemorySearchInput{Limit: 7, Purpose: "impression"})
+	if err != nil {
+		return MemoryImpressionSnapshot{}, err
+	}
+	return buildMemoryImpressionSnapshot(semanticMemorySnapshotItems(output.Items), time.Now(), rebuilt), nil
+}
+
+func (r *PostgresRepository) SaveMCPServerConfig(ctx context.Context, ident identity.LocalIdentity, input MCPServerConfigRecord) (MCPServerConfigRecord, error) {
+	user, err := r.ensureUser(ctx, ident)
+	if err != nil {
+		return MCPServerConfigRecord{}, err
+	}
+	record := normalizeMCPServerConfigRecord(input)
+	if record.Slug == "" {
+		return MCPServerConfigRecord{}, NewError(CodeInvalidRequest, "MCP server slug is required.")
+	}
+	record.UserID = user.ID
+	argsRaw, err := json.Marshal(record.Args)
+	if err != nil {
+		return MCPServerConfigRecord{}, err
+	}
+	envRaw, err := json.Marshal(record.Env)
+	if err != nil {
+		return MCPServerConfigRecord{}, err
+	}
+	row := r.Pool.QueryRow(ctx, `insert into mcp_server_configs (user_id, slug, display_name, enabled, transport, command, args_json, env_json, timeout_ms) values ($1,$2,$3,$4,$5,$6,$7,$8,$9) on conflict (user_id, slug) do update set display_name=excluded.display_name, enabled=excluded.enabled, transport=excluded.transport, command=excluded.command, args_json=excluded.args_json, env_json=excluded.env_json, timeout_ms=excluded.timeout_ms, updated_at=now() returning user_id, slug, display_name, enabled, transport, command, args_json, env_json, timeout_ms`, record.UserID, record.Slug, record.DisplayName, record.Enabled, record.Transport, record.Command, argsRaw, envRaw, record.TimeoutMS)
+	return scanMCPServerConfig(row)
+}
+
+func (r *PostgresRepository) ListMCPServerConfigs(ctx context.Context, ident identity.LocalIdentity) ([]MCPServerConfigRecord, error) {
+	user, err := r.ensureUser(ctx, ident)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := r.Pool.Query(ctx, `select user_id, slug, display_name, enabled, transport, command, args_json, env_json, timeout_ms from mcp_server_configs where user_id=$1 order by slug asc`, user.ID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	records := []MCPServerConfigRecord{}
+	for rows.Next() {
+		record, err := scanMCPServerConfig(rows)
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, record)
+	}
+	return records, rows.Err()
+}
+
+func (r *PostgresRepository) DeleteMCPServerConfig(ctx context.Context, ident identity.LocalIdentity, slug string) error {
+	user, err := r.ensureUser(ctx, ident)
+	if err != nil {
+		return err
+	}
+	_, err = r.Pool.Exec(ctx, `delete from mcp_server_configs where user_id=$1 and slug=$2`, user.ID, strings.TrimSpace(slug))
+	return err
 }
 
 func (r *PostgresRepository) CreateThread(ctx context.Context, ident identity.LocalIdentity, input CreateThreadInput) (Thread, error) {
@@ -36,8 +376,24 @@ func (r *PostgresRepository) CreateThread(ctx context.Context, ident identity.Lo
 		return Thread{}, err
 	}
 	threadID := NewThreadID()
-	row := r.Pool.QueryRow(ctx, `insert into threads (id, user_id, title, mode, lifecycle_status, persona_id) values ($1, $2, $3, $4, $5, nullif($6, '')) returning id, user_id, title, mode, lifecycle_status, coalesce(persona_id, ''), created_at, updated_at, archived_at`, threadID, user.ID, title, input.Mode, ThreadLifecycleActive, strings.TrimSpace(input.PersonaID))
-	return scanThread(row)
+	personaID := strings.TrimSpace(input.PersonaID)
+	tx, err := r.Pool.Begin(ctx)
+	if err != nil {
+		return Thread{}, err
+	}
+	defer tx.Rollback(ctx)
+	if err := validatePersonaReferenceTx(ctx, tx, personaID); err != nil {
+		return Thread{}, err
+	}
+	row := tx.QueryRow(ctx, `insert into threads (id, user_id, title, mode, lifecycle_status, persona_id) values ($1, $2, $3, $4, $5, nullif($6, '')) returning id, user_id, title, mode, lifecycle_status, coalesce(persona_id, ''), created_at, updated_at, archived_at`, threadID, user.ID, title, input.Mode, ThreadLifecycleActive, personaID)
+	thread, err := scanThread(row)
+	if err != nil {
+		return Thread{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Thread{}, err
+	}
+	return thread, nil
 }
 
 func (r *PostgresRepository) UpsertSeedThread(ctx context.Context, ident identity.LocalIdentity, input SeedThreadInput) (Thread, error) {
@@ -120,8 +476,23 @@ func (r *PostgresRepository) UpdateThread(ctx context.Context, ident identity.Lo
 	if input.PersonaID != nil {
 		personaID = strings.TrimSpace(*input.PersonaID)
 	}
-	row := r.Pool.QueryRow(ctx, `update threads set title=$1, mode=$2, persona_id=nullif($5, ''), updated_at=now() where id=$3 and user_id=$4 returning id, user_id, title, mode, lifecycle_status, coalesce(persona_id, ''), created_at, updated_at, archived_at`, title, mode, threadID, current.UserID, personaID)
-	return scanThread(row)
+	tx, err := r.Pool.Begin(ctx)
+	if err != nil {
+		return Thread{}, err
+	}
+	defer tx.Rollback(ctx)
+	if err := validatePersonaReferenceTx(ctx, tx, personaID); err != nil {
+		return Thread{}, err
+	}
+	row := tx.QueryRow(ctx, `update threads set title=$1, mode=$2, persona_id=nullif($5, ''), updated_at=now() where id=$3 and user_id=$4 returning id, user_id, title, mode, lifecycle_status, coalesce(persona_id, ''), created_at, updated_at, archived_at`, title, mode, threadID, current.UserID, personaID)
+	thread, err := scanThread(row)
+	if err != nil {
+		return Thread{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Thread{}, err
+	}
+	return thread, nil
 }
 
 func (r *PostgresRepository) ArchiveThread(ctx context.Context, ident identity.LocalIdentity, threadID string) (Thread, error) {
@@ -314,8 +685,8 @@ func (r *PostgresRepository) StartRun(ctx context.Context, ident identity.LocalI
 		metadata["script_name"] = NormalizeScriptName(input.ScriptName)
 	} else {
 		metadata["message_id"] = input.MessageID
-		metadata["provider_id"] = firstNonEmpty(snapshot.ModelRoute.ProviderID, input.ProviderID)
-		metadata["model"] = firstNonEmpty(snapshot.ModelRoute.Model, input.Model)
+		metadata["provider_id"] = runProviderID(input.ProviderID, snapshot)
+		metadata["model"] = runModel(input.ProviderID, input.Model, snapshot)
 	}
 	if snapshot.ID != "" {
 		metadata["persona_id"] = snapshot.ID
@@ -423,7 +794,605 @@ func (r *PostgresRepository) PrepareRunContext(ctx context.Context, ident identi
 		context.Persona = snapshot
 		applyPersonaToRunContext(&context, events)
 	}
+	memories, err := r.SearchMemory(ctx, ident, MemorySearchInput{ScopeType: MemoryScopeThread, ScopeID: thread.ID, Limit: 5, Purpose: "run_context"})
+	if err != nil {
+		context.MemorySnapshot = MemorySnapshot{RunID: run.ID, ThreadID: thread.ID, Limit: 5, LoadStatus: "unavailable"}
+		return context, nil
+	}
+	status := "loaded"
+	if len(memories.Items) == 0 {
+		status = "empty"
+	}
+	context.MemorySnapshot = MemorySnapshot{RunID: run.ID, ThreadID: thread.ID, Entries: memories.Items, Limit: 5, TotalCandidates: len(memories.Items), LoadStatus: status, RedactionApplied: true}
+	notebook, err := r.SearchMemory(ctx, ident, MemorySearchInput{ScopeType: MemoryScopeThread, ScopeID: thread.ID, SourceType: "notebook", Limit: 5, Purpose: "run_context_notebook"})
+	if err != nil {
+		context.NotebookSnapshot = MemorySnapshot{RunID: run.ID, ThreadID: thread.ID, Limit: 5, LoadStatus: "unavailable"}
+	} else {
+		notebookStatus := "loaded"
+		if len(notebook.Items) == 0 {
+			notebookStatus = "empty"
+		}
+		context.NotebookSnapshot = MemorySnapshot{RunID: run.ID, ThreadID: thread.ID, Entries: notebook.Items, Limit: 5, TotalCandidates: len(notebook.Items), LoadStatus: notebookStatus, RedactionApplied: true}
+	}
+	_, _ = r.AppendRunEvent(ctx, ident, run.ID, AppendRunEventInput{Category: RunEventCategoryProgress, Type: EventMemorySnapshotLoaded, Summary: "Memory snapshot loaded", Metadata: memorySnapshotEventMetadata(context.MemorySnapshot)})
 	return context, nil
+}
+
+func (r *PostgresRepository) ListToolCatalog(ctx context.Context, ident identity.LocalIdentity) ([]ToolCatalogEntry, error) {
+	user, err := r.ensureUser(ctx, ident)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := r.Pool.Query(ctx, `select id, run_id, thread_id, user_id, sequence, category, type, summary, content, metadata, created_at from run_events where user_id=$1 and type in ('mcp_discovery_succeeded','mcp_discovery_failed','mcp_discovery_rejected') order by created_at asc, id asc`, user.ID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var events []RunEvent
+	for rows.Next() {
+		event, err := scanRunEvent(rows)
+		if err != nil {
+			return nil, err
+		}
+		events = append(events, event)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return SafeToolCatalogFromEvents(events), nil
+}
+
+func (r *PostgresRepository) ListMCPDiscoveryEvents(ctx context.Context, ident identity.LocalIdentity) ([]RunEvent, error) {
+	user, err := r.ensureUser(ctx, ident)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := r.Pool.Query(ctx, `select id, run_id, thread_id, user_id, sequence, category, type, summary, content, metadata, created_at from run_events where user_id=$1 and type in ('mcp_discovery_succeeded','mcp_discovery_failed','mcp_discovery_rejected') order by created_at asc, id asc`, user.ID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var events []RunEvent
+	for rows.Next() {
+		event, err := scanRunEvent(rows)
+		if err != nil {
+			return nil, err
+		}
+		events = append(events, event)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return events, nil
+}
+
+func (r *PostgresRepository) CreateArtifact(ctx context.Context, ident identity.LocalIdentity, input CreateArtifactInput) (Artifact, error) {
+	title := strings.TrimSpace(input.Title)
+	content := input.Content
+	if title == "" || strings.TrimSpace(content) == "" {
+		return Artifact{}, NewError(CodeInvalidRequest, "Artifact title and content are required.")
+	}
+	if !utf8.ValidString(content) {
+		return Artifact{}, NewError(CodeInvalidRequest, "Artifact content must be valid UTF-8.")
+	}
+	limit := boundedArtifactBytes(input.MaxBytes)
+	if len([]byte(content)) > limit {
+		return Artifact{}, NewError(CodeInvalidRequest, "Artifact content is too large.")
+	}
+	user, err := r.ensureUser(ctx, ident)
+	if err != nil {
+		return Artifact{}, err
+	}
+	thread, err := scanThread(r.Pool.QueryRow(ctx, `select id, user_id, title, mode, lifecycle_status, coalesce(persona_id, ''), created_at, updated_at, archived_at from threads where id=$1 and user_id=$2`, strings.TrimSpace(input.ThreadID), user.ID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Artifact{}, NewError(CodeThreadNotFound, "Thread not found.")
+	}
+	if err != nil {
+		return Artifact{}, err
+	}
+	run, err := scanRun(r.Pool.QueryRow(ctx, `select id, thread_id, user_id, status, source, title, created_at, updated_at, completed_at, stop_requested_at, error_code, error_message from runs where id=$1 and user_id=$2 and thread_id=$3`, strings.TrimSpace(input.RunID), user.ID, thread.ID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Artifact{}, NewError(CodeRunNotFound, "Run not found.")
+	}
+	if err != nil {
+		return Artifact{}, err
+	}
+	return scanArtifact(r.Pool.QueryRow(ctx, `insert into artifacts (id, user_id, thread_id, run_id, title, artifact_type, content, content_bytes, text_excerpt, truncated) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) returning id, thread_id, run_id, title, artifact_type, content, content_bytes, text_excerpt, truncated, created_at, updated_at`, NewArtifactID(), user.ID, thread.ID, run.ID, title, "text", content, len([]byte(content)), artifactExcerpt(content, limit), false))
+}
+
+func (r *PostgresRepository) ReadArtifact(ctx context.Context, ident identity.LocalIdentity, input ReadArtifactInput) (Artifact, error) {
+	user, err := r.ensureUser(ctx, ident)
+	if err != nil {
+		return Artifact{}, err
+	}
+	artifact, err := scanArtifact(r.Pool.QueryRow(ctx, `select id, thread_id, run_id, title, artifact_type, content, content_bytes, text_excerpt, truncated, created_at, updated_at from artifacts where id=$1 and user_id=$2 and thread_id=$3`, strings.TrimSpace(input.ArtifactID), user.ID, strings.TrimSpace(input.ThreadID)))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Artifact{}, NewError(CodeArtifactNotFound, "Artifact not found.")
+	}
+	if err != nil {
+		return Artifact{}, err
+	}
+	limit := boundedArtifactBytes(input.MaxBytes)
+	artifact.TextExcerpt = artifactExcerpt(artifact.Content, limit)
+	artifact.Truncated = len([]byte(artifact.Content)) > limit
+	return artifact, nil
+}
+
+func (r *PostgresRepository) ListArtifacts(ctx context.Context, ident identity.LocalIdentity, input ListArtifactsInput) ([]Artifact, error) {
+	user, err := r.ensureUser(ctx, ident)
+	if err != nil {
+		return nil, err
+	}
+	limit := input.Limit
+	if limit <= 0 || limit > 50 {
+		limit = 20
+	}
+	rows, err := r.Pool.Query(ctx, `select a.id, a.thread_id, a.run_id, a.title, a.artifact_type, '' as content, a.content_bytes, a.text_excerpt, a.truncated, a.created_at, a.updated_at from artifacts a join threads t on t.id=a.thread_id and t.user_id=a.user_id where a.user_id=$1 and a.thread_id=$2 order by a.created_at asc, a.id asc limit $3`, user.ID, strings.TrimSpace(input.ThreadID), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	artifacts := []Artifact{}
+	for rows.Next() {
+		artifact, err := scanArtifact(rows)
+		if err != nil {
+			return nil, err
+		}
+		artifact.TextExcerpt = artifactExcerpt(artifact.TextExcerpt, 512)
+		artifacts = append(artifacts, artifact)
+	}
+	return artifacts, rows.Err()
+}
+
+func (r *PostgresRepository) SpawnAgentTask(ctx context.Context, ident identity.LocalIdentity, input SpawnAgentTaskInput) (AgentTask, error) {
+	role := strings.TrimSpace(input.Role)
+	goal := strings.TrimSpace(input.Goal)
+	if !isSupportedAgentRole(role) || goal == "" || len([]rune(goal)) > 4000 {
+		return AgentTask{}, NewError(CodeInvalidRequest, "Agent task role and goal are invalid.")
+	}
+	user, err := r.ensureUser(ctx, ident)
+	if err != nil {
+		return AgentTask{}, err
+	}
+	thread, err := scanThread(r.Pool.QueryRow(ctx, `select id, user_id, title, mode, lifecycle_status, coalesce(persona_id, ''), created_at, updated_at, archived_at from threads where id=$1 and user_id=$2`, strings.TrimSpace(input.ThreadID), user.ID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return AgentTask{}, NewError(CodeThreadNotFound, "Thread not found.")
+	}
+	if err != nil {
+		return AgentTask{}, err
+	}
+	run, err := scanRun(r.Pool.QueryRow(ctx, `select id, thread_id, user_id, status, source, title, created_at, updated_at, completed_at, stop_requested_at, error_code, error_message from runs where id=$1 and user_id=$2 and thread_id=$3`, strings.TrimSpace(input.RunID), user.ID, thread.ID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return AgentTask{}, NewError(CodeRunNotFound, "Run not found.")
+	}
+	if err != nil {
+		return AgentTask{}, err
+	}
+	return scanAgentTask(r.Pool.QueryRow(ctx, `insert into agent_tasks (id, user_id, thread_id, run_id, role, goal, status) values ($1,$2,$3,$4,$5,$6,$7) returning id, thread_id, run_id, role, goal, status, result_summary, created_at, updated_at`, NewAgentTaskID(), user.ID, thread.ID, run.ID, role, goal, AgentTaskStatusSpawned))
+}
+
+func (r *PostgresRepository) ListAgentTasks(ctx context.Context, ident identity.LocalIdentity, input ListAgentTasksInput) ([]AgentTask, error) {
+	user, err := r.ensureUser(ctx, ident)
+	if err != nil {
+		return nil, err
+	}
+	limit := input.Limit
+	if limit <= 0 || limit > 50 {
+		limit = 20
+	}
+	rows, err := r.Pool.Query(ctx, `select at.id, at.thread_id, at.run_id, at.role, at.goal, at.status, at.result_summary, at.created_at, at.updated_at from agent_tasks at join threads t on t.id=at.thread_id and t.user_id=at.user_id where at.user_id=$1 and at.thread_id=$2 order by at.created_at asc, at.id asc limit $3`, user.ID, strings.TrimSpace(input.ThreadID), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	tasks := []AgentTask{}
+	for rows.Next() {
+		task, err := scanAgentTask(rows)
+		if err != nil {
+			return nil, err
+		}
+		tasks = append(tasks, task)
+	}
+	return tasks, rows.Err()
+}
+
+func (r *PostgresRepository) CompleteAgentTask(ctx context.Context, ident identity.LocalIdentity, input CompleteAgentTaskInput) (AgentTask, error) {
+	summary := strings.TrimSpace(input.ResultSummary)
+	if summary == "" || len([]rune(summary)) > 4000 {
+		return AgentTask{}, NewError(CodeInvalidRequest, "Agent result summary is invalid.")
+	}
+	user, err := r.ensureUser(ctx, ident)
+	if err != nil {
+		return AgentTask{}, err
+	}
+	task, err := scanAgentTask(r.Pool.QueryRow(ctx, `update agent_tasks set status=$1, result_summary=$2, updated_at=now() where id=$3 and user_id=$4 and thread_id=$5 returning id, thread_id, run_id, role, goal, status, result_summary, created_at, updated_at`, AgentTaskStatusCompleted, RedactEventText(summary), strings.TrimSpace(input.TaskID), user.ID, strings.TrimSpace(input.ThreadID)))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return AgentTask{}, NewError(CodeInvalidRequest, "Agent task not found.")
+	}
+	if err != nil {
+		return AgentTask{}, err
+	}
+	return task, nil
+}
+
+func (r *PostgresRepository) CreateMemoryEntry(ctx context.Context, ident identity.LocalIdentity, input CreateMemoryEntryInput) (MemoryEntry, error) {
+	user, err := r.ensureUser(ctx, ident)
+	if err != nil {
+		return MemoryEntry{}, err
+	}
+	scopeType, scopeID, err := normalizeMemoryScope(user.ID, input.ScopeType, input.ScopeID)
+	if err != nil {
+		return MemoryEntry{}, err
+	}
+	title, summary, content, safety, err := normalizeMemoryContent(input.Title, input.Content)
+	if err != nil {
+		return MemoryEntry{}, err
+	}
+	status := MemoryEntryApproved
+	if safety == MemorySafetyBlocked {
+		status = MemoryEntryDisabled
+	}
+	row := r.Pool.QueryRow(ctx, `insert into memory_entries (id, user_id, scope_type, scope_id, title, summary, content, status, safety_state, source_thread_id, source_run_id, source_event_id, content_hash) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,nullif($10,''),nullif($11,''),nullif($12,''),$13) returning id, user_id, scope_type, scope_id, title, summary, content, status, safety_state, coalesce(source_thread_id,''), coalesce(source_run_id,''), coalesce(source_event_id,''), content_hash, created_at, updated_at, deleted_at, coalesce(deleted_by_user_id,''), coalesce(delete_reason,'')`,
+		NewMemoryEntryID(), user.ID, scopeType, scopeID, title, summary, content, status, safety, strings.TrimSpace(input.SourceThreadID), strings.TrimSpace(input.SourceRunID), strings.TrimSpace(input.SourceEventID), memoryContentHash(scopeType, scopeID, content))
+	return scanMemoryEntry(row)
+}
+
+func (r *PostgresRepository) ListMemoryEntries(ctx context.Context, ident identity.LocalIdentity, input MemorySearchInput) (MemorySearchOutput, error) {
+	return r.SearchMemory(ctx, ident, input)
+}
+
+func (r *PostgresRepository) SearchMemory(ctx context.Context, ident identity.LocalIdentity, input MemorySearchInput) (MemorySearchOutput, error) {
+	user, err := r.ensureUser(ctx, ident)
+	if err != nil {
+		return MemorySearchOutput{}, err
+	}
+	limit := memoryLimit(input.Limit)
+	scopeType := input.ScopeType
+	scopeID := strings.TrimSpace(input.ScopeID)
+	if scopeType == "" {
+		scopeType = MemoryScopeUser
+	}
+	query := strings.ToLower(strings.TrimSpace(input.Query))
+	sql := `select id, user_id, scope_type, scope_id, title, summary, content, status, safety_state, coalesce(source_thread_id,''), coalesce(source_run_id,''), coalesce(source_event_id,''), content_hash, created_at, updated_at, deleted_at, coalesce(deleted_by_user_id,''), coalesce(delete_reason,'') from memory_entries where user_id=$1 and safety_state <> 'blocked'`
+	args := []any{user.ID}
+	if input.IncludeTombstoned {
+		sql += ` and status in ('approved','tombstoned')`
+	} else {
+		sql += ` and status='approved'`
+	}
+	if scopeType == MemoryScopeThread {
+		args = append(args, scopeID)
+		sql += ` and ((scope_type='user' and scope_id=$1) or (scope_type='thread' and scope_id=$2))`
+	} else {
+		sql += ` and scope_type='user' and scope_id=$1`
+	}
+	if query != "" {
+		args = append(args, "%"+query+"%")
+		sql += ` and (lower(title) like $` + intPlaceholder(len(args)) + ` or lower(summary) like $` + intPlaceholder(len(args)) + ` or lower(content) like $` + intPlaceholder(len(args)) + `)`
+	}
+	if sourceRunID := strings.TrimSpace(input.SourceRunID); sourceRunID != "" {
+		args = append(args, sourceRunID)
+		sql += ` and source_run_id=$` + intPlaceholder(len(args))
+	}
+	if sourceThreadID := strings.TrimSpace(input.SourceThreadID); sourceThreadID != "" {
+		args = append(args, sourceThreadID)
+		sql += ` and source_thread_id=$` + intPlaceholder(len(args))
+	}
+	switch strings.TrimSpace(input.SourceType) {
+	case "", "any":
+	case "run":
+		sql += ` and source_run_id is not null`
+	case "thread":
+		sql += ` and source_thread_id is not null`
+	case "notebook":
+		sql += ` and source_event_id='notebook'`
+	case "manual":
+		sql += ` and source_run_id is null and source_thread_id is null and coalesce(source_event_id,'') <> 'notebook'`
+	default:
+		return MemorySearchOutput{}, NewError(CodeInvalidRequest, "Memory source type is invalid.")
+	}
+	args = append(args, limit)
+	sql += ` order by updated_at desc, id desc limit $` + intPlaceholder(len(args))
+	rows, err := r.Pool.Query(ctx, sql, args...)
+	if err != nil {
+		return MemorySearchOutput{}, err
+	}
+	defer rows.Close()
+	var items []MemorySearchResult
+	for rows.Next() {
+		entry, err := scanMemoryEntry(rows)
+		if err != nil {
+			return MemorySearchOutput{}, err
+		}
+		items = append(items, memorySearchResult(entry))
+	}
+	return MemorySearchOutput{Items: items}, rows.Err()
+}
+
+func (r *PostgresRepository) GetMemoryEntry(ctx context.Context, ident identity.LocalIdentity, entryID string, input MemoryEntryAccessInput) (MemoryEntry, error) {
+	user, err := r.ensureUser(ctx, ident)
+	if err != nil {
+		return MemoryEntry{}, err
+	}
+	entry, err := scanMemoryEntry(r.Pool.QueryRow(ctx, `select id, user_id, scope_type, scope_id, title, summary, content, status, safety_state, coalesce(source_thread_id,''), coalesce(source_run_id,''), coalesce(source_event_id,''), content_hash, created_at, updated_at, deleted_at, coalesce(deleted_by_user_id,''), coalesce(delete_reason,'') from memory_entries where id=$1 and user_id=$2 and status in ('approved','tombstoned') and safety_state <> 'blocked'`, strings.TrimSpace(entryID), user.ID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return MemoryEntry{}, NewError(CodeMemoryNotFound, "Memory not found.")
+	}
+	if err != nil {
+		return MemoryEntry{}, err
+	}
+	if !memoryEntryReadableTo(entry, user.ID, input) {
+		return MemoryEntry{}, NewError(CodeMemoryNotFound, "Memory not found.")
+	}
+	entry.Content = ""
+	return entry, err
+}
+
+func (r *PostgresRepository) ListMemoryAudit(ctx context.Context, ident identity.LocalIdentity, input MemoryAuditInput) (MemoryAuditOutput, error) {
+	user, err := r.ensureUser(ctx, ident)
+	if err != nil {
+		return MemoryAuditOutput{}, err
+	}
+	limit := memoryLimit(input.Limit)
+	sql := `select id, run_id, thread_id, user_id, 0, 'progress', type, summary, null, metadata, created_at from memory_audit_events where user_id=$1 and type = any($2)`
+	args := []any{user.ID, []string{EventMemorySnapshotLoaded, EventMemoryWriteProposed, EventMemoryWriteApproved, EventMemoryWriteDenied, EventMemoryEntryDeleted}}
+	if threadID := strings.TrimSpace(input.ThreadID); threadID != "" {
+		args = append(args, threadID)
+		sql += ` and thread_id=$` + intPlaceholder(len(args))
+	}
+	if runID := strings.TrimSpace(input.SourceRunID); runID != "" {
+		args = append(args, runID)
+		sql += ` and run_id=$` + intPlaceholder(len(args))
+	}
+	if eventType := strings.TrimSpace(input.EventType); eventType != "" {
+		if eventType == "memory_deleted" {
+			eventType = EventMemoryEntryDeleted
+		}
+		args = append(args, eventType)
+		sql += ` and type=$` + intPlaceholder(len(args))
+	}
+	args = append(args, limit)
+	sql += ` order by created_at desc, id desc limit $` + intPlaceholder(len(args))
+	rows, err := r.Pool.Query(ctx, sql, args...)
+	if err != nil {
+		return MemoryAuditOutput{}, err
+	}
+	defer rows.Close()
+	var items []MemoryAuditItem
+	for rows.Next() {
+		event, err := scanRunEvent(rows)
+		if err != nil {
+			return MemoryAuditOutput{}, err
+		}
+		items = append(items, memoryAuditItem(event))
+	}
+	return MemoryAuditOutput{Items: items}, rows.Err()
+}
+
+func (r *PostgresRepository) DeleteMemoryEntry(ctx context.Context, ident identity.LocalIdentity, entryID string, input DeleteMemoryEntryInput) (MemoryTombstone, error) {
+	user, err := r.ensureUser(ctx, ident)
+	if err != nil {
+		return MemoryTombstone{}, err
+	}
+	entry, err := scanMemoryEntry(r.Pool.QueryRow(ctx, `select id, user_id, scope_type, scope_id, title, summary, content, status, safety_state, coalesce(source_thread_id,''), coalesce(source_run_id,''), coalesce(source_event_id,''), content_hash, created_at, updated_at, deleted_at, coalesce(deleted_by_user_id,''), coalesce(delete_reason,'') from memory_entries where id=$1 and user_id=$2`, strings.TrimSpace(entryID), user.ID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return MemoryTombstone{}, NewError(CodeMemoryNotFound, "Memory not found.")
+	}
+	if err != nil {
+		return MemoryTombstone{}, err
+	}
+	if !memoryEntryReadableTo(entry, user.ID, MemoryEntryAccessInput{ScopeType: input.ScopeType, ScopeID: input.ScopeID, SourceThreadID: input.SourceThreadID, SourceRunID: input.SourceRunID}) {
+		return MemoryTombstone{}, NewError(CodeMemoryNotFound, "Memory not found.")
+	}
+	if entry.Status == MemoryEntryTombstoned && entry.DeletedAt != nil {
+		return MemoryTombstone{EntryID: entry.ID, Status: string(MemoryEntryTombstoned), DeletedAt: *entry.DeletedAt}, nil
+	}
+	entry, err = scanMemoryEntry(r.Pool.QueryRow(ctx, `update memory_entries set status='tombstoned', content='', summary='[deleted]', deleted_at=now(), deleted_by_user_id=$3, delete_reason=$4, updated_at=now() where id=$1 and user_id=$2 and status <> 'tombstoned' returning id, user_id, scope_type, scope_id, title, summary, content, status, safety_state, coalesce(source_thread_id,''), coalesce(source_run_id,''), coalesce(source_event_id,''), content_hash, created_at, updated_at, deleted_at, coalesce(deleted_by_user_id,''), coalesce(delete_reason,'')`, entry.ID, user.ID, user.ID, RedactEventText(strings.TrimSpace(input.Reason))))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return MemoryTombstone{}, NewError(CodeMemoryNotFound, "Memory not found.")
+	}
+	if err != nil {
+		return MemoryTombstone{}, err
+	}
+	r.appendMemoryAuditEvent(ctx, ident, entry.SourceRunID, EventMemoryEntryDeleted, "Memory entry deleted", memoryEntryAuditMetadata(entry, ""))
+	return MemoryTombstone{EntryID: strings.TrimSpace(entryID), Status: string(MemoryEntryTombstoned), DeletedAt: *entry.DeletedAt}, nil
+}
+
+func (r *PostgresRepository) ProposeMemoryWrite(ctx context.Context, ident identity.LocalIdentity, input ProposeMemoryWriteInput) (MemoryWriteProposal, error) {
+	user, err := r.ensureUser(ctx, ident)
+	if err != nil {
+		return MemoryWriteProposal{}, err
+	}
+	if key := strings.TrimSpace(input.IdempotencyKey); key != "" {
+		proposal, err := scanMemoryProposal(r.Pool.QueryRow(ctx, `select id, user_id, scope_type, scope_id, title, summary, content, status, safety_state, coalesce(source_thread_id,''), coalesce(source_run_id,''), coalesce(source_event_id,''), idempotency_key, coalesce(created_entry_id,''), created_at, decided_at, coalesce(decided_by_user_id,''), coalesce(decision_reason,'') from memory_write_proposals where user_id=$1 and idempotency_key=$2`, user.ID, key))
+		if err == nil {
+			return proposal, nil
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return MemoryWriteProposal{}, err
+		}
+	}
+	scopeType, scopeID, err := normalizeMemoryScope(user.ID, input.ScopeType, input.ScopeID)
+	if err != nil {
+		return MemoryWriteProposal{}, err
+	}
+	title, summary, content, safety, err := normalizeMemoryContent(input.Title, input.Content)
+	if err != nil {
+		return MemoryWriteProposal{}, err
+	}
+	status := MemoryWritePending
+	if safety == MemorySafetyBlocked {
+		status = MemoryWriteDenied
+	}
+	row := r.Pool.QueryRow(ctx, `insert into memory_write_proposals (id, user_id, scope_type, scope_id, title, summary, content, status, safety_state, source_thread_id, source_run_id, source_event_id, idempotency_key) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,nullif($10,''),nullif($11,''),nullif($12,''),$13) returning id, user_id, scope_type, scope_id, title, summary, content, status, safety_state, coalesce(source_thread_id,''), coalesce(source_run_id,''), coalesce(source_event_id,''), idempotency_key, coalesce(created_entry_id,''), created_at, decided_at, coalesce(decided_by_user_id,''), coalesce(decision_reason,'')`,
+		NewMemoryProposalID(), user.ID, scopeType, scopeID, title, summary, content, status, safety, strings.TrimSpace(input.SourceThreadID), strings.TrimSpace(input.SourceRunID), strings.TrimSpace(input.SourceEventID), strings.TrimSpace(input.IdempotencyKey))
+	proposal, err := scanMemoryProposal(row)
+	if err != nil {
+		return MemoryWriteProposal{}, err
+	}
+	r.appendMemoryAuditEvent(ctx, ident, proposal.SourceRunID, EventMemoryWriteProposed, "Memory write proposed", memoryProposalAuditMetadata(proposal, ""))
+	return proposal, nil
+}
+
+func (r *PostgresRepository) ListMemoryWriteProposals(ctx context.Context, ident identity.LocalIdentity, input MemoryWriteProposalListInput) (MemoryWriteProposalListOutput, error) {
+	user, err := r.ensureUser(ctx, ident)
+	if err != nil {
+		return MemoryWriteProposalListOutput{}, err
+	}
+	limit := memoryLimit(input.Limit)
+	status := input.Status
+	if status == "" {
+		status = MemoryWritePending
+	}
+	conditions := []string{"user_id=$1", "status=$2"}
+	args := []any{user.ID, status}
+	if input.ScopeType != "" {
+		args = append(args, input.ScopeType)
+		conditions = append(conditions, "scope_type=$"+strconv.Itoa(len(args)))
+	}
+	if strings.TrimSpace(input.ScopeID) != "" {
+		args = append(args, strings.TrimSpace(input.ScopeID))
+		conditions = append(conditions, "scope_id=$"+strconv.Itoa(len(args)))
+	}
+	if strings.TrimSpace(input.SourceRunID) != "" {
+		args = append(args, strings.TrimSpace(input.SourceRunID))
+		conditions = append(conditions, "source_run_id=$"+strconv.Itoa(len(args)))
+	}
+	args = append(args, limit)
+	query := `select id, user_id, scope_type, scope_id, title, summary, '' as content, status, safety_state, coalesce(source_thread_id,''), coalesce(source_run_id,''), coalesce(source_event_id,''), '' as idempotency_key, coalesce(created_entry_id,''), created_at, decided_at, '' as decided_by_user_id, coalesce(decision_reason,'') from memory_write_proposals where ` + strings.Join(conditions, " and ") + ` order by created_at desc limit $` + strconv.Itoa(len(args))
+	rows, err := r.Pool.Query(ctx, query, args...)
+	if err != nil {
+		return MemoryWriteProposalListOutput{}, err
+	}
+	defer rows.Close()
+	items := []MemoryWriteProposal{}
+	for rows.Next() {
+		proposal, err := scanMemoryProposal(rows)
+		if err != nil {
+			return MemoryWriteProposalListOutput{}, err
+		}
+		items = append(items, proposal)
+	}
+	if err := rows.Err(); err != nil {
+		return MemoryWriteProposalListOutput{}, err
+	}
+	return MemoryWriteProposalListOutput{Items: items}, nil
+}
+
+func (r *PostgresRepository) UpdateMemoryWriteProposal(ctx context.Context, ident identity.LocalIdentity, proposalID string, input MemoryWriteProposalUpdateInput) (MemoryWriteProposal, error) {
+	user, err := r.ensureUser(ctx, ident)
+	if err != nil {
+		return MemoryWriteProposal{}, err
+	}
+	title, summary, content, safety, err := normalizeMemoryContent(input.Title, input.Summary)
+	if err != nil {
+		return MemoryWriteProposal{}, err
+	}
+	if safety == MemorySafetyBlocked {
+		return MemoryWriteProposal{}, NewError(CodeInvalidRequest, "Memory proposal edit contains sensitive content.")
+	}
+	proposal, err := scanMemoryProposal(r.Pool.QueryRow(ctx, `update memory_write_proposals set title=$3, summary=$4, content=$5, safety_state=$6 where id=$1 and user_id=$2 and status='pending' and safety_state <> 'blocked' returning id, user_id, scope_type, scope_id, title, summary, '' as content, status, safety_state, coalesce(source_thread_id,''), coalesce(source_run_id,''), coalesce(source_event_id,''), '' as idempotency_key, coalesce(created_entry_id,''), created_at, decided_at, '' as decided_by_user_id, coalesce(decision_reason,'')`, strings.TrimSpace(proposalID), user.ID, title, summary, content, safety))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return MemoryWriteProposal{}, NewError(CodeMemoryNotFound, "Memory proposal not found.")
+	}
+	if err != nil {
+		return MemoryWriteProposal{}, err
+	}
+	return proposal, nil
+}
+
+func (r *PostgresRepository) ApproveMemoryWrite(ctx context.Context, ident identity.LocalIdentity, proposalID string, input MemoryWriteDecisionInput) (MemoryWriteDecision, error) {
+	user, err := r.ensureUser(ctx, ident)
+	if err != nil {
+		return MemoryWriteDecision{}, err
+	}
+	tx, err := r.Pool.Begin(ctx)
+	if err != nil {
+		return MemoryWriteDecision{}, err
+	}
+	defer tx.Rollback(ctx)
+	proposal, err := scanMemoryProposal(tx.QueryRow(ctx, `select id, user_id, scope_type, scope_id, title, summary, content, status, safety_state, coalesce(source_thread_id,''), coalesce(source_run_id,''), coalesce(source_event_id,''), idempotency_key, coalesce(created_entry_id,''), created_at, decided_at, coalesce(decided_by_user_id,''), coalesce(decision_reason,'') from memory_write_proposals where id=$1 and user_id=$2 for update`, strings.TrimSpace(proposalID), user.ID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return MemoryWriteDecision{}, NewError(CodeMemoryNotFound, "Memory proposal not found.")
+	}
+	if err != nil {
+		return MemoryWriteDecision{}, err
+	}
+	if proposal.Status == MemoryWriteApproved && proposal.CreatedEntryID != "" {
+		entry, err := scanMemoryEntry(tx.QueryRow(ctx, `select id, user_id, scope_type, scope_id, title, summary, content, status, safety_state, coalesce(source_thread_id,''), coalesce(source_run_id,''), coalesce(source_event_id,''), content_hash, created_at, updated_at, deleted_at, coalesce(deleted_by_user_id,''), coalesce(delete_reason,'') from memory_entries where id=$1`, proposal.CreatedEntryID))
+		if err != nil {
+			return MemoryWriteDecision{}, err
+		}
+		entry.Content = ""
+		if err := tx.Commit(ctx); err != nil {
+			return MemoryWriteDecision{}, err
+		}
+		return MemoryWriteDecision{Proposal: proposal, Entry: entry}, nil
+	}
+	if proposal.Status != MemoryWritePending || proposal.SafetyState == MemorySafetyBlocked {
+		return MemoryWriteDecision{}, NewError(CodeInvalidRequest, "Memory write cannot be approved.")
+	}
+	entry, err := scanMemoryEntry(tx.QueryRow(ctx, `insert into memory_entries (id, user_id, scope_type, scope_id, title, summary, content, status, safety_state, source_thread_id, source_run_id, source_event_id, content_hash) values ($1,$2,$3,$4,$5,$6,$7,'approved',$8,nullif($9,''),nullif($10,''),nullif($11,''),$12) returning id, user_id, scope_type, scope_id, title, summary, content, status, safety_state, coalesce(source_thread_id,''), coalesce(source_run_id,''), coalesce(source_event_id,''), content_hash, created_at, updated_at, deleted_at, coalesce(deleted_by_user_id,''), coalesce(delete_reason,'')`,
+		NewMemoryEntryID(), user.ID, proposal.ScopeType, proposal.ScopeID, proposal.Title, proposal.Summary, proposal.Content, proposal.SafetyState, proposal.SourceThreadID, proposal.SourceRunID, proposal.SourceEventID, memoryContentHash(proposal.ScopeType, proposal.ScopeID, proposal.Content)))
+	if err != nil {
+		return MemoryWriteDecision{}, err
+	}
+	proposal, err = scanMemoryProposal(tx.QueryRow(ctx, `update memory_write_proposals set status='approved', created_entry_id=$1, decided_at=now(), decided_by_user_id=$2, decision_reason=$3 where id=$4 returning id, user_id, scope_type, scope_id, title, summary, content, status, safety_state, coalesce(source_thread_id,''), coalesce(source_run_id,''), coalesce(source_event_id,''), idempotency_key, coalesce(created_entry_id,''), created_at, decided_at, coalesce(decided_by_user_id,''), coalesce(decision_reason,'')`, entry.ID, user.ID, RedactEventText(strings.TrimSpace(input.Reason)), proposal.ID))
+	if err != nil {
+		return MemoryWriteDecision{}, err
+	}
+	entry.Content = ""
+	if err := tx.Commit(ctx); err != nil {
+		return MemoryWriteDecision{}, err
+	}
+	r.appendMemoryAuditEvent(ctx, ident, proposal.SourceRunID, EventMemoryWriteApproved, "Memory write approved", memoryProposalAuditMetadata(proposal, entry.ID))
+	return MemoryWriteDecision{Proposal: proposal, Entry: entry}, nil
+}
+
+func (r *PostgresRepository) DenyMemoryWrite(ctx context.Context, ident identity.LocalIdentity, proposalID string, input MemoryWriteDecisionInput) (MemoryWriteDecision, error) {
+	user, err := r.ensureUser(ctx, ident)
+	if err != nil {
+		return MemoryWriteDecision{}, err
+	}
+	proposal, err := scanMemoryProposal(r.Pool.QueryRow(ctx, `select id, user_id, scope_type, scope_id, title, summary, content, status, safety_state, coalesce(source_thread_id,''), coalesce(source_run_id,''), coalesce(source_event_id,''), idempotency_key, coalesce(created_entry_id,''), created_at, decided_at, coalesce(decided_by_user_id,''), coalesce(decision_reason,'') from memory_write_proposals where id=$1 and user_id=$2`, strings.TrimSpace(proposalID), user.ID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return MemoryWriteDecision{}, NewError(CodeMemoryNotFound, "Memory proposal not found.")
+	}
+	if err != nil {
+		return MemoryWriteDecision{}, err
+	}
+	if proposal.Status == MemoryWriteDenied {
+		return MemoryWriteDecision{Proposal: proposal}, nil
+	}
+	if proposal.Status == MemoryWriteApproved {
+		return MemoryWriteDecision{}, NewError(CodeInvalidRequest, "Approved memory write cannot be denied.")
+	}
+	proposal, err = scanMemoryProposal(r.Pool.QueryRow(ctx, `update memory_write_proposals set status='denied', decided_at=now(), decided_by_user_id=$3, decision_reason=$4 where id=$1 and user_id=$2 and status='pending' returning id, user_id, scope_type, scope_id, title, summary, content, status, safety_state, coalesce(source_thread_id,''), coalesce(source_run_id,''), coalesce(source_event_id,''), idempotency_key, coalesce(created_entry_id,''), created_at, decided_at, coalesce(decided_by_user_id,''), coalesce(decision_reason,'')`, proposal.ID, user.ID, user.ID, RedactEventText(strings.TrimSpace(input.Reason))))
+	if err != nil {
+		return MemoryWriteDecision{}, err
+	}
+	r.appendMemoryAuditEvent(ctx, ident, proposal.SourceRunID, EventMemoryWriteDenied, "Memory write denied", memoryProposalAuditMetadata(proposal, ""))
+	return MemoryWriteDecision{Proposal: proposal}, nil
+}
+
+func (r *PostgresRepository) appendMemoryAuditEvent(ctx context.Context, ident identity.LocalIdentity, runID string, eventType string, summary string, metadata map[string]any) {
+	user, err := r.ensureUser(ctx, ident)
+	if err != nil {
+		return
+	}
+	runID = strings.TrimSpace(runID)
+	threadID := ""
+	var run Run
+	if runID != "" {
+		run, err = scanRun(r.Pool.QueryRow(ctx, `select id, thread_id, user_id, status, source, title, created_at, updated_at, completed_at, stop_requested_at, error_code, error_message from runs where id=$1 and user_id=$2`, runID, user.ID))
+		if err == nil {
+			threadID = run.ThreadID
+		}
+	}
+	_, _ = r.Pool.Exec(ctx, `insert into memory_audit_events (id, user_id, thread_id, run_id, type, summary, metadata) values ($1,$2,$3,$4,$5,$6,$7)`, NewRunEventID(), user.ID, threadID, runID, eventType, RedactEventText(summary), mustJSON(RedactEventMetadata(metadata)))
+	if run.ID != "" {
+		_, _ = insertRunEventIgnoringTerminal(ctx, r.Pool, run, RunEventCategoryProgress, eventType, summary, nil, metadata)
+	}
 }
 
 func (r *PostgresRepository) AppendRunEvent(ctx context.Context, ident identity.LocalIdentity, runID string, input AppendRunEventInput) (RunEvent, error) {
@@ -447,7 +1416,7 @@ func (r *PostgresRepository) AppendRunEvent(ctx context.Context, ident identity.
 	if err != nil {
 		return RunEvent{}, err
 	}
-	if IsRunTerminal(run.Status) {
+	if IsRunTerminal(run.Status) && !isTerminalRunEventAppendAllowed(input.Type) {
 		return RunEvent{}, NewError(CodeInvalidRequest, "Terminal run cannot accept new events.")
 	}
 	var nextSequence int
@@ -457,6 +1426,11 @@ func (r *PostgresRepository) AppendRunEvent(ctx context.Context, ident identity.
 	event, err := scanRunEvent(tx.QueryRow(ctx, `insert into run_events (id, run_id, thread_id, user_id, sequence, category, type, summary, content, metadata) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) returning id, run_id, thread_id, user_id, sequence, category, type, summary, content, metadata, created_at`, NewRunEventID(), run.ID, run.ThreadID, user.ID, nextSequence, input.Category, input.Type, input.Summary, input.Content, mustJSON(input.Metadata)))
 	if err != nil {
 		return RunEvent{}, err
+	}
+	if isMemoryAuditEvent(event.Type) {
+		if _, err := tx.Exec(ctx, `insert into memory_audit_events (id, user_id, thread_id, run_id, type, summary, metadata, created_at) values ($1,$2,$3,$4,$5,$6,$7,$8)`, NewRunEventID(), user.ID, run.ThreadID, run.ID, event.Type, event.Summary, mustJSON(event.Metadata), event.CreatedAt); err != nil {
+			return RunEvent{}, err
+		}
 	}
 	status := run.Status
 	completedAtSQL := `completed_at`
@@ -483,7 +1457,7 @@ func (r *PostgresRepository) GetToolCall(ctx context.Context, ident identity.Loc
 	if err != nil {
 		return ToolCall{}, err
 	}
-	call, err := scanToolCall(r.Pool.QueryRow(ctx, `select tc.id, tc.thread_id, tc.run_id, tc.tool_call_id, tc.tool_name, tc.arguments_summary, tc.approval_status, tc.execution_status, tc.result_summary, tc.error_code, tc.error_message, tc.requested_at, tc.updated_at from tool_calls tc join runs r on r.id=tc.run_id where tc.thread_id=$1 and tc.run_id=$2 and tc.tool_call_id=$3 and r.user_id=$4`, threadID, runID, strings.TrimSpace(toolCallID), user.ID))
+	call, err := scanToolCall(r.Pool.QueryRow(ctx, `select tc.id, tc.thread_id, tc.run_id, tc.tool_call_id, tc.tool_name, tc.candidate_schema_hash, tc.arguments_summary, tc.approval_status, tc.execution_status, tc.result_summary, tc.error_code, tc.error_message, tc.requested_at, tc.updated_at from tool_calls tc join runs r on r.id=tc.run_id where tc.thread_id=$1 and tc.run_id=$2 and tc.tool_call_id=$3 and r.user_id=$4`, threadID, runID, strings.TrimSpace(toolCallID), user.ID))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ToolCall{}, NewError(CodeRunNotFound, "Run not found.")
 	}
@@ -518,17 +1492,17 @@ func (r *PostgresRepository) RecordToolCallRequest(ctx context.Context, ident id
 		return ToolCall{}, nil, NewError(CodeInvalidRequest, "Terminal runs cannot request tools.")
 	}
 	var existingToolCallID string
-	err = tx.QueryRow(ctx, `select tool_call_id from tool_calls where run_id=$1 limit 1`, run.ID).Scan(&existingToolCallID)
+	err = tx.QueryRow(ctx, `select tool_call_id from tool_calls where run_id=$1 and execution_status in ('blocked', 'not_started', 'executing') limit 1`, run.ID).Scan(&existingToolCallID)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return ToolCall{}, nil, err
 	}
 	if existingToolCallID != "" && existingToolCallID != input.ToolCallID {
-		return ToolCall{}, nil, NewError(CodeInvalidRequest, "Only one tool call is supported per run.")
+		return ToolCall{}, nil, NewError(CodeInvalidRequest, "Another tool call is already pending or executing.")
 	}
 	arguments := RedactEventMetadata(input.ArgumentsSummary)
-	call, err := scanToolCall(tx.QueryRow(ctx, `insert into tool_calls (id, thread_id, run_id, tool_call_id, tool_name, arguments_summary, arguments_hash, approval_status, execution_status) values ($1, $2, $3, $4, $5, $6, $7, $8, $9) on conflict (run_id, tool_call_id) do nothing returning id, thread_id, run_id, tool_call_id, tool_name, arguments_summary, approval_status, execution_status, result_summary, error_code, error_message, requested_at, updated_at`, NewToolCallID(), run.ThreadID, run.ID, input.ToolCallID, input.ToolName, mustJSON(arguments), input.ArgumentsHash, input.ApprovalStatus, input.ExecutionStatus))
+	call, err := scanToolCall(tx.QueryRow(ctx, `insert into tool_calls (id, thread_id, run_id, tool_call_id, tool_name, candidate_schema_hash, arguments_summary, arguments_hash, approval_status, execution_status) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) on conflict (run_id, tool_call_id) do nothing returning id, thread_id, run_id, tool_call_id, tool_name, candidate_schema_hash, arguments_summary, approval_status, execution_status, result_summary, error_code, error_message, requested_at, updated_at`, NewToolCallID(), run.ThreadID, run.ID, input.ToolCallID, input.ToolName, input.CandidateSchemaHash, mustJSON(arguments), input.ArgumentsHash, input.ApprovalStatus, input.ExecutionStatus))
 	if errors.Is(err, pgx.ErrNoRows) {
-		existing, err := scanToolCall(tx.QueryRow(ctx, `select id, thread_id, run_id, tool_call_id, tool_name, arguments_summary, approval_status, execution_status, result_summary, error_code, error_message, requested_at, updated_at from tool_calls where run_id=$1 and tool_call_id=$2`, run.ID, input.ToolCallID))
+		existing, err := scanToolCall(tx.QueryRow(ctx, `select id, thread_id, run_id, tool_call_id, tool_name, candidate_schema_hash, arguments_summary, approval_status, execution_status, result_summary, error_code, error_message, requested_at, updated_at from tool_calls where run_id=$1 and tool_call_id=$2`, run.ID, input.ToolCallID))
 		if err != nil {
 			return ToolCall{}, nil, err
 		}
@@ -537,17 +1511,32 @@ func (r *PostgresRepository) RecordToolCallRequest(ctx context.Context, ident id
 	if err != nil {
 		return ToolCall{}, nil, err
 	}
-	run.Status = RunStatusBlockedOnToolApproval
+	autoApproved := call.ApprovalStatus == ToolCallApprovalApproved && call.ExecutionStatus == ToolCallExecutionNotStarted
+	if autoApproved {
+		run.Status = RunStatusQueued
+	} else {
+		run.Status = RunStatusBlockedOnToolApproval
+	}
 	if _, err := tx.Exec(ctx, `update runs set status=$1, updated_at=now() where id=$2 and user_id=$3`, run.Status, run.ID, user.ID); err != nil {
 		return ToolCall{}, nil, err
 	}
 	if _, err := tx.Exec(ctx, `update background_jobs set status='cancelled', updated_at=now() where run_id=$1 and user_id=$2 and status in ('queued', 'retrying')`, run.ID, user.ID); err != nil {
 		return ToolCall{}, nil, err
 	}
-	metadata := map[string]any{"tool_call_id": call.ToolCallID, "tool_name": call.ToolName, "arguments_summary": call.ArgumentsSummary, "approval_status": string(call.ApprovalStatus), "execution_status": string(call.ExecutionStatus)}
+	metadata, err := toolCallEventMetadataForPostgresRun(ctx, tx, run.ID, call)
+	if err != nil {
+		return ToolCall{}, nil, err
+	}
 	requested, err := insertRunEvent(ctx, tx, run, RunEventCategoryProgress, EventToolCallRequested, "Tool call requested", nil, metadata)
 	if err != nil {
 		return ToolCall{}, nil, err
+	}
+	if autoApproved {
+		approved, err := insertRunEvent(ctx, tx, run, RunEventCategoryProgress, EventToolCallApproved, "Tool call auto-approved", nil, metadata)
+		if err != nil {
+			return ToolCall{}, nil, err
+		}
+		return call, []RunEvent{requested, approved}, tx.Commit(ctx)
 	}
 	required, err := insertRunEvent(ctx, tx, run, RunEventCategoryProgress, EventToolCallApprovalRequired, "Tool approval required", nil, metadata)
 	if err != nil {
@@ -579,7 +1568,7 @@ func (r *PostgresRepository) ApproveToolCall(ctx context.Context, ident identity
 	if call.ApprovalStatus != ToolCallApprovalRequired || call.ExecutionStatus != ToolCallExecutionBlocked || IsRunTerminal(run.Status) {
 		return ToolCall{}, nil, NewError(CodeInvalidRequest, "Tool call cannot be approved.")
 	}
-	call, err = scanToolCall(tx.QueryRow(ctx, `update tool_calls set approval_status='approved', execution_status='not_started', updated_at=now() where id=$1 returning id, thread_id, run_id, tool_call_id, tool_name, arguments_summary, approval_status, execution_status, result_summary, error_code, error_message, requested_at, updated_at`, call.ID))
+	call, err = scanToolCall(tx.QueryRow(ctx, `update tool_calls set approval_status='approved', execution_status='not_started', updated_at=now() where id=$1 returning id, thread_id, run_id, tool_call_id, tool_name, candidate_schema_hash, arguments_summary, approval_status, execution_status, result_summary, error_code, error_message, requested_at, updated_at`, call.ID))
 	if err != nil {
 		return ToolCall{}, nil, err
 	}
@@ -595,7 +1584,11 @@ func (r *PostgresRepository) ApproveToolCall(ctx context.Context, ident identity
 	if _, err := tx.Exec(ctx, `insert into background_jobs (id, run_id, thread_id, user_id, kind, status, priority, max_attempts, scheduled_at, metadata) values ($1, $2, $3, $4, $5, 'queued', 50, 3, now(), $6)`, jobID, run.ID, run.ThreadID, user.ID, BackgroundJobKindRunExecution, mustJSON(metadata)); err != nil {
 		return ToolCall{}, nil, err
 	}
-	event, err := insertRunEvent(ctx, tx, run, RunEventCategoryProgress, EventToolCallApproved, "Tool call approved", nil, toolCallEventMetadata(call))
+	toolMetadata, err := toolCallEventMetadataForPostgresRun(ctx, tx, run.ID, call)
+	if err != nil {
+		return ToolCall{}, nil, err
+	}
+	event, err := insertRunEvent(ctx, tx, run, RunEventCategoryProgress, EventToolCallApproved, "Tool call approved", nil, toolMetadata)
 	if err != nil {
 		return ToolCall{}, nil, err
 	}
@@ -622,7 +1615,7 @@ func (r *PostgresRepository) DenyToolCall(ctx context.Context, ident identity.Lo
 	if call.ExecutionStatus == ToolCallExecutionExecuting || call.ExecutionStatus == ToolCallExecutionSucceeded || call.ExecutionStatus == ToolCallExecutionFailed || call.ExecutionStatus == ToolCallExecutionCancelled || IsRunTerminal(run.Status) {
 		return ToolCall{}, nil, NewError(CodeInvalidRequest, "Tool call cannot be denied.")
 	}
-	call, err = scanToolCall(tx.QueryRow(ctx, `update tool_calls set approval_status='denied', execution_status='cancelled', updated_at=now() where id=$1 returning id, thread_id, run_id, tool_call_id, tool_name, arguments_summary, approval_status, execution_status, result_summary, error_code, error_message, requested_at, updated_at`, call.ID))
+	call, err = scanToolCall(tx.QueryRow(ctx, `update tool_calls set approval_status='denied', execution_status='cancelled', updated_at=now() where id=$1 returning id, thread_id, run_id, tool_call_id, tool_name, candidate_schema_hash, arguments_summary, approval_status, execution_status, result_summary, error_code, error_message, requested_at, updated_at`, call.ID))
 	if err != nil {
 		return ToolCall{}, nil, err
 	}
@@ -633,7 +1626,11 @@ func (r *PostgresRepository) DenyToolCall(ctx context.Context, ident identity.Lo
 	if err != nil {
 		return ToolCall{}, nil, err
 	}
-	denied, err := insertRunEvent(ctx, tx, stopped, RunEventCategoryProgress, EventToolCallDenied, "Tool call denied by user", nil, toolCallEventMetadata(call))
+	toolMetadata, err := toolCallEventMetadataForPostgresRun(ctx, tx, run.ID, call)
+	if err != nil {
+		return ToolCall{}, nil, err
+	}
+	denied, err := insertRunEvent(ctx, tx, stopped, RunEventCategoryProgress, EventToolCallDenied, "Tool call denied by user", nil, toolMetadata)
 	if err != nil {
 		return ToolCall{}, nil, err
 	}
@@ -664,11 +1661,15 @@ func (r *PostgresRepository) StartToolCallExecution(ctx context.Context, ident i
 	if call.ApprovalStatus != ToolCallApprovalApproved || call.ExecutionStatus != ToolCallExecutionNotStarted || IsRunTerminal(run.Status) {
 		return ToolCall{}, nil, NewError(CodeInvalidRequest, "Tool call cannot execute.")
 	}
-	call, err = scanToolCall(tx.QueryRow(ctx, `update tool_calls set execution_status='executing', updated_at=now() where id=$1 returning id, thread_id, run_id, tool_call_id, tool_name, arguments_summary, approval_status, execution_status, result_summary, error_code, error_message, requested_at, updated_at`, call.ID))
+	call, err = scanToolCall(tx.QueryRow(ctx, `update tool_calls set execution_status='executing', updated_at=now() where id=$1 returning id, thread_id, run_id, tool_call_id, tool_name, candidate_schema_hash, arguments_summary, approval_status, execution_status, result_summary, error_code, error_message, requested_at, updated_at`, call.ID))
 	if err != nil {
 		return ToolCall{}, nil, err
 	}
-	event, err := insertRunEvent(ctx, tx, run, RunEventCategoryProgress, EventToolCallExecuting, "Tool call executing", nil, toolCallEventMetadata(call))
+	toolMetadata, err := toolCallEventMetadataForPostgresRun(ctx, tx, run.ID, call)
+	if err != nil {
+		return ToolCall{}, nil, err
+	}
+	event, err := insertRunEvent(ctx, tx, run, RunEventCategoryProgress, EventToolCallExecuting, "Tool call executing", nil, toolMetadata)
 	if err != nil {
 		return ToolCall{}, nil, err
 	}
@@ -696,7 +1697,7 @@ func (r *PostgresRepository) CompleteToolCallSuccess(ctx context.Context, ident 
 		return ToolCall{}, nil, NewError(CodeInvalidRequest, "Tool call cannot succeed.")
 	}
 	result := RedactEventMetadata(resultSummary)
-	call, err = scanToolCall(tx.QueryRow(ctx, `update tool_calls set execution_status='succeeded', result_summary=$1, updated_at=now() where id=$2 returning id, thread_id, run_id, tool_call_id, tool_name, arguments_summary, approval_status, execution_status, result_summary, error_code, error_message, requested_at, updated_at`, mustJSON(result), call.ID))
+	call, err = scanToolCall(tx.QueryRow(ctx, `update tool_calls set execution_status='succeeded', result_summary=$1, updated_at=now() where id=$2 returning id, thread_id, run_id, tool_call_id, tool_name, candidate_schema_hash, arguments_summary, approval_status, execution_status, result_summary, error_code, error_message, requested_at, updated_at`, mustJSON(result), call.ID))
 	if err != nil {
 		return ToolCall{}, nil, err
 	}
@@ -704,7 +1705,11 @@ func (r *PostgresRepository) CompleteToolCallSuccess(ctx context.Context, ident 
 	if err != nil {
 		return ToolCall{}, nil, err
 	}
-	succeeded, err := insertRunEvent(ctx, tx, running, RunEventCategoryProgress, EventToolCallSucceeded, "Tool call succeeded", nil, toolCallEventMetadata(call))
+	toolMetadata, err := toolCallEventMetadataForPostgresRun(ctx, tx, run.ID, call)
+	if err != nil {
+		return ToolCall{}, nil, err
+	}
+	succeeded, err := insertRunEvent(ctx, tx, running, RunEventCategoryProgress, EventToolCallSucceeded, "Tool call succeeded", nil, toolMetadata)
 	if err != nil {
 		return ToolCall{}, nil, err
 	}
@@ -739,7 +1744,7 @@ func (r *PostgresRepository) FailToolCallExecution(ctx context.Context, ident id
 	if message == "" {
 		message = "Tool execution failed."
 	}
-	call, err = scanToolCall(tx.QueryRow(ctx, `update tool_calls set execution_status='failed', error_code=$1, error_message=$2, updated_at=now() where id=$3 returning id, thread_id, run_id, tool_call_id, tool_name, arguments_summary, approval_status, execution_status, result_summary, error_code, error_message, requested_at, updated_at`, code, message, call.ID))
+	call, err = scanToolCall(tx.QueryRow(ctx, `update tool_calls set execution_status='failed', error_code=$1, error_message=$2, updated_at=now() where id=$3 returning id, thread_id, run_id, tool_call_id, tool_name, candidate_schema_hash, arguments_summary, approval_status, execution_status, result_summary, error_code, error_message, requested_at, updated_at`, code, message, call.ID))
 	if err != nil {
 		return ToolCall{}, nil, err
 	}
@@ -747,7 +1752,11 @@ func (r *PostgresRepository) FailToolCallExecution(ctx context.Context, ident id
 	if err != nil {
 		return ToolCall{}, nil, err
 	}
-	failed, err := insertRunEvent(ctx, tx, failedRun, RunEventCategoryError, EventToolCallFailed, message, nil, toolCallEventMetadata(call))
+	toolMetadata, err := toolCallEventMetadataForPostgresRun(ctx, tx, run.ID, call)
+	if err != nil {
+		return ToolCall{}, nil, err
+	}
+	failed, err := insertRunEvent(ctx, tx, failedRun, RunEventCategoryError, EventToolCallFailed, message, nil, toolMetadata)
 	if err != nil {
 		return ToolCall{}, nil, err
 	}
@@ -991,6 +2000,34 @@ func insertRunEvent(ctx context.Context, tx pgx.Tx, run Run, category RunEventCa
 	return scanRunEvent(tx.QueryRow(ctx, `insert into run_events (id, run_id, thread_id, user_id, sequence, category, type, summary, content, metadata) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) returning id, run_id, thread_id, user_id, sequence, category, type, summary, content, metadata, created_at`, NewRunEventID(), run.ID, run.ThreadID, run.UserID, nextSequence, category, eventType, RedactEventText(summary), content, mustJSON(RedactEventMetadata(metadata))))
 }
 
+func insertRunEventIgnoringTerminal(ctx context.Context, pool *pgxpool.Pool, run Run, category RunEventCategory, eventType string, summary string, content *string, metadata map[string]any) (RunEvent, error) {
+	var nextSequence int
+	if err := pool.QueryRow(ctx, `select coalesce(max(sequence), 0) + 1 from run_events where run_id=$1`, run.ID).Scan(&nextSequence); err != nil {
+		return RunEvent{}, err
+	}
+	return scanRunEvent(pool.QueryRow(ctx, `insert into run_events (id, run_id, thread_id, user_id, sequence, category, type, summary, content, metadata) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) returning id, run_id, thread_id, user_id, sequence, category, type, summary, content, metadata, created_at`, NewRunEventID(), run.ID, run.ThreadID, run.UserID, nextSequence, category, eventType, RedactEventText(summary), content, mustJSON(RedactEventMetadata(metadata))))
+}
+
+func toolCallEventMetadataForPostgresRun(ctx context.Context, tx pgx.Tx, runID string, call ToolCall) (map[string]any, error) {
+	rows, err := tx.Query(ctx, `select id, run_id, thread_id, user_id, sequence, category, type, summary, content, metadata, created_at from run_events where run_id=$1 order by sequence asc, id asc`, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	events := []RunEvent{}
+	for rows.Next() {
+		event, err := scanRunEvent(rows)
+		if err != nil {
+			return nil, err
+		}
+		events = append(events, event)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return toolCallEventMetadataForRun(events, call), nil
+}
+
 func scopedPostgresToolCall(ctx context.Context, tx pgx.Tx, userID string, threadID string, runID string, toolCallID string) (Run, ToolCall, error) {
 	run, err := scanRun(tx.QueryRow(ctx, `select id, thread_id, user_id, status, source, title, created_at, updated_at, completed_at, stop_requested_at, error_code, error_message from runs where id=$1 and thread_id=$2 and user_id=$3 for update`, runID, threadID, userID))
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -999,7 +2036,7 @@ func scopedPostgresToolCall(ctx context.Context, tx pgx.Tx, userID string, threa
 	if err != nil {
 		return Run{}, ToolCall{}, err
 	}
-	call, err := scanToolCall(tx.QueryRow(ctx, `select id, thread_id, run_id, tool_call_id, tool_name, arguments_summary, approval_status, execution_status, result_summary, error_code, error_message, requested_at, updated_at from tool_calls where thread_id=$1 and run_id=$2 and tool_call_id=$3 for update`, threadID, runID, strings.TrimSpace(toolCallID)))
+	call, err := scanToolCall(tx.QueryRow(ctx, `select id, thread_id, run_id, tool_call_id, tool_name, candidate_schema_hash, arguments_summary, approval_status, execution_status, result_summary, error_code, error_message, requested_at, updated_at from tool_calls where thread_id=$1 and run_id=$2 and tool_call_id=$3 for update`, threadID, runID, strings.TrimSpace(toolCallID)))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Run{}, ToolCall{}, NewError(CodeRunNotFound, "Run not found.")
 	}
@@ -1151,6 +2188,19 @@ func selectPersonaSnapshot(ctx context.Context, tx pgx.Tx, personaID string, res
 	return snapshot, nil
 }
 
+func validatePersonaReferenceTx(ctx context.Context, tx pgx.Tx, personaID string) error {
+	personaID = strings.TrimSpace(personaID)
+	if personaID == "" {
+		return nil
+	}
+	var exists int
+	err := tx.QueryRow(ctx, `select 1 from personas p join persona_versions pv on pv.persona_id=p.id and pv.version=p.active_version where p.id=$1 and p.is_active=true`, personaID).Scan(&exists)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return NewError(CodeInvalidRequest, "Persona could not be resolved for this thread.")
+	}
+	return err
+}
+
 func insertPersonaSnapshot(ctx context.Context, tx pgx.Tx, runID string, snapshot PersonaSnapshot) error {
 	if snapshot.ID == "" {
 		return nil
@@ -1220,7 +2270,7 @@ func scanToolCall(row scanner) (ToolCall, error) {
 	var call ToolCall
 	var rawArguments []byte
 	var rawResult []byte
-	if err := row.Scan(&call.ID, &call.ThreadID, &call.RunID, &call.ToolCallID, &call.ToolName, &rawArguments, &call.ApprovalStatus, &call.ExecutionStatus, &rawResult, &call.ErrorCode, &call.ErrorMessage, &call.RequestedAt, &call.UpdatedAt); err != nil {
+	if err := row.Scan(&call.ID, &call.ThreadID, &call.RunID, &call.ToolCallID, &call.ToolName, &call.CandidateSchemaHash, &rawArguments, &call.ApprovalStatus, &call.ExecutionStatus, &rawResult, &call.ErrorCode, &call.ErrorMessage, &call.RequestedAt, &call.UpdatedAt); err != nil {
 		return ToolCall{}, err
 	}
 	if len(rawArguments) > 0 {
@@ -1233,6 +2283,42 @@ func scanToolCall(row scanner) (ToolCall, error) {
 		call.ArgumentsSummary = map[string]any{}
 	}
 	return call, nil
+}
+
+func scanArtifact(row scanner) (Artifact, error) {
+	var artifact Artifact
+	if err := row.Scan(&artifact.ID, &artifact.ThreadID, &artifact.RunID, &artifact.Title, &artifact.ArtifactType, &artifact.Content, &artifact.ContentBytes, &artifact.TextExcerpt, &artifact.Truncated, &artifact.CreatedAt, &artifact.UpdatedAt); err != nil {
+		return Artifact{}, err
+	}
+	return artifact, nil
+}
+
+func scanAgentTask(row scanner) (AgentTask, error) {
+	var task AgentTask
+	if err := row.Scan(&task.ID, &task.ThreadID, &task.RunID, &task.Role, &task.Goal, &task.Status, &task.ResultSummary, &task.CreatedAt, &task.UpdatedAt); err != nil {
+		return AgentTask{}, err
+	}
+	return task, nil
+}
+
+func scanMemoryEntry(row scanner) (MemoryEntry, error) {
+	var entry MemoryEntry
+	if err := row.Scan(&entry.ID, &entry.UserID, &entry.ScopeType, &entry.ScopeID, &entry.Title, &entry.Summary, &entry.Content, &entry.Status, &entry.SafetyState, &entry.SourceThreadID, &entry.SourceRunID, &entry.SourceEventID, &entry.ContentHash, &entry.CreatedAt, &entry.UpdatedAt, &entry.DeletedAt, &entry.DeletedBy, &entry.DeleteReason); err != nil {
+		return MemoryEntry{}, err
+	}
+	return entry, nil
+}
+
+func scanMemoryProposal(row scanner) (MemoryWriteProposal, error) {
+	var proposal MemoryWriteProposal
+	if err := row.Scan(&proposal.ID, &proposal.UserID, &proposal.ScopeType, &proposal.ScopeID, &proposal.Title, &proposal.Summary, &proposal.Content, &proposal.Status, &proposal.SafetyState, &proposal.SourceThreadID, &proposal.SourceRunID, &proposal.SourceEventID, &proposal.IdempotencyKey, &proposal.CreatedEntryID, &proposal.CreatedAt, &proposal.DecidedAt, &proposal.DecidedBy, &proposal.DecisionReason); err != nil {
+		return MemoryWriteProposal{}, err
+	}
+	return proposal, nil
+}
+
+func intPlaceholder(index int) string {
+	return fmt.Sprintf("%d", index)
 }
 
 func scanRunEvent(row scanner) (RunEvent, error) {

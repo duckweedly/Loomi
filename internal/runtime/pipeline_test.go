@@ -270,7 +270,7 @@ func TestPipelinePrepareContextMetadataIncludesSafeMCPAvailability(t *testing.T)
 		t.Fatal(err)
 	}
 	last := events[len(events)-1]
-	if last.Metadata["mcp_candidate_count"] != 1 || last.Metadata["mcp_execution_enabled"] != false {
+	if last.Metadata["mcp_candidate_count"] != 1 || last.Metadata["mcp_execution_enabled"] != true {
 		t.Fatalf("mcp metadata = %+v", last.Metadata)
 	}
 	if last.Metadata["mcp_servers_configured"] != 1 || last.Metadata["mcp_servers_enabled"] != 1 || last.Metadata["mcp_servers_succeeded"] != 1 {
