@@ -128,6 +128,12 @@ Claude Code 项目内命令使用横线格式：
 
 ## 当前候选：Memory Provider Error UI
 
+## 近期已完成：M82 Real Local Usability Closeout
+
+状态：M82 closeout。CLI 默认 API host 对齐本地 Loomi API 的 `127.0.0.1:18080`，避免误连本机其他 8080 服务导致 `401 missing bearer token`。CLI config/env 支持 `LOOMI_API_TOKEN` / `api_token` bearer token，但输出只显示 `api_token_set`。`loomi doctor --provider local_codex` 现在区分 detected-but-not-enabled blocked reason 和 enabled ready state。真实本机 smoke 已通过 `loomi smoke agent --auto-approve --prompt "Read AGENTS.md with workspace.read, then reply M82 smoke complete."`，产出 `thread_id=thr_1779861294575417000_71c96fe2b8eb`、`run_id=run_1779861294596954000_78e89c7fc75e`、`final_stage=run_completed`，并记录 `workspace.read AGENTS.md` request/approved/executing/succeeded 事件。
+
+本轮没有新增工具、Docker/Redis/Firecracker、多 agent 架构，也没有把 token 写入日志或文档。
+
 当前 Spec Kit 功能目录：
 
 ```text

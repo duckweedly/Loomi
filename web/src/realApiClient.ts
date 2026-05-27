@@ -55,6 +55,7 @@ type ApiMessage = {
   thread_id: string
   role: 'user' | 'assistant'
   content: string
+  metadata?: Record<string, unknown> | null
   created_at: string
   client_message_id?: string | null
   run_id?: string | null
@@ -344,14 +345,16 @@ function mapThread(thread: ApiThread): Thread {
 }
 
 function mapMessage(message: ApiMessage): Message {
+  const metadataRunId = message.metadata?.run_id
+  const metadataAttemptOfMessageId = message.metadata?.attempt_of_message_id
   return {
     id: message.id,
     threadId: message.thread_id,
     role: message.role,
     content: message.content,
     createdAt: message.created_at,
-    runId: message.run_id ?? undefined,
-    attemptOfMessageId: message.attempt_of_message_id ?? undefined,
+    runId: message.run_id ?? (typeof metadataRunId === 'string' ? metadataRunId : undefined) ?? undefined,
+    attemptOfMessageId: message.attempt_of_message_id ?? (typeof metadataAttemptOfMessageId === 'string' ? metadataAttemptOfMessageId : undefined) ?? undefined,
   }
 }
 
@@ -811,6 +814,7 @@ function statusFromApiEvent(event: ApiRunEvent): RunStatus {
   if (type === 'run.failed' || type === 'job.retry_exhausted' || type === 'pipeline.step.failed') return 'failed'
   if (type === 'run.cancelled') return 'cancelled'
   if (type === 'run.completed') return 'completed'
+  if (type === 'assistant.message.completed' || type === 'message.model_output_completed' || type === 'model.final') return 'completed'
   if (event.category !== 'final') return event.category === 'error' ? 'failed' : 'running'
   return 'completed'
 }

@@ -74,6 +74,10 @@ tool_call_failed
 
 Metadata includes `tool_source=builtin`, `tool_group=workspace`, redacted arguments, approval status, execution status, and safe result/error metadata.
 
+`workspace.glob` skips generated dependency/cache folders such as `node_modules`, `dist`, `build`, `.next`, `.vite`, `.venv`, `.claude`, and `.cache`, and returns `skipped_dir_count`. `workspace.grep` uses the same skip list, skips oversized files, stops after a bounded scanned-file budget, and returns `scanned_file_count` plus `skipped_file_count`.
+
+If `workspace.read` is pointed at a directory, it succeeds with `kind=directory`, empty `content`, a bounded `entries` list, and a summary that tells the model to use `workspace.glob` for recursive listing or `workspace.read` on a file path. This prevents a mistaken directory read from failing the whole run.
+
 ## Failure Semantics
 
-Traversal, absolute escape, sensitive files, symlink escape, directories as files, unavailable paths, invalid grep patterns, and unsupported binary content do not expose file contents. Execution failures are persisted as `tool_call_failed` and terminal run failures through the existing approved-tool path.
+Traversal, absolute escape, sensitive files, symlink escape, unavailable paths, invalid grep patterns, and unsupported binary content do not expose file contents. Execution failures are persisted as `tool_call_failed` and terminal run failures through the existing approved-tool path.

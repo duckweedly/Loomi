@@ -200,6 +200,30 @@ func TestMessageHandlers(t *testing.T) {
 	}
 }
 
+func TestMessageListProjectsAssistantRunID(t *testing.T) {
+	product := productdata.NewMemoryService()
+	srv := NewServerWithProduct(config.Config{AppEnv: "local"}, fakeChecker{}, product)
+	create := requestJSON(t, srv, http.MethodPost, "/v1/threads", `{"title":"Thread","mode":"chat"}`)
+	threadID := decodeThreadID(t, create.Body.Bytes())
+	if _, err := product.AppendAssistantMessage(context.Background(), identity.LocalDevIdentity(), threadID, productdata.AppendAssistantMessageInput{Content: "Persisted final", Metadata: map[string]any{"run_id": "run-api-1"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	list := requestJSON(t, srv, http.MethodGet, "/v1/threads/"+threadID+"/messages", "")
+
+	var body struct {
+		Messages []struct {
+			RunID string `json:"run_id"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(list.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if list.Code != http.StatusOK || len(body.Messages) != 1 || body.Messages[0].RunID != "run-api-1" {
+		t.Fatalf("list status=%d body=%s", list.Code, list.Body.String())
+	}
+}
+
 func TestAPIPreflightAllowsBrowserWrites(t *testing.T) {
 	srv := NewServerWithProduct(config.Config{AppEnv: "local"}, fakeChecker{}, productdata.NewMemoryService())
 	for _, origin := range []string{"http://127.0.0.1:5173", "http://localhost:5173"} {

@@ -34,7 +34,7 @@ type SmokeAgentResult struct {
 
 func RunAgentSmoke(ctx context.Context, client *Client, cfg Config, opts SmokeAgentOptions) (SmokeAgentResult, error) {
 	if client == nil {
-		client = NewClient(cfg.Host)
+		client = NewClientFromConfig(cfg)
 	}
 	result := SmokeAgentResult{Stage: "api_ready"}
 	if err := client.CheckReady(ctx); err != nil {

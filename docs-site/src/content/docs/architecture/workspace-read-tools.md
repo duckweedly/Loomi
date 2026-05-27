@@ -36,9 +36,9 @@ Sensitive paths are denied before opening files:
 
 ## Results
 
-`workspace.read` returns bounded UTF-8 text with `offset`, `limit`, `bytes_read`, `utf8_valid`, and `truncated` metadata. Binary content is summarized as unsupported and does not return raw bytes.
+`workspace.read` returns bounded UTF-8 text with `offset`, `limit`, `bytes_read`, `utf8_valid`, and `truncated` metadata. Binary content is summarized as unsupported and does not return raw bytes. Directory reads are treated as a safe successful summary with `kind=directory`, empty `content`, bounded relative `entries`, and guidance to use `workspace.glob` or read a concrete file path; they do not terminate the run.
 
-`workspace.glob` and `workspace.grep` walk with result limits and return relative paths only. Grep returns safe line excerpts and match counts.
+`workspace.glob` and `workspace.grep` walk with result limits and return relative paths only. Both skip generated dependency/cache folders before walking into them. Grep also has a scanned-file budget for no-match searches, skips oversized files, and returns safe line excerpts and scan counters.
 
 ## Catalog And Persona
 

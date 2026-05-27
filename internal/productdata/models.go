@@ -1543,14 +1543,14 @@ func validateDiscoveryToolCallArguments(input RecordToolCallRequestInput) (Recor
 	switch input.ToolName {
 	case ToolNameLoadTools:
 		if value, ok := input.ArgumentsSummary["queries"]; ok {
-			normalized, valid := safeStringListArgument(value, 5)
+			normalized, valid := safeOptionalStringListArgument(value, 5)
 			if !valid {
 				return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Tool lookup queries are invalid.")
 			}
 			input.ArgumentsSummary["queries"] = normalized
 		}
 		if value, ok := input.ArgumentsSummary["names"]; ok {
-			normalized, valid := safeStringListArgument(value, 20)
+			normalized, valid := safeOptionalStringListArgument(value, 20)
 			if !valid {
 				return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Tool lookup names are invalid.")
 			}
@@ -2122,6 +2122,14 @@ func boolArgument(value any) bool {
 }
 
 func safeStringListArgument(value any, maxItems int) ([]any, bool) {
+	normalized, valid := safeOptionalStringListArgument(value, maxItems)
+	if !valid || len(normalized) == 0 {
+		return nil, false
+	}
+	return normalized, true
+}
+
+func safeOptionalStringListArgument(value any, maxItems int) ([]any, bool) {
 	var items []any
 	switch typed := value.(type) {
 	case string:
@@ -2136,7 +2144,7 @@ func safeStringListArgument(value any, maxItems int) ([]any, bool) {
 	default:
 		return nil, false
 	}
-	if len(items) == 0 || len(items) > maxItems {
+	if len(items) > maxItems {
 		return nil, false
 	}
 	normalized := make([]any, 0, len(items))
@@ -2477,7 +2485,10 @@ func NormalizeRunEventInput(input AppendRunEventInput) (AppendRunEventInput, err
 		return AppendRunEventInput{}, NewError(CodeInvalidRequest, "Run event summary is required.")
 	}
 	if input.Content != nil {
-		content := RedactEventText(strings.TrimSpace(*input.Content))
+		content := strings.TrimSpace(*input.Content)
+		if !isAssistantOutputContentEvent(input.Type) {
+			content = RedactEventText(content)
+		}
 		input.Content = &content
 	}
 	input.Metadata = RedactEventMetadata(input.Metadata)
@@ -2490,6 +2501,15 @@ func NormalizeRunEventInput(input AppendRunEventInput) (AppendRunEventInput, err
 	input.ErrorCode = strings.TrimSpace(input.ErrorCode)
 	input.ErrorMessage = RedactEventText(strings.TrimSpace(input.ErrorMessage))
 	return input, nil
+}
+
+func isAssistantOutputContentEvent(eventType string) bool {
+	switch strings.TrimSpace(eventType) {
+	case "model_output_delta", "model_output_completed", "assistant_message", "model.final":
+		return true
+	default:
+		return false
+	}
 }
 
 func NormalizeWorkTodoMetadata(metadata map[string]any) map[string]any {

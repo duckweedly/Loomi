@@ -1147,6 +1147,27 @@ func TestRunEventRedactsSecretText(t *testing.T) {
 	}
 }
 
+func TestRunEventKeepsAssistantFinalContentWithBenignTokenWords(t *testing.T) {
+	svc := NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, CreateThreadInput{Title: "Run", Mode: ThreadModeChat})
+	if err != nil {
+		t.Fatalf("CreateThread() error = %v", err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, StartRunInput{})
+	if err != nil {
+		t.Fatalf("StartRun() error = %v", err)
+	}
+	content := "## Analysis\n\n- Design Tokens are not API tokens.\n- This project has key design ideas."
+	event, err := svc.AppendRunEvent(context.Background(), ident, run.ID, AppendRunEventInput{Category: RunEventCategoryMessage, Type: "model_output_completed", Summary: "Model output completed", Content: &content, Metadata: map[string]any{"provider_id": "custom"}})
+	if err != nil {
+		t.Fatalf("AppendRunEvent(message) error = %v", err)
+	}
+	if event.Content == nil || *event.Content != content {
+		t.Fatalf("assistant final content redacted = %+v", event)
+	}
+}
+
 func TestAppendRunEventNormalizesTodoMetadata(t *testing.T) {
 	svc := NewMemoryService()
 	ident := identity.LocalDevIdentity()

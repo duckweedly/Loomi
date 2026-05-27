@@ -12,6 +12,7 @@ type Config struct {
 	Path     string `json:"path"`
 	Found    bool   `json:"found"`
 	Host     string `json:"host"`
+	APIToken string `json:"api_token"`
 	Mode     string `json:"mode"`
 	Provider string `json:"provider"`
 	Model    string `json:"model"`
@@ -25,6 +26,7 @@ func LoadConfigFromEnv() (Config, error) {
 		return Config{}, err
 	}
 	applyEnvDefault(&cfg.Host, "LOOMI_HOST")
+	applyEnvDefault(&cfg.APIToken, "LOOMI_API_TOKEN")
 	applyEnvDefault(&cfg.Mode, "LOOMI_MODE")
 	applyEnvDefault(&cfg.Provider, "LOOMI_PROVIDER")
 	applyEnvDefault(&cfg.Model, "LOOMI_MODEL")
@@ -68,6 +70,31 @@ func LoadConfigFile(path string) (Config, error) {
 	return cfg, nil
 }
 
+func (cfg Config) MarshalJSON() ([]byte, error) {
+	type safeConfig struct {
+		Path        string `json:"path"`
+		Found       bool   `json:"found"`
+		Host        string `json:"host"`
+		APITokenSet bool   `json:"api_token_set"`
+		Mode        string `json:"mode"`
+		Provider    string `json:"provider"`
+		Model       string `json:"model"`
+		Persona     string `json:"persona"`
+		Script      string `json:"script"`
+	}
+	return json.Marshal(safeConfig{
+		Path:        cfg.Path,
+		Found:       cfg.Found,
+		Host:        cfg.Host,
+		APITokenSet: strings.TrimSpace(cfg.APIToken) != "",
+		Mode:        cfg.Mode,
+		Provider:    cfg.Provider,
+		Model:       cfg.Model,
+		Persona:     cfg.Persona,
+		Script:      cfg.Script,
+	})
+}
+
 func SaveConfigFile(cfg Config) error {
 	path := strings.TrimSpace(cfg.Path)
 	if path == "" {
@@ -79,6 +106,7 @@ func SaveConfigFile(cfg Config) error {
 	cfg = normalizeConfig(cfg)
 	raw, err := json.MarshalIndent(struct {
 		Host     string `json:"host,omitempty"`
+		APIToken string `json:"api_token,omitempty"`
 		Mode     string `json:"mode,omitempty"`
 		Provider string `json:"provider,omitempty"`
 		Model    string `json:"model,omitempty"`
@@ -86,6 +114,7 @@ func SaveConfigFile(cfg Config) error {
 		Script   string `json:"script,omitempty"`
 	}{
 		Host:     cfg.Host,
+		APIToken: cfg.APIToken,
 		Mode:     cfg.Mode,
 		Provider: cfg.Provider,
 		Model:    cfg.Model,
@@ -121,6 +150,8 @@ func setConfigValue(cfg *Config, key string, value string) error {
 	switch strings.TrimSpace(key) {
 	case "host":
 		cfg.Host = value
+	case "api_token":
+		cfg.APIToken = value
 	case "mode":
 		cfg.Mode = value
 	case "provider":
@@ -132,7 +163,7 @@ func setConfigValue(cfg *Config, key string, value string) error {
 	case "script":
 		cfg.Script = value
 	default:
-		return errors.New("supported config keys: host, mode, provider, model, persona, script")
+		return errors.New("supported config keys: host, api_token, mode, provider, model, persona, script")
 	}
 	return nil
 }
@@ -145,6 +176,7 @@ func defaultConfig(path string) Config {
 
 func normalizeConfig(cfg Config) Config {
 	cfg.Host = strings.TrimSpace(cfg.Host)
+	cfg.APIToken = strings.TrimSpace(cfg.APIToken)
 	cfg.Mode = strings.TrimSpace(cfg.Mode)
 	cfg.Provider = strings.TrimSpace(cfg.Provider)
 	cfg.Model = strings.TrimSpace(cfg.Model)

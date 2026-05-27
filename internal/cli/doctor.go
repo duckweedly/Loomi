@@ -23,10 +23,10 @@ type DoctorReport struct {
 
 func RunDoctor(ctx context.Context, client *Client, cfg Config) DoctorReport {
 	if client == nil {
-		client = NewClient(cfg.Host)
+		client = NewClientFromConfig(cfg)
 	}
 	report := DoctorReport{OK: true, Config: cfg}
-	report.add(okCheck("config", fmt.Sprintf("path=%s found=%v mode=%s provider=%s script=%s", cfg.Path, cfg.Found, cfg.Mode, cfg.Provider, cfg.Script)))
+	report.add(okCheck("config", fmt.Sprintf("path=%s found=%v api_token_set=%v mode=%s provider=%s script=%s", cfg.Path, cfg.Found, strings.TrimSpace(cfg.APIToken) != "", cfg.Mode, cfg.Provider, cfg.Script)))
 	if err := client.CheckReady(ctx); err != nil {
 		report.add(failCheck("api", err.Error(), "start loomi-api or set LOOMI_HOST / loomi config set host"))
 		return report
@@ -35,18 +35,32 @@ func RunDoctor(ctx context.Context, client *Client, cfg Config) DoctorReport {
 
 	providers, err := client.ListModelProviders(ctx)
 	if err != nil {
-		report.add(failCheck("providers", err.Error(), "check /v1/model-providers and provider settings"))
+		report.add(failCheck("providers", err.Error(), authRemedy(err, "check /v1/model-providers and provider settings")))
 	} else {
 		report.add(providerCheck(ctx, client, cfg, providers))
 	}
 
 	tools, err := client.ListTools(ctx)
 	if err != nil {
-		report.add(failCheck("tools", err.Error(), "check /v1/tools/catalog"))
+		report.add(failCheck("tools", err.Error(), authRemedy(err, "check /v1/tools/catalog")))
 	} else {
 		report.add(toolCatalogCheck(tools))
 	}
 	return report
+}
+
+func authRemedy(err error, fallback string) string {
+	if err == nil {
+		return fallback
+	}
+	detail := strings.ToLower(err.Error())
+	if strings.Contains(detail, "401") && strings.Contains(detail, "missing bearer token") {
+		return "set LOOMI_API_TOKEN or run loomi config set api_token <token>, then run loomi doctor again"
+	}
+	if strings.Contains(detail, "401") || strings.Contains(detail, "403") {
+		return "refresh LOOMI_API_TOKEN or run loomi config set api_token <token>, then run loomi doctor again"
+	}
+	return fallback
 }
 
 func (r *DoctorReport) add(check DoctorCheck) {
@@ -94,9 +108,33 @@ func providerCheck(ctx context.Context, client *Client, cfg Config, providers []
 		return warnCheck("providers", detail, providerCheckRemedy(provider))
 	}
 	if configured == "local_codex" {
+		if local, ok := localProviderDetection(ctx, client, configured); ok {
+			return warnCheck("providers", localProviderDetail(local), "enable Local Codex in Settings > Providers or POST /v1/local-provider-detections/local_codex/enable, then run loomi doctor --provider local_codex")
+		}
 		return warnCheck("providers", "default provider local_codex is not registered", "set LOOMI_PROVIDER or run loomi config set provider <id>; use loomi models list to see registered providers")
 	}
 	return warnCheck("providers", "configured provider not found: "+configured, "run loomi models list or set loomi config provider")
+}
+
+func localProviderDetection(ctx context.Context, client *Client, providerID string) (LocalProviderCapability, bool) {
+	localProviders, err := client.ListLocalProviderDetections(ctx)
+	if err != nil {
+		return LocalProviderCapability{}, false
+	}
+	for _, provider := range localProviders {
+		if provider.ProviderID == providerID {
+			return provider, true
+		}
+	}
+	return LocalProviderCapability{}, false
+}
+
+func localProviderDetail(provider LocalProviderCapability) string {
+	detail := fmt.Sprintf("%s blocked status=%s auth=%s", provider.ProviderID, provider.Status, provider.AuthMode)
+	if provider.Message != "" {
+		detail += " message=" + provider.Message
+	}
+	return detail
 }
 
 func providerReady(provider ProviderCapability) bool {

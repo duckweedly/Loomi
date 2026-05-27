@@ -59,7 +59,7 @@ history
 - 恢复中
 - 后端能力未接入
 
-US1 adds the assistant draft as a first-class transient bubble. The bubble reads from `run.assistantDraft`, appears while the run is pending or streaming, preserves partial text for failed/stopped/recovering terminal states, and hides a matching final assistant message when a completed draft is already represented by persisted history so final content is not duplicated.
+US1 adds the assistant draft as a first-class transient bubble. The bubble reads from `run.assistantDraft`, appears while the run is pending or streaming, preserves partial text for failed/stopped/recovering terminal states, and hides a matching final assistant message when a completed draft is already represented by persisted history so final content is not duplicated. Terminal real-API refreshes reconcile the run with the persisted assistant message by `run_id`; once that message exists, it is the source of truth for final Markdown rendering and the stream draft becomes only a process artifact.
 
 US2 groups selected-run events before rendering Timeline/debug details. The stable groups are Run lifecycle, Model stream, Worker/job, and Error. Error semantics win over explicit group metadata, token usage stays in the Model stream detail, and provider/stream/backend failures stay visually separate from normal lifecycle events.
 

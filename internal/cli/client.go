@@ -14,12 +14,13 @@ import (
 	"time"
 )
 
-const DefaultBaseURL = "http://127.0.0.1:8080"
+const DefaultBaseURL = "http://127.0.0.1:18080"
 
 type Client struct {
-	baseURL    string
-	httpClient *http.Client
-	sseClient  *http.Client
+	baseURL     string
+	bearerToken string
+	httpClient  *http.Client
+	sseClient   *http.Client
 }
 
 type Thread struct {
@@ -191,6 +192,13 @@ type ProviderCapability struct {
 	HTTPStatus          int    `json:"http_status"`
 }
 
+type LocalProviderCapability struct {
+	ProviderID string `json:"provider_id"`
+	AuthMode   string `json:"auth_mode"`
+	Status     string `json:"status"`
+	Message    string `json:"message"`
+}
+
 func NewClient(baseURL string) *Client {
 	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	if baseURL == "" {
@@ -204,6 +212,18 @@ func NewClient(baseURL string) *Client {
 		sseClient: &http.Client{
 			Transport: &http.Transport{ResponseHeaderTimeout: 15 * time.Second},
 		},
+	}
+}
+
+func NewClientFromConfig(cfg Config) *Client {
+	client := NewClient(cfg.Host)
+	client.SetBearerToken(cfg.APIToken)
+	return client
+}
+
+func (c *Client) SetBearerToken(token string) {
+	if c != nil {
+		c.bearerToken = strings.TrimSpace(token)
 	}
 }
 
@@ -510,6 +530,16 @@ func (c *Client) CheckModelProvider(ctx context.Context, providerID string) (Pro
 	return resp.Provider, nil
 }
 
+func (c *Client) ListLocalProviderDetections(ctx context.Context) ([]LocalProviderCapability, error) {
+	var resp struct {
+		Providers []LocalProviderCapability `json:"providers"`
+	}
+	if err := c.doJSON(ctx, http.MethodGet, "/v1/local-provider-detections", nil, &resp); err != nil {
+		return nil, err
+	}
+	return resp.Providers, nil
+}
+
 func (c *Client) ListEvents(ctx context.Context, runID string, afterSequence int) ([]RunEvent, error) {
 	path := fmt.Sprintf("/v1/runs/%s/events", url.PathEscape(runID))
 	if afterSequence > 0 {
@@ -533,6 +563,7 @@ func (c *Client) StreamEvents(ctx context.Context, runID string, afterSequence i
 	if err != nil {
 		return err
 	}
+	c.authorize(req)
 	resp, err := c.sseClient.Do(req)
 	if err != nil {
 		return err
@@ -575,6 +606,7 @@ func (c *Client) doJSON(ctx context.Context, method string, path string, body an
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	c.authorize(req)
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return err
@@ -594,6 +626,13 @@ func (c *Client) doJSON(ctx context.Context, method string, path string, body an
 		return err
 	}
 	return nil
+}
+
+func (c *Client) authorize(req *http.Request) {
+	if c == nil || req == nil || c.bearerToken == "" {
+		return
+	}
+	req.Header.Set("Authorization", "Bearer "+c.bearerToken)
 }
 
 func readSSE(r io.Reader, onEvent func(RunEvent)) error {

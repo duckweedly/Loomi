@@ -25,6 +25,7 @@ const (
 	maxWorkspaceReadBytes      = 128 * 1024
 	defaultWorkspaceListLimit  = 100
 	maxWorkspaceListLimit      = 500
+	maxWorkspaceGrepFiles      = 500
 	maxWorkspaceLineBytes      = 1024 * 1024
 	defaultWorkspaceWriteBytes = 32 * 1024
 	maxWorkspaceWriteBytes     = 128 * 1024
@@ -170,6 +171,7 @@ func (s workspaceScope) glob(ctx context.Context, args map[string]any) (map[stri
 	limit := boundedInt(args, "limit", defaultWorkspaceListLimit, maxWorkspaceListLimit)
 	matches := make([]map[string]any, 0)
 	truncated := false
+	skippedDirs := 0
 	err = filepath.WalkDir(start, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return nil
@@ -186,6 +188,10 @@ func (s workspaceScope) glob(ctx context.Context, args map[string]any) (map[stri
 				return filepath.SkipDir
 			}
 			return nil
+		}
+		if entry.IsDir() && isGeneratedWorkspaceDir(rel) {
+			skippedDirs++
+			return filepath.SkipDir
 		}
 		if rel == "." || entry.IsDir() {
 			return nil
@@ -216,7 +222,7 @@ func (s workspaceScope) glob(ctx context.Context, args map[string]any) (map[stri
 	if err != nil && err != filepath.SkipAll {
 		return nil, err
 	}
-	return map[string]any{"tool": productdata.ToolNameWorkspaceGlob, "scope": "workspace", "matches": sortedStringMaps(matches), "match_count": len(matches), "limit": limit, "truncated": truncated}, nil
+	return map[string]any{"tool": productdata.ToolNameWorkspaceGlob, "scope": "workspace", "matches": sortedStringMaps(matches), "match_count": len(matches), "limit": limit, "truncated": truncated, "skipped_dir_count": skippedDirs}, nil
 }
 
 func (s workspaceScope) grep(ctx context.Context, args map[string]any) (map[string]any, error) {
@@ -247,6 +253,8 @@ func (s workspaceScope) grep(ctx context.Context, args map[string]any) (map[stri
 	limit := boundedInt(args, "limit", defaultWorkspaceListLimit, maxWorkspaceListLimit)
 	matches := make([]map[string]any, 0)
 	truncated := false
+	scannedFiles := 0
+	skippedFiles := 0
 	visit := func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return nil
@@ -263,6 +271,9 @@ func (s workspaceScope) grep(ctx context.Context, args map[string]any) (map[stri
 				return filepath.SkipDir
 			}
 			return nil
+		}
+		if entry.IsDir() && isGeneratedWorkspaceDir(rel) {
+			return filepath.SkipDir
 		}
 		if entry.IsDir() {
 			return nil
@@ -281,6 +292,16 @@ func (s workspaceScope) grep(ctx context.Context, args map[string]any) (map[stri
 		if err != nil {
 			return nil
 		}
+		info, err := entry.Info()
+		if err == nil && info.Size() > int64(maxWorkspaceReadBytes) {
+			skippedFiles++
+			return nil
+		}
+		if scannedFiles >= maxWorkspaceGrepFiles {
+			truncated = true
+			return filepath.SkipAll
+		}
+		scannedFiles++
 		fileMatches, err := grepFile(filePath, rel, re, limit-len(matches))
 		if err != nil {
 			return nil
@@ -311,7 +332,7 @@ func (s workspaceScope) grep(ctx context.Context, args map[string]any) (map[stri
 	if err != nil && err != filepath.SkipAll {
 		return nil, err
 	}
-	return map[string]any{"tool": productdata.ToolNameWorkspaceGrep, "scope": "workspace", "matches": sortedStringMaps(matches), "match_count": len(matches), "limit": limit, "truncated": truncated}, nil
+	return map[string]any{"tool": productdata.ToolNameWorkspaceGrep, "scope": "workspace", "matches": sortedStringMaps(matches), "match_count": len(matches), "limit": limit, "truncated": truncated, "scanned_file_count": scannedFiles, "skipped_file_count": skippedFiles}, nil
 }
 
 func (s workspaceScope) read(runID string, args map[string]any) (map[string]any, error) {
@@ -319,13 +340,16 @@ func (s workspaceScope) read(runID string, args map[string]any) (map[string]any,
 	if relArg == "" {
 		return nil, errors.New("workspace read path is required")
 	}
-	path, rel, err := s.resolveFile(relArg)
+	path, rel, err := s.resolveWorkspacePath(relArg)
 	if err != nil {
 		return nil, err
 	}
 	info, err := os.Stat(path)
 	if err != nil {
 		return nil, errors.New("workspace file is unavailable")
+	}
+	if info.IsDir() {
+		return s.readDirectory(rel, path, args)
 	}
 	offset := boundedInt(args, "offset", 0, 1<<30)
 	if offset < 0 {
@@ -368,6 +392,38 @@ func (s workspaceScope) read(runID string, args map[string]any) (map[string]any,
 		s.tracker.Record(runID, s.trackingKey(rel), info.ModTime(), info.Size())
 	}
 	return map[string]any{"tool": productdata.ToolNameWorkspaceRead, "scope": "workspace", "path": rel, "content": content, "bytes_read": len([]byte(content)), "offset": offset, "limit": limit, "truncated": truncated, "utf8_valid": valid}, nil
+}
+
+func (s workspaceScope) readDirectory(rel string, path string, args map[string]any) (map[string]any, error) {
+	limit := boundedInt(args, "limit", defaultWorkspaceListLimit, maxWorkspaceListLimit)
+	items, err := os.ReadDir(path)
+	if err != nil {
+		return nil, errors.New("workspace directory is unavailable")
+	}
+	entries := make([]map[string]any, 0, min(limit, len(items)))
+	truncated := false
+	for _, item := range items {
+		name := item.Name()
+		entryRel := name
+		if rel != "." {
+			entryRel = filepath.ToSlash(filepath.Join(rel, name))
+		}
+		if isSensitiveWorkspacePath(entryRel) || item.IsDir() && isGeneratedWorkspaceDir(entryRel) {
+			continue
+		}
+		if len(entries) >= limit {
+			truncated = true
+			break
+		}
+		kind := "file"
+		if item.IsDir() {
+			kind = "directory"
+		} else if item.Type()&os.ModeSymlink != 0 {
+			kind = "symlink"
+		}
+		entries = append(entries, map[string]any{"path": entryRel, "kind": kind})
+	}
+	return map[string]any{"tool": productdata.ToolNameWorkspaceRead, "scope": "workspace", "path": rel, "kind": "directory", "content": "", "summary": "path is a directory; use workspace.glob to list files recursively or workspace.read on a file path", "entries": entries, "entry_count": len(entries), "limit": limit, "truncated": truncated, "utf8_valid": true}, nil
 }
 
 func (s workspaceScope) writeFile(args map[string]any) (map[string]any, error) {
@@ -981,6 +1037,16 @@ func isSensitiveWorkspacePath(rel string) bool {
 		}
 	}
 	return false
+}
+
+func isGeneratedWorkspaceDir(rel string) bool {
+	base := strings.ToLower(strings.TrimSpace(filepath.Base(filepath.ToSlash(rel))))
+	switch base {
+	case ".git", ".claude", ".cache", ".next", ".nuxt", ".vite", ".astro", ".venv", ".idea", ".vscode", "node_modules", "vendor", "__pycache__", "dist", "build", "coverage", "target":
+		return true
+	default:
+		return false
+	}
 }
 
 func grepFile(path string, rel string, re *regexp.Regexp, remaining int) ([]map[string]any, error) {

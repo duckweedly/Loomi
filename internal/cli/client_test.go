@@ -80,6 +80,39 @@ func TestRunnerExecuteCreatesThreadMessageRunAndConsumesSSE(t *testing.T) {
 	}
 }
 
+func TestClientSendsBearerTokenToJSONAndEventStreamRequests(t *testing.T) {
+	var jsonAuth string
+	var streamAuth string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/model-providers":
+			jsonAuth = r.Header.Get("Authorization")
+			writeTestJSON(w, http.StatusOK, `{"providers":[]}`)
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/runs/run_auth/events/stream":
+			streamAuth = r.Header.Get("Authorization")
+			w.Header().Set("Content-Type", "text/event-stream")
+			fmt.Fprint(w, "event: close\n")
+			fmt.Fprint(w, "data: {\"run_id\":\"run_auth\"}\n\n")
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
+		}
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL)
+	client.SetBearerToken("secret-token")
+	if _, err := client.ListModelProviders(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.StreamEvents(context.Background(), "run_auth", 0, func(RunEvent) {}); err != nil {
+		t.Fatal(err)
+	}
+
+	if jsonAuth != "Bearer secret-token" || streamAuth != "Bearer secret-token" {
+		t.Fatalf("json auth = %q stream auth = %q", jsonAuth, streamAuth)
+	}
+}
+
 func TestRunnerExecuteCreatesThreadWithPromptTitle(t *testing.T) {
 	var threadPayload map[string]string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

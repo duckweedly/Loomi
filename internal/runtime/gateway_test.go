@@ -998,6 +998,27 @@ func TestGatewayContinuationOmitsWorkspaceGlobAfterSuccessfulListing(t *testing.
 	}
 }
 
+func TestGatewayLoadToolsProviderSchemaIsQueriesOnly(t *testing.T) {
+	tool, ok := builtinProviderToolDefinition(productdata.ToolNameLoadTools)
+	if !ok {
+		t.Fatal("load_tools provider definition missing")
+	}
+	properties, ok := tool.Parameters["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("properties = %+v", tool.Parameters["properties"])
+	}
+	if _, ok := properties["names"]; ok {
+		t.Fatalf("load_tools provider schema should not expose names: %+v", properties)
+	}
+	if _, ok := properties["queries"]; !ok {
+		t.Fatalf("load_tools provider schema should expose queries: %+v", properties)
+	}
+	required, ok := tool.Parameters["required"].([]string)
+	if !ok || len(required) != 1 || required[0] != "queries" {
+		t.Fatalf("load_tools required = %+v", tool.Parameters["required"])
+	}
+}
+
 func TestGatewayExposesCodeAgentToolsToProvider(t *testing.T) {
 	svc := productdata.NewMemoryService()
 	ident := identity.LocalDevIdentity()

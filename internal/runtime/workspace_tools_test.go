@@ -63,6 +63,58 @@ func TestWorkspaceReadToolsDefaultToUserHomeWhenRootUnset(t *testing.T) {
 	}
 }
 
+func TestWorkspaceGrepNoMatchIsBoundedByScannedFiles(t *testing.T) {
+	root := t.TempDir()
+	for i := 0; i < maxWorkspaceGrepFiles+5; i++ {
+		path := filepath.Join(root, fmt.Sprintf("file-%03d.txt", i))
+		if err := os.WriteFile(path, []byte("ordinary content\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	executor := WorkspaceToolExecutor{Root: root}
+
+	grep, err := executor.Execute(context.Background(), ToolInvocation{ToolName: productdata.ToolNameWorkspaceGrep, ArgumentsSummary: map[string]any{"query": "unlikely_query_to_list_nothing", "path": ".", "limit": 20}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if grep["match_count"] != 0 || grep["truncated"] != true || grep["scanned_file_count"] != maxWorkspaceGrepFiles {
+		t.Fatalf("grep = %+v", grep)
+	}
+}
+
+func TestWorkspaceGlobSkipsGeneratedDirectories(t *testing.T) {
+	root := t.TempDir()
+	for _, dir := range []string{"node_modules/pkg", "dist/assets", ".claude/worktrees/run"} {
+		if err := os.MkdirAll(filepath.Join(root, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, dir, "generated.txt"), []byte("generated"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(root, "docs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "docs", "keep.txt"), []byte("keep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	executor := WorkspaceToolExecutor{Root: root}
+
+	result, err := executor.Execute(context.Background(), ToolInvocation{ToolName: productdata.ToolNameWorkspaceGlob, ArgumentsSummary: map[string]any{"pattern": "**/*", "path": ".", "limit": 20}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	matches := result["matches"].([]map[string]any)
+	if len(matches) != 1 || matches[0]["path"] != "docs/keep.txt" {
+		t.Fatalf("glob matches = %+v", matches)
+	}
+	if result["skipped_dir_count"] != 3 {
+		t.Fatalf("glob result = %+v", result)
+	}
+}
+
 func TestWorkspaceReadToolsTreatSelectedRootNameAsRootAlias(t *testing.T) {
 	parent := t.TempDir()
 	root := filepath.Join(parent, "Downloads")
@@ -88,6 +140,29 @@ func TestWorkspaceReadToolsTreatSelectedRootNameAsRootAlias(t *testing.T) {
 	}
 	if read["path"] != "receipt.txt" || read["content"] != "downloaded file\n" {
 		t.Fatalf("read = %+v", read)
+	}
+}
+
+func TestWorkspaceReadDirectoryReturnsSafeSummary(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "receipt.txt"), []byte("downloaded file\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "nested"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	executor := WorkspaceToolExecutor{Root: root}
+
+	read, err := executor.Execute(context.Background(), ToolInvocation{ToolName: productdata.ToolNameWorkspaceRead, ArgumentsSummary: map[string]any{"path": ".", "limit": 10}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if read["path"] != "." || read["kind"] != "directory" || read["content"] != "" || read["entry_count"] != 2 {
+		t.Fatalf("read directory = %+v", read)
+	}
+	if strings.Contains(fmt.Sprintf("%+v", read), root) || !strings.Contains(fmt.Sprintf("%+v", read), "receipt.txt") {
+		t.Fatalf("read directory leaked root or missed entries: %+v", read)
 	}
 }
 

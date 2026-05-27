@@ -18,40 +18,42 @@ TARGET=/tmp/loomi-bin/loomi scripts/install-cli.sh
 go run ./cmd/loomi help tools
 go run ./cmd/loomi config show
 go run ./cmd/loomi doctor
-LOOMI_CONFIG=/tmp/loomi-config.json go run ./cmd/loomi config set host http://127.0.0.1:8080
+LOOMI_CONFIG=/tmp/loomi-config.json go run ./cmd/loomi config set host http://127.0.0.1:18080
+LOOMI_CONFIG=/tmp/loomi-config.json go run ./cmd/loomi config set api_token <token>
+LOOMI_CONFIG=/tmp/loomi-config.json go run ./cmd/loomi config unset api_token
 LOOMI_CONFIG=/tmp/loomi-config.json go run ./cmd/loomi config unset host
-go run ./cmd/loomi sessions list --host http://127.0.0.1:8080
-go run ./cmd/loomi models list --host http://127.0.0.1:8080
-go run ./cmd/loomi personas list --host http://127.0.0.1:8080
-go run ./cmd/loomi tools list --host http://127.0.0.1:8080
-go run ./cmd/loomi tools list --host http://127.0.0.1:8080 --group workspace --enabled-only
-go run ./cmd/loomi mcp servers --host http://127.0.0.1:8080
-go run ./cmd/loomi lsp tools --host http://127.0.0.1:8080
-go run ./cmd/loomi artifacts list <thread-id> --host http://127.0.0.1:8080
-go run ./cmd/loomi artifacts read <thread-id> <artifact-id> --host http://127.0.0.1:8080
-go run ./cmd/loomi memory list --host http://127.0.0.1:8080
-go run ./cmd/loomi memory search "workspace preference" --host http://127.0.0.1:8080
-go run ./cmd/loomi memory show <memory-id> --host http://127.0.0.1:8080
-go run ./cmd/loomi memory audit --thread-id <thread-id> --host http://127.0.0.1:8080
-go run ./cmd/loomi agent tools --host http://127.0.0.1:8080
-go run ./cmd/loomi agent tasks <thread-id> --host http://127.0.0.1:8080
-go run ./cmd/loomi browser tools --host http://127.0.0.1:8080
-go run ./cmd/loomi browser events <run-id> --host http://127.0.0.1:8080 --compact
-go run ./cmd/loomi run "Summarize the workspace status" --host http://127.0.0.1:8080 --mode work --provider local_codex
+go run ./cmd/loomi sessions list --host http://127.0.0.1:18080
+go run ./cmd/loomi models list --host http://127.0.0.1:18080
+go run ./cmd/loomi personas list --host http://127.0.0.1:18080
+go run ./cmd/loomi tools list --host http://127.0.0.1:18080
+go run ./cmd/loomi tools list --host http://127.0.0.1:18080 --group workspace --enabled-only
+go run ./cmd/loomi mcp servers --host http://127.0.0.1:18080
+go run ./cmd/loomi lsp tools --host http://127.0.0.1:18080
+go run ./cmd/loomi artifacts list <thread-id> --host http://127.0.0.1:18080
+go run ./cmd/loomi artifacts read <thread-id> <artifact-id> --host http://127.0.0.1:18080
+go run ./cmd/loomi memory list --host http://127.0.0.1:18080
+go run ./cmd/loomi memory search "workspace preference" --host http://127.0.0.1:18080
+go run ./cmd/loomi memory show <memory-id> --host http://127.0.0.1:18080
+go run ./cmd/loomi memory audit --thread-id <thread-id> --host http://127.0.0.1:18080
+go run ./cmd/loomi agent tools --host http://127.0.0.1:18080
+go run ./cmd/loomi agent tasks <thread-id> --host http://127.0.0.1:18080
+go run ./cmd/loomi browser tools --host http://127.0.0.1:18080
+go run ./cmd/loomi browser events <run-id> --host http://127.0.0.1:18080 --compact
+go run ./cmd/loomi run "Summarize the workspace status" --host http://127.0.0.1:18080 --mode work --provider local_codex
 LOOMI_HOST=http://127.0.0.1:18080 LOOMI_PROVIDER=custom LOOMI_MODE=chat go run ./cmd/loomi run --compact --timeout 30s '请只回复 pong'
-go run ./cmd/loomi run "Summarize the workspace status" --host http://127.0.0.1:8080 --mode work --provider local_codex --compact
-go run ./cmd/loomi run "Summarize the workspace status" --host http://127.0.0.1:8080 --mode work --provider local_codex --interactive-approvals
-go run ./cmd/loomi runs status <run-id> --host http://127.0.0.1:8080
-go run ./cmd/loomi runs stop <run-id> --host http://127.0.0.1:8080
-go run ./cmd/loomi runs attach <active-run-id> --host http://127.0.0.1:8080 --compact
-go run ./cmd/loomi runs attach <terminal-run-id> --host http://127.0.0.1:8080 --compact
-go run ./cmd/loomi runs follow <run-id> --host http://127.0.0.1:8080 --compact
-printf 'Summarize the workspace status' | go run ./cmd/loomi run --prompt-file - --output json --host http://127.0.0.1:8080
-go run ./cmd/loomi chat --host http://127.0.0.1:8080
+go run ./cmd/loomi run "Summarize the workspace status" --host http://127.0.0.1:18080 --mode work --provider local_codex --compact
+go run ./cmd/loomi run "Summarize the workspace status" --host http://127.0.0.1:18080 --mode work --provider local_codex --interactive-approvals
+go run ./cmd/loomi runs status <run-id> --host http://127.0.0.1:18080
+go run ./cmd/loomi runs stop <run-id> --host http://127.0.0.1:18080
+go run ./cmd/loomi runs attach <active-run-id> --host http://127.0.0.1:18080 --compact
+go run ./cmd/loomi runs attach <terminal-run-id> --host http://127.0.0.1:18080 --compact
+go run ./cmd/loomi runs follow <run-id> --host http://127.0.0.1:18080 --compact
+printf 'Summarize the workspace status' | go run ./cmd/loomi run --prompt-file - --output json --host http://127.0.0.1:18080
+go run ./cmd/loomi chat --host http://127.0.0.1:18080
 # In chat, try /tools workspace, /run, /approvals, /events compact, and /stop after a run.
-go run ./cmd/loomi events tail <run-id> --host http://127.0.0.1:8080 --tools-only --compact
-go run ./cmd/loomi approvals follow <run-id> --host http://127.0.0.1:8080
-go run ./cmd/loomi approvals approve --follow --host http://127.0.0.1:8080 <thread-id> <run-id> <tool-call-id>
+go run ./cmd/loomi events tail <run-id> --host http://127.0.0.1:18080 --tools-only --compact
+go run ./cmd/loomi approvals follow <run-id> --host http://127.0.0.1:18080
+go run ./cmd/loomi approvals approve --follow --host http://127.0.0.1:18080 <thread-id> <run-id> <tool-call-id>
 ```
 
 Expected evidence:
@@ -62,7 +64,7 @@ Expected evidence:
 4. `loomi completion bash|zsh|fish` prints completion scripts for the current command surface.
 5. `scripts/build-cli.sh` writes a local `dist/loomi` binary, injects detected build metadata, and verifies it with `dist/loomi version`.
 6. `scripts/install-cli.sh` installs the built binary to `~/.local/bin/loomi` by default, supports `PREFIX`/`TARGET`, and refuses to replace an existing target unless `LOOMI_INSTALL_OVERWRITE=1` is set.
-7. `loomi doctor` reports config, API readiness, configured provider status, and tool catalog health; it exits non-zero when API readiness fails. If the default `local_codex` provider is selected but not registered by the API, doctor prints a specific warning and points the operator to `LOOMI_PROVIDER`, `loomi config set provider <id>`, and `loomi models list` without changing the config file.
+7. `loomi doctor` reports config, API readiness, configured provider status, and tool catalog health; it exits non-zero when API readiness fails. The CLI defaults to `http://127.0.0.1:18080` so it does not accidentally hit unrelated local services on 8080. If the API requires auth, `LOOMI_API_TOKEN` or `loomi config set api_token <token>` is used as a bearer token, and output shows only `api_token_set=true`.
 8. Event output includes run event type, sequence, and content/summary without raw secrets.
 9. When a run is blocked on a tool call, the final output includes copyable `loomi approvals approve ...` and `loomi approvals deny ...` commands for unresolved approvals only.
 10. Text event output shows compact tool `arguments_summary` and `result_summary` values for approval and success events, with common tools rendered as readable fields such as `path=...`, `exit=0`, `stdout="..."`, `links=2`, or `items=3` instead of raw JSON.
@@ -79,8 +81,8 @@ Expected evidence:
 21. `loomi chat` can start a new thread, resume an existing thread through `sessions resume`, and switch model/persona with slash commands backed by server lists.
 22. If the SSE connection closes before a terminal event or pending approval, `internal/cli.Runner` reconnects with `after_sequence` and does not duplicate already-rendered events.
 23. When `loomi run` has no `--thread`, `internal/cli.Runner` creates a Chat/Work thread with the requested mode and a stable non-empty title derived from the first non-empty prompt line, capped to a short excerpt before the user message and run are created.
-24. `loomi config show` reads `~/.loomi/config.json` or `LOOMI_CONFIG`, then applies `LOOMI_HOST`, `LOOMI_MODE`, `LOOMI_PROVIDER`, `LOOMI_MODEL`, `LOOMI_PERSONA`, and `LOOMI_SCRIPT` overrides.
-25. `loomi config set/unset` writes only the config file, creates it with `0600`, and leaves env overrides untouched.
+24. `loomi config show` reads `~/.loomi/config.json` or `LOOMI_CONFIG`, then applies `LOOMI_HOST`, `LOOMI_API_TOKEN`, `LOOMI_MODE`, `LOOMI_PROVIDER`, `LOOMI_MODEL`, `LOOMI_PERSONA`, and `LOOMI_SCRIPT` overrides.
+25. `loomi config set/unset` writes only the config file, creates it with `0600`, and leaves env overrides untouched. `api_token` may be stored locally for protected API sessions, but text/JSON output must not print the raw value.
 26. `loomi approvals follow` filters the event stream down to tool approval notices and copyable approve/deny commands.
 27. `loomi tools list` text output groups tools by catalog group and supports `--group`, `--enabled-only`, and `--flat`.
 28. `loomi events tail --tools-only --compact` filters out model delta/final events and renders compact tool call state, arguments, and per-tool result summaries.
@@ -92,3 +94,17 @@ Expected evidence:
 34. `loomi browser tools/events` exposes browser tool catalog entries and browser run events without direct browser session control.
 
 If `local_codex` is not enabled, `loomi run` should fail with the API error. Enable it from the existing provider settings/API before using the CLI for live local-agent dogfooding.
+
+For M82 local dogfood, the minimum usable path is:
+
+```bash
+export DATABASE_URL=postgres://loomi:loomi@127.0.0.1:55433/loomi_m2?sslmode=disable
+migrate -path migrations -database "$DATABASE_URL" up
+APP_ENV=local HTTP_ADDR=127.0.0.1:18080 DATABASE_URL="$DATABASE_URL" go run ./cmd/loomi-api
+curl -X POST http://127.0.0.1:18080/v1/workspace/root -H 'Content-Type: application/json' --data '{"path":"'$PWD'"}'
+curl -X POST http://127.0.0.1:18080/v1/local-provider-detections/local_codex/enable
+go run ./cmd/loomi doctor --provider local_codex
+go run ./cmd/loomi smoke agent --auto-approve --prompt "Read AGENTS.md with workspace.read, then reply M82 smoke complete."
+```
+
+If `local_codex` is detected but not enabled, doctor prints a provider warning with `blocked status=available auth=oauth` and points to the explicit enable endpoint. If the API returns `401 missing bearer token`, doctor points to `LOOMI_API_TOKEN` / `api_token` config instead of generic provider settings.

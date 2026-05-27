@@ -202,6 +202,46 @@ describe('ChatCanvas state copy', () => {
     expect(html).toContain('<code>code</code>')
   })
 
+  test('renders escaped and indented assistant headings without visible hash marks', () => {
+    const html = renderToStaticMarkup(createElement(ChatCanvas, {
+      sidebarCollapsed: false,
+      thread: { id: 'thread-a', title: 'Thread A', project: 'Loomi', mode: 'chat', updatedAt: 'Now', lifecycleStatus: 'active', runStatus: 'completed' },
+      messages: [{ id: 'msg-a', threadId: 'thread-a', role: 'assistant', content: '\u3000\\# 六、最可能占空间、建议重点处理\n\n优先看这些：', createdAt: 'Now' }],
+      run: null,
+      loading: false,
+      error: null,
+      dataSourceMode: 'real_api',
+      streamState: 'closed',
+      providerCapabilities: [{ id: 'custom', family: 'openai_compatible' as const, model: 'gpt-5.5', status: 'available' as const }],
+      onSendMessage: () => {},
+      onStopRun: () => {},
+      locale: 'zh',
+    }))
+
+    expect(html).toContain('<h1>六、最可能占空间、建议重点处理</h1>')
+    expect(html).not.toContain('# 六、')
+  })
+
+  test('strips doubled heading markers from rendered assistant headings', () => {
+    const html = renderToStaticMarkup(createElement(ChatCanvas, {
+      sidebarCollapsed: false,
+      thread: { id: 'thread-a', title: 'Thread A', project: 'Loomi', mode: 'chat', updatedAt: 'Now', lifecycleStatus: 'active', runStatus: 'completed' },
+      messages: [{ id: 'msg-a', threadId: 'thread-a', role: 'assistant', content: '# # 六、最可能占空间、建议重点处理', createdAt: 'Now' }],
+      run: null,
+      loading: false,
+      error: null,
+      dataSourceMode: 'real_api',
+      streamState: 'closed',
+      providerCapabilities: [{ id: 'custom', family: 'openai_compatible' as const, model: 'gpt-5.5', status: 'available' as const }],
+      onSendMessage: () => {},
+      onStopRun: () => {},
+      locale: 'zh',
+    }))
+
+    expect(html).toContain('<h1>六、最可能占空间、建议重点处理</h1>')
+    expect(html).not.toContain('<h1># 六、')
+  })
+
   test('holds streaming draft markdown until the assistant final content completes', () => {
     const html = renderToStaticMarkup(createElement(ChatCanvas, {
       sidebarCollapsed: false,
@@ -251,7 +291,23 @@ describe('ChatCanvas state copy', () => {
     expect(html).toContain('<p>Before <code>inline</code></p>')
     expect(html).toContain('<pre><code class="language-text">GrafanaAgent</code></pre>')
     expect(html).toContain('<p>After <code>ok</code></p>')
+    expect(html).not.toContain('<span>text</span>')
     expect(html).not.toContain('<code>text')
+  })
+
+  test('keeps assistant code blocks flat inside message bubbles', () => {
+    const css = [
+      readFileSync(resolve(import.meta.dir, '../styles/20-chat.css'), 'utf8'),
+      readFileSync(resolve(import.meta.dir, '../styles/80-island-components.css'), 'utf8'),
+      readFileSync(resolve(import.meta.dir, '../styles/83-dark-compact.css'), 'utf8'),
+      readFileSync(resolve(import.meta.dir, '../styles/84-pastel-compact.css'), 'utf8'),
+      readFileSync(resolve(import.meta.dir, '../styles/86-pastel-green-finish.css'), 'utf8'),
+    ].join('\n')
+
+    expect(css).toContain('.message-code-block')
+    expect(css).toContain('.message-code-block {\n  position: relative;\n  margin: 10px 0 12px;\n  border: 0;')
+    expect(css).not.toContain('.message-markdown pre,\n.message-table-wrap,\n.tool-grid')
+    expect(css).not.toContain('.app-shell[data-theme=\'dark\'] .message-markdown pre')
   })
 
   test('repairs collapsed markdown headings without touching fenced code', () => {

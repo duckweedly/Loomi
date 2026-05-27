@@ -470,7 +470,7 @@ func omitProviderTool(tools []ProviderToolDefinition, name string) []ProviderToo
 func builtinProviderToolDefinition(name string) (ProviderToolDefinition, bool) {
 	switch name {
 	case productdata.ToolNameLoadTools:
-		return providerTool(name, "Return safe descriptions for currently enabled Loomi tools by name or keyword.", map[string]any{"queries": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "maxItems": 5}, "names": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "maxItems": 20}, "limit": integerSchema(1, 30)}, []string{}), true
+		return providerTool(name, "Return safe descriptions for currently enabled Loomi tools by catalog keyword.", map[string]any{"queries": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "minItems": 1, "maxItems": 5}, "limit": integerSchema(1, 30)}, []string{"queries"}), true
 	case productdata.ToolNameLoadSkill:
 		return providerTool(name, "Return a safe installed skill summary by name without loading the instruction body.", map[string]any{"name": stringSchema("Installed skill name or keyword."), "limit": integerSchema(1, 20)}, []string{"name"}), true
 	case productdata.ToolNameWorkspaceGlob:

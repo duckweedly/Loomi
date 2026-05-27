@@ -450,6 +450,8 @@ func TestDoctorCommandExplainsMissingDefaultLocalCodexProvider(t *testing.T) {
 			fmt.Fprint(w, `{"ok":true}`)
 		case "/v1/model-providers":
 			fmt.Fprint(w, `{"providers":[{"id":"custom","status":"available","execution_state":"supported","model":"test-model"}],"request_id":"req_providers"}`)
+		case "/v1/local-provider-detections":
+			fmt.Fprint(w, `{"providers":[{"provider_id":"local_claude_code","status":"unavailable"}],"request_id":"req_local"}`)
 		case "/v1/tools/catalog":
 			fmt.Fprint(w, `{"tools":[{"name":"workspace.read","group":"workspace","risk_level":"low","approval_policy":"always_required","execution_state":"executable","enabled":true}],"request_id":"req_tools"}`)
 		default:
@@ -467,6 +469,40 @@ func TestDoctorCommandExplainsMissingDefaultLocalCodexProvider(t *testing.T) {
 	for _, expected := range []string{
 		"warn\tproviders\tdefault provider local_codex is not registered",
 		"fix\tproviders\tset LOOMI_PROVIDER or run loomi config set provider <id>; use loomi models list to see registered providers",
+	} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("stdout missing %q: %s", expected, output)
+		}
+	}
+}
+
+func TestDoctorCommandExplainsDetectedButDisabledLocalCodexProvider(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/readyz":
+			fmt.Fprint(w, `{"ok":true}`)
+		case "/v1/model-providers":
+			fmt.Fprint(w, `{"providers":[],"request_id":"req_providers"}`)
+		case "/v1/local-provider-detections":
+			fmt.Fprint(w, `{"providers":[{"provider_id":"local_codex","auth_mode":"oauth","status":"available","message":"Detected OAuth token presence but not enabled. Explicit opt-in is required before use."}],"request_id":"req_local"}`)
+		case "/v1/tools/catalog":
+			fmt.Fprint(w, `{"tools":[{"name":"workspace.read","group":"workspace","risk_level":"low","approval_policy":"always_required","execution_state":"executable","enabled":true}],"request_id":"req_tools"}`)
+		default:
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	err := run([]string{"doctor", "--host", server.URL, "--provider", "local_codex"}, &stdout, &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := stdout.String()
+	for _, expected := range []string{
+		"warn\tproviders\tlocal_codex blocked status=available auth=oauth",
+		"fix\tproviders\tenable Local Codex in Settings > Providers or POST /v1/local-provider-detections/local_codex/enable",
 	} {
 		if !strings.Contains(output, expected) {
 			t.Fatalf("stdout missing %q: %s", expected, output)
@@ -505,6 +541,71 @@ func TestDoctorCommandExplainsProviderAuthFailure(t *testing.T) {
 		if !strings.Contains(output, expected) {
 			t.Fatalf("stdout missing %q: %s", expected, output)
 		}
+	}
+}
+
+func TestDoctorCommandUsesConfiguredAPITokenWithoutPrintingIt(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(configPath, []byte(`{"api_token":"doctor-secret"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LOOMI_CONFIG", configPath)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/readyz" && r.Header.Get("Authorization") != "Bearer doctor-secret" {
+			w.WriteHeader(http.StatusUnauthorized)
+			fmt.Fprint(w, `{"error":"missing bearer token"}`)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/readyz":
+			fmt.Fprint(w, `{"ok":true}`)
+		case "/v1/model-providers":
+			fmt.Fprint(w, `{"providers":[{"id":"local_codex","status":"available","execution_state":"supported","model":"gpt-5-codex"}],"request_id":"req_providers"}`)
+		case "/v1/tools/catalog":
+			fmt.Fprint(w, `{"tools":[{"name":"workspace.read","group":"workspace","risk_level":"low","approval_policy":"always_required","execution_state":"executable","enabled":true}],"request_id":"req_tools"}`)
+		default:
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	err := run([]string{"doctor", "--host", server.URL}, &stdout, &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := stdout.String()
+	if !strings.Contains(output, "doctor ok") || !strings.Contains(output, "api_token_set=true") || strings.Contains(output, "doctor-secret") {
+		t.Fatalf("stdout = %s", output)
+	}
+}
+
+func TestDoctorCommandExplainsMissingAPIToken(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/readyz":
+			fmt.Fprint(w, `{"ok":true}`)
+		case "/v1/model-providers", "/v1/tools/catalog":
+			w.WriteHeader(http.StatusUnauthorized)
+			fmt.Fprint(w, `{"error":"missing bearer token"}`)
+		default:
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	err := run([]string{"doctor", "--host", server.URL}, &stdout, &bytes.Buffer{})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	output := stdout.String()
+	if !strings.Contains(output, "doctor fail") ||
+		!strings.Contains(output, "fix\tproviders\tset LOOMI_API_TOKEN or run loomi config set api_token <token>") ||
+		!strings.Contains(output, "fix\ttools\tset LOOMI_API_TOKEN or run loomi config set api_token <token>") {
+		t.Fatalf("stdout = %s", output)
 	}
 }
 

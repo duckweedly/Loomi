@@ -75,6 +75,22 @@ POST /v1/threads/{thread_id}/messages
 
 M3 message 只支持 `role: "user"`，不会创建 assistant placeholder、run event、streaming delta、tool call 或 LLM request。
 
+Model-gateway assistant messages created by later milestones include safe run linkage in the message projection:
+
+```json
+{
+  "id": "msg_...",
+  "thread_id": "thr_...",
+  "role": "assistant",
+  "content": "Final answer",
+  "metadata": { "run_id": "run_..." },
+  "run_id": "run_...",
+  "created_at": "2026-05-27T00:00:00Z"
+}
+```
+
+`run_id` is duplicated from safe metadata so clients can reconcile a terminal run with its persisted assistant message without parsing debug metadata. This field is display/state linkage only; it is not an authorization boundary.
+
 ## Frontend real API mode
 
 前端只有在设置 `VITE_LOOMI_API_BASE_URL` 时才调用这些 `/v1` endpoint。未设置时仍使用 mock data；已设置但 API 不可用时，UI 显示可恢复错误，不自动 fallback 到 mock。

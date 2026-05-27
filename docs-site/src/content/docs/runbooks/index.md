@@ -22,7 +22,7 @@ set +a
 
 ```bash
 APP_ENV=local
-HTTP_ADDR=127.0.0.1:8080
+HTTP_ADDR=127.0.0.1:18080
 DATABASE_URL=postgres://loomi:loomi@127.0.0.1:55433/loomi_m2?sslmode=disable
 LOG_LEVEL=info
 READINESS_TIMEOUT_SECONDS=5
@@ -50,7 +50,7 @@ docker run --rm --network host -v "$PWD/migrations:/migrations" migrate/migrate 
   version
 ```
 
-期望 version 为 `1`，且不是 dirty state。
+期望 version 为当前最新 migration，且不是 dirty state。
 
 ### 4. 启动 API
 
@@ -63,8 +63,8 @@ go run ./cmd/loomi-api
 ### 5. 检查 health/readiness
 
 ```bash
-curl -i http://127.0.0.1:8080/healthz
-curl -i http://127.0.0.1:8080/readyz
+curl -i http://127.0.0.1:18080/healthz
+curl -i http://127.0.0.1:18080/readyz
 ```
 
 期望：
@@ -76,8 +76,8 @@ curl -i http://127.0.0.1:8080/readyz
 
 ```bash
 docker compose stop postgres
-curl -i http://127.0.0.1:8080/healthz
-curl -i http://127.0.0.1:8080/readyz
+curl -i http://127.0.0.1:18080/healthz
+curl -i http://127.0.0.1:18080/readyz
 docker compose start postgres
 ```
 

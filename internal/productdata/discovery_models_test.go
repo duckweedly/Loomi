@@ -15,6 +15,14 @@ func TestValidateDiscoveryToolCalls(t *testing.T) {
 	if got := validatedStringArgs.ArgumentsSummary["names"]; len(got.([]any)) != 1 || got.([]any)[0] != ToolNameWorkspaceRead {
 		t.Fatalf("load_tools string names were not normalized: %+v", got)
 	}
+	queriesOnly := RecordToolCallRequestInput{ToolCallID: "tc_load_tools_queries_only", ToolName: ToolNameLoadTools, ArgumentsSummary: map[string]any{"queries": []any{"workspace list files directory glob ls"}, "names": []any{}, "limit": 10}, ApprovalStatus: ToolCallApprovalApproved, ExecutionStatus: ToolCallExecutionNotStarted}
+	validatedQueriesOnly, err := ValidateToolCallRequestInput(queriesOnly)
+	if err != nil {
+		t.Fatalf("queries-only load_tools err = %v", err)
+	}
+	if got := validatedQueriesOnly.ArgumentsSummary["names"]; len(got.([]any)) != 0 {
+		t.Fatalf("empty load_tools names were not preserved: %+v", got)
+	}
 	loadSkill := RecordToolCallRequestInput{ToolCallID: "tc_load_skill", ToolName: ToolNameLoadSkill, ArgumentsSummary: map[string]any{"name": "speckit"}, ApprovalStatus: ToolCallApprovalApproved, ExecutionStatus: ToolCallExecutionNotStarted}
 	if _, err := ValidateToolCallRequestInput(loadSkill); err != nil {
 		t.Fatalf("load_skill err = %v", err)

@@ -66,6 +66,14 @@ export function shouldSelectWorkspaceRefreshThread({ requestedThreadId, resolved
   return Boolean(resolvedThreadId) && resolvedThreadId !== requestedThreadId && requestedThreadId === currentSelectedThreadId
 }
 
+export function getThreadIdAfterArchive({ archivedThreadId, currentSelectedThreadId, threads }: { archivedThreadId: string; currentSelectedThreadId: string; threads: Thread[] }) {
+  if (archivedThreadId !== currentSelectedThreadId) return currentSelectedThreadId
+  const archivedIndex = threads.findIndex((thread) => thread.id === archivedThreadId)
+  const remaining = threads.filter((thread) => thread.id !== archivedThreadId)
+  if (remaining.length === 0) return ''
+  return remaining[Math.min(Math.max(archivedIndex, 0), remaining.length - 1)]?.id || ''
+}
+
 export function shouldApplySendMessageResult({ requestedThreadId, currentSelectedThreadId }: { requestedThreadId: string; currentSelectedThreadId: string }) {
   return requestedThreadId === currentSelectedThreadId
 }
@@ -199,6 +207,19 @@ export function applyRunStreamEventToRun(run: Run, event: RunEvent): Run {
   const shouldApplyAssistantDelta = !event.assistantDelta || event.sequence === undefined || maxSequence <= event.sequence
   let nextRun: Run = event.type.startsWith('tool.call.') ? applyRealRunEvent(run, { ...event, runId: event.runId ?? run.id, threadId: event.threadId ?? run.threadId }) : { ...run, events: mergeRunEvents(run.events, [event]) }
   if (event.assistantDelta && shouldApplyAssistantDelta) nextRun = applyAssistantDeltaToRun(nextRun, event.assistantDelta, event.id)
+  if (isAssistantFinalContentEvent(event)) {
+    return {
+      ...nextRun,
+      status: 'completed',
+      completedAt: event.time,
+      assistantDraft: {
+        content: event.content ?? nextRun.assistantDraft?.content ?? '',
+        status: 'completed',
+        messageId: nextRun.assistantDraft?.messageId,
+        lastEventId: event.id,
+      },
+    }
+  }
 
   if (event.status === 'running' || event.status === 'blocked_on_tool_approval') return { ...nextRun, status: event.status }
   if (event.status === 'completed') {
@@ -238,6 +259,28 @@ export function applyRunStreamEventToRun(run: Run, event: RunEvent): Run {
     }
   }
   return { ...nextRun, status: event.status }
+}
+
+export function reconcileRunWithPersistedAssistant(run: Run, messages: Message[]): Run {
+  if (!isRuntimeTerminal(run.status)) return run
+  const assistant = [...messages].reverse().find((message) => (
+    message.role === 'assistant'
+    && message.threadId === run.threadId
+    && message.runId === run.id
+    && message.content.trim()
+  ))
+  if (!assistant) return run
+  const current = run.assistantDraft
+  if (current?.content === assistant.content && current.messageId === assistant.id && current.status === 'completed') return run
+  return {
+    ...run,
+    assistantDraft: {
+      content: assistant.content,
+      status: 'completed',
+      messageId: assistant.id,
+      lastEventId: current?.lastEventId,
+    },
+  }
 }
 
 function hasRunEventIdentity(run: Run, event: RunEvent) {
@@ -375,11 +418,12 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
         ? await Promise.all([apiClient.getThreadMessages(nextThreadId), apiClient.getThreadRun(nextThreadId)])
         : [[], null]
       if (!shouldApplyWorkspaceRefresh({ requestedThreadId: threadId, currentSelectedThreadId: selectedThreadIdRef.current, threads: nextThreads, messages: nextMessages, run: nextRun })) return
+      const reconciledRun = nextRun ? reconcileRunWithPersistedAssistant(nextRun, nextMessages) : null
       setThreads(nextThreads)
       setMessages(nextMessages)
-      setRun(nextRun)
+      setRun(reconciledRun)
       setCapabilitySignals({ backendUnavailable: false, modelSetupMissing: false, providerUnavailable: false, streamDisconnected: false })
-      setStreamState(nextRun && shouldBlockRuntimeSubmit(nextRun) ? 'connecting' : 'closed')
+      setStreamState(reconciledRun && shouldBlockRuntimeSubmit(reconciledRun) ? 'connecting' : 'closed')
       if (!threadId && nextThreadId) setSelectedThreadId(nextThreadId)
       else if (shouldSelectWorkspaceRefreshThread({ requestedThreadId: threadId, resolvedThreadId: nextThreadId, currentSelectedThreadId: selectedThreadIdRef.current })) setSelectedThreadId(nextThreadId)
     } catch (err) {
@@ -901,10 +945,11 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
       try {
         const [nextMessages, nextRun] = await Promise.all([apiClient.getThreadMessages(threadId), apiClient.getThreadRun(threadId)])
         if (cancelled || !nextRun || nextRun.id !== activeRunID) return
+        const reconciledRun = reconcileRunWithPersistedAssistant(nextRun, nextMessages)
         setMessages(nextMessages)
-        setRun(nextRun)
-        runRef.current = nextRun
-        if (!shouldBlockRuntimeSubmit(nextRun)) {
+        setRun(reconciledRun)
+        runRef.current = reconciledRun
+        if (!shouldBlockRuntimeSubmit(reconciledRun)) {
           setCapabilitySignals((current) => ({ ...current, streamDisconnected: false }))
           setStreamState((current) => (current === 'closed' ? current : 'closed'))
         }
@@ -1004,11 +1049,20 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
     setError(null)
     try {
       await apiClient.archiveThread(threadId)
-      await refresh('')
+      const nextThreadId = getThreadIdAfterArchive({ archivedThreadId: threadId, currentSelectedThreadId: selectedThreadIdRef.current, threads })
+      setThreads((current) => current.filter((thread) => thread.id !== threadId))
+      if (nextThreadId !== selectedThreadIdRef.current) {
+        setSelectedThreadId(nextThreadId)
+        if (!nextThreadId) {
+          setMessages([])
+          setRun(null)
+        }
+      }
+      await refresh(nextThreadId)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'API request failed')
     }
-  }, [refresh])
+  }, [refresh, threads])
 
   const stopRun = useCallback(async () => {
     if (!run || !shouldBlockRuntimeSubmit(run)) return

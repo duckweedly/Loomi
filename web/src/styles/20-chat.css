@@ -500,7 +500,7 @@
   overflow-x: auto;
   border: 0;
   border-radius: 0;
-  padding: 35px 42px 12px 14px;
+  padding: 8px 38px 8px 0;
   background: transparent;
 }
 
@@ -513,41 +513,31 @@
 
 .message-code-block {
   position: relative;
-  overflow: hidden;
-  margin: 12px 0 14px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--bg-panel-muted) 86%, transparent);
+  margin: 10px 0 12px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
 }
 
 .message-code-block-head {
   position: absolute;
-  top: 8px;
-  right: 8px;
-  left: 12px;
+  top: 5px;
+  right: 0;
   z-index: 1;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   pointer-events: none;
-}
-
-.message-code-block-head span {
-  color: var(--text-muted);
-  font-family: var(--font-mono);
-  font-size: 11px;
-  line-height: 1;
-  text-transform: lowercase;
 }
 
 .message-code-block-head button {
   display: inline-grid;
-  width: 26px;
-  height: 26px;
+  width: 24px;
+  height: 24px;
   place-items: center;
-  border: 1px solid var(--border-subtle);
-  border-radius: 6px;
-  background: color-mix(in srgb, var(--surface-primary) 72%, transparent);
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
   pointer-events: auto;
@@ -555,7 +545,7 @@
 
 .message-code-block-head button:hover {
   color: var(--text-primary);
-  background: color-mix(in srgb, var(--surface-primary) 92%, transparent);
+  background: color-mix(in srgb, var(--surface-primary) 72%, transparent);
 }
 
 .message-markdown a {

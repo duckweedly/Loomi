@@ -19,6 +19,27 @@ describe('createClientMessageID', () => {
 })
 
 describe('real API response validation', () => {
+  test('maps assistant message run id from safe metadata for terminal reconciliation', async () => {
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      messages: [{
+        id: 'msg-assistant',
+        thread_id: 'thread-1',
+        role: 'assistant',
+        content: 'Persisted final',
+        metadata: { run_id: 'run-1' },
+        created_at: '2026-05-27T00:00:00Z',
+      }],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } })) as typeof fetch
+    try {
+      const messages = await realApiClient.getThreadMessages('thread-1')
+
+      expect(messages[0]).toMatchObject({ id: 'msg-assistant', runId: 'run-1', content: 'Persisted final' })
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
   test('desktop dev defaults to the local API port when no env is supplied', async () => {
     const source = await Bun.file(new URL('./realApiClient.ts', import.meta.url)).text()
 
@@ -768,7 +789,7 @@ describe('M4 run mapping', () => {
 
     expect(events.map((event) => event.type)).toEqual(['assistant.drafting', 'assistant.message.completed', 'run.completed'])
     expect(run.status).toBe('completed')
-    expect(run.assistantDraft).toMatchObject({ content: 'Local simulated response', status: 'completed', lastEventId: 'evt-final' })
+    expect(run.assistantDraft).toMatchObject({ content: 'Local simulated response', status: 'completed', lastEventId: 'evt-message' })
   })
 
   test('maps lifecycle progress message error and final event categories', () => {
@@ -808,6 +829,26 @@ describe('M4 run mapping', () => {
     expect(event.type).toBe('message.model_output_delta')
     expect(event.assistantDelta).toBe('hello')
     expect(event.status).toBe('running')
+  })
+
+  test('maps model output completion as terminal assistant content', () => {
+    const event = mapApiRunEvent({
+      id: 'evt-final-message',
+      run_id: 'run-1',
+      thread_id: 'thread-1',
+      sequence: 4,
+      category: 'message',
+      type: 'model_output_completed',
+      summary: 'Model output completed',
+      content: '## Final\n\n- rendered',
+      metadata: {},
+      created_at: '2026-05-27T00:00:00Z',
+    })
+
+    expect(event.type).toBe('message.model_output_completed')
+    expect(event.content).toBe('## Final\n\n- rendered')
+    expect(event.status).toBe('completed')
+    expect(event.assistantDelta).toBeUndefined()
   })
 
   test('real sendMessage starts model gateway runs from durable messages', () => {

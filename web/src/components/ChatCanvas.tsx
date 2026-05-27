@@ -81,6 +81,9 @@ function normalizeMarkdownContent(content: string) {
       if (index % 2 === 1) return part
       return part
         .replace(/\s*---\s*(#{1,6})/g, '\n\n$1')
+        .replace(/^[\t\u00a0\u3000 ]{1,3}\\(#{1,6})/gm, '$1')
+        .replace(/^[\t\u00a0\u3000 ]{1,3}(#{1,6})/gm, '$1')
+        .replace(/^\\(#{1,6})(?=\s)/gm, '$1')
         .replace(/([^\n])\s+(#{1,6})(?=\S)/g, '$1\n\n$2')
         .replace(/^(#{1,6})(?=\S)/gm, '$1 ')
         .replace(/^(#{1,6}\s+\d+)\.(?=\S)/gm, '$1. ')
@@ -95,20 +98,15 @@ function textFromChildren(children: ReactNode): string {
   return ''
 }
 
-function codeLanguage(className?: string) {
-  const match = /(?:^|\s)language-([a-z0-9_-]+)(?:\s|$)/i.exec(className ?? '')
-  const language = match?.[1]?.toLowerCase()
-  if (!language || language === 'plaintext' || language === 'plain' || language === 'txt') return 'text'
-  return language
+function headingText(children: ReactNode) {
+  return textFromChildren(children).replace(/^#{1,6}\s+/, '')
 }
 
 function MarkdownCodeBlock({ className, children }: { className?: string; children?: ReactNode }) {
-  const language = codeLanguage(className)
   const text = textFromChildren(children).replace(/\n$/, '')
   return (
     <div className="message-code-block">
       <div className="message-code-block-head">
-        <span>{language}</span>
         <button type="button" onClick={() => void navigator.clipboard?.writeText(text)} aria-label="Copy code">
           <Copy size={13} />
         </button>
@@ -120,6 +118,9 @@ function MarkdownCodeBlock({ className, children }: { className?: string; childr
 
 const markdownComponents: Components = {
   a: ({ href, children }) => <a href={safeHref(href ?? '')} rel="noreferrer" target="_blank">{children}</a>,
+  h1: ({ children }) => <h1>{headingText(children)}</h1>,
+  h2: ({ children }) => <h2>{headingText(children)}</h2>,
+  h3: ({ children }) => <h3>{headingText(children)}</h3>,
   pre: ({ children }) => {
     const child = Array.isArray(children) ? children[0] : children
     if (typeof child === 'object' && child && 'props' in child) {
