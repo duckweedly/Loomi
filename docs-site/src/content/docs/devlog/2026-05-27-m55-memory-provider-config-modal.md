@@ -1,6 +1,6 @@
 ---
 title: M55 Memory Provider Config Modal
-description: Arkloop-style compact Memory provider configuration flow.
+description: Compact Memory provider configuration flow.
 ---
 
 ## Completed

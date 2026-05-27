@@ -41,7 +41,7 @@ M55 moves provider-specific Memory configuration into a modal so the main Settin
 
 M56 changes provider choice from a segmented control to selectable provider cards, matching the reference Memory service layout more closely while keeping Loomi's own copy and boundaries.
 
-M57 adds ArkLoop-style Notebook tools beside semantic memory tools. Notebook entries use the same approved memory store and audit boundary, but are marked with `source_event_id=notebook` so they can be filtered as `source_type=notebook`.
+M57 adds structured Notebook tools beside semantic memory tools. Notebook entries use the same approved memory store and audit boundary, but are marked with `source_event_id=notebook` so they can be filtered as `source_type=notebook`.
 
 M58 injects safe memory context into provider prompts. Semantic memory summaries are wrapped in `<memory>`, and structured notebook summaries are wrapped separately in `<notebook>`.
 
