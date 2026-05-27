@@ -256,6 +256,82 @@ func (r Renderer) PrintRunResult(result RunResult) error {
 	return nil
 }
 
+func (r Renderer) PrintSmokeAgent(result SmokeAgentResult) error {
+	status := "blocked"
+	if result.OK {
+		status = "ok"
+	} else if strings.HasPrefix(result.BlockedReason, "run_") {
+		status = "failed"
+	}
+	if _, err := fmt.Fprintf(r.out(), "smoke %s\n", status); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(r.out(), "stage\t%s\n", result.Stage); err != nil {
+		return err
+	}
+	if result.ThreadID != "" {
+		if _, err := fmt.Fprintf(r.out(), "thread_id\t%s\n", result.ThreadID); err != nil {
+			return err
+		}
+	}
+	if result.RunID != "" {
+		if _, err := fmt.Fprintf(r.out(), "run_id\t%s\n", result.RunID); err != nil {
+			return err
+		}
+	}
+	if result.FinalStage != "" {
+		if _, err := fmt.Fprintf(r.out(), "final_stage\t%s\n", result.FinalStage); err != nil {
+			return err
+		}
+	}
+	if result.Provider.ID != "" {
+		if _, err := fmt.Fprintf(r.out(), "provider\t%s\n", smokeProviderDetail(result.Provider)); err != nil {
+			return err
+		}
+	}
+	if result.EventCount > 0 {
+		if _, err := fmt.Fprintf(r.out(), "events\t%d total, %d tool, %d approvals\n", result.EventCount, result.ToolEventCount, result.ApprovalCount); err != nil {
+			return err
+		}
+	}
+	if len(result.LastEvents) > 0 {
+		if _, err := fmt.Fprintf(r.out(), "last_events\t%s\n", strings.Join(result.LastEvents, "; ")); err != nil {
+			return err
+		}
+	}
+	if result.BlockedReason != "" {
+		if _, err := fmt.Fprintf(r.out(), "blocked_reason\t%s\n", result.BlockedReason); err != nil {
+			return err
+		}
+	}
+	if result.Remedy != "" {
+		if _, err := fmt.Fprintf(r.out(), "fix\t%s\n", result.Remedy); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func smokeProviderDetail(provider ProviderCapability) string {
+	detail := fmt.Sprintf("%s status=%s", provider.ID, provider.Status)
+	if provider.CheckStage != "" {
+		detail += " check_stage=" + provider.CheckStage
+	}
+	if provider.CheckCode != "" {
+		detail += " check=" + provider.CheckCode
+	}
+	if provider.HTTPStatus != 0 {
+		detail += fmt.Sprintf(" http=%d", provider.HTTPStatus)
+	}
+	if provider.ExecutionState != "" {
+		detail += " execution=" + provider.ExecutionState
+	}
+	if provider.Model != "" {
+		detail += " model=" + provider.Model
+	}
+	return detail
+}
+
 func (r Renderer) PrintApprovals(events []RunEvent) error {
 	for _, event := range events {
 		toolCallID := eventToolCallID(event)

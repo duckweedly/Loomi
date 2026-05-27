@@ -161,6 +161,8 @@ The second model stream reuses existing run events with `metadata.model_phase = 
 
 Only one non-terminal tool call may exist in a run. Workspace continuation is capped at three accepted tool calls; exceeding the cap records `tool_loop_limit_reached` and fails the run without recording the extra call. Continuation requests for non-workspace tools, tools outside the run's enabled tool snapshot, or Chat-mode-only tools still record `unsupported_tool_loop` and fail without execution. Repeating an already-requested `tool_call_id` during continuation records `duplicate_tool_call_id` and does not duplicate approval-required events.
 
+M80 clarifies the durable resume contract without adding fields. If a worker retry sees an approved tool call that already reached `tool_call_succeeded`, it may resume the missing continuation only when the event suffix has no continuation start, later tool request, or final run event. Pending `tool_call_requested` events without a matching `tool_call_succeeded` are not serialized into provider continuation input.
+
 ## Diagnostics
 
 `GET /v1/diagnostics/worker-queue` now includes M7 counters:

@@ -5,6 +5,45 @@ description: Loomi 使用 Spec Kit 管理需求、计划、任务和实现。
 
 Loomi 使用 Spec Kit 作为 AI 开发前的对齐层。它的作用不是简单生成代码，而是让每个非平凡功能都有可审查的需求、技术计划和任务拆分。
 
+## 当前候选完成：M79 Agent Harness Smoke
+
+当前实现沿用 M76 continuation reliability、M78 sandbox process foundation 和 M6 worker/job path，不新增 Docker、Redis 或外部服务。
+
+关键产物：
+
+- CLI：`loomi smoke agent` 执行真实 API/provider/run stream，打印 `thread_id`、`run_id`、final stage、provider `check_stage` 和最后事件摘要。
+- Diagnostics：`loomi doctor --provider <id>` 和 smoke 对 401/403、429、503 输出可行动原因。
+- Runtime：provider completion check 使用语义 `check_code`，不会把 upstream body 或 token 写入输出。
+- Docs：runbook/devlog/spec-kit 记录真实 smoke 的 env、blocked 边界和验证命令。
+
+状态：candidate。该轮只做 harness smoke closeout；不新增 Docker/Redis，不改 web UI，不复制 Arkloop 命名或文案。
+
+## 当前候选：M81 Sandbox Process Lifecycle Recovery
+
+当前实现继续沿用 M78 sandbox process foundation，只补 Arkloop 对标里的下一块最小机制差距，不新增 Docker/Firecracker、guest agent 或 shell service。
+
+关键产物：
+
+- Runtime：process stdout buffer 改为 bounded latest-tail，同时 `next_cursor` 使用绝对捕获字节 cursor，长输出继续读取不会重复、丢失新尾部或无限增长。
+- Lifecycle：exited/terminated process 的 `continue_process` 只返回终态摘要和安全状态，不再尝试写 stdin 或执行新动作。
+- Safety：run-scoped process ownership、argv-only、approval required、workspace root/path/secret redaction 继续保留。
+- Tests：覆盖长输出 cursor、exit 后 terminal summary、terminate 后 state-only continue、跨 run 拒绝和 output redaction。
+
+状态：candidate。该轮只补进程输出/生命周期/恢复边界；不做 Firecracker/Docker、guest agent、PTY/shell/resize、Redis、artifact sync、provider/gateway continuation 改动或新 sandbox service。
+
+## 近期候选完成：M80 Durable Run Resume
+
+当前实现沿用 M76 tool continuation reliability 和 M6 worker/job durable event path，不新增字段、队列或外部状态层。
+
+关键产物：
+
+- Runtime：worker retry 遇到已 `succeeded` 的 approved tool call 时，按 durable run events 判断是否需要补发 provider continuation。
+- Guard：只有该 tool 的 `tool_call_succeeded` 之后没有 continuation start、后续 tool request 或 terminal event，才恢复 continuation。
+- Tests：覆盖 pending tool call 不进入 continuation、worker restart 后 approval/executing/succeeded 顺序保留、M76 多工具 final assistant 单写，以及 terminal run late-write guard。
+- Docs：architecture/API/devlog/spec-kit 状态记录 Arkloop 对标点和 Loomi 实现边界。
+
+状态：candidate。该轮只修 durable resume 语义；不做 interrupted status 字段、batch API、Redis、外部 queue、terminal shell runtime 或多 agent 编排。
+
 ## 当前候选：M78 Sandbox Process Foundation
 
 当前实现沿用 `specs/032-sandbox-exec-command-tools/` 的 sandbox exec 基础，不新增 Docker/Firecracker 或独立 sandbox service。

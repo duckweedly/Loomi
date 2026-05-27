@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRunToolsListCommand(t *testing.T) {
@@ -473,6 +474,141 @@ func TestDoctorCommandExplainsMissingDefaultLocalCodexProvider(t *testing.T) {
 	}
 }
 
+func TestDoctorCommandExplainsProviderAuthFailure(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/readyz":
+			fmt.Fprint(w, `{"ok":true}`)
+		case "/v1/model-providers":
+			fmt.Fprint(w, `{"providers":[{"id":"custom","status":"configured","execution_state":"supported","model":"bad-model"}],"request_id":"req_providers"}`)
+		case "/v1/model-providers/check":
+			fmt.Fprint(w, `{"provider":{"id":"custom","status":"completion-failed","execution_state":"supported","model":"bad-model","check_stage":"completion","check_code":"completion-failed-auth","http_status":401,"message":"Provider token was rejected by the upstream completion endpoint."},"request_id":"req_check"}`)
+		case "/v1/tools/catalog":
+			fmt.Fprint(w, `{"tools":[{"name":"workspace.read","group":"workspace","risk_level":"low","approval_policy":"always_required","execution_state":"executable","enabled":true}],"request_id":"req_tools"}`)
+		default:
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	err := run([]string{"doctor", "--host", server.URL, "--provider", "custom"}, &stdout, &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := stdout.String()
+	for _, expected := range []string{
+		"warn\tproviders\tcustom status=completion-failed execution=supported model=bad-model check_stage=completion check=completion-failed-auth http=401",
+		"fix\tproviders\tRefresh the provider API token",
+	} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("stdout missing %q: %s", expected, output)
+		}
+	}
+}
+
+func TestSmokeAgentCommandReportsProviderBoundaryBlocker(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/readyz":
+			fmt.Fprint(w, `{"ok":true}`)
+		case "/v1/model-providers/check":
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `{"provider":{"id":"custom","family":"openai_compatible","model":"bad-model","status":"completion-failed","execution_state":"supported","check_stage":"completion","check_code":"completion-failed-auth","http_status":401,"message":"Provider token was rejected by the upstream completion endpoint."},"request_id":"req_check"}`)
+		default:
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	err := run([]string{"smoke", "agent", "--host", server.URL, "--provider", "custom", "--prompt", "hello"}, &stdout, &bytes.Buffer{})
+	if err == nil {
+		t.Fatal("expected provider-boundary blocker exit")
+	}
+	output := stdout.String()
+	for _, expected := range []string{
+		"smoke blocked",
+		"stage\tprovider_check",
+		"provider\tcustom status=completion-failed check_stage=completion check=completion-failed-auth http=401",
+		"blocked_reason\tprovider_auth",
+		"fix\tRefresh the provider API token",
+	} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("stdout missing %q: %s", expected, output)
+		}
+	}
+}
+
+func TestSmokeAgentCommandRunsWithAutoApprovalAndPrintsSummary(t *testing.T) {
+	var calls []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls = append(calls, r.Method+" "+r.URL.String())
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/readyz":
+			fmt.Fprint(w, `{"ok":true}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/model-providers/check":
+			fmt.Fprint(w, `{"provider":{"id":"custom","family":"openai_compatible","model":"model","status":"completion-ok","execution_state":"supported","check_stage":"completion","check_code":"completion-ok","http_status":200,"message":"Provider completion check succeeded."},"request_id":"req_check"}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/threads":
+			fmt.Fprint(w, `{"thread":{"id":"thr_smoke","mode":"work"},"request_id":"req_thread"}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/threads/thr_smoke/messages":
+			fmt.Fprint(w, `{"message":{"id":"msg_smoke"},"request_id":"req_msg"}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/threads/thr_smoke/runs":
+			fmt.Fprint(w, `{"run":{"id":"run_smoke","thread_id":"thr_smoke","status":"running"},"request_id":"req_run"}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/threads/thr_smoke/runs/run_smoke/tool-calls/tc_read/approve":
+			fmt.Fprint(w, `{"tool_call":{"tool_call_id":"tc_read","approval_status":"approved","execution_status":"not_started"},"request_id":"req_approve"}`)
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/runs/run_smoke/events/stream":
+			w.Header().Set("Content-Type", "text/event-stream")
+			if r.URL.Query().Get("after_sequence") == "" {
+				fmt.Fprint(w, "event: run_event\n")
+				fmt.Fprint(w, "data: {\"id\":\"evt_1\",\"run_id\":\"run_smoke\",\"thread_id\":\"thr_smoke\",\"sequence\":1,\"type\":\"model_request_started\",\"metadata\":{\"model_phase\":\"initial\",\"provider_id\":\"custom\"}}\n\n")
+				fmt.Fprint(w, "event: run_event\n")
+				fmt.Fprint(w, "data: {\"id\":\"evt_2\",\"run_id\":\"run_smoke\",\"thread_id\":\"thr_smoke\",\"sequence\":2,\"type\":\"tool_call_approval_required\",\"metadata\":{\"tool_call_id\":\"tc_read\",\"tool_name\":\"workspace.read\",\"arguments_summary\":{\"path\":\"AGENTS.md\"}}}\n\n")
+				return
+			}
+			fmt.Fprint(w, "event: run_event\n")
+			fmt.Fprint(w, "data: {\"id\":\"evt_3\",\"run_id\":\"run_smoke\",\"thread_id\":\"thr_smoke\",\"sequence\":3,\"type\":\"tool_call_approved\",\"metadata\":{\"tool_call_id\":\"tc_read\",\"tool_name\":\"workspace.read\"}}\n\n")
+			fmt.Fprint(w, "event: run_event\n")
+			fmt.Fprint(w, "data: {\"id\":\"evt_4\",\"run_id\":\"run_smoke\",\"thread_id\":\"thr_smoke\",\"sequence\":4,\"type\":\"tool_call_succeeded\",\"metadata\":{\"tool_call_id\":\"tc_read\",\"tool_name\":\"workspace.read\",\"result_summary\":{\"path\":\"AGENTS.md\",\"truncated\":false}}}\n\n")
+			fmt.Fprint(w, "event: run_event\n")
+			fmt.Fprint(w, "data: {\"id\":\"evt_5\",\"run_id\":\"run_smoke\",\"thread_id\":\"thr_smoke\",\"sequence\":5,\"type\":\"model_output_delta\",\"content\":\"ok\"}\n\n")
+			fmt.Fprint(w, "event: run_event\n")
+			fmt.Fprint(w, "data: {\"id\":\"evt_6\",\"run_id\":\"run_smoke\",\"thread_id\":\"thr_smoke\",\"sequence\":6,\"type\":\"run_completed\"}\n\n")
+			fmt.Fprint(w, "event: close\n")
+			fmt.Fprint(w, "data: {\"run_id\":\"run_smoke\"}\n\n")
+		default:
+			t.Fatalf("request = %s %s", r.Method, r.URL.String())
+		}
+	}))
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	err := run([]string{"smoke", "agent", "--host", server.URL, "--provider", "custom", "--auto-approve", "--prompt", "hello"}, &stdout, &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := stdout.String()
+	for _, expected := range []string{
+		"smoke ok",
+		"thread_id\tthr_smoke",
+		"run_id\trun_smoke",
+		"final_stage\trun_completed",
+		"provider\tcustom status=completion-ok check_stage=completion check=completion-ok http=200",
+		"events\t6 total, 3 tool, 1 approvals",
+		"last_events\t0004 tool_call_succeeded workspace.read tc_read; 0005 model_output_delta; 0006 run_completed",
+	} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("stdout missing %q: %s", expected, output)
+		}
+	}
+	if !containsMainString(calls, "POST /v1/threads/thr_smoke/runs/run_smoke/tool-calls/tc_read/approve") {
+		t.Fatalf("calls = %v", calls)
+	}
+}
+
 func TestRunHelpCommandShowsTopics(t *testing.T) {
 	var stdout bytes.Buffer
 	if err := run([]string{"help", "tools"}, &stdout, &bytes.Buffer{}); err != nil {
@@ -904,6 +1040,47 @@ func TestRunCommandCompactPrintsShortTranscript(t *testing.T) {
 	}
 	if strings.Contains(output, "tool_call_succeeded") {
 		t.Fatalf("stdout was not compact: %s", output)
+	}
+}
+
+func TestRunCommandStopsWhenTerminalEventArrivesWithoutSSEClose(t *testing.T) {
+	streamClosed := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/v1/threads":
+			fmt.Fprint(w, `{"thread":{"id":"thr_cli","mode":"work"},"request_id":"req_thread"}`)
+		case "/v1/threads/thr_cli/messages":
+			fmt.Fprint(w, `{"message":{"id":"msg_cli"},"request_id":"req_msg"}`)
+		case "/v1/threads/thr_cli/runs":
+			fmt.Fprint(w, `{"run":{"id":"run_cli","thread_id":"thr_cli","status":"running"},"request_id":"req_run"}`)
+		case "/v1/runs/run_cli/events/stream":
+			w.Header().Set("Content-Type", "text/event-stream")
+			fmt.Fprint(w, "event: run_event\n")
+			fmt.Fprint(w, "data: {\"id\":\"evt_1\",\"run_id\":\"run_cli\",\"thread_id\":\"thr_cli\",\"sequence\":1,\"type\":\"run_failed\"}\n\n")
+			if flusher, ok := w.(http.Flusher); ok {
+				flusher.Flush()
+			}
+			<-r.Context().Done()
+			close(streamClosed)
+		default:
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	err := runWithIO([]string{"run", "--host", server.URL, "hello"}, strings.NewReader(""), &stdout, &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-streamClosed:
+	case <-time.After(time.Second):
+		t.Fatalf("stream was not closed after terminal event")
+	}
+	if !strings.Contains(stdout.String(), "run run_cli failed") {
+		t.Fatalf("stdout = %s", stdout.String())
 	}
 }
 

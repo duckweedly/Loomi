@@ -366,8 +366,7 @@ func CheckProviderCompletion(ctx context.Context, provider ProviderConfig, clien
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		io.Copy(io.Discard, io.LimitReader(resp.Body, 64*1024))
 		capability.Status = ProviderStatusCompletionFailed
-		capability.CheckCode = fmt.Sprintf("completion-failed-%d", resp.StatusCode)
-		capability.Message = fmt.Sprintf("Provider completion check failed with HTTP %d.", resp.StatusCode)
+		capability.CheckCode, capability.Message = completionHTTPFailure(resp.StatusCode)
 		return capability
 	}
 	io.Copy(io.Discard, io.LimitReader(resp.Body, 64*1024))
@@ -409,6 +408,17 @@ func (p *HTTPProvider) buildCompletionCheckRequest(ctx context.Context) (*http.R
 		return httpRequest, nil
 	default:
 		return nil, errors.New("Provider family is unsupported.")
+	}
+}
+
+func completionHTTPFailure(status int) (string, string) {
+	switch status {
+	case http.StatusUnauthorized, http.StatusForbidden:
+		return "completion-failed-auth", "Provider token was rejected by the upstream completion endpoint."
+	case http.StatusTooManyRequests:
+		return "completion-failed-rate-limited", "Provider completion check was rate limited by the upstream endpoint."
+	default:
+		return fmt.Sprintf("completion-failed-%d", status), fmt.Sprintf("Provider completion check failed with HTTP %d.", status)
 	}
 }
 

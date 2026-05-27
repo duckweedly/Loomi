@@ -19,6 +19,13 @@ Continuation context is built from existing conversation messages plus the curre
 
 No durable `messages.role = tool` row is written for this slice. Run events and the tool-call projection remain the audit source of truth.
 
+On worker restart, the queued runner may re-enter with the same approved `tool_call_id`. If the tool projection already says `execution_status = succeeded`, Loomi does not execute the tool again. It scans the durable run events after that tool's `tool_call_succeeded` event:
+
+- if no continuation `model_request_started`, later `tool_call_requested`, or final run event exists, it resumes provider continuation from the persisted tool result;
+- if continuation already started, a later tool was requested, or the run is terminal, it treats the retry as already handled.
+
+This keeps the provider input rebuild durable without mixing an unfinished `tool_call_requested` into continuation and without duplicating final assistant output after a retry.
+
 ## Provider boundary
 
 Runtime code uses provider-neutral message roles:

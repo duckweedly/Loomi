@@ -1,7 +1,6 @@
 package runtime
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -45,9 +44,10 @@ func SandboxToolDefinitions() []ToolDefinition {
 
 type boundedOutput struct {
 	mu    sync.Mutex
-	buf   bytes.Buffer
+	buf   []byte
 	limit int
 	total int
+	start int
 }
 
 type SandboxProcessStore struct {
@@ -246,6 +246,7 @@ func (s *SandboxProcessStore) start(ctx context.Context, scope workspaceScope, i
 		if command.ProcessState != nil {
 			process.exitCode = command.ProcessState.ExitCode()
 		}
+		process.stdinOpen = false
 		cancel()
 		close(process.done)
 		process.mu.Unlock()
@@ -279,10 +280,15 @@ func (s *SandboxProcessStore) continueProcess(scope workspaceScope, invocation T
 	if err != nil {
 		return nil, err
 	}
-	if err := process.applyInput(invocation.ArgumentsSummary); err != nil {
+	if !process.isTerminal() {
+		if err := process.applyInput(invocation.ArgumentsSummary); err != nil {
+			return nil, err
+		}
+	}
+	cursor, err := sandboxCursorArg(invocation.ArgumentsSummary, "cursor")
+	if err != nil {
 		return nil, err
 	}
-	cursor := boundedInt(invocation.ArgumentsSummary, "cursor", 0, maxSandboxOutputBytes)
 	return process.result(productdata.ToolNameSandboxContinueProcess, "continue_process", scope.root, cursor), nil
 }
 
@@ -299,6 +305,7 @@ func (s *SandboxProcessStore) terminateProcess(scope workspaceScope, invocation 
 	process.cancel()
 	process.mu.Lock()
 	process.terminated = true
+	process.stdinOpen = false
 	if process.command != nil && process.command.Process != nil {
 		_ = killSandboxProcessGroup(process.command.Process, syscall.SIGTERM)
 	}
@@ -365,6 +372,22 @@ func (p *sandboxProcess) applyInput(args map[string]any) error {
 		_ = stdin.Close()
 	}
 	return nil
+}
+
+func (p *sandboxProcess) isTerminal() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.terminated {
+		p.stdinOpen = false
+		return true
+	}
+	select {
+	case <-p.done:
+		p.stdinOpen = false
+		return true
+	default:
+		return false
+	}
 }
 
 func (p *sandboxProcess) result(toolName string, operation string, root string, cursor int) map[string]any {
@@ -472,6 +495,28 @@ func sandboxArgv(value any) ([]string, error) {
 		return nil, errors.New("sandbox exec command must be argv-form with a bare command name")
 	}
 	return argv, nil
+}
+
+func sandboxCursorArg(args map[string]any, key string) (int, error) {
+	value, ok := args[key]
+	if !ok || value == nil {
+		return 0, nil
+	}
+	var parsed int
+	switch typed := value.(type) {
+	case int:
+		parsed = typed
+	case int64:
+		parsed = int(typed)
+	case float64:
+		parsed = int(typed)
+	default:
+		return 0, errors.New("sandbox process cursor is invalid")
+	}
+	if parsed < 0 {
+		return 0, errors.New("sandbox process cursor is invalid")
+	}
+	return parsed, nil
 }
 
 func allowedReadOnlyCommand(argv []string) bool {
@@ -692,12 +737,16 @@ func (w *boundedOutput) Write(p []byte) (int, error) {
 	defer w.mu.Unlock()
 	written := len(p)
 	w.total += len(p)
-	remaining := w.limit - w.buf.Len()
-	if remaining > 0 {
-		if len(p) > remaining {
-			p = p[:remaining]
-		}
-		_, _ = w.buf.Write(p)
+	if w.limit <= 0 {
+		w.buf = nil
+		w.start = w.total
+		return written, nil
+	}
+	w.buf = append(w.buf, p...)
+	if len(w.buf) > w.limit {
+		over := len(w.buf) - w.limit
+		w.buf = append([]byte(nil), w.buf[over:]...)
+		w.start += over
 	}
 	return written, nil
 }
@@ -705,31 +754,38 @@ func (w *boundedOutput) Write(p []byte) (int, error) {
 func (w *boundedOutput) String() string {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	return w.buf.String()
+	return string(w.buf)
 }
 
 func (w *boundedOutput) StringFrom(offset int) string {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if offset <= 0 {
-		return w.buf.String()
+	if offset < w.start {
+		offset = w.start
 	}
-	if offset >= w.buf.Len() {
+	if offset >= w.total {
 		return ""
 	}
-	return string(w.buf.Bytes()[offset:])
+	bufferOffset := offset - w.start
+	if bufferOffset < 0 {
+		bufferOffset = 0
+	}
+	if bufferOffset >= len(w.buf) {
+		return ""
+	}
+	return string(w.buf[bufferOffset:])
 }
 
 func (w *boundedOutput) Stored() int {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	return w.buf.Len()
+	return w.total
 }
 
 func (w *boundedOutput) Truncated() bool {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	return w.total > w.limit
+	return w.start > 0
 }
 
 func (w *boundedOutput) Total() int {

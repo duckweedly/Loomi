@@ -313,6 +313,30 @@ func TestCheckProviderCompletionReportsHTTP503WithoutLeakingBody(t *testing.T) {
 	}
 }
 
+func TestCheckProviderCompletionReportsHTTP401AsAuthFailure(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":{"message":"bad key sk-leak"}}`))
+	}))
+	defer server.Close()
+
+	capability := CheckProviderCompletion(context.Background(), ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: server.URL + "/v1", APIKey: "secret-key", Model: "gpt-5.5", Enabled: true}, server.Client())
+
+	if capability.Status != ProviderStatusCompletionFailed || capability.CheckCode != "completion-failed-auth" || capability.HTTPStatus != http.StatusUnauthorized {
+		t.Fatalf("capability = %+v", capability)
+	}
+	if capability.Message != "Provider token was rejected by the upstream completion endpoint." {
+		t.Fatalf("message = %q", capability.Message)
+	}
+	rendered, err := json.Marshal(capability)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(rendered), "sk-leak") || strings.Contains(string(rendered), "secret-key") {
+		t.Fatalf("capability leaked provider data: %s", rendered)
+	}
+}
+
 func TestHTTPProviderStreamsGeminiTextAndFunctionEvents(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1beta/models/gemini-3.5-flash:streamGenerateContent" || r.URL.Query().Get("alt") != "sse" || r.Header.Get("x-goog-api-key") != "secret-key" {

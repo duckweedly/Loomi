@@ -96,7 +96,9 @@ func (r Runner) Execute(ctx context.Context, opts RunOptions) (RunResult, error)
 	afterSequence := 0
 	for attempt := 0; attempt < 4; attempt++ {
 		var callbackErr error
-		err = client.StreamEvents(ctx, run.ID, afterSequence, func(event RunEvent) {
+		streamCtx, cancelStream := context.WithCancel(ctx)
+		streamStopped := false
+		err = client.StreamEvents(streamCtx, run.ID, afterSequence, func(event RunEvent) {
 			if callbackErr != nil {
 				return
 			}
@@ -123,10 +125,16 @@ func (r Runner) Execute(ctx context.Context, opts RunOptions) (RunResult, error)
 				status = "blocked_on_tool_approval"
 			case "run_completed":
 				status = "completed"
+				streamStopped = true
+				cancelStream()
 			case "run_failed":
 				status = "failed"
+				streamStopped = true
+				cancelStream()
 			case "run_stopped":
 				status = "stopped"
+				streamStopped = true
+				cancelStream()
 			}
 			if opts.OnEvent != nil {
 				opts.OnEvent(event)
@@ -157,21 +165,33 @@ func (r Runner) Execute(ctx context.Context, opts RunOptions) (RunResult, error)
 				}
 				action = strings.TrimSpace(strings.ToLower(action))
 				if action == "" || action == "skip" {
+					streamStopped = true
+					cancelStream()
 					return
 				}
 				if action != "approve" && action != "deny" {
 					callbackErr = errors.New("approval action must be approve, deny, or skip")
+					streamStopped = true
+					cancelStream()
 					return
 				}
 				decided[approval.ToolCallID] = struct{}{}
 				if _, err := client.DecideToolCall(ctx, approval.ThreadID, approval.RunID, approval.ToolCallID, action); err != nil {
 					callbackErr = err
+					streamStopped = true
+					cancelStream()
 					return
 				}
+				streamStopped = true
+				cancelStream()
 			}
 		})
+		cancelStream()
 		if callbackErr != nil {
 			return RunResult{}, callbackErr
+		}
+		if streamStopped && errors.Is(err, context.Canceled) {
+			err = nil
 		}
 		if err != nil {
 			return RunResult{}, err

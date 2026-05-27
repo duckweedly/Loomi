@@ -91,7 +91,7 @@ func providerCheck(ctx context.Context, client *Client, cfg Config, providers []
 		if providerReady(provider) {
 			return okCheck("providers", detail)
 		}
-		return warnCheck("providers", detail, "fix provider configuration or upstream completion before live loomi run")
+		return warnCheck("providers", detail, providerCheckRemedy(provider))
 	}
 	if configured == "local_codex" {
 		return warnCheck("providers", "default provider local_codex is not registered", "set LOOMI_PROVIDER or run loomi config set provider <id>; use loomi models list to see registered providers")
@@ -108,6 +108,9 @@ func providerReady(provider ProviderCapability) bool {
 
 func providerDetail(provider ProviderCapability) string {
 	detail := fmt.Sprintf("%s status=%s execution=%s model=%s", provider.ID, provider.Status, provider.ExecutionState, provider.Model)
+	if provider.CheckStage != "" {
+		detail += " check_stage=" + provider.CheckStage
+	}
 	if provider.CheckCode != "" {
 		detail += " check=" + provider.CheckCode
 	}
@@ -118,6 +121,21 @@ func providerDetail(provider ProviderCapability) string {
 		detail += " message=" + provider.Message
 	}
 	return detail
+}
+
+func providerCheckRemedy(provider ProviderCapability) string {
+	switch provider.HTTPStatus {
+	case 401, 403:
+		return "Refresh the provider API token, then run loomi doctor again."
+	case 429:
+		return "Wait for quota reset or set LOOMI_PROVIDER / loomi config set provider to another configured provider."
+	case 503:
+		return "Retry later or set LOOMI_PROVIDER / loomi config set provider to another configured provider."
+	}
+	if provider.CheckStage != "" || provider.CheckCode != "" {
+		return "Fix provider configuration or upstream completion before live loomi run."
+	}
+	return "fix provider configuration or upstream completion before live loomi run"
 }
 
 func toolCatalogCheck(tools []ToolCatalogEntry) DoctorCheck {

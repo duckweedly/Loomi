@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/sheridiany/loomi/internal/cli"
 )
@@ -52,6 +53,8 @@ func runWithIO(args []string, stdin io.Reader, stdout io.Writer, stderr io.Write
 		return cmdCompletion(args[1:], stdout)
 	case "doctor":
 		return cmdDoctor(ctx, args[1:], stdout)
+	case "smoke":
+		return cmdSmoke(ctx, args[1:], stdout)
 	case "status":
 		return cmdStatus(ctx, args[1:], stdout)
 	case "config":
@@ -100,6 +103,7 @@ commands:
   version                        show CLI version
   completion <bash|zsh|fish>      print shell completion script
   doctor                         check API, config, provider, and tools
+  smoke agent                    run a real agent harness smoke
   status                         check local Loomi API
   config show                    show resolved local CLI defaults
   config set <key> <value>       persist a local CLI default
@@ -152,6 +156,22 @@ flags:
 
 flags:
   --host <url>          Loomi API host
+  --provider <id>       provider id to check
+  --output text|json`)
+		return err
+	case "smoke":
+		_, err := fmt.Fprintln(stdout, `usage: loomi smoke agent [flags]
+
+flags:
+  --host <url>                  Loomi API host
+  --provider <id>               model provider id
+  --model <model>               model override
+  --persona <id>                persona id
+  --mode <chat|work>            thread mode, default from config
+  --thread <id>                 use an existing thread
+  --prompt <text>               prompt to send
+  --auto-approve                approve tool calls for this smoke only
+  --timeout <duration>          smoke timeout, for example 2m
   --output text|json`)
 		return err
 	case "run":
@@ -266,6 +286,69 @@ commands:
 	}
 }
 
+func cmdSmoke(ctx context.Context, args []string, stdout io.Writer) error {
+	if len(args) == 0 || args[0] != "agent" {
+		return fmt.Errorf("usage: loomi smoke agent")
+	}
+	return cmdSmokeAgent(ctx, args[1:], stdout)
+}
+
+func cmdSmokeAgent(ctx context.Context, args []string, stdout io.Writer) error {
+	cfg, err := cli.LoadConfigFromEnv()
+	if err != nil {
+		return err
+	}
+	fs := flag.NewFlagSet("smoke agent", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	host := fs.String("host", cfg.Host, "Loomi API host")
+	provider := fs.String("provider", cfg.Provider, "model provider id")
+	model := fs.String("model", cfg.Model, "model override")
+	persona := fs.String("persona", cfg.Persona, "persona id")
+	mode := fs.String("mode", cfg.Mode, "thread mode")
+	threadID := fs.String("thread", "", "existing thread id")
+	prompt := fs.String("prompt", "Loomi harness smoke: read AGENTS.md, then reply with a one sentence completion marker.", "prompt")
+	autoApprove := fs.Bool("auto-approve", false, "approve tool calls for this smoke only")
+	timeout := fs.Duration("timeout", 2*time.Minute, "smoke timeout")
+	output := fs.String("output", "text", "text or json")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *output != "text" && *output != "json" {
+		return fmt.Errorf("--output must be text or json")
+	}
+	cfg.Host = *host
+	smokeCtx := ctx
+	cancel := func() {}
+	if *timeout > 0 {
+		smokeCtx, cancel = context.WithTimeout(ctx, *timeout)
+	}
+	defer cancel()
+	result, err := cli.RunAgentSmoke(smokeCtx, cli.NewClient(*host), cfg, cli.SmokeAgentOptions{
+		ThreadID:    *threadID,
+		Prompt:      *prompt,
+		Mode:        *mode,
+		Provider:    *provider,
+		Model:       *model,
+		Persona:     *persona,
+		AutoApprove: *autoApprove,
+	})
+	if err != nil {
+		return err
+	}
+	renderer := cli.Renderer{Out: stdout}
+	if *output == "json" {
+		if err := renderer.PrintJSON(result); err != nil {
+			return err
+		}
+	} else if err := renderer.PrintSmokeAgent(result); err != nil {
+		return err
+	}
+	if !result.OK {
+		return exitError{code: 1}
+	}
+	return nil
+}
+
 func cmdVersion(args []string, stdout io.Writer) error {
 	fs := flag.NewFlagSet("version", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -293,6 +376,7 @@ func cmdDoctor(ctx context.Context, args []string, stdout io.Writer) error {
 	fs := flag.NewFlagSet("doctor", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	host := fs.String("host", cfg.Host, "Loomi API host")
+	provider := fs.String("provider", cfg.Provider, "provider id")
 	output := fs.String("output", "text", "text or json")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -301,6 +385,7 @@ func cmdDoctor(ctx context.Context, args []string, stdout io.Writer) error {
 		return fmt.Errorf("--output must be text or json")
 	}
 	cfg.Host = *host
+	cfg.Provider = *provider
 	report := cli.RunDoctor(ctx, cli.NewClient(*host), cfg)
 	renderer := cli.Renderer{Out: stdout}
 	if *output == "json" {

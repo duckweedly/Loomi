@@ -141,6 +141,17 @@ func (r QueuedRunRouter) runApprovedTool(ctx context.Context, run productdata.Ru
 	if err != nil {
 		return err
 	}
+	if existing.ExecutionStatus == productdata.ToolCallExecutionSucceeded {
+		if r.shouldResumeContinuationAfterSucceededTool(ctx, run.ID, toolCallID) {
+			input := r.gatewayContinuationInput(ctx, run, toolCallID)
+			if input.MessageID == "" || input.ProviderID == "" {
+				return productdata.NewError(productdata.CodeInvalidRequest, "Continuation context is missing.")
+			}
+			r.Gateway.ContinueAfterToolResult(ctx, run, input)
+			return r.gatewayResult(ctx, run.ID)
+		}
+		return nil
+	}
 	if existing.ExecutionStatus != productdata.ToolCallExecutionNotStarted {
 		return nil
 	}
@@ -187,6 +198,37 @@ func (r QueuedRunRouter) runApprovedTool(ctx context.Context, run productdata.Ru
 		}
 	}
 	return r.gatewayResult(ctx, run.ID)
+}
+
+func (r QueuedRunRouter) shouldResumeContinuationAfterSucceededTool(ctx context.Context, runID string, toolCallID string) bool {
+	if r.Gateway == nil || r.Gateway.Service == nil || strings.TrimSpace(toolCallID) == "" {
+		return false
+	}
+	events, err := r.Gateway.Service.ListRunEvents(ctx, identity.LocalDevIdentity(), runID, 0)
+	if err != nil {
+		return false
+	}
+	succeededSequence := 0
+	for _, event := range events {
+		if event.Type == productdata.EventToolCallSucceeded && metadataString(event.Metadata, "tool_call_id") == toolCallID {
+			succeededSequence = event.Sequence
+		}
+	}
+	if succeededSequence == 0 {
+		return false
+	}
+	for _, event := range events {
+		if event.Sequence <= succeededSequence {
+			continue
+		}
+		if event.Category == productdata.RunEventCategoryFinal || event.Type == productdata.EventToolCallRequested {
+			return false
+		}
+		if event.Type == "model_request_started" && metadataString(event.Metadata, "model_phase") == "continuation" {
+			return false
+		}
+	}
+	return true
 }
 
 func (r QueuedRunRouter) artifactService() productdata.ArtifactService {

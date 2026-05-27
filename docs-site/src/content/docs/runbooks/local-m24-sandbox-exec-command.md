@@ -48,6 +48,23 @@ Expected evidence:
 6. HTTP smoke covers `start_process -> continue_process -> terminate_process` through separate approval/resume cycles and completes the run after provider continuation.
 7. UI summaries label process lifecycle tools distinctly and show `process_id`, `next_cursor`, and `terminal_summary` without host paths or secret-looking output.
 
+## M81 Process Lifecycle Recovery Checks
+
+M81 focuses on process output/lifecycle/recovery usability, not on a new sandbox service.
+
+```bash
+go test ./internal/runtime -run 'TestSandboxProcessContinueCursorReadsBoundedLongOutput|TestSandboxProcessContinueAfterExitReturnsTerminalSummary|TestSandboxProcessContinueAfterTerminateOnlyReturnsSafeState|TestSandboxProcessOutputRedactionCoversPathsAndSecrets' -count=1
+```
+
+Expected evidence:
+
+1. Long stdout remains bounded while `next_cursor` continues to advance with captured bytes.
+2. Reusing the previous cursor reads only new retained output and does not replay old output.
+3. Exited processes return `status=exited`, `exit_code`, and `terminal_summary` on continue.
+4. Terminated processes can be continued only as a safe state read; stdin text and close requests do not perform a new action.
+5. Cross-run process access stays rejected.
+6. Absolute host paths, workspace roots, and secret-looking content are redacted in process output previews.
+
 ## Full Validation Target
 
 ```bash

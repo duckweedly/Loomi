@@ -118,7 +118,7 @@ Unsupported request fields, shell-form commands, model-supplied env, write/netwo
 }
 ```
 
-`cursor` is optional and returns stdout bytes after that bounded buffer offset. `stdin_text` is optional, capped by product-data validation, and requires a monotonically increasing `input_seq` so duplicate writes can be rejected. `close_stdin` closes the stdin pipe after any supplied text is written.
+`cursor` is optional and returns stdout bytes after that absolute stdout byte cursor. `next_cursor` advances with total stdout bytes captured, not with the current preview length, so callers can poll long output without replaying already-read bytes. The stdout buffer is bounded and keeps the latest retained bytes; if a caller passes a cursor older than the retained window, Loomi returns the oldest retained safe tail and marks `stdout_truncated: true` instead of growing memory without limit. `stdin_text` is optional, capped by product-data validation, and requires a monotonically increasing `input_seq` so duplicate writes can be rejected. `close_stdin` closes the stdin pipe after any supplied text is written.
 
 `sandbox.terminate_process` accepts only `process_id`.
 
@@ -173,12 +173,12 @@ Process tool results use `bounded_process` scope:
 }
 ```
 
-`status` is one of `running`, `exited`, or `terminated`. `next_cursor` is the next stdout offset to pass back into `sandbox.continue_process` for incremental reads. Timed-out processes are reported with `timed_out: true` after the process exits due to the bounded context.
+`status` is one of `running`, `exited`, or `terminated`. `next_cursor` is the next absolute stdout cursor to pass back into `sandbox.continue_process` for incremental reads. Timed-out processes are reported with `timed_out: true` after the process exits due to the bounded context.
 
-`sandbox.terminate_process` also returns `terminal_summary`, for example `terminated exit_code=-1`, so RunRail and ToolCallCard can show a compact lifecycle outcome without exposing raw process details.
+`sandbox.terminate_process` also returns `terminal_summary`, for example `terminated exit_code=-1`, so RunRail and ToolCallCard can show a compact lifecycle outcome without exposing raw process details. A later `sandbox.continue_process` on an exited or terminated process is read-only: it skips stdin writes/close actions and returns the stored terminal status, cursor, byte counts, and summary.
 
 ## Event Safety
 
 Tool-call request events expose only safe command previews. Normal API/UI events must not include host absolute workspace roots, credentials, raw environment values, provider raw payloads, or unbounded output.
 
-M78 applies the same output scrubber before returning one-shot and process results: invalid UTF-8 is dropped, the configured workspace root is replaced with `.`, host absolute paths and secret-looking content are redacted, and `redaction_applied` is set when the preview changes. The bounded byte counts still reflect the captured stream size, not the redacted preview length.
+M81 keeps the same output scrubber before returning one-shot and process results: invalid UTF-8 is dropped, the configured workspace root is replaced with `.`, host absolute paths and secret-looking content are redacted, and `redaction_applied` is set when the preview changes. The bounded byte counts and cursor values still reflect captured stdout/stderr bytes, not the redacted preview length.

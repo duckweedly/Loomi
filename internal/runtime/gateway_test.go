@@ -562,6 +562,50 @@ func TestGatewayBuildsContinuationContextFromToolResultEvents(t *testing.T) {
 	}
 }
 
+func TestGatewayContinuationSkipsPendingToolCalls(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, productdata.CreateThreadInput{Title: "Pending continuation", Mode: productdata.ThreadModeWork})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _, err := svc.CreateMessage(context.Background(), ident, thread.ID, productdata.CreateMessageInput{Content: "Use tools"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, productdata.StartRunInput{Source: productdata.RunSourceModelGateway, MessageID: message.ID, ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.AppendRunEvent(context.Background(), ident, run.ID, productdata.AppendRunEventInput{Category: productdata.RunEventCategoryProgress, Type: productdata.EventToolCallRequested, Summary: "Tool call requested", Metadata: map[string]any{"tool_call_id": "tc_pending", "tool_name": productdata.ToolNameWorkspaceRead, "arguments_summary": map[string]any{"path": "pending.txt"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.AppendRunEvent(context.Background(), ident, run.ID, productdata.AppendRunEventInput{Category: productdata.RunEventCategoryProgress, Type: productdata.EventToolCallRequested, Summary: "Tool call requested", Metadata: map[string]any{"tool_call_id": "tc_done", "tool_name": productdata.ToolNameWorkspaceGrep, "arguments_summary": map[string]any{"query": "needle"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.AppendRunEvent(context.Background(), ident, run.ID, productdata.AppendRunEventInput{Category: productdata.RunEventCategoryProgress, Type: productdata.EventToolCallSucceeded, Summary: "Tool call succeeded", Metadata: map[string]any{"tool_call_id": "tc_done", "tool_name": productdata.ToolNameWorkspaceGrep, "result_summary": map[string]any{"matches": []any{"notes.txt"}}}}); err != nil {
+		t.Fatal(err)
+	}
+	gateway := NewGateway(svc, nil, nil)
+
+	messages, err := gateway.loadContinuationMessages(context.Background(), thread.ID, message.ID, run.ID, "tc_done")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(messages) != 3 {
+		t.Fatalf("messages = %+v", messages)
+	}
+	for _, message := range messages {
+		if message.ToolCallID == "tc_pending" {
+			t.Fatalf("pending tool call entered continuation: %+v", messages)
+		}
+	}
+	if messages[1].ToolCallID != "tc_done" || messages[2].ToolCallID != "tc_done" {
+		t.Fatalf("continuation messages = %+v", messages)
+	}
+}
+
 func TestGatewayBuildsMCPContinuationContextFromRedactedToolResult(t *testing.T) {
 	svc := productdata.NewMemoryService()
 	ident := identity.LocalDevIdentity()
@@ -593,6 +637,80 @@ func TestGatewayBuildsMCPContinuationContextFromRedactedToolResult(t *testing.T)
 	toolResult := provider.request.Messages[2]
 	if toolResult.Role != ProviderMessageRoleToolResult || toolResult.ToolName != "mcp.local-search.search" || !strings.Contains(toolResult.Content, "safe") || strings.Contains(toolResult.Content, "sk-secret") {
 		t.Fatalf("tool result = %+v", toolResult)
+	}
+}
+
+func TestQueuedRunRouterResumesContinuationAfterSucceededToolRestart(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, productdata.CreateThreadInput{Title: "Restart resume", Mode: productdata.ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _, err := svc.CreateMessage(context.Background(), ident, thread.ID, productdata.CreateMessageInput{Content: "What time is it?"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, productdata.StartRunInput{Source: productdata.RunSourceModelGateway, MessageID: message.ID, ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.RecordToolCallRequest(context.Background(), ident, run.ID, productdata.RecordToolCallRequestInput{ToolCallID: "tc_resume", ToolName: productdata.ToolNameCurrentTime, ArgumentsSummary: map[string]any{"timezone": "UTC"}, ArgumentsHash: "hash_resume", ApprovalStatus: productdata.ToolCallApprovalRequired, ExecutionStatus: productdata.ToolCallExecutionBlocked}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.ApproveToolCall(context.Background(), ident, thread.ID, run.ID, "tc_resume"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.StartToolCallExecution(context.Background(), ident, thread.ID, run.ID, "tc_resume"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.CompleteToolCallSuccess(context.Background(), ident, thread.ID, run.ID, "tc_resume", map[string]any{"iso_time": "2026-05-25T10:00:00Z", "timezone": "UTC", "source": "runtime"}); err != nil {
+		t.Fatal(err)
+	}
+	provider := &capturingProvider{config: ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: "https://example.test/v1", APIKey: "key", Model: "model", Enabled: true}, events: []ProviderEvent{{Type: ProviderEventTextDelta, Text: "Recovered "}, {Type: ProviderEventCompleted, Text: "Recovered after restart."}}}
+	router := QueuedRunRouter{Gateway: NewGateway(svc, nil, []Provider{provider})}
+
+	if err := router.runApprovedTool(context.Background(), run, "tc_resume", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := svc.GetRun(context.Background(), ident, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != productdata.RunStatusCompleted {
+		t.Fatalf("run = %+v", got)
+	}
+	events, err := svc.ListRunEvents(context.Background(), ident, run.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertToolEventOrder(t, events, "tc_resume", []string{productdata.EventToolCallApprovalRequired, productdata.EventToolCallApproved, productdata.EventToolCallExecuting, productdata.EventToolCallSucceeded})
+	if len(provider.request.Messages) != 3 || provider.request.Messages[1].ToolCallID != "tc_resume" || provider.request.Messages[2].ToolCallID != "tc_resume" {
+		t.Fatalf("provider request = %+v", provider.request.Messages)
+	}
+	messages, err := svc.ListMessages(context.Background(), ident, thread.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 2 || messages[1].Content != "Recovered after restart." {
+		t.Fatalf("messages = %+v", messages)
+	}
+}
+
+func assertToolEventOrder(t *testing.T, events []productdata.RunEvent, toolCallID string, expected []string) {
+	t.Helper()
+	position := 0
+	for _, event := range events {
+		if metadataString(event.Metadata, "tool_call_id") != toolCallID {
+			continue
+		}
+		if position < len(expected) && event.Type == expected[position] {
+			position++
+		}
+	}
+	if position != len(expected) {
+		t.Fatalf("tool event order for %s missing %v in events %+v", toolCallID, expected[position:], events)
 	}
 }
 

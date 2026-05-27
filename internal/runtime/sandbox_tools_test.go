@@ -303,6 +303,145 @@ func TestSandboxProcessContinueSupportsCursorAndStdin(t *testing.T) {
 	}
 }
 
+func TestSandboxProcessContinueCursorReadsBoundedLongOutput(t *testing.T) {
+	root := t.TempDir()
+	store := NewSandboxProcessStore()
+	executor := SandboxToolExecutor{Root: root, Store: store}
+
+	start, err := executor.Execute(context.Background(), ToolInvocation{RunID: "run_long_output", ToolCallID: "tc_start", ToolName: productdata.ToolNameSandboxStartProcess, ArgumentsSummary: map[string]any{"argv": []any{"cat"}, "stdin": true, "timeout_ms": 100000, "max_output_bytes": 12}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	processID := start["process_id"].(string)
+
+	first, err := executor.Execute(context.Background(), ToolInvocation{RunID: "run_long_output", ToolCallID: "tc_continue_1", ToolName: productdata.ToolNameSandboxContinueProcess, ArgumentsSummary: map[string]any{"process_id": processID, "stdin_text": "alpha-0000\n", "input_seq": 1, "cursor": 0}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first = waitForSandboxStdout(t, executor, "run_long_output", processID, 0, "alpha")
+	cursor := first["next_cursor"].(int)
+	if cursor <= 0 || first["stdout_truncated"] != false {
+		t.Fatalf("first = %+v", first)
+	}
+
+	second, err := executor.Execute(context.Background(), ToolInvocation{RunID: "run_long_output", ToolCallID: "tc_continue_2", ToolName: productdata.ToolNameSandboxContinueProcess, ArgumentsSummary: map[string]any{"process_id": processID, "stdin_text": "beta-1111\n", "input_seq": 2, "cursor": cursor}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && !strings.Contains(second["stdout"].(string), "beta") {
+		second, err = executor.Execute(context.Background(), ToolInvocation{RunID: "run_long_output", ToolCallID: "tc_continue_poll_2", ToolName: productdata.ToolNameSandboxContinueProcess, ArgumentsSummary: map[string]any{"process_id": processID, "cursor": cursor}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !strings.Contains(second["stdout"].(string), "beta") || strings.Contains(second["stdout"].(string), "alpha") {
+		t.Fatalf("second = %+v", second)
+	}
+	if second["next_cursor"].(int) <= cursor {
+		t.Fatalf("cursor did not advance: first=%+v second=%+v", first, second)
+	}
+	if second["stdout_bytes"].(int) <= 12 || second["stdout_truncated"] != true {
+		t.Fatalf("long output was not bounded: %+v", second)
+	}
+	_, _ = executor.Execute(context.Background(), ToolInvocation{RunID: "run_long_output", ToolCallID: "tc_terminate", ToolName: productdata.ToolNameSandboxTerminateProcess, ArgumentsSummary: map[string]any{"process_id": processID}})
+}
+
+func TestSandboxProcessContinueAfterExitReturnsTerminalSummary(t *testing.T) {
+	root := t.TempDir()
+	store := NewSandboxProcessStore()
+	executor := SandboxToolExecutor{Root: root, Store: store}
+
+	start, err := executor.Execute(context.Background(), ToolInvocation{RunID: "run_exit", ToolCallID: "tc_start", ToolName: productdata.ToolNameSandboxStartProcess, ArgumentsSummary: map[string]any{"argv": []any{"cat"}, "stdin": true, "timeout_ms": 100000}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	processID := start["process_id"].(string)
+	continued, err := executor.Execute(context.Background(), ToolInvocation{RunID: "run_exit", ToolCallID: "tc_continue_1", ToolName: productdata.ToolNameSandboxContinueProcess, ArgumentsSummary: map[string]any{"process_id": processID, "stdin_text": "done\n", "input_seq": 1, "close_stdin": true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && continued["status"] == "running" {
+		continued, err = executor.Execute(context.Background(), ToolInvocation{RunID: "run_exit", ToolCallID: "tc_continue_poll", ToolName: productdata.ToolNameSandboxContinueProcess, ArgumentsSummary: map[string]any{"process_id": processID, "cursor": continued["next_cursor"]}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if continued["status"] != "exited" || continued["exit_code"] != 0 || !strings.Contains(continued["terminal_summary"].(string), "exited exit_code=0") {
+		t.Fatalf("continued = %+v", continued)
+	}
+}
+
+func TestSandboxProcessContinueAfterTerminateOnlyReturnsSafeState(t *testing.T) {
+	root := t.TempDir()
+	store := NewSandboxProcessStore()
+	executor := SandboxToolExecutor{Root: root, Store: store}
+
+	start, err := executor.Execute(context.Background(), ToolInvocation{RunID: "run_terminated_continue", ToolCallID: "tc_start", ToolName: productdata.ToolNameSandboxStartProcess, ArgumentsSummary: map[string]any{"argv": []any{"cat"}, "stdin": true, "timeout_ms": 100000}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	processID := start["process_id"].(string)
+	terminated, err := executor.Execute(context.Background(), ToolInvocation{RunID: "run_terminated_continue", ToolCallID: "tc_terminate", ToolName: productdata.ToolNameSandboxTerminateProcess, ArgumentsSummary: map[string]any{"process_id": processID}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	continued, err := executor.Execute(context.Background(), ToolInvocation{RunID: "run_terminated_continue", ToolCallID: "tc_continue_after_terminate", ToolName: productdata.ToolNameSandboxContinueProcess, ArgumentsSummary: map[string]any{"process_id": processID, "stdin_text": "should-not-write\n", "input_seq": 1, "close_stdin": true, "cursor": terminated["next_cursor"]}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if continued["status"] != "terminated" || continued["operation"] != "continue_process" || continued["input_seq"] != 0 || continued["stdin_open"] != false {
+		t.Fatalf("continued = %+v", continued)
+	}
+	if strings.Contains(continued["stdout"].(string), "should-not-write") {
+		t.Fatalf("continue wrote to terminated process: %+v", continued)
+	}
+}
+
+func TestSandboxProcessOutputRedactionCoversPathsAndSecrets(t *testing.T) {
+	root := t.TempDir()
+	store := NewSandboxProcessStore()
+	executor := SandboxToolExecutor{Root: root, Store: store}
+
+	start, err := executor.Execute(context.Background(), ToolInvocation{RunID: "run_redaction", ToolCallID: "tc_start", ToolName: productdata.ToolNameSandboxStartProcess, ArgumentsSummary: map[string]any{"argv": []any{"cat"}, "stdin": true, "timeout_ms": 100000}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	processID := start["process_id"].(string)
+	secretText := "token=secret\n" + root + "/src\n/Users/xuean/private\n"
+	_, err = executor.Execute(context.Background(), ToolInvocation{RunID: "run_redaction", ToolCallID: "tc_continue_1", ToolName: productdata.ToolNameSandboxContinueProcess, ArgumentsSummary: map[string]any{"process_id": processID, "stdin_text": secretText, "input_seq": 1, "cursor": 0}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	continued := waitForSandboxStdout(t, executor, "run_redaction", processID, 0, "[redacted]")
+	if continued["redaction_applied"] != true || strings.Contains(continued["stdout"].(string), "token=secret") || strings.Contains(continued["stdout"].(string), root) || strings.Contains(continued["stdout"].(string), "/Users/") {
+		t.Fatalf("continued = %+v", continued)
+	}
+	_, _ = executor.Execute(context.Background(), ToolInvocation{RunID: "run_redaction", ToolCallID: "tc_terminate", ToolName: productdata.ToolNameSandboxTerminateProcess, ArgumentsSummary: map[string]any{"process_id": processID}})
+}
+
+func waitForSandboxStdout(t *testing.T, executor SandboxToolExecutor, runID string, processID string, cursor int, want string) map[string]any {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	var result map[string]any
+	var err error
+	for time.Now().Before(deadline) {
+		result, err = executor.Execute(context.Background(), ToolInvocation{RunID: runID, ToolCallID: "tc_continue_wait", ToolName: productdata.ToolNameSandboxContinueProcess, ArgumentsSummary: map[string]any{"process_id": processID, "cursor": cursor}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(result["stdout"].(string), want) {
+			return result
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("stdout never contained %q: %+v", want, result)
+	return nil
+}
+
 func stringSliceResult(t *testing.T, value any) []string {
 	t.Helper()
 	items, ok := value.([]string)
