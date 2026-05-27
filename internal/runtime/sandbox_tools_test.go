@@ -67,6 +67,23 @@ func TestSandboxExecCommandBoundsOutput(t *testing.T) {
 	}
 }
 
+func TestSandboxExecCommandRedactsSecretLookingOutput(t *testing.T) {
+	root := t.TempDir()
+	executor := SandboxToolExecutor{Root: root}
+
+	result, err := executor.Execute(context.Background(), ToolInvocation{ToolName: productdata.ToolNameSandboxExecCommand, ArgumentsSummary: map[string]any{"argv": []any{"go", "test", "./.../token=secret", "/Users/xuean/private"}}})
+	if err == nil {
+		t.Fatalf("unsafe validation args unexpectedly executed: %+v", result)
+	}
+
+	leaky := boundedOutput{limit: 1024}
+	_, _ = leaky.Write([]byte("token=secret\n/Users/xuean/private\n" + root + "/src\n"))
+	preview, redacted := sandboxSafeOutputPreview(leaky.String(), root)
+	if !redacted || strings.Contains(preview, "token=secret") || strings.Contains(preview, "/Users/") || strings.Contains(preview, root) {
+		t.Fatalf("preview=%q redacted=%v", preview, redacted)
+	}
+}
+
 func TestSandboxExecCommandAllowsCodeAgentReadAndValidationCommands(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "keep.txt"), []byte("needle\n"), 0o644); err != nil {
@@ -206,9 +223,33 @@ func TestSandboxProcessStartContinueAndTerminate(t *testing.T) {
 	if terminated["operation"] != "terminate_process" || terminated["status"] != "terminated" || terminated["process_id"] != processID {
 		t.Fatalf("terminated = %+v", terminated)
 	}
+	if terminated["terminal_summary"] == "" {
+		t.Fatalf("terminated without terminal summary: %+v", terminated)
+	}
 	if _, err := executor.Execute(context.Background(), ToolInvocation{RunID: "other_run", ToolCallID: "tc_continue", ToolName: productdata.ToolNameSandboxContinueProcess, ArgumentsSummary: map[string]any{"process_id": processID}}); err == nil {
 		t.Fatal("cross-run continue err = nil")
 	}
+}
+
+func TestSandboxProcessContinueReturnsPromptlyWithoutOutput(t *testing.T) {
+	root := t.TempDir()
+	store := NewSandboxProcessStore()
+	executor := SandboxToolExecutor{Root: root, Store: store}
+
+	start, err := executor.Execute(context.Background(), ToolInvocation{RunID: "run_prompt", ToolCallID: "tc_start", ToolName: productdata.ToolNameSandboxStartProcess, ArgumentsSummary: map[string]any{"argv": []any{"cat"}, "stdin": true, "timeout_ms": 100000}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	processID := start["process_id"].(string)
+	started := time.Now()
+	continued, err := executor.Execute(context.Background(), ToolInvocation{RunID: "run_prompt", ToolCallID: "tc_continue", ToolName: productdata.ToolNameSandboxContinueProcess, ArgumentsSummary: map[string]any{"process_id": processID, "cursor": 0}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if time.Since(started) > 100*time.Millisecond || continued["status"] != "running" || continued["stdout"] != "" {
+		t.Fatalf("continue blocked or returned unexpected output after %s: %+v", time.Since(started), continued)
+	}
+	_, _ = executor.Execute(context.Background(), ToolInvocation{RunID: "run_prompt", ToolCallID: "tc_terminate", ToolName: productdata.ToolNameSandboxTerminateProcess, ArgumentsSummary: map[string]any{"process_id": processID}})
 }
 
 func TestSandboxProcessContinueSupportsCursorAndStdin(t *testing.T) {

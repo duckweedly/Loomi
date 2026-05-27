@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -76,6 +77,55 @@ func TestRunnerExecuteCreatesThreadMessageRunAndConsumesSSE(t *testing.T) {
 		if !containsString(calls, expected) {
 			t.Fatalf("calls missing %q: %v", expected, calls)
 		}
+	}
+}
+
+func TestRunnerExecuteCreatesThreadWithPromptTitle(t *testing.T) {
+	var threadPayload map[string]string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/threads":
+			if err := json.NewDecoder(r.Body).Decode(&threadPayload); err != nil {
+				t.Fatal(err)
+			}
+			writeTestJSON(w, http.StatusCreated, `{"thread":{"id":"thr_cli","mode":"chat","title":"请只回复 pong"},"request_id":"req_thread"}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/threads/thr_cli/messages":
+			writeTestJSON(w, http.StatusCreated, `{"message":{"id":"msg_cli"},"request_id":"req_msg"}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/threads/thr_cli/runs":
+			writeTestJSON(w, http.StatusAccepted, `{"run":{"id":"run_cli","thread_id":"thr_cli","status":"running"},"request_id":"req_run"}`)
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/runs/run_cli/events/stream":
+			w.Header().Set("Content-Type", "text/event-stream")
+			fmt.Fprint(w, "event: run_event\n")
+			fmt.Fprint(w, "data: {\"id\":\"evt_1\",\"run_id\":\"run_cli\",\"thread_id\":\"thr_cli\",\"sequence\":1,\"type\":\"run_completed\"}\n\n")
+			fmt.Fprint(w, "event: close\n")
+			fmt.Fprint(w, "data: {\"run_id\":\"run_cli\"}\n\n")
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
+		}
+	}))
+	defer server.Close()
+
+	_, err := Runner{Client: NewClient(server.URL)}.Execute(context.Background(), RunOptions{
+		Prompt:   "请只回复 pong\n\n这部分很长，不能全部塞进标题里。" + strings.Repeat("x", 120),
+		Mode:     "chat",
+		Provider: "local_codex",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if threadPayload["mode"] != "chat" {
+		t.Fatalf("mode = %q", threadPayload["mode"])
+	}
+	title := threadPayload["title"]
+	if title == "" {
+		t.Fatalf("thread payload missing title: %+v", threadPayload)
+	}
+	if len([]rune(title)) > 80 {
+		t.Fatalf("title too long: %q", title)
+	}
+	if strings.Contains(title, "这部分很长") || strings.Contains(title, strings.Repeat("x", 20)) {
+		t.Fatalf("title leaked too much prompt: %q", title)
 	}
 }
 

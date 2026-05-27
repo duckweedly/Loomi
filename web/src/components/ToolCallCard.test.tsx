@@ -118,6 +118,86 @@ describe('ToolCallCard M7 approval-required state', () => {
     expect(html).not.toContain('workspace.read')
   })
 
+  test('renders code-agent patch preview and apply cards with safe diff metadata', () => {
+    const previewHtml = renderToStaticMarkup(createElement(ToolCallCard, {
+      toolCall: {
+        id: 'tool_preview',
+        toolCallId: 'tc_preview',
+        name: 'workspace.patch_preview',
+        status: 'approval_required',
+        approvalStatus: 'required',
+        executionStatus: 'blocked',
+        summary: 'Tool approval required',
+        input: '',
+        output: '',
+        argumentsSummary: { path: 'src/notes.txt', old_text: '[redacted]', new_text: '[redacted]' },
+        resultSummary: null,
+        errorCode: null,
+        errorMessage: null,
+      },
+      onApprove: () => undefined,
+      onDeny: () => undefined,
+    }))
+
+    const applyHtml = renderToStaticMarkup(createElement(ToolCallCard, {
+      toolCall: {
+        id: 'tool_apply',
+        toolCallId: 'tc_apply',
+        name: 'workspace.patch_apply',
+        status: 'succeeded',
+        approvalStatus: 'approved',
+        executionStatus: 'succeeded',
+        summary: 'Tool call succeeded',
+        input: '',
+        output: '',
+        argumentsSummary: { path: 'src/notes.txt' },
+        resultSummary: { operation: 'patch_apply', path: 'src/notes.txt', changed: true, diff: '--- src/notes.txt\n+++ src/notes.txt\n-needle\n+daily loop\n', preview_id: 'patch_123' },
+        errorCode: null,
+        errorMessage: null,
+      },
+    }))
+
+    expect(previewHtml).toContain('Preview workspace patch')
+    expect(previewHtml).toContain('Awaiting approval')
+    expect(previewHtml).toContain('Approve')
+    expect(previewHtml).not.toContain('workspace.patch_preview')
+    expect(previewHtml).not.toContain('src/notes.txt')
+    expect(applyHtml).toContain('Apply workspace patch')
+    expect(applyHtml).toContain('changed: true')
+    expect(applyHtml).toContain('diff: [redacted]')
+    expect(applyHtml).not.toContain('workspace.patch_apply')
+    expect(applyHtml).not.toContain('src/notes.txt')
+    expect(applyHtml).not.toContain('needle')
+    expect(applyHtml).not.toContain('patch_123')
+  })
+
+  test('renders sandbox process lifecycle cards with bounded safe summaries', () => {
+    const html = renderToStaticMarkup(createElement(ToolCallCard, {
+      toolCall: {
+        id: 'tool_process',
+        toolCallId: 'tc_process',
+        name: 'sandbox.terminate_process',
+        status: 'succeeded',
+        approvalStatus: 'approved',
+        executionStatus: 'succeeded',
+        summary: 'Tool call succeeded',
+        input: '',
+        output: '',
+        argumentsSummary: { process_id: 'sp_abc123' },
+        resultSummary: { operation: 'terminate_process', process_id: 'sp_abc123', status: 'terminated', terminal_summary: 'terminated exit_code=-1', stdout: 'TOKEN=secret /Users/xuean/Loomi' },
+        errorCode: null,
+        errorMessage: null,
+      },
+    }))
+
+    expect(html).toContain('Terminate sandbox process')
+    expect(html).toContain('process_id: sp_abc123')
+    expect(html).toContain('terminal_summary: terminated exit_code=-1')
+    expect(html).not.toContain('sandbox.terminate_process')
+    expect(html).not.toContain('/Users/')
+    expect(html).not.toContain('TOKEN=secret')
+  })
+
   test('hides unknown raw tool names behind a generic label', () => {
     const html = renderToStaticMarkup(createElement(ToolCallCard, {
       locale: 'zh',

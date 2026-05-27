@@ -186,6 +186,9 @@ type ProviderCapability struct {
 	SessionLocal        bool   `json:"session_local"`
 	CredentialReference string `json:"credential_reference"`
 	ExecutionState      string `json:"execution_state"`
+	CheckStage          string `json:"check_stage"`
+	CheckCode           string `json:"check_code"`
+	HTTPStatus          int    `json:"http_status"`
 }
 
 func NewClient(baseURL string) *Client {
@@ -224,8 +227,8 @@ func (c *Client) CheckReady(ctx context.Context) error {
 	return nil
 }
 
-func (c *Client) CreateThread(ctx context.Context, mode string) (Thread, error) {
-	body := map[string]string{"mode": strings.TrimSpace(mode)}
+func (c *Client) CreateThread(ctx context.Context, mode string, title string) (Thread, error) {
+	body := map[string]string{"mode": strings.TrimSpace(mode), "title": strings.TrimSpace(title)}
 	var resp struct {
 		Thread Thread `json:"thread"`
 	}
@@ -494,6 +497,17 @@ func (c *Client) ListModelProviders(ctx context.Context) ([]ProviderCapability, 
 		return nil, err
 	}
 	return resp.Providers, nil
+}
+
+func (c *Client) CheckModelProvider(ctx context.Context, providerID string) (ProviderCapability, error) {
+	var resp struct {
+		Provider ProviderCapability `json:"provider"`
+	}
+	body := map[string]string{"provider_id": strings.TrimSpace(providerID)}
+	if err := c.doJSON(ctx, http.MethodPost, "/v1/model-providers/check", body, &resp); err != nil {
+		return ProviderCapability{}, err
+	}
+	return resp.Provider, nil
 }
 
 func (c *Client) ListEvents(ctx context.Context, runID string, afterSequence int) ([]RunEvent, error) {

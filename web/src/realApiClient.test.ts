@@ -560,6 +560,26 @@ describe('M5 provider and run mapping', () => {
     expect(provider.baseUrl).toBe('https://example.test/v1')
     expect(provider.model).toBe('gpt-5.5')
   })
+
+  test('maps provider completion diagnosis fields without raw provider body', () => {
+    const provider = mapApiProviderCapability({
+      id: 'custom',
+      family: 'openai_compatible',
+      model: 'gpt-5.5',
+      status: 'completion-failed',
+      check_code: 'completion-failed-503',
+      check_stage: 'completion',
+      http_status: 503,
+      message: 'Provider completion check failed with HTTP 503.',
+    })
+
+    expect(provider.status).toBe('completion-failed')
+    expect(provider.checkCode).toBe('completion-failed-503')
+    expect(provider.checkStage).toBe('completion')
+    expect(provider.httpStatus).toBe(503)
+    expect(JSON.stringify(provider)).not.toContain('raw provider body')
+    expect(JSON.stringify(provider)).not.toContain('sk-')
+  })
 })
 
 describe('M4 run mapping', () => {
@@ -700,6 +720,14 @@ describe('M4 run mapping', () => {
       expect(source).resolves.toContain('subscribeRunEvents'),
       expect(source).resolves.toContain('stream_closed'),
       expect(source).resolves.toContain('onClosed?.()'),
+    ])
+  })
+
+  test('requests replay events with explicit after_sequence cursor', () => {
+    const source = Bun.file(new URL('./realApiClient.ts', import.meta.url)).text()
+    return Promise.all([
+      expect(source).resolves.toContain('getRunEvents(runId: string, afterSequence = 0)'),
+      expect(source).resolves.toContain('after_sequence=${afterSequence}'),
     ])
   })
 

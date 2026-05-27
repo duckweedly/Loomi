@@ -89,7 +89,7 @@ func (g *Gateway) runWithContext(ctx context.Context, run productdata.Run, input
 		return
 	}
 	capability := provider.Config().Capability()
-	if capability.Status != ProviderStatusAvailable {
+	if !providerStatusCanRun(capability.Status) {
 		g.fail(ctx, run.ID, string(capability.Status), capability.Message)
 		return
 	}
@@ -109,7 +109,7 @@ func (g *Gateway) ContinueAfterToolResult(ctx context.Context, run productdata.R
 		return
 	}
 	capability := provider.Config().Capability()
-	if capability.Status != ProviderStatusAvailable {
+	if !providerStatusCanRun(capability.Status) {
 		g.fail(ctx, run.ID, string(capability.Status), capability.Message)
 		return
 	}
@@ -275,16 +275,18 @@ func (g *Gateway) loadContinuationMessages(ctx context.Context, threadID string,
 	if err != nil {
 		return nil, err
 	}
-	toolCall, result, err := continuationToolResult(events, toolCallID)
+	results, err := continuationToolResults(events, toolCallID)
 	if err != nil {
 		return nil, err
 	}
-	resultContent, err := json.Marshal(result)
-	if err != nil {
-		return nil, err
+	for _, item := range results {
+		resultContent, err := json.Marshal(item.Result)
+		if err != nil {
+			return nil, err
+		}
+		messages = append(messages, ProviderMessage{Role: ProviderMessageRoleAssistantToolCall, ToolCallID: item.ToolCall.ToolCallID, ToolName: item.ToolCall.ToolName, ArgumentsSummary: item.ToolCall.ArgumentsSummary})
+		messages = append(messages, ProviderMessage{Role: ProviderMessageRoleToolResult, ToolCallID: item.ToolCall.ToolCallID, ToolName: item.ToolCall.ToolName, Content: string(resultContent)})
 	}
-	messages = append(messages, ProviderMessage{Role: ProviderMessageRoleAssistantToolCall, ToolCallID: toolCall.ToolCallID, ToolName: toolCall.ToolName, ArgumentsSummary: toolCall.ArgumentsSummary})
-	messages = append(messages, ProviderMessage{Role: ProviderMessageRoleToolResult, ToolCallID: toolCall.ToolCallID, ToolName: toolCall.ToolName, Content: string(resultContent)})
 	return messages, nil
 }
 
@@ -724,33 +726,48 @@ type continuationToolCall struct {
 	ArgumentsSummary map[string]any
 }
 
-func continuationToolResult(events []productdata.RunEvent, toolCallID string) (continuationToolCall, map[string]any, error) {
-	var requested *continuationToolCall
+type continuationToolResultItem struct {
+	ToolCall continuationToolCall
+	Result   map[string]any
+}
+
+func continuationToolResults(events []productdata.RunEvent, toolCallID string) ([]continuationToolResultItem, error) {
+	requested := map[string]continuationToolCall{}
+	completed := map[string]bool{}
+	results := []continuationToolResultItem{}
 	for _, event := range events {
 		if event.Type != productdata.EventToolCallRequested && event.Type != productdata.EventToolCallSucceeded {
 			continue
 		}
 		eventToolCallID := metadataString(event.Metadata, "tool_call_id")
-		if toolCallID != "" && eventToolCallID != toolCallID {
+		if eventToolCallID == "" {
 			continue
 		}
 		if event.Type == productdata.EventToolCallRequested {
-			requested = &continuationToolCall{ToolCallID: eventToolCallID, ToolName: metadataString(event.Metadata, "tool_name"), ArgumentsSummary: toolArgumentsSummary(event.Metadata)}
+			requested[eventToolCallID] = continuationToolCall{ToolCallID: eventToolCallID, ToolName: metadataString(event.Metadata, "tool_name"), ArgumentsSummary: toolArgumentsSummary(event.Metadata)}
 			continue
 		}
-		if requested == nil {
-			return continuationToolCall{}, nil, productdata.NewError(productdata.CodeInvalidRequest, "Tool call request was not found.")
+		if completed[eventToolCallID] {
+			continue
+		}
+		toolCall, ok := requested[eventToolCallID]
+		if !ok {
+			return nil, productdata.NewError(productdata.CodeInvalidRequest, "Tool call request was not found.")
 		}
 		result := metadataMap(event.Metadata, "result_for_model_redacted")
 		if len(result) == 0 {
 			result = metadataMap(event.Metadata, "result_summary")
 		}
 		if len(result) == 0 {
-			return continuationToolCall{}, nil, productdata.NewError(productdata.CodeInvalidRequest, "Tool result was not found.")
+			return nil, productdata.NewError(productdata.CodeInvalidRequest, "Tool result was not found.")
 		}
-		return *requested, productdata.RedactEventMetadata(result), nil
+		completed[eventToolCallID] = true
+		results = append(results, continuationToolResultItem{ToolCall: toolCall, Result: productdata.RedactEventMetadata(result)})
+		if toolCallID != "" && eventToolCallID == toolCallID {
+			return results, nil
+		}
 	}
-	return continuationToolCall{}, nil, productdata.NewError(productdata.CodeInvalidRequest, "Tool result was not found.")
+	return nil, productdata.NewError(productdata.CodeInvalidRequest, "Tool result was not found.")
 }
 
 func metadataMap(metadata map[string]any, key string) map[string]any {

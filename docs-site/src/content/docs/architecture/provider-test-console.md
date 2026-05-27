@@ -32,9 +32,14 @@ The visible states are:
 
 - not checked
 - checking
-- connected
+- configured
+- reachable
+- completion-ok
+- completion-failed
 - failed
 - not configured
+
+M72 separates static configuration from live completion health. `GET /v1/model-providers` only reports local configuration readiness and must not call the provider. `POST /v1/model-providers/check` runs a minimal completion smoke and may return `check_code` values such as `completion-failed-503`. Settings shows the check code on the provider card so an upstream 503 is not mistaken for an available model.
 
 ## Chat and Composer relationship
 

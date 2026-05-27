@@ -9,7 +9,7 @@ export type ApiClient = {
   listThreads(): Promise<Thread[]>
   getThreadMessages(threadId: string): Promise<Message[]>
   getThreadRun(threadId: string): Promise<Run>
-  getRunEvents(runId: string): Promise<Run['events']>
+  getRunEvents(runId: string, afterSequence?: number): Promise<Run['events']>
   listPersonas?(): Promise<Persona[]>
   listSkills?(): Promise<InstalledSkill[]>
   listModelProviders?(): Promise<ProviderCapability[]>

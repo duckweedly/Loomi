@@ -82,6 +82,14 @@ Later run attach/follow update:
 - Added `loomi runs follow <run-id>` for future-only tailing: by default it reads the current last event sequence and starts SSE after that point; `--after` can override the resume point.
 - Reused the same compact/tools-only/json event rendering path as `loomi events tail`; no new backend endpoint or runtime semantics were introduced.
 
+M77 long-run recovery hardening:
+
+- `runs attach` now stops after replay when the current run projection is terminal, avoiding an unnecessary live SSE wait after completed, failed, stopped, or cancelled runs.
+- Active `runs attach` still renders the projection, replays persisted events, then opens SSE with `after_sequence` equal to the last replayed sequence.
+- `runs follow` remains future-only by default: it reads the current last sequence and opens SSE after that cursor.
+- API history and stream tests cover the exclusive `after_sequence` boundary, including `after_sequence` equal to the current last event.
+- Real API frontend state dedupes replay/live duplicates by sequence as well as event id, so repeated assistant deltas and repeated tool lifecycle events do not double-render.
+
 Later MCP/LSP visibility update:
 
 - Added `loomi mcp servers` over the existing `/v1/mcp/servers` endpoint. Text output includes only safe status metadata and discovered candidate names; raw command, args, env, secrets, and host paths stay hidden.
@@ -124,6 +132,13 @@ Later local build update:
 - Added `scripts/install-cli.sh` for a local install path. It defaults to `~/.local/bin/loomi`, supports `PREFIX` and `TARGET`, and refuses to replace an existing target unless `LOOMI_INSTALL_OVERWRITE=1` is set.
 - Added `loomi completion bash|zsh|fish` for shell completion scripts.
 - Kept the scripts local-only: they do not publish release artifacts.
+
+M71 real run closeout:
+
+- Fixed `loomi run` without `--thread` so the CLI creates a real Chat/Work thread with both `mode` and a stable non-empty `title` before appending the prompt message and starting the run.
+- Thread titles are derived from the first non-empty prompt line, whitespace-normalized, capped to a short excerpt, and fall back to `Loomi run` for empty direct Runner calls.
+- Improved `loomi doctor` when the default provider resolves to `local_codex` but the API has not registered it: the CLI now reports a specific warning and tells the operator to choose a registered provider through `LOOMI_PROVIDER`, `loomi config set provider <id>`, or `loomi models list`.
+- Kept provider execution failures out of scope; a live run that reaches provider 503 remains an M72 provider/runtime blocker, not a CLI thread-creation failure.
 
 Focused validation:
 

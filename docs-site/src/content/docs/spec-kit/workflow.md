@@ -5,6 +5,57 @@ description: Loomi 使用 Spec Kit 管理需求、计划、任务和实现。
 
 Loomi 使用 Spec Kit 作为 AI 开发前的对齐层。它的作用不是简单生成代码，而是让每个非平凡功能都有可审查的需求、技术计划和任务拆分。
 
+## 当前候选：M78 Sandbox Process Foundation
+
+当前实现沿用 `specs/032-sandbox-exec-command-tools/` 的 sandbox exec 基础，不新增 Docker/Firecracker 或独立 sandbox service。
+
+关键产物：
+
+- Runtime：`sandbox.start_process` / `sandbox.continue_process` / `sandbox.terminate_process` 走 Work-mode approval-gated ToolBroker path，使用本地内存 run-scoped process registry。
+- Safety：argv-only、workspace cwd、allowlist、timeout/output bounds、secret/path redaction、terminal run/denied/unapproved/cross-run guard。
+- UI：RunRail / ToolCallCard 显示 process lifecycle 安全摘要。
+- Docs：API/architecture/runbook/devlog 记录 Arkloop 对标和明确非目标。
+
+状态：candidate。该轮只做本地受控进程 foundation；不做 Arkloop 的 Firecracker/Docker 隔离、guest agent、sandbox template、shell/PTY/resize、Redis 或 artifact sync。
+
+## 近期候选完成：M77 Long Run Recovery
+
+当前实现沿用 M4 run/event/SSE、M6 worker event persistence、M71 CLI control-plane 和 real API frontend state，不改 provider、tool execution 或 workspace mutation 语义。
+
+关键产物：
+
+- CLI：`runs attach` 先读 run projection，再 replay persisted events，再按最后 replay sequence 继续 live SSE；terminal run replay 后退出。
+- CLI：`runs follow` 默认只从当前 last sequence 之后 tail，不回放历史。
+- API：events history 和 SSE 都保持 `sequence > after_sequence` exclusive cursor，不重复边界事件。
+- UI：real API replay + live merge 按 id/sequence 去重，避免 duplicate assistant delta 和 tool lifecycle event。
+- Docs：architecture/runbook/devlog 记录 Arkloop 对标后的 Loomi M77 边界。
+
+状态：candidate。该轮只补长 run 断线恢复和 attach/follow cursor；不新增 worker ownership 语义，不改 provider/tool/workspace mutation，不引入 Redis 或多实例 stream fanout。
+
+## 近期候选完成：M76 Tool Continuation Reliability
+
+当前实现沿用 M75 Work-mode 工具闭环，不新增工具、batch API 或多 agent。
+
+关键产物：
+
+- HTTP smoke：模拟 provider 连续请求 `workspace.grep`、`workspace.read`、`workspace.patch_preview`、`workspace.patch_apply`、`sandbox.exec_command`、`workspace.read`，并验证 final assistant message。
+- Runtime：Gateway continuation request 按 run events 重建已成功 tool result 的有序前缀，覆盖 5-8 次工具调用里的顺序、去重和终止边界。
+- Docs：architecture/runbook/devlog 记录 Arkloop 对标观察和 Loomi 本 slice 取舍。
+
+状态：candidate。该轮只做 tool continuation reliability；不新增工具，不引入 batch API，不引入多 agent，不改 provider HTTP 实现。
+
+## 近期候选：M75 Code-Agent Daily Loop
+
+当前实现沿用 Work-mode 工具闭环，不新增工具或 provider 路由。
+
+关键产物：
+
+- HTTP smoke：模拟 provider 连续请求 `workspace.grep`、`workspace.read`、`workspace.patch_preview`、`workspace.patch_apply`、`sandbox.exec_command`，并验证 approval、事件、continuation 和最终 assistant message。
+- UI smoke：RunRail / ToolCallCard 可读地展示 patch preview/apply 和 sandbox validation 步骤，同时隐藏 raw path/content/diff payload。
+- Docs：新增 architecture/runbook/devlog，说明本地复现和 done 证据。
+
+状态：candidate。该轮只打通 dogfoodable daily loop；不处理 provider 503、CLI thread title、新工具、多 agent、Docker 或 Firecracker。
+
 ## 推荐顺序
 
 ```text
@@ -51,6 +102,18 @@ specs/070-memory-provider-error-ui/
 - `tasks.md`：按 runtime/docs/validation 拆分。
 
 状态：candidate。该轮只补 runtime error display；不做 run detail navigation、modal redesign 或 raw log viewer。
+
+## 追加候选完成：M72 Provider 503 Diagnosis
+
+当前实现目录仍沿用本轮工作上下文，不新增 provider router/fallback spec。
+
+关键产物：
+
+- runtime：新增 completion smoke 诊断状态 `configured`、`reachable`、`completion-ok`、`completion-failed`，并归类 `completion-failed-503`。
+- API：`GET /v1/model-providers` 不外呼 provider；`POST /v1/model-providers/check` 才执行安全 completion smoke。
+- CLI/UI：doctor 和 Settings > Providers 都显示 `completion-failed-503`，不把配置完整误报成 completion 可用。
+
+状态：candidate。该轮只诊断 provider 503；不修 M71 thread title bug，不新增 M81 provider router/fallback。
 
 ## 近期候选完成：Memory Provider Runtime Errors
 
@@ -227,6 +290,12 @@ specs/041-web-search-providers/
 - `tasks.md`：按 productdata/runtime/provider/worker/web/docs 验证拆分。
 
 状态：candidate。该轮只补真实 web search provider 能力；`web.search` 与 `web.fetch` 都可在 Chat/Work 中按 persona allowlist 作为 read-only auto-approved public web 工具使用，搜索结果只返回 bounded title/url/snippet safe summary。
+
+## M71 CLI Real Run Closeout
+
+当前关联：CLI control-plane closeout，支撑真实 Chat/Work run dogfood。
+
+状态：complete candidate。`loomi run` 无 `--thread` 时会先创建带 mode 和短标题的真实 thread，再写入 user message 并启动 run；`loomi doctor` 对默认 `local_codex` 未注册给出明确 operator 提示但不写配置文件。Provider 503 根因保留为 M72 blocker。
 
 ## 近期候选完成：UI-02 Real Usage Readiness
 

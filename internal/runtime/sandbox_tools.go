@@ -7,10 +7,13 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
+	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 	"unicode/utf8"
 
@@ -125,6 +128,7 @@ func (s workspaceScope) execCommand(ctx context.Context, args map[string]any) (m
 
 	command := exec.CommandContext(runCtx, argv[0], argv[1:]...)
 	command.Dir = cwdPath
+	configureSandboxCommand(command)
 	var stdout boundedOutput
 	var stderr boundedOutput
 	stdout.limit = outputLimit
@@ -143,6 +147,8 @@ func (s workspaceScope) execCommand(ctx context.Context, args map[string]any) (m
 			return nil, errors.New("sandbox command could not be executed")
 		}
 	}
+	stdoutPreview, stdoutRedacted := sandboxSafeOutputPreview(stdout.String(), s.root)
+	stderrPreview, stderrRedacted := sandboxSafeOutputPreview(stderr.String(), s.root)
 	return map[string]any{
 		"tool":              productdata.ToolNameSandboxExecCommand,
 		"scope":             "bounded_command",
@@ -151,13 +157,13 @@ func (s workspaceScope) execCommand(ctx context.Context, args map[string]any) (m
 		"cwd":               cwdRel,
 		"exit_code":         exitCode,
 		"timed_out":         timedOut,
-		"stdout":            sandboxOutputPreview(stdout.String(), s.root),
-		"stderr":            sandboxOutputPreview(stderr.String(), s.root),
+		"stdout":            stdoutPreview,
+		"stderr":            stderrPreview,
 		"stdout_bytes":      stdout.total,
 		"stderr_bytes":      stderr.total,
 		"stdout_truncated":  stdout.Truncated(),
 		"stderr_truncated":  stderr.Truncated(),
-		"redaction_applied": false,
+		"redaction_applied": stdoutRedacted || stderrRedacted,
 	}, nil
 }
 
@@ -192,6 +198,7 @@ func (s *SandboxProcessStore) start(ctx context.Context, scope workspaceScope, i
 	runCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutMS)*time.Millisecond)
 	command := exec.CommandContext(runCtx, argv[0], argv[1:]...)
 	command.Dir = cwdPath
+	configureSandboxCommand(command)
 	stdoutPipe, err := command.StdoutPipe()
 	if err != nil {
 		cancel()
@@ -292,12 +299,15 @@ func (s *SandboxProcessStore) terminateProcess(scope workspaceScope, invocation 
 	process.cancel()
 	process.mu.Lock()
 	process.terminated = true
+	if process.command != nil && process.command.Process != nil {
+		_ = killSandboxProcessGroup(process.command.Process, syscall.SIGTERM)
+	}
 	process.mu.Unlock()
 	select {
 	case <-process.done:
 	case <-time.After(2 * time.Second):
 		if process.command.Process != nil {
-			_ = process.command.Process.Kill()
+			_ = killSandboxProcessGroup(process.command.Process, syscall.SIGKILL)
 		}
 		<-process.done
 	}
@@ -371,6 +381,18 @@ func (p *sandboxProcess) result(toolName string, operation string, root string, 
 	}
 	stdout := p.stdout.StringFrom(cursor)
 	nextCursor := p.stdout.Stored()
+	stdoutPreview, stdoutRedacted := sandboxSafeOutputPreview(stdout, root)
+	stderrPreview, stderrRedacted := sandboxSafeOutputPreview(p.stderr.String(), root)
+	terminalSummary := ""
+	if status != "running" {
+		terminalSummary = status
+		if p.exitCode >= 0 {
+			terminalSummary += " exit_code=" + strconv.Itoa(p.exitCode)
+		}
+		if p.timedOut {
+			terminalSummary += " timed_out=true"
+		}
+	}
 	return map[string]any{
 		"tool":              toolName,
 		"scope":             "bounded_process",
@@ -381,8 +403,8 @@ func (p *sandboxProcess) result(toolName string, operation string, root string, 
 		"status":            status,
 		"exit_code":         p.exitCode,
 		"timed_out":         p.timedOut,
-		"stdout":            sandboxOutputPreview(stdout, root),
-		"stderr":            sandboxOutputPreview(p.stderr.String(), root),
+		"stdout":            stdoutPreview,
+		"stderr":            stderrPreview,
 		"stdout_bytes":      p.stdout.Total(),
 		"stderr_bytes":      p.stderr.Total(),
 		"stdout_truncated":  p.stdout.Truncated(),
@@ -390,13 +412,32 @@ func (p *sandboxProcess) result(toolName string, operation string, root string, 
 		"next_cursor":       nextCursor,
 		"stdin_open":        p.stdinOpen,
 		"input_seq":         p.inputSeq,
-		"redaction_applied": false,
+		"terminal_summary":  terminalSummary,
+		"redaction_applied": stdoutRedacted || stderrRedacted,
 	}
 }
 
 func sandboxProcessID(runID string, toolCallID string, argv []string) string {
 	sum := sha256.Sum256([]byte(runID + "\x00" + toolCallID + "\x00" + strings.Join(argv, "\x00")))
 	return "sp_" + hex.EncodeToString(sum[:8])
+}
+
+func configureSandboxCommand(command *exec.Cmd) {
+	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	command.WaitDelay = 2 * time.Second
+	command.Cancel = func() error {
+		return killSandboxProcessGroup(command.Process, syscall.SIGTERM)
+	}
+}
+
+func killSandboxProcessGroup(process *os.Process, signal syscall.Signal) error {
+	if process == nil {
+		return nil
+	}
+	if err := syscall.Kill(-process.Pid, signal); err != nil {
+		return process.Signal(signal)
+	}
+	return nil
 }
 
 func sandboxArgv(value any) ([]string, error) {
@@ -631,12 +672,19 @@ func sandboxOptionalPathArgsAllowed(args []string) bool {
 }
 
 func sandboxOutputPreview(content string, root string) string {
+	preview, _ := sandboxSafeOutputPreview(content, root)
+	return preview
+}
+
+func sandboxSafeOutputPreview(content string, root string) (string, bool) {
+	original := content
 	content = strings.ToValidUTF8(content, "")
 	content = strings.ReplaceAll(content, root, ".")
 	if strings.ContainsRune(content, 0) || !utf8.ValidString(content) {
-		return ""
+		return "", true
 	}
-	return content
+	content = productdata.RedactEventText(content)
+	return content, content != original
 }
 
 func (w *boundedOutput) Write(p []byte) (int, error) {

@@ -133,6 +133,37 @@ describe('RunRail tool continuation runtime states', () => {
     expect(html).not.toContain('/tmp/')
   })
 
+  test('shows code-agent daily loop patch and validation details', () => {
+    const html = renderToStaticMarkup(createElement(RunRail, {
+      run: {
+        id: 'run-a',
+        threadId: 'thread-a',
+        status: 'completed',
+        model: 'Model gateway',
+        context: 'model_gateway',
+        events: [
+          { id: 'evt-grep', sequence: 1, type: 'tool.call.succeeded', label: 'tool', detail: 'Tool call succeeded', time: 'Now', status: 'running', group: 'tool-call', metadata: { tool_group: 'workspace', tool_name: 'workspace.grep', result_summary: { operation: 'grep', match_count: 1 }, loop_index: 1, loop_max: 6 } },
+          { id: 'evt-read', sequence: 2, type: 'tool.call.succeeded', label: 'tool', detail: 'Tool call succeeded', time: 'Now', status: 'running', group: 'tool-call', metadata: { tool_group: 'workspace', tool_name: 'workspace.read', result_summary: { bytes_read: 24, truncated: false }, loop_index: 2, loop_max: 6 } },
+          { id: 'evt-preview', sequence: 3, type: 'tool.call.approval_required', label: 'tool', detail: 'Tool approval required', time: 'Now', status: 'blocked_on_tool_approval', group: 'tool-call', metadata: { tool_group: 'workspace', tool_name: 'workspace.patch_preview', arguments_summary: { path: 'src/notes.txt', old_text: '[redacted]', new_text: '[redacted]' }, loop_index: 3, loop_max: 6 } },
+          { id: 'evt-apply', sequence: 4, type: 'tool.call.succeeded', label: 'tool', detail: 'Tool call succeeded', time: 'Now', status: 'running', group: 'tool-call', metadata: { tool_group: 'workspace', tool_name: 'workspace.patch_apply', result_summary: { operation: 'patch_apply', path: 'src/notes.txt', changed: true, diff: '--- src/notes.txt\n+++ src/notes.txt\n-needle\n+daily loop\n' }, loop_index: 4, loop_max: 6 } },
+          { id: 'evt-exec', sequence: 5, type: 'tool.call.succeeded', label: 'tool', detail: 'Tool call succeeded', time: 'Now', status: 'completed', group: 'tool-call', metadata: { tool_group: 'sandbox', tool_name: 'sandbox.exec_command', result_summary: { operation: 'exec_command', exit_code: 0, timed_out: false }, loop_index: 5, loop_max: 6 } },
+          { id: 'evt-final', sequence: 6, type: 'run.completed', label: 'run', detail: 'Run completed', time: 'Now', status: 'completed', group: 'run-lifecycle' },
+        ],
+      },
+      open: true,
+    }))
+
+    expect(html).toContain('Read project files completed')
+    expect(html).toContain('Preview workspace patch waiting for approval')
+    expect(html).toContain('Apply workspace patch completed')
+    expect(html).toContain('Run sandbox command completed')
+    expect(html).toContain('Loop 5/6')
+    expect(html).toContain('changed: true')
+    expect(html).toContain('exit_code: 0')
+    expect(html).not.toContain('src/notes.txt')
+    expect(html).not.toContain('needle')
+  })
+
   test('shows todo write lifecycle as work plan update without unsafe text', () => {
     const html = renderToStaticMarkup(createElement(RunRail, {
       run: {
@@ -175,6 +206,32 @@ describe('RunRail tool continuation runtime states', () => {
     expect(html).toContain('Run sandbox command completed')
     expect(html).not.toContain('/tmp/')
     expect(html).not.toContain('TOKEN')
+  })
+
+  test('shows sandbox process lifecycle summaries without host paths or secrets', () => {
+    const html = renderToStaticMarkup(createElement(RunRail, {
+      run: {
+        id: 'run-a',
+        threadId: 'thread-a',
+        status: 'completed',
+        model: 'Model gateway',
+        context: 'model_gateway',
+        events: [
+          { id: 'evt-start', sequence: 1, type: 'tool.call.succeeded', label: 'tool', detail: 'Tool call succeeded', time: 'Now', status: 'completed', group: 'tool-call', metadata: { tool_group: 'sandbox', tool_name: 'sandbox.start_process', result_summary: { operation: 'start_process', process_id: 'sp_abc123', status: 'running', stdout: 'TOKEN=secret /Users/xuean/Loomi' } } },
+          { id: 'evt-continue', sequence: 2, type: 'tool.call.succeeded', label: 'tool', detail: 'Tool call succeeded', time: 'Now', status: 'completed', group: 'tool-call', metadata: { tool_group: 'sandbox', tool_name: 'sandbox.continue_process', result_summary: { operation: 'continue_process', process_id: 'sp_abc123', status: 'running', next_cursor: 12 } } },
+          { id: 'evt-terminate', sequence: 3, type: 'tool.call.succeeded', label: 'tool', detail: 'Tool call succeeded', time: 'Now', status: 'completed', group: 'tool-call', metadata: { tool_group: 'sandbox', tool_name: 'sandbox.terminate_process', result_summary: { operation: 'terminate_process', process_id: 'sp_abc123', status: 'terminated', terminal_summary: 'terminated exit_code=-1' } } },
+        ],
+      },
+      open: true,
+    }))
+
+    expect(html).toContain('Start sandbox process completed')
+    expect(html).toContain('Continue sandbox process completed')
+    expect(html).toContain('Terminate sandbox process completed')
+    expect(html).toContain('process_id: sp_abc123')
+    expect(html).toContain('terminal_summary: terminated exit_code=-1')
+    expect(html).not.toContain('/Users/xuean/Loomi')
+    expect(html).not.toContain('TOKEN=secret')
   })
 
   test('shows lsp read-only lifecycle states without host paths or secrets', () => {

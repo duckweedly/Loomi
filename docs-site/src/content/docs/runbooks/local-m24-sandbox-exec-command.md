@@ -3,6 +3,16 @@ title: Local Bounded Command Validation
 description: Local validation for approval-gated bounded sandbox.exec_command.
 ---
 
+## M78 Sandbox Process Foundation
+
+M78 extends the M24 command slice with the minimum controlled process lifecycle:
+
+- `sandbox.start_process` starts an approved allowlisted argv command and returns `process_id`, `status`, `next_cursor`, bounded stdout/stderr previews, and safe lifecycle metadata.
+- `sandbox.continue_process` polls later output by `cursor` and returns promptly when there is no new output.
+- `sandbox.terminate_process` cancels a run-scoped process and records `terminal_summary`.
+
+This remains a local host process foundation. It is not Docker, Firecracker, a shell, a PTY, or a general terminal service.
+
 ## Focused Checks
 
 ```bash
@@ -25,6 +35,7 @@ Expected evidence:
 ```bash
 go test ./internal/productdata ./internal/runtime -run 'TestValidateSandbox|TestToolCatalogIncludesSandbox|TestSandbox|TestToolBrokerExecutesSandbox|TestSandboxToolDefinitions|TestGatewayExposesEnabledBuiltinProviderTools'
 go test ./internal/httpapi -run TestM24SandboxProcessLoopSmoke -count=1
+bun test --cwd web ./src/components/RunRail.runtime.test.ts ./src/components/ToolCallCard.test.tsx
 ```
 
 Expected evidence:
@@ -35,6 +46,7 @@ Expected evidence:
 4. Process handles are run-scoped; another run cannot continue or terminate them.
 5. Runtime results expose status, exit code, timeout, bounded stdout/stderr, byte counts, truncation flags, `next_cursor`, `stdin_open`, and `input_seq` without leaking host workspace roots.
 6. HTTP smoke covers `start_process -> continue_process -> terminate_process` through separate approval/resume cycles and completes the run after provider continuation.
+7. UI summaries label process lifecycle tools distinctly and show `process_id`, `next_cursor`, and `terminal_summary` without host paths or secret-looking output.
 
 ## Full Validation Target
 

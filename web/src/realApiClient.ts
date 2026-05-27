@@ -12,8 +12,12 @@ export function hasRealApiBase() {
 }
 
 export function selectSendProvider(providers: ProviderCapability[] = []) {
-  return providers.find((candidate) => candidate.id === 'local_codex' && candidate.status === 'available' && candidate.executionState === 'supported')
-    ?? providers.find((candidate) => candidate.status === 'available')
+  return providers.find((candidate) => candidate.id === 'local_codex' && providerCanSend(candidate) && candidate.executionState === 'supported')
+    ?? providers.find(providerCanSend)
+}
+
+function providerCanSend(provider: ProviderCapability) {
+  return provider.executionState !== 'unsupported' && ['available', 'configured', 'reachable', 'completion-ok'].includes(provider.status)
 }
 
 type ApiThread = {
@@ -81,6 +85,9 @@ export type ApiProviderCapability = {
   session_local?: boolean
   credential_reference?: string | null
   execution_state?: string | null
+  check_stage?: string | null
+  check_code?: string | null
+  http_status?: number | null
 }
 
 export type ApiLocalProviderDetection = {
@@ -550,6 +557,9 @@ export function mapApiProviderCapability(provider: ApiProviderCapability): Provi
     sessionLocal: provider.session_local ?? false,
     credentialReference: provider.credential_reference ?? undefined,
     executionState: provider.execution_state ?? undefined,
+    checkStage: provider.check_stage ?? null,
+    checkCode: provider.check_code ?? null,
+    httpStatus: provider.http_status ?? null,
   }
 }
 
@@ -849,8 +859,9 @@ export const realApiClient: ApiClient = {
     }
   },
 
-  async getRunEvents(runId: string) {
-    const body = await requestJSON<unknown>(`/v1/runs/${runId}/events`)
+  async getRunEvents(runId: string, afterSequence = 0) {
+    const suffix = afterSequence > 0 ? `?after_sequence=${afterSequence}` : ''
+    const body = await requestJSON<unknown>(`/v1/runs/${runId}/events${suffix}`)
     return requireArrayField<ApiRunEvent>(body, 'events', 'Run event response was invalid.').map(mapApiRunEvent)
   },
 
@@ -1171,7 +1182,7 @@ export const realApiClient: ApiClient = {
   async sendMessage(threadId: string, content: string, personaId?: string, options?: { providerId?: string; model?: string }) {
     const providers = await this.listModelProviders?.()
     const provider = options?.providerId
-      ? providers?.find((candidate) => candidate.id === options.providerId && candidate.status === 'available') ?? selectSendProvider(providers)
+      ? providers?.find((candidate) => candidate.id === options.providerId && providerCanSend(candidate)) ?? selectSendProvider(providers)
       : selectSendProvider(providers)
     if (!provider) throw new ApiRequestError('Model provider is unavailable.', 'provider_unavailable', 503)
     try {

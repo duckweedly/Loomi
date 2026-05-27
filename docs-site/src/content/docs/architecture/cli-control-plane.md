@@ -51,7 +51,7 @@ The CLI resolves defaults from `~/.loomi/config.json`, or from `LOOMI_CONFIG` wh
 - `loomi run <prompt>` creates a Work thread by default, appends a user message, starts a `model_gateway` run, and tails SSE until terminal or the next pending approval. It also supports `--prompt-file`, `--timeout`, `--thread`, `--provider`, `--model`, `--persona`, `--script`, `--compact`, `--interactive-approvals`, and `--output text|json|stream-json`.
 - `loomi runs status <run-id>` reads the current run projection.
 - `loomi runs stop <run-id>` delegates to the existing stop endpoint and renders the stopped/already-terminal result.
-- `loomi runs attach <run-id>` prints the current run projection, replays persisted events after `--after` (default `0`), then follows live events from the last replayed sequence.
+- `loomi runs attach <run-id>` prints the current run projection, replays persisted events after `--after` (default `0`), then follows live events from the last replayed sequence only when the run projection is non-terminal. Terminal runs replay history and exit.
 - `loomi runs follow <run-id>` tails live events only by default. Without `--after`, it first reads the persisted event list to find the current last sequence, then streams future events from that point.
 - `loomi events tail <run-id>` streams persisted and live run events. `--tools-only` filters to tool-call events, `--compact` renders shorter one-line summaries, and `--output json` preserves a script-friendly stream.
 - `loomi approvals list <run-id>` derives pending approvals from run events.
@@ -67,6 +67,8 @@ With `--interactive-approvals`, `loomi run` prompts for `approve`, `deny`, or `s
 ## Runner Reconnect
 
 `internal/cli.Runner` reconnects the event stream up to three times when the SSE connection closes before a terminal run event or pending approval. Reconnect uses `after_sequence` and de-duplicates event IDs, so streamed model deltas and tool events are not rendered twice during a short disconnect.
+
+Long-run recovery uses the same cursor rule across CLI and API: first render the current run projection, replay persisted events with `sequence > after_sequence`, set the live SSE cursor to the highest replayed sequence, and ignore repeated event identity. `runs follow` skips replay by reading the current last sequence first; `runs attach` uses replay for history visibility.
 
 ## Remaining Gap
 

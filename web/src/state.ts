@@ -75,15 +75,20 @@ export function shouldApplyRunStreamEvent({ eventThreadId, eventRunId, selectedT
 }
 
 export function mergeRunEvents(existing: RunEvent[], incoming: RunEvent[]) {
-  const indexesByKey = new Map<string, number>()
+  const indexesById = new Map<string, number>()
+  const indexesBySequence = new Map<number, number>()
   const merged: RunEvent[] = []
   for (const event of [...existing, ...incoming]) {
-    const key = event.id || String(event.sequence)
-    const existingIndex = indexesByKey.get(key)
+    const existingIndex = event.id && indexesById.has(event.id)
+      ? indexesById.get(event.id)
+      : event.sequence !== undefined
+        ? indexesBySequence.get(event.sequence)
+        : undefined
     if (existingIndex === undefined) {
-      indexesByKey.set(key, merged.length)
+      if (event.id) indexesById.set(event.id, merged.length)
+      if (event.sequence !== undefined) indexesBySequence.set(event.sequence, merged.length)
       merged.push(event)
-    } else {
+    } else if (event.id && merged[existingIndex]?.id === event.id) {
       merged[existingIndex] = { ...merged[existingIndex], ...event }
     }
   }
@@ -158,7 +163,7 @@ export function applyModelGatewayEventToRun(run: Run, event: RuntimeEvent): Run 
 
 export function shouldApplyIncomingRunEvent(run: Run, event: RunEvent) {
   if (shouldIgnoreTerminalRuntimeEvent(run) && !isAssistantFinalContentEvent(event)) return false
-  return !run.events.some((existing) => (existing.id || String(existing.sequence)) === (event.id || String(event.sequence)))
+  return !hasRunEventIdentity(run, event)
 }
 
 export function shouldUpdateStreamStateForRunEvent(run: Run, event: RunEvent) {
@@ -176,7 +181,7 @@ function isAssistantFinalContentEvent(event: RunEvent) {
 export function applyRunStreamEventToRun(run: Run, event: RunEvent): Run {
   if (isRuntimeTerminal(run.status)) {
     if (run.status !== 'completed') return run
-    if (!isAssistantFinalContentEvent(event) || run.events.some((existing) => existing.id === event.id)) return run
+    if (!isAssistantFinalContentEvent(event) || hasRunEventIdentity(run, event)) return run
     return {
       ...run,
       events: mergeRunEvents(run.events, [event]),
@@ -188,7 +193,7 @@ export function applyRunStreamEventToRun(run: Run, event: RunEvent): Run {
       },
     }
   }
-  if (run.events.some((existing) => existing.id === event.id)) return run
+  if (hasRunEventIdentity(run, event)) return run
 
   const maxSequence = getMaxRunEventSequence(run.events, -1)
   const shouldApplyAssistantDelta = !event.assistantDelta || event.sequence === undefined || maxSequence <= event.sequence
@@ -233,6 +238,13 @@ export function applyRunStreamEventToRun(run: Run, event: RunEvent): Run {
     }
   }
   return { ...nextRun, status: event.status }
+}
+
+function hasRunEventIdentity(run: Run, event: RunEvent) {
+  return run.events.some((existing) => {
+    if (event.id && existing.id === event.id) return true
+    return event.sequence !== undefined && existing.sequence === event.sequence
+  })
 }
 
 export function createRetryAttemptRun(failedRun: Run): Run {
@@ -1095,8 +1107,8 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
       setProviderCheckResults((current) => ({
         ...current,
         [providerId]: {
-          status: provider.status === 'available' ? 'success' : 'failed',
-          message: provider.message ?? provider.status,
+          status: ['available', 'configured', 'reachable', 'completion-ok'].includes(provider.status) ? 'success' : 'failed',
+          message: provider.checkCode ?? provider.message ?? provider.status,
         },
       }))
     } catch (err) {
@@ -1119,8 +1131,8 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
         const exists = current.some((candidate) => candidate.id === provider.id)
         return exists ? current.map((candidate) => (candidate.id === provider.id ? provider : candidate)) : [...current, provider]
       })
-      setProviderCheckResults((current) => ({ ...current, [provider.id]: { status: provider.status === 'available' ? 'success' : 'failed', message: provider.message ?? provider.status } }))
-      setProviderSaveResult({ status: provider.status === 'available' ? 'success' : 'failed', message: provider.message ?? provider.status })
+      setProviderCheckResults((current) => ({ ...current, [provider.id]: { status: ['available', 'configured', 'reachable', 'completion-ok'].includes(provider.status) ? 'success' : 'failed', message: provider.checkCode ?? provider.message ?? provider.status } }))
+      setProviderSaveResult({ status: ['available', 'configured', 'reachable', 'completion-ok'].includes(provider.status) ? 'success' : 'failed', message: provider.checkCode ?? provider.message ?? provider.status })
     } catch (err) {
       setProviderSaveResult({ status: 'failed', message: redactProviderCheckMessage(err instanceof Error ? err.message : 'Provider save failed') })
     }

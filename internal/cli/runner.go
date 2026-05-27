@@ -58,7 +58,7 @@ func (r Runner) Execute(ctx context.Context, opts RunOptions) (RunResult, error)
 		if mode == "" {
 			mode = "work"
 		}
-		thread, err := client.CreateThread(ctx, mode)
+		thread, err := client.CreateThread(ctx, mode, threadTitleFromPrompt(opts.Prompt))
 		if err != nil {
 			return RunResult{}, err
 		}
@@ -181,6 +181,25 @@ func (r Runner) Execute(ctx context.Context, opts RunOptions) (RunResult, error)
 		}
 	}
 	return RunResult{ThreadID: threadID, RunID: run.ID, Status: status, Output: output.String(), PendingApprovals: PendingApprovals(events)}, nil
+}
+
+func threadTitleFromPrompt(prompt string) string {
+	const maxRunes = 80
+	title := ""
+	for _, line := range strings.Split(prompt, "\n") {
+		title = strings.Join(strings.Fields(line), " ")
+		if title != "" {
+			break
+		}
+	}
+	if title == "" {
+		return "Loomi run"
+	}
+	runes := []rune(title)
+	if len(runes) <= maxRunes {
+		return title
+	}
+	return string(runes[:maxRunes-3]) + "..."
 }
 
 func hasUndecidedPendingApprovals(events []RunEvent, decided map[string]struct{}) bool {

@@ -380,7 +380,7 @@ export function ChatCanvas({ thread, messages, run, loading, error, dataSourceMo
   const shouldShowAssistantDraft = Boolean(visibleRun && !hasPersistedCompletedDraftMessage)
   const shouldShowHistory = state === 'history' || state === 'waiting-run' || state === 'running' || state === 'completed' || state === 'failed' || state === 'stopped' || state === 'recovering' || state === 'stopping'
   const composerModelOptions: ComposerModelOption[] = providerCapabilities
-    .filter((provider) => provider.status === 'available' && provider.executionState !== 'unsupported')
+    .filter((provider) => ['available', 'configured', 'reachable', 'completion-ok'].includes(provider.status) && provider.executionState !== 'unsupported')
     .map((provider) => ({
       key: `${provider.id}:${provider.model}`,
       providerId: provider.id,

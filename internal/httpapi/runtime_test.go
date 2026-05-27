@@ -86,6 +86,34 @@ func TestModelProviderHandlersExposeRedactedCapability(t *testing.T) {
 	}
 }
 
+func TestModelProviderCheckRunsCompletionSmokeAndReportsHTTP503(t *testing.T) {
+	providerServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(`{"error":{"message":"raw provider body sk-secret prompt trace"}}`))
+	}))
+	defer providerServer.Close()
+	svc := productdata.NewMemoryService()
+	cfg := config.Config{AppEnv: "local", ModelProviders: []config.ModelProvider{{ID: "custom", Family: "openai_compatible", BaseURL: providerServer.URL + "/v1", APIKey: "secret-key", Model: "gpt-5.5", Enabled: true}}}
+	srv := NewServerWithProduct(cfg, fakeChecker{}, svc)
+
+	check := requestJSON(t, srv, http.MethodPost, "/v1/model-providers/check", `{"provider_id":"custom"}`)
+
+	if check.Code != http.StatusOK {
+		t.Fatalf("check status = %d body=%s", check.Code, check.Body.String())
+	}
+	body := check.Body.String()
+	for _, expected := range []string{`"status":"completion-failed"`, `"check_code":"completion-failed-503"`, `"http_status":503`} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("body missing %q: %s", expected, body)
+		}
+	}
+	for _, leaked := range []string{"secret-key", "sk-secret", "prompt trace", "raw provider body"} {
+		if strings.Contains(body, leaked) {
+			t.Fatalf("body leaked %q: %s", leaked, body)
+		}
+	}
+}
+
 func TestModelProviderCheckAcceptsEnabledLocalProvider(t *testing.T) {
 	svc := productdata.NewMemoryService()
 	home := t.TempDir()
@@ -115,7 +143,7 @@ func TestModelProviderHandlerSavesLocalCustomProvider(t *testing.T) {
 	if res.Code != http.StatusOK {
 		t.Fatalf("status = %d body=%s", res.Code, res.Body.String())
 	}
-	if strings.Contains(res.Body.String(), "secret-key") || !strings.Contains(res.Body.String(), `"id":"custom"`) || !strings.Contains(res.Body.String(), `"status":"available"`) {
+	if strings.Contains(res.Body.String(), "secret-key") || !strings.Contains(res.Body.String(), `"id":"custom"`) || !strings.Contains(res.Body.String(), `"status":"configured"`) {
 		t.Fatalf("body = %s", res.Body.String())
 	}
 	listed := requestJSON(t, srv, http.MethodGet, "/v1/model-providers", "")
@@ -630,6 +658,29 @@ func TestRunEventHistoryHandlerReturnsOrderedEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(body.Events) != 3 || body.Events[0].Sequence != 2 || body.Events[1].Sequence != 3 || body.Events[2].Sequence != 4 {
+		t.Fatalf("events = %+v", body.Events)
+	}
+}
+
+func TestRunEventHistoryHandlerAfterLastSequenceReturnsNoDuplicates(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	run := createRuntimeTestRun(t, svc)
+	appendRuntimeTestEvent(t, svc, run.ID, productdata.RunEventCategoryProgress, "context_loaded")
+	appendRuntimeTestEvent(t, svc, run.ID, productdata.RunEventCategoryFinal, "run_completed")
+	srv := NewServerWithProduct(config.Config{AppEnv: "local"}, fakeChecker{}, svc)
+
+	res := requestJSON(t, srv, http.MethodGet, "/v1/runs/"+run.ID+"/events?after_sequence=4", "")
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", res.Code, res.Body.String())
+	}
+	var body struct {
+		Events []productdata.RunEvent `json:"events"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Events) != 0 {
 		t.Fatalf("events = %+v", body.Events)
 	}
 }

@@ -49,6 +49,15 @@ describe('SettingsView provider test console', () => {
     expect(copy).toContain("providerAdd: 'Add provider'")
   })
 
+  test('renders completion diagnosis code for provider checks', async () => {
+    const source = await Bun.file(new URL('./SettingsView.tsx', import.meta.url)).text()
+    const state = await Bun.file(new URL('../state.ts', import.meta.url)).text()
+
+    expect(source).toContain('provider.checkCode')
+    expect(source).toContain('completion-failed-503')
+    expect(state).toContain('provider.checkCode ?? provider.message ?? provider.status')
+  })
+
   test('labels provider draft as local and separate from real provider calls', async () => {
     const source = await Bun.file(new URL('./SettingsView.tsx', import.meta.url)).text()
 

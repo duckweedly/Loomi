@@ -24,7 +24,7 @@ export type BackendCapabilityInput = {
 }
 
 export function shouldShowProviderUnavailableWarning(dataSourceMode: 'mock' | 'real_api' | 'model_gateway', providerCapabilities: ProviderCapability[]) {
-  return dataSourceMode !== 'mock' && !providerCapabilities.some((provider) => provider.status === 'available' && provider.executionState !== 'unsupported')
+  return dataSourceMode !== 'mock' && !providerCapabilities.some((provider) => provider.executionState !== 'unsupported' && ['available', 'configured', 'reachable', 'completion-ok'].includes(provider.status))
 }
 
 export function getProviderUnavailableWarning(providerCapabilities: ProviderCapability[], locale: Locale = 'en') {

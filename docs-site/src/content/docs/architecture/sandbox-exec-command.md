@@ -7,6 +7,14 @@ description: Approval-gated bounded read and validation command execution throug
 
 The follow-up process slice adds `sandbox.start_process`, `sandbox.continue_process`, and `sandbox.terminate_process` for short-lived allowlisted commands that need output polling, bounded stdin, or explicit termination. These tools share the same safety boundary as `sandbox.exec_command`; they do not create a persistent shell, PTY, container, or general background worker.
 
+## Arkloop Comparison
+
+Arkloop separates a sandbox service, guest agent, session manager, warm pool, process controller, shell controller, and tool-runtime snapshot. Its process path can route through Docker or Firecracker-style sessions, keeps per-session process refs, reads stdout/stderr through bounded buffers, supports follow/continue/terminate actions, and tears processes down with session lifecycle hooks. Its config layer describes sandbox templates and runtime tiers.
+
+M78 borrows only the mechanism shape: process ids, run/session ownership, bounded output snapshots, explicit continue/terminate actions, and terminal summaries. Loomi does not copy Arkloop's config format, tier names, agent protocol, endpoint names, copy, or expression layer.
+
+M78 deliberately does not implement Arkloop's full isolation model. There is no Firecracker microVM, Docker pool, guest user, network namespace, filesystem snapshot sync, artifact extraction, shell checkpoint, PTY resize, or sandbox template registry. The current Loomi foundation is a local in-memory process registry around host `exec.Cmd`, guarded by Work-mode tool availability, explicit approval, argv-only validation, workspace cwd resolution, timeout/output bounds, and event redaction.
+
 ## Runtime Boundary
 
 ```text
@@ -33,6 +41,7 @@ Process tools use an in-memory run-scoped process store:
 - `sandbox.start_process` starts one allowlisted argv command and returns a `process_id`, status, cwd, exit metadata, and bounded stdout/stderr previews. `stdin: true` is supported only for the narrow stdin process slice, currently argv-form `["cat"]`.
 - `sandbox.continue_process` verifies the same `run_id`, returns the current status/output snapshot, supports stdout cursor polling through `cursor`/`next_cursor`, and can write bounded `stdin_text` when paired with a monotonically increasing `input_seq`.
 - `sandbox.terminate_process` accepts only `process_id`, verifies the same `run_id`, cancels the process, waits briefly, and kills it only if it does not exit.
+- Terminal process results include `terminal_summary` for the UI audit trail.
 - Process timeouts are bounded independently from one-shot exec commands and are capped at 120 seconds.
 
 ## Safety Rules
@@ -47,6 +56,7 @@ Process tools use an in-memory run-scoped process store:
 - Process handles are scoped to the originating run; another run cannot continue or terminate them.
 - Stdin writes require an explicitly stdin-enabled process, bounded text, and increasing `input_seq`; duplicate, closed, or non-stdin process writes fail before changing process state.
 - Normal run events do not include raw env values, host absolute roots, provider raw payloads, or hidden local state.
+- Output previews redact host absolute paths and secret-looking content before entering tool results and UI summaries.
 
 ## Current Limitations
 

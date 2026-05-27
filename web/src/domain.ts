@@ -16,7 +16,7 @@ export type RunEventCategory = 'lifecycle' | 'progress' | 'message' | 'error' | 
 
 export type StreamState = 'connecting' | 'live' | 'recoverable_error' | 'closed'
 
-export type BackendCapabilityState = 'available' | 'unavailable' | 'misconfigured'
+export type BackendCapabilityState = 'available' | 'configured' | 'reachable' | 'completion-ok' | 'completion-failed' | 'unavailable' | 'misconfigured'
 
 export type ProviderFamily = 'anthropic' | 'openai' | 'gemini' | 'openai_compatible'
 
@@ -31,6 +31,9 @@ export type ProviderCapability = {
   sessionLocal?: boolean
   credentialReference?: 'redacted' | string
   executionState?: 'supported' | 'unsupported' | string
+  checkStage?: string | null
+  checkCode?: string | null
+  httpStatus?: number | null
 }
 
 export type LocalProviderDetection = {

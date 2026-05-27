@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/sheridiany/loomi/internal/config"
@@ -17,7 +18,7 @@ func TestProviderConfigsFromConfig(t *testing.T) {
 		t.Fatalf("providers = %+v", providers)
 	}
 	capability := providers[0].Capability()
-	if capability.Status != ProviderStatusAvailable || capability.BaseURL != "https://example.test" {
+	if capability.Status != ProviderStatusConfigured || capability.BaseURL != "https://example.test" {
 		t.Fatalf("capability = %+v", capability)
 	}
 }
@@ -272,6 +273,43 @@ func TestHTTPProviderReportsRedactedHTTPErrorStatus(t *testing.T) {
 	}
 	if events[0].Metadata["http_status"] != http.StatusBadRequest || events[0].Metadata["provider_error_type"] != "invalid_request_error" || events[0].Metadata["provider_error_code"] != "unsupported_parameter" {
 		t.Fatalf("metadata = %+v", events[0].Metadata)
+	}
+}
+
+func TestCheckProviderCompletionReportsHTTP503WithoutLeakingBody(t *testing.T) {
+	var requestBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" || r.Header.Get("Authorization") != "Bearer secret-key" {
+			t.Fatalf("request path=%s headers=%v", r.URL.Path, r.Header)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(`{"error":{"message":"raw provider body sk-leak prompt trace"}}`))
+	}))
+	defer server.Close()
+
+	capability := CheckProviderCompletion(context.Background(), ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: server.URL + "/v1", APIKey: "secret-key", Model: "gpt-5.5", Enabled: true}, server.Client())
+
+	if capability.Status != ProviderStatusCompletionFailed || capability.CheckCode != "completion-failed-503" || capability.HTTPStatus != http.StatusServiceUnavailable {
+		t.Fatalf("capability = %+v", capability)
+	}
+	if capability.Message != "Provider completion check failed with HTTP 503." {
+		t.Fatalf("message = %q", capability.Message)
+	}
+	rendered, err := json.Marshal(capability)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(rendered), "sk-leak") || strings.Contains(string(rendered), "prompt trace") || strings.Contains(string(rendered), "secret-key") {
+		t.Fatalf("capability leaked provider data: %s", rendered)
+	}
+	if requestBody["stream"] != false {
+		t.Fatalf("request body = %+v", requestBody)
+	}
+	if messages, ok := requestBody["messages"].([]any); !ok || len(messages) != 1 {
+		t.Fatalf("request body messages = %+v", requestBody["messages"])
 	}
 }
 

@@ -441,6 +441,38 @@ func TestDoctorCommandReturnsExitErrorWhenAPIUnavailable(t *testing.T) {
 	}
 }
 
+func TestDoctorCommandExplainsMissingDefaultLocalCodexProvider(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/readyz":
+			fmt.Fprint(w, `{"ok":true}`)
+		case "/v1/model-providers":
+			fmt.Fprint(w, `{"providers":[{"id":"custom","status":"available","execution_state":"supported","model":"test-model"}],"request_id":"req_providers"}`)
+		case "/v1/tools/catalog":
+			fmt.Fprint(w, `{"tools":[{"name":"workspace.read","group":"workspace","risk_level":"low","approval_policy":"always_required","execution_state":"executable","enabled":true}],"request_id":"req_tools"}`)
+		default:
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	err := run([]string{"doctor", "--host", server.URL}, &stdout, &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := stdout.String()
+	for _, expected := range []string{
+		"warn\tproviders\tdefault provider local_codex is not registered",
+		"fix\tproviders\tset LOOMI_PROVIDER or run loomi config set provider <id>; use loomi models list to see registered providers",
+	} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("stdout missing %q: %s", expected, output)
+		}
+	}
+}
+
 func TestRunHelpCommandShowsTopics(t *testing.T) {
 	var stdout bytes.Buffer
 	if err := run([]string{"help", "tools"}, &stdout, &bytes.Buffer{}); err != nil {
@@ -589,6 +621,36 @@ func TestRunsAttachReplaysThenStreamsFromLastSequence(t *testing.T) {
 		}
 	}
 	if len(calls) != 3 {
+		t.Fatalf("calls = %#v", calls)
+	}
+}
+
+func TestRunsAttachTerminalRunReplaysHistoryWithoutOpeningStream(t *testing.T) {
+	var calls []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls = append(calls, r.Method+" "+r.URL.String())
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/runs/run_cli":
+			fmt.Fprint(w, `{"run":{"id":"run_cli","thread_id":"thr_cli","status":"completed"},"request_id":"req_run"}`)
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/runs/run_cli/events":
+			fmt.Fprint(w, `{"events":[{"id":"evt_1","run_id":"run_cli","thread_id":"thr_cli","sequence":1,"type":"model_output_delta","content":"done"},{"id":"evt_2","run_id":"run_cli","thread_id":"thr_cli","sequence":2,"type":"run_completed"}],"request_id":"req_events"}`)
+		default:
+			t.Fatalf("request = %s %s", r.Method, r.URL.String())
+		}
+	}))
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	err := run([]string{"runs", "attach", "--host", server.URL, "--compact", "run_cli"}, &stdout, &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := stdout.String()
+	if !strings.Contains(output, "run run_cli completed") || !strings.Contains(output, "0001 done") || !strings.Contains(output, "0002 run_completed") {
+		t.Fatalf("stdout = %s", output)
+	}
+	if len(calls) != 2 {
 		t.Fatalf("calls = %#v", calls)
 	}
 }

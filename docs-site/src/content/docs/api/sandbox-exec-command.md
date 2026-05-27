@@ -175,6 +175,10 @@ Process tool results use `bounded_process` scope:
 
 `status` is one of `running`, `exited`, or `terminated`. `next_cursor` is the next stdout offset to pass back into `sandbox.continue_process` for incremental reads. Timed-out processes are reported with `timed_out: true` after the process exits due to the bounded context.
 
+`sandbox.terminate_process` also returns `terminal_summary`, for example `terminated exit_code=-1`, so RunRail and ToolCallCard can show a compact lifecycle outcome without exposing raw process details.
+
 ## Event Safety
 
 Tool-call request events expose only safe command previews. Normal API/UI events must not include host absolute workspace roots, credentials, raw environment values, provider raw payloads, or unbounded output.
+
+M78 applies the same output scrubber before returning one-shot and process results: invalid UTF-8 is dropped, the configured workspace root is replaced with `.`, host absolute paths and secret-looking content are redacted, and `redaction_applied` is set when the preview changes. The bounded byte counts still reflect the captured stream size, not the redacted preview length.

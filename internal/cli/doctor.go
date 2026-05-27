@@ -37,7 +37,7 @@ func RunDoctor(ctx context.Context, client *Client, cfg Config) DoctorReport {
 	if err != nil {
 		report.add(failCheck("providers", err.Error(), "check /v1/model-providers and provider settings"))
 	} else {
-		report.add(providerCheck(cfg, providers))
+		report.add(providerCheck(ctx, client, cfg, providers))
 	}
 
 	tools, err := client.ListTools(ctx)
@@ -68,7 +68,7 @@ func failCheck(name string, detail string, remedy string) DoctorCheck {
 	return DoctorCheck{Name: name, Status: "fail", Detail: detail, Remedy: remedy}
 }
 
-func providerCheck(cfg Config, providers []ProviderCapability) DoctorCheck {
+func providerCheck(ctx context.Context, client *Client, cfg Config, providers []ProviderCapability) DoctorCheck {
 	if strings.TrimSpace(cfg.Script) != "" {
 		return okCheck("providers", "script="+cfg.Script)
 	}
@@ -80,13 +80,44 @@ func providerCheck(cfg Config, providers []ProviderCapability) DoctorCheck {
 		if provider.ID != configured {
 			continue
 		}
-		detail := fmt.Sprintf("%s status=%s execution=%s model=%s", provider.ID, provider.Status, provider.ExecutionState, provider.Model)
-		if provider.Status == "available" && provider.ExecutionState == "supported" {
+		var err error
+		if provider.Status == "configured" || provider.Status == "reachable" {
+			provider, err = client.CheckModelProvider(ctx, provider.ID)
+		}
+		detail := providerDetail(provider)
+		if err != nil {
+			return warnCheck("providers", detail+" check_error="+err.Error(), "run loomi models list and check provider settings")
+		}
+		if providerReady(provider) {
 			return okCheck("providers", detail)
 		}
-		return warnCheck("providers", detail, "enable or configure provider before live loomi run")
+		return warnCheck("providers", detail, "fix provider configuration or upstream completion before live loomi run")
+	}
+	if configured == "local_codex" {
+		return warnCheck("providers", "default provider local_codex is not registered", "set LOOMI_PROVIDER or run loomi config set provider <id>; use loomi models list to see registered providers")
 	}
 	return warnCheck("providers", "configured provider not found: "+configured, "run loomi models list or set loomi config provider")
+}
+
+func providerReady(provider ProviderCapability) bool {
+	if provider.ExecutionState == "unsupported" {
+		return false
+	}
+	return provider.Status == "available" || provider.Status == "configured" || provider.Status == "reachable" || provider.Status == "completion-ok"
+}
+
+func providerDetail(provider ProviderCapability) string {
+	detail := fmt.Sprintf("%s status=%s execution=%s model=%s", provider.ID, provider.Status, provider.ExecutionState, provider.Model)
+	if provider.CheckCode != "" {
+		detail += " check=" + provider.CheckCode
+	}
+	if provider.HTTPStatus != 0 {
+		detail += fmt.Sprintf(" http=%d", provider.HTTPStatus)
+	}
+	if provider.Message != "" {
+		detail += " message=" + provider.Message
+	}
+	return detail
 }
 
 func toolCatalogCheck(tools []ToolCatalogEntry) DoctorCheck {

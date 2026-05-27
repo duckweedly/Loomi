@@ -1334,6 +1334,9 @@ func cmdRunsStream(ctx context.Context, args []string, stdout io.Writer, replay 
 				return err
 			}
 		}
+		if isCLIRunTerminal(run.Status) {
+			return nil
+		}
 	} else if resumeAfter < 0 {
 		events, err := client.ListEvents(ctx, runID, 0)
 		if err != nil {
@@ -1344,6 +1347,15 @@ func cmdRunsStream(ctx context.Context, args []string, stdout io.Writer, replay 
 	return client.StreamEvents(ctx, runID, resumeAfter, func(event cli.RunEvent) {
 		_ = printStreamedEvent(renderer, event, *output, *compact, *toolsOnly)
 	})
+}
+
+func isCLIRunTerminal(status string) bool {
+	switch status {
+	case "completed", "failed", "stopped", "cancelled":
+		return true
+	default:
+		return false
+	}
 }
 
 func cmdApprovals(ctx context.Context, args []string, stdout io.Writer) error {

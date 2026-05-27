@@ -98,6 +98,10 @@ function statusLabel(status: SettingRowStatus, t: ReturnType<typeof getDictionar
 
 function capabilityLabel(status: BackendCapabilityState, t: ReturnType<typeof getDictionary>['settings']) {
   if (status === 'available') return t.available
+  if (status === 'configured') return 'Configured'
+  if (status === 'reachable') return 'Reachable'
+  if (status === 'completion-ok') return 'Completion ok'
+  if (status === 'completion-failed') return 'Completion failed'
   if (status === 'misconfigured') return t.misconfigured
   return t.unavailable
 }
@@ -605,6 +609,7 @@ function ProviderManagementPanel({
       route: `local://${provider.providerId.replace(/^local_/, '').replaceAll('_', '-')}`,
       status: provider.status,
       statusText: localProviderStatusLabel(provider.status, t),
+      checkCode: null,
       family: provider.providerKind,
       model: provider.modelCandidates[0] ?? provider.authMode,
       localProvider: true,
@@ -618,12 +623,13 @@ function ProviderManagementPanel({
       name: providerDisplayName(provider.id),
       route: provider.localProvider ? `local://${provider.id.replace(/^local_/, '').replaceAll('_', '-')}` : provider.baseUrl ?? provider.family,
       status: provider.status,
-      statusText: capabilityLabel(provider.status, t),
+      statusText: provider.checkCode ?? capabilityLabel(provider.status, t),
+      checkCode: provider.checkCode,
       family: provider.family,
       model: provider.model,
       localProvider: Boolean(provider.localProvider),
       readOnly: Boolean(provider.localProvider),
-      enabled: provider.status === 'available',
+      enabled: ['available', 'configured', 'reachable', 'completion-ok'].includes(provider.status),
       detectedStatus: provider.status,
     })),
     ...detectedOnlyProviders,
@@ -683,6 +689,7 @@ function ProviderManagementPanel({
                     <span aria-hidden="true" />
                     {provider.statusText}
                   </span>
+                  {provider.checkCode === 'completion-failed-503' && <small>completion-failed-503</small>}
                   <p>{provider.family} · {provider.model}</p>
                   {result?.message && <small>{t.providerCheckResult(result.status, result.message)}</small>}
                 </div>

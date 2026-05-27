@@ -3,7 +3,7 @@ import type { Locale } from '../i18n'
 
 const redacted = '[redacted]'
 
-const sensitiveKeyPattern = /(^|_|\b)(authorization|api[-_]?key|token|secret|cookie|set[-_]?cookie|path|cwd|stdout|stderr|raw[-_]?body|body|html|headers|content|input|output)($|_|\b)/i
+const sensitiveKeyPattern = /(^|_|\b)(authorization|api[-_]?key|token|secret|cookie|set[-_]?cookie|path|cwd|stdout|stderr|raw[-_]?body|body|html|headers|content|input|output|diff|snippet|preview[-_]?id)($|_|\b)/i
 const pathPattern = /(?:\/(?:Users|home|tmp)\/[^\s"'<>]+|[A-Za-z]:\\[^\s"'<>]+|[^\s"'<>]*\.env[^\s"'<>]*)/g
 const pathDetectPattern = /(?:\/(?:Users|home|tmp)\/[^\s"'<>]+|[A-Za-z]:\\[^\s"'<>]+|[^\s"'<>]*\.env[^\s"'<>]*)/
 const relativePathPattern = /(^|[\s"'(:])(?:[A-Za-z0-9_.-]+\/)+[A-Za-z0-9_.-]+\.[A-Za-z0-9_-]+/g
@@ -27,6 +27,9 @@ const toolLabels: Record<string, string> = {
   'web.search': 'Search web',
   'lsp.symbols': 'Analyze code',
   'sandbox.exec_command': 'Run sandbox command',
+  'sandbox.start_process': 'Start sandbox process',
+  'sandbox.continue_process': 'Continue sandbox process',
+  'sandbox.terminate_process': 'Terminate sandbox process',
   'runtime.get_current_time': 'Get current time',
   'todo.write': 'Update work plan',
 }
@@ -44,6 +47,9 @@ const zhToolLabels: Record<string, string> = {
   'web.search': '搜索网页',
   'lsp.symbols': '分析代码',
   'sandbox.exec_command': '运行沙箱命令',
+  'sandbox.start_process': '启动沙箱进程',
+  'sandbox.continue_process': '继续沙箱进程',
+  'sandbox.terminate_process': '终止沙箱进程',
   'runtime.get_current_time': '获取当前时间',
   'todo.write': '更新工作计划',
 }
@@ -91,6 +97,11 @@ const allowedKeys = new Set([
   'stderr',
   'stdout_truncated',
   'stderr_truncated',
+  'process_id',
+  'next_cursor',
+  'terminal_summary',
+  'stdin_open',
+  'input_seq',
   'truncated',
   'total',
   'completed_count',
@@ -107,6 +118,11 @@ const allowedKeys = new Set([
   'server',
   'message',
   'side_effect',
+  'operation',
+  'changed',
+  'diff',
+  'snippet',
+  'preview_id',
 ])
 
 function statusCopy(event: RunEvent, locale: Locale = 'en') {

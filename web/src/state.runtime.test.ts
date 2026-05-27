@@ -83,6 +83,34 @@ describe('runtime state orchestration helpers', () => {
     expect(next.events.map((event) => event.id)).toEqual(['evt-3', 'evt-1', 'evt-2'])
   })
 
+  test('dedupes replayed assistant delta when live stream repeats the same sequence', () => {
+    const runningRun: Run = {
+      ...run,
+      status: 'running',
+      events: [{ id: 'evt-replay', runId: run.id, threadId: run.threadId, sequence: 2, type: 'message.model_output_delta', label: 'Model', detail: 'hi', time: 'Replay', status: 'running', assistantDelta: 'hi' }],
+      assistantDraft: { content: 'hi', status: 'streaming', lastEventId: 'evt-replay' },
+    }
+
+    const next = applyRunStreamEventToRun(runningRun, { id: 'evt-live-duplicate', runId: run.id, threadId: run.threadId, sequence: 2, type: 'message.model_output_delta', label: 'Model', detail: 'hi', time: 'Live', status: 'running', assistantDelta: 'hi' })
+
+    expect(next.assistantDraft?.content).toBe('hi')
+    expect(next.events.map((event) => event.id)).toEqual(['evt-replay'])
+  })
+
+  test('dedupes replayed tool event when live stream repeats the same sequence', () => {
+    const runningRun: Run = {
+      ...run,
+      status: 'blocked_on_tool_approval',
+      events: [{ id: 'evt-tool-replay', runId: run.id, threadId: run.threadId, sequence: 5, type: 'tool.call.approval_required', label: 'Tool', detail: 'approval', time: 'Replay', status: 'blocked_on_tool_approval', group: 'tool-call', metadata: { tool_call_id: 'tc_1', tool_name: 'runtime.get_current_time', approval_status: 'required', execution_status: 'blocked' } }],
+      toolCalls: [{ id: 'tc_1', toolCallId: 'tc_1', name: 'runtime.get_current_time', status: 'approval_required', approvalStatus: 'required', executionStatus: 'blocked', argumentsSummary: {} }],
+    }
+
+    const next = applyRunStreamEventToRun(runningRun, { id: 'evt-tool-live-duplicate', runId: run.id, threadId: run.threadId, sequence: 5, type: 'tool.call.approval_required', label: 'Tool', detail: 'approval', time: 'Live', status: 'blocked_on_tool_approval', group: 'tool-call', metadata: { tool_call_id: 'tc_1', tool_name: 'runtime.get_current_time', approval_status: 'required', execution_status: 'blocked' } })
+
+    expect(next.events.map((event) => event.id)).toEqual(['evt-tool-replay'])
+    expect(next.toolCalls).toHaveLength(1)
+  })
+
   test('preserves normalized event identity when applying model gateway events', () => {
     const event = { id: 'evt-delta', runId: run.id, threadId: run.threadId, type: 'message.model_output_delta', label: 'message', detail: 'Model output delta', content: 'hel', assistantDelta: 'hel', time: 'Now', status: 'running' } as const
 

@@ -28,12 +28,15 @@ The simulator appends events through the product data service. Only after an eve
 SSE streams use one recovery model for first load, refresh, and reconnect:
 
 1. Validate the run belongs to the local identity.
-2. Read persisted events with `sequence > after_sequence`.
-3. Write those history events in ascending order.
-4. Subscribe to live published events for the same run.
-5. Close after a terminal event or terminal run snapshot.
+2. Subscribe to live events for non-terminal runs before reading history, so events committed during the replay window are not lost.
+3. Read persisted events with `sequence > after_sequence`.
+4. Write those history events in ascending order.
+5. Continue live delivery only from the highest sequence already sent.
+6. Close after a terminal event or terminal run snapshot.
 
-The frontend dedupes by event id/sequence and ignores stale stream events if the selected thread or run changes. Out-of-order lower-sequence deltas are retained in the timeline ordering but do not append stale text to the visible assistant draft. `model.delta` appends to the selected run assistant draft, `model.final` marks the draft completed without appending provider metadata to chat text, and `model.error` drives the failed draft state while preserving partial output. Once a run reaches `completed`, `failed`, `stopped`, or `cancelled`, later stream events cannot promote it into another terminal state in the visible run model.
+`after_sequence` is an exclusive cursor. `GET /v1/runs/{run_id}/events?after_sequence=N` and the SSE stream both return only events with `sequence > N`, so clients can set the cursor to the last replayed event without receiving duplicates.
+
+The frontend dedupes by event id and sequence and ignores stale stream events if the selected thread or run changes. If a replayed event and a live event share the same sequence, the replayed event wins and the live duplicate is ignored, preventing duplicate assistant deltas and duplicate tool lifecycle rows. Out-of-order lower-sequence deltas are retained in the timeline ordering but do not append stale text to the visible assistant draft. `model.delta` appends to the selected run assistant draft, `model.final` marks the draft completed without appending provider metadata to chat text, and `model.error` drives the failed draft state while preserving partial output. Once a run reaches `completed`, `failed`, `stopped`, or `cancelled`, later stream events cannot promote it into another terminal state in the visible run model.
 
 Timeline/debug rendering maps every event into one stable group: Run lifecycle, Model stream, Worker/job, or Error. Error-like types, failed statuses, and error severity override explicit group metadata. Token usage and provider metadata stay in event detail rows rather than assistant message text. This grouping is frontend-owned so M4 local simulated events and future M5 model/provider events share the same readability rules.
 

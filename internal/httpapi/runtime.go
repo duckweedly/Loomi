@@ -414,7 +414,7 @@ func (s *Server) handleModelProviderCheck(w http.ResponseWriter, r *http.Request
 			writeAPIError(w, productdata.NewError(productdata.CodeProviderMisconfigured, capability.Message))
 			return
 		}
-		writeJSON(w, http.StatusOK, modelProviderCheckResponse{Provider: capability, RequestID: diagnostics.NewRequestID()})
+		writeJSON(w, http.StatusOK, modelProviderCheckResponse{Provider: productruntime.CheckProviderCompletion(r.Context(), provider, nil), RequestID: diagnostics.NewRequestID()})
 		return
 	}
 	capability, ok := s.localProviderRouteCapability(req.ProviderID)

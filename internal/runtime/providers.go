@@ -29,9 +29,13 @@ const (
 type ProviderStatus string
 
 const (
-	ProviderStatusAvailable     ProviderStatus = "available"
-	ProviderStatusUnavailable   ProviderStatus = "unavailable"
-	ProviderStatusMisconfigured ProviderStatus = "misconfigured"
+	ProviderStatusConfigured       ProviderStatus = "configured"
+	ProviderStatusReachable        ProviderStatus = "reachable"
+	ProviderStatusCompletionOK     ProviderStatus = "completion-ok"
+	ProviderStatusCompletionFailed ProviderStatus = "completion-failed"
+	ProviderStatusAvailable        ProviderStatus = "available"
+	ProviderStatusUnavailable      ProviderStatus = "unavailable"
+	ProviderStatusMisconfigured    ProviderStatus = "misconfigured"
 )
 
 type ProviderEventType string
@@ -68,6 +72,9 @@ type ProviderCapability struct {
 	SessionLocal        bool           `json:"session_local,omitempty"`
 	CredentialReference string         `json:"credential_reference,omitempty"`
 	ExecutionState      string         `json:"execution_state,omitempty"`
+	CheckStage          string         `json:"check_stage,omitempty"`
+	CheckCode           string         `json:"check_code,omitempty"`
+	HTTPStatus          int            `json:"http_status,omitempty"`
 }
 
 type ProviderRequest struct {
@@ -164,7 +171,7 @@ func (p *HTTPProvider) Config() ProviderConfig { return p.providerConfig }
 
 func (p *HTTPProvider) Stream(ctx context.Context, request ProviderRequest) (<-chan ProviderEvent, error) {
 	capability := p.providerConfig.Capability()
-	if capability.Status != ProviderStatusAvailable {
+	if !providerStatusCanRun(capability.Status) {
 		return nil, errors.New(capability.Message)
 	}
 	httpRequest, err := p.buildRequest(ctx, request)
@@ -272,7 +279,7 @@ func SelectProvider(providers []ProviderConfig, providerID string) (ProviderConf
 	for _, provider := range providers {
 		if provider.ID == providerID {
 			capability := provider.Capability()
-			if capability.Status == ProviderStatusAvailable {
+			if providerStatusCanRun(capability.Status) {
 				return provider, nil
 			}
 			return ProviderConfig{}, errors.New(capability.Message)
@@ -287,7 +294,7 @@ func (c ProviderConfig) Capability() ProviderCapability {
 		Family:  c.Family,
 		BaseURL: redactProviderBaseURL(c.BaseURL),
 		Model:   c.Model,
-		Status:  ProviderStatusAvailable,
+		Status:  ProviderStatusConfigured,
 	}
 	if !c.Enabled {
 		capability.Status = ProviderStatusUnavailable
@@ -317,6 +324,92 @@ func (c ProviderConfig) Capability() ProviderCapability {
 		capability.Message = "Provider family is unsupported."
 	}
 	return capability
+}
+
+func providerStatusCanRun(status ProviderStatus) bool {
+	switch status {
+	case ProviderStatusAvailable, ProviderStatusConfigured, ProviderStatusReachable, ProviderStatusCompletionOK:
+		return true
+	default:
+		return false
+	}
+}
+
+func CheckProviderCompletion(ctx context.Context, provider ProviderConfig, client *http.Client) ProviderCapability {
+	if client == nil {
+		client = http.DefaultClient
+	}
+	capability := provider.Capability()
+	if !providerStatusCanRun(capability.Status) {
+		return capability
+	}
+	checker := &HTTPProvider{providerConfig: provider, client: client}
+	req, err := checker.buildCompletionCheckRequest(ctx)
+	if err != nil {
+		capability.Status = ProviderStatusCompletionFailed
+		capability.CheckStage = "completion"
+		capability.CheckCode = "completion-failed-request"
+		capability.Message = "Provider completion check could not be prepared."
+		return capability
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		capability.Status = ProviderStatusCompletionFailed
+		capability.CheckStage = "completion"
+		capability.CheckCode = "completion-failed-network"
+		capability.Message = "Provider completion check failed before receiving a response."
+		return capability
+	}
+	defer resp.Body.Close()
+	capability.CheckStage = "completion"
+	capability.HTTPStatus = resp.StatusCode
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		io.Copy(io.Discard, io.LimitReader(resp.Body, 64*1024))
+		capability.Status = ProviderStatusCompletionFailed
+		capability.CheckCode = fmt.Sprintf("completion-failed-%d", resp.StatusCode)
+		capability.Message = fmt.Sprintf("Provider completion check failed with HTTP %d.", resp.StatusCode)
+		return capability
+	}
+	io.Copy(io.Discard, io.LimitReader(resp.Body, 64*1024))
+	capability.Status = ProviderStatusCompletionOK
+	capability.CheckCode = "completion-ok"
+	capability.Message = "Provider completion check succeeded."
+	return capability
+}
+
+func (p *HTTPProvider) buildCompletionCheckRequest(ctx context.Context) (*http.Request, error) {
+	switch p.providerConfig.Family {
+	case ProviderFamilyAnthropic:
+		content := "ok"
+		body := anthropicRequestBody{Model: p.providerConfig.Model, MaxTokens: 8, Stream: false, Messages: []anthropicMessage{{Role: "user", Content: []anthropicContentBlock{{Type: "text", Text: content}}}}}
+		httpRequest, err := jsonRequest(ctx, strings.TrimRight(defaultProviderBaseURL(p.providerConfig), "/")+"/v1/messages", body)
+		if err != nil {
+			return nil, err
+		}
+		httpRequest.Header.Set("x-api-key", p.providerConfig.APIKey)
+		httpRequest.Header.Set("anthropic-version", "2023-06-01")
+		return httpRequest, nil
+	case ProviderFamilyOpenAI, ProviderFamilyOpenAICompatible:
+		content := "ok"
+		body := openAIRequestBody{Model: p.providerConfig.Model, Stream: false, Messages: []openAIMessage{{Role: "user", Content: &content}}}
+		httpRequest, err := jsonRequest(ctx, strings.TrimRight(defaultProviderBaseURL(p.providerConfig), "/")+"/chat/completions", body)
+		if err != nil {
+			return nil, err
+		}
+		httpRequest.Header.Set("Authorization", "Bearer "+p.providerConfig.APIKey)
+		return httpRequest, nil
+	case ProviderFamilyGemini:
+		body := geminiRequestBody{Contents: []geminiContent{{Role: "user", Parts: []geminiPart{{Text: "ok"}}}}}
+		baseURL := strings.TrimRight(defaultProviderBaseURL(p.providerConfig), "/")
+		httpRequest, err := jsonRequest(ctx, fmt.Sprintf("%s/v1beta/models/%s:generateContent", baseURL, url.PathEscape(p.providerConfig.Model)), body)
+		if err != nil {
+			return nil, err
+		}
+		httpRequest.Header.Set("x-goog-api-key", p.providerConfig.APIKey)
+		return httpRequest, nil
+	default:
+		return nil, errors.New("Provider family is unsupported.")
+	}
 }
 
 func parseProviderSSE(ctx context.Context, family ProviderFamily, body io.Reader, ch chan<- ProviderEvent) bool {

@@ -125,7 +125,8 @@ runId === activeRunId
 当 `VITE_LOOMI_API_BASE_URL` 配置后，thread/message 和 M4 run/event/SSE 都走 real API：
 
 - `sendMessage` 先创建 message，再通过 `POST /v1/threads/{thread_id}/runs` 启动 local simulated run。
-- `subscribeRunEvents` 连接 `GET /v1/runs/{run_id}/events/stream?after_sequence=...`。
+- `getRunEvents` 读取 persisted replay；需要边界 cursor 时传 `after_sequence`，语义是只返回更大的 sequence。
+- `subscribeRunEvents` 连接 `GET /v1/runs/{run_id}/events/stream?after_sequence=...`，从当前 run 已知最大 sequence 之后继续。
 - `stopRun` 调用 `POST /v1/runs/{run_id}/stop`。
 - RunRail 的 mock scenario selector 只在 mock mode 显示。
 

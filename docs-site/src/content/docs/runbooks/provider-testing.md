@@ -41,8 +41,10 @@ Expected:
 - the provider management toolbar shows search plus All/Enabled/Local/Cloud filters
 - configured provider cards show safe display name, route or base URL, Local/Read-only badges when relevant, and no secrets
 - Add provider opens the modal, the provider type menu opens, and Save uses the local provider save path
-- Test connection enters checking and then connected or failed for configured providers
+- Test connection enters checking and then reports `completion-ok` or a precise failure category such as `completion-failed-503`
 - failed messages do not display API keys or bearer tokens
+
+`models list` can show `configured` before a live completion smoke has run. Use Settings > Providers Test connection or `loomi doctor` to verify completion health. `loomi doctor` calls the provider check endpoint and should surface `check=completion-failed-503 http=503` when the provider accepts configuration but rejects the real completion call.
 
 ## Send a real message
 
