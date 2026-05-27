@@ -1,5 +1,5 @@
 import { FormEvent, ClipboardEvent, useMemo, useRef, useState } from 'react'
-import { Button } from '@lobehub/ui'
+import { Button, Select } from 'animal-island-ui'
 import { ArrowUp, FileText, FolderOpen, Image, Paperclip, X } from 'lucide-react'
 import type { Message, Run } from '../domain'
 import { deriveComposerActions } from '../runtime/composerActions'
@@ -23,7 +23,6 @@ type Props = {
   disabled?: boolean
   providerUnavailable?: boolean
   placeholder?: string
-  mode?: 'chat' | 'work'
   dataSourceMode?: 'mock' | 'real_api'
   threadSelected: boolean
   run: Run | null
@@ -56,7 +55,7 @@ function formatAttachmentSize(size: number) {
   return `${(size / 1024 / 1024).toFixed(1)} MB`
 }
 
-export function Composer({ disabled, providerUnavailable = false, placeholder, mode = 'chat', threadSelected, run, messages, modelOptions = [], onSubmit, onStop, onChooseWorkspaceFolder, stopLabel = 'Stop', workspaceFolderLabel = '选择目录', workspaceFolderStatus, modelLabel = 'Model', attachLabel = 'Attach', pasteImageLabel = 'Paste image', attachmentPendingLabel = 'queued for this message', modelUnavailableLabel = 'No model' }: Props) {
+export function Composer({ disabled, providerUnavailable = false, placeholder, threadSelected, run, messages, modelOptions = [], onSubmit, onStop, onChooseWorkspaceFolder, stopLabel = 'Stop', workspaceFolderLabel = '选择目录', workspaceFolderStatus, modelLabel = 'Model', attachLabel = 'Attach', pasteImageLabel = 'Paste image', attachmentPendingLabel = 'queued for this message', modelUnavailableLabel = 'No model' }: Props) {
   const [value, setValue] = useState('')
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([])
   const [selectedModelKey, setSelectedModelKey] = useState('')
@@ -65,11 +64,14 @@ export function Composer({ disabled, providerUnavailable = false, placeholder, m
   const composerDisabled = Boolean(disabled || providerUnavailable)
   const hasAttachments = attachments.length > 0
   const canSubmit = actions.canSend || actions.canContinue || (threadSelected && hasAttachments && !actions.canStop && !providerUnavailable)
-  const inputPlaceholder = placeholder ?? (mode === 'work' ? 'Describe the task for Loomi' : 'Message Loomi')
+  const inputPlaceholder = placeholder ?? 'Message Loomi'
   const selectedModel = useMemo(
     () => modelOptions.find((option) => option.key === selectedModelKey) ?? modelOptions[0],
     [modelOptions, selectedModelKey],
   )
+  const modelSelectOptions = modelOptions.length > 0
+    ? modelOptions.map((option) => ({ key: option.key, label: option.label }))
+    : [{ key: '', label: modelUnavailableLabel }]
 
   function addFiles(files: FileList | File[]) {
     const next = Array.from(files).map((file) => ({
@@ -97,7 +99,7 @@ export function Composer({ disabled, providerUnavailable = false, placeholder, m
   }
 
   return (
-    <form className="composer glass-panel" onSubmit={handleSubmit}>
+    <form className="composer glass-panel animal-command-bar" onSubmit={handleSubmit}>
       <textarea
         className="composer-input"
         disabled={composerDisabled}
@@ -140,13 +142,13 @@ export function Composer({ disabled, providerUnavailable = false, placeholder, m
           <button type="button" className="composer-icon-action" aria-label={attachLabel} onClick={() => fileInputRef.current?.click()}>
             <Paperclip size={16} />
           </button>
-          {mode === 'work' && onChooseWorkspaceFolder && (
+          {onChooseWorkspaceFolder && (
             <button type="button" className="composer-action composer-folder" onClick={onChooseWorkspaceFolder}>
               <FolderOpen size={15} />
               <span>{workspaceFolderLabel}</span>
             </button>
           )}
-          {mode === 'work' && workspaceFolderStatus && <span className="composer-folder-status">{workspaceFolderStatus}</span>}
+          {workspaceFolderStatus && <span className="composer-folder-status">{workspaceFolderStatus}</span>}
           <div className="composer-actions">
             {actions.canStop && onStop && <button type="button" className="composer-action" onClick={onStop}>{stopLabel}</button>}
           </div>
@@ -154,17 +156,9 @@ export function Composer({ disabled, providerUnavailable = false, placeholder, m
         <div className="composer-toolbar-right">
           <label className={`composer-model-select${modelOptions.length === 0 ? ' disabled' : ''}`}>
             <span>{modelLabel}</span>
-            {modelOptions.length > 0 ? (
-              <select value={selectedModel?.key ?? ''} onChange={(event) => setSelectedModelKey(event.target.value)}>
-                {modelOptions.map((option) => <option key={option.key} value={option.key}>{option.label}</option>)}
-              </select>
-            ) : (
-              <select disabled value="">
-                <option>{modelUnavailableLabel}</option>
-              </select>
-            )}
+            <Select disabled={modelOptions.length === 0} options={modelSelectOptions} placeholder={modelUnavailableLabel} value={selectedModel?.key ?? ''} onChange={setSelectedModelKey} />
           </label>
-          <Button aria-label="Send message" disabled={composerDisabled || !canSubmit || (value.trim().length === 0 && !hasAttachments)} htmlType="submit" icon={<ArrowUp size={15} />} type="primary" />
+          <Button aria-label="Send message" className="animal-send-button" disabled={composerDisabled || !canSubmit || (value.trim().length === 0 && !hasAttachments)} htmlType="submit" icon={<ArrowUp size={15} />} type="primary" />
         </div>
       </div>
     </form>

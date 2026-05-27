@@ -44,7 +44,44 @@ describe('ChatCanvas state copy', () => {
     expect(source).not.toContain("draft.status === 'completed') return null")
     expect(source).toContain('visibleRunForTranscript')
     expect(source).toContain("status === 'failed'")
-    expect(source).toContain('draft.content || draftFallback')
+    expect(source).toContain('thinkingHintForRun')
+  })
+
+  test('renders a short per-run thinking hint while assistant content is empty', () => {
+    const html = renderToStaticMarkup(createElement(ChatCanvas, {
+      sidebarCollapsed: false,
+      thread: { id: 'thread-a', title: 'Thread A', project: 'Loomi', mode: 'chat', updatedAt: 'Now', lifecycleStatus: 'active', runStatus: 'running' },
+      messages: [{ id: 'msg-user', threadId: 'thread-a', role: 'user', content: '你好', createdAt: 'Now' }],
+      run: {
+        id: 'run-a',
+        threadId: 'thread-a',
+        status: 'running',
+        model: 'Local simulated',
+        context: 'local_simulated',
+        events: [],
+        assistantDraft: { content: '', status: 'streaming' },
+      },
+      loading: false,
+      error: null,
+      dataSourceMode: 'mock',
+      streamState: 'open',
+      onSendMessage: () => {},
+      onStopRun: () => {},
+      locale: 'zh',
+    }))
+
+    expect(html).toContain('message-draft-status')
+    expect(html).toMatch(/组织回复|梳理线索|核对上下文|提炼重点|推敲答案|收束思路|准备回答|再看一眼/)
+    expect(html).not.toContain('模型正在生成回复')
+  })
+
+  test('uses text shimmer rather than a pulse dot for pending thinking copy', () => {
+    const source = readFileSync(resolve(import.meta.dir, 'ChatCanvas.tsx'), 'utf8')
+    const css = readFileSync(resolve(import.meta.dir, '../styles/20-chat.css'), 'utf8')
+
+    expect(source).toContain('thinking-shimmer')
+    expect(css).toContain('.thinking-shimmer')
+    expect(css).not.toContain('draft-pulse')
   })
 
   test('routes ChatCanvas rendering through deriveChatCanvasState', () => {
@@ -78,6 +115,27 @@ describe('ChatCanvas state copy', () => {
     }))
 
     expect(html.match(/Final answer/g)).toHaveLength(1)
+  })
+
+  test('uses the Animal Island typewriter for the latest completed assistant answer', () => {
+    const source = readFileSync(resolve(import.meta.dir, 'ChatCanvas.tsx'), 'utf8')
+    expect(source).toContain("Typewriter } from 'animal-island-ui'")
+    expect(source).toContain('message-markdown-typewriter')
+    expect(source).toContain('shouldTypewriteHistoryMessage')
+    expect(source).toContain("run.status !== 'completed'")
+    expect(source).toContain('loomi.completedTypewriterMessages')
+    expect(source).toContain('loomi.streamedAssistantRuns')
+    expect(source).toContain('markCompletedTypewriter(typewriterTrigger)')
+    expect(source).toContain('markStreamedAssistantRun(run.id)')
+  })
+
+  test('uses the Animal Island wave divider between conversation turns', () => {
+    const source = readFileSync(resolve(import.meta.dir, 'ChatCanvas.tsx'), 'utf8')
+    const css = readFileSync(resolve(import.meta.dir, '../styles/20-chat.css'), 'utf8')
+    expect(source).toContain("import { Divider, Typewriter } from 'animal-island-ui'")
+    expect(source).toContain('<Divider type="wave-yellow" />')
+    expect(source).toContain("index > 0 && message.role === 'user'")
+    expect(css).toContain('.conversation-divider')
   })
 
   test('deduplicates restored completed draft when persisted assistant message lacks run linkage', () => {
@@ -242,7 +300,7 @@ describe('ChatCanvas state copy', () => {
     expect(html).not.toContain('<h1># 六、')
   })
 
-  test('holds streaming draft markdown until the assistant final content completes', () => {
+  test('renders streaming draft content as markdown before the final answer completes', () => {
     const html = renderToStaticMarkup(createElement(ChatCanvas, {
       sidebarCollapsed: false,
       thread: { id: 'thread-a', title: 'Thread A', project: 'Loomi', mode: 'chat', updatedAt: 'Now', lifecycleStatus: 'active', runStatus: 'running' },
@@ -254,7 +312,7 @@ describe('ChatCanvas state copy', () => {
         model: 'Local simulated',
         context: 'local_simulated',
         events: [],
-        assistantDraft: { content: '>HarnessAgentsareautonomousAIworkers\n\n1. 先用一张图理解```text\n|broken|', status: 'streaming' },
+        assistantDraft: { content: '## 正在整理\n\n- 第一条\n- 第二条', status: 'streaming' },
       },
       loading: false,
       error: null,
@@ -266,10 +324,10 @@ describe('ChatCanvas state copy', () => {
       locale: 'zh',
     }))
 
-    expect(html).toContain('模型正在生成回复')
-    expect(html).not.toContain('HarnessAgentsareautonomousAIworkers')
-    expect(html).not.toContain('|broken|')
-    expect(html).not.toContain('<blockquote>')
+    expect(html).toContain('正在整理')
+    expect(html).toContain('<li>第一条</li>')
+    expect(html).toContain('<li>第二条</li>')
+    expect(html).not.toMatch(/组织回复|梳理线索|核对上下文|提炼重点|推敲答案|收束思路|准备回答|再看一眼/)
   })
 
   test('does not turn multiline fenced content into inline code chips', () => {
@@ -295,7 +353,37 @@ describe('ChatCanvas state copy', () => {
     expect(html).not.toContain('<code>text')
   })
 
-  test('keeps assistant code blocks flat inside message bubbles', () => {
+  test('renders an unfinished streaming fenced code block before the closing fence arrives', () => {
+    const html = renderToStaticMarkup(createElement(ChatCanvas, {
+      sidebarCollapsed: false,
+      thread: { id: 'thread-a', title: 'Thread A', project: 'Loomi', mode: 'chat', updatedAt: 'Now', lifecycleStatus: 'active', runStatus: 'running' },
+      messages: [{ id: 'msg-user', threadId: 'thread-a', role: 'user', content: '再来一个 SQL', createdAt: 'Now' }],
+      run: {
+        id: 'run-a',
+        threadId: 'thread-a',
+        status: 'running',
+        model: 'Local simulated',
+        context: 'local_simulated',
+        events: [],
+        assistantDraft: { content: '这里是 SQL：\n\n```sqlCREATE VIEW sales_summary AS\nSELECT * FROM orders;', status: 'streaming' },
+      },
+      loading: false,
+      error: null,
+      dataSourceMode: 'real_api',
+      streamState: 'live',
+      providerCapabilities: [{ id: 'custom', family: 'openai_compatible' as const, model: 'gpt-5.5', status: 'available' as const }],
+      onSendMessage: () => {},
+      onStopRun: () => {},
+      locale: 'zh',
+    }))
+
+    expect(html).toContain('<div class="message-code-block">')
+    expect(html).toContain('<span class="message-code-block-lang">sql</span>')
+    expect(html).toContain('<code class="language-sql">CREATE VIEW sales_summary AS\nSELECT * FROM orders;</code>')
+    expect(html).not.toContain('<code>sql')
+  })
+
+  test('themes assistant code blocks for light and dark chat surfaces', () => {
     const css = [
       readFileSync(resolve(import.meta.dir, '../styles/20-chat.css'), 'utf8'),
       readFileSync(resolve(import.meta.dir, '../styles/80-island-components.css'), 'utf8'),
@@ -305,9 +393,15 @@ describe('ChatCanvas state copy', () => {
     ].join('\n')
 
     expect(css).toContain('.message-code-block')
-    expect(css).toContain('.message-code-block {\n  position: relative;\n  margin: 10px 0 12px;\n  border: 0;')
+    expect(css).toContain('border: 1px solid color-mix(in srgb, var(--border-subtle) 86%, var(--text-primary) 14%)')
+    expect(css).toContain('border-radius: 12px')
+    expect(css).toContain('padding: 48px 48px 24px 34px')
+    expect(css).toContain('background: color-mix(in srgb, var(--text-primary) 7%, transparent)')
+    expect(css).toContain('.message-code-block-lang')
+    expect(css).toContain(".app-shell[data-theme='dark'] .message-code-block")
+    expect(css).toContain(".app-shell[data-theme='dark'] .message-markdown pre code {\n  border-color: transparent;\n  background: transparent;")
+    expect(css).toContain(".app-shell[data-theme='dark'] .message-code-block-head button")
     expect(css).not.toContain('.message-markdown pre,\n.message-table-wrap,\n.tool-grid')
-    expect(css).not.toContain('.app-shell[data-theme=\'dark\'] .message-markdown pre')
   })
 
   test('repairs collapsed markdown headings without touching fenced code', () => {

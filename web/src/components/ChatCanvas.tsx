@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
-import { useState } from 'react'
+import { Fragment, useEffect, useState } from 'react'
 import { Copy, ChevronDown, ChevronRight, RefreshCcw, RotateCcw } from 'lucide-react'
+import { Divider, Typewriter } from 'animal-island-ui'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { Components } from 'react-markdown'
@@ -9,6 +10,7 @@ import type { Locale } from '../i18n'
 import { getDictionary } from '../i18n'
 import { getProviderUnavailableWarning, shouldShowProviderUnavailableWarning } from '../runtime/backendCapabilityStatus'
 import { deriveChatCanvasState } from '../runtime/chatCanvasState'
+import { thinkingHintForRun } from '../runtime/thinkingHint'
 import { humanToolName } from '../runtime/toolPreview'
 import type { ProviderSaveResult } from '../state'
 import { Composer } from './Composer'
@@ -73,9 +75,17 @@ function safeHref(href: string) {
   return /^(https?:|mailto:)/i.test(href) ? href : '#'
 }
 
-function normalizeMarkdownContent(content: string) {
+function normalizeStreamingFenceStart(content: string) {
   return content
-    .replace(/\r\n/g, '\n')
+    .replace(/```(sql)(?=(?:CREATE|SELECT|WITH|INSERT|UPDATE|DELETE|ALTER|DROP|TRUNCATE|MERGE|EXPLAIN)\b)/gi, '```$1\n')
+    .replace(/```(tsx|ts|jsx|js|javascript|typescript)(?=(?:import|export|const|let|var|function|class|interface|type)\b)/gi, '```$1\n')
+    .replace(/```(python|py)(?=(?:from|import|def|class|if|for|while|with|print)\b)/gi, '```$1\n')
+    .replace(/```(json)(?=[[{])/gi, '```$1\n')
+    .replace(/```(bash|sh|zsh)(?=(?:cd|ls|cat|grep|rg|npm|pnpm|bun|yarn|git|curl|echo)\b)/gi, '```$1\n')
+}
+
+function normalizeMarkdownContent(content: string) {
+  return normalizeStreamingFenceStart(content.replace(/\r\n/g, '\n'))
     .split(/(```[\s\S]*?```)/g)
     .map((part, index) => {
       if (index % 2 === 1) return part
@@ -102,11 +112,17 @@ function headingText(children: ReactNode) {
   return textFromChildren(children).replace(/^#{1,6}\s+/, '')
 }
 
+function codeLanguageLabel(className?: string) {
+  return className?.match(/language-([\w+-]+)/)?.[1]
+}
+
 function MarkdownCodeBlock({ className, children }: { className?: string; children?: ReactNode }) {
   const text = textFromChildren(children).replace(/\n$/, '')
+  const language = codeLanguageLabel(className)
   return (
     <div className="message-code-block">
       <div className="message-code-block-head">
+        {language && <span className="message-code-block-lang">{language}</span>}
         <button type="button" onClick={() => void navigator.clipboard?.writeText(text)} aria-label="Copy code">
           <Copy size={13} />
         </button>
@@ -133,12 +149,82 @@ const markdownComponents: Components = {
   table: ({ children }) => <div className="message-table-wrap"><table>{children}</table></div>,
 }
 
-function MarkdownMessage({ content }: { content: string }) {
+const assistantTypewriterSpeed = 28
+const completedTypewriterStorageKey = 'loomi.completedTypewriterMessages'
+const streamedAssistantRunsStorageKey = 'loomi.streamedAssistantRuns'
+const completedTypewriterMessages = new Set<string>()
+const streamedAssistantRuns = new Set<string>()
+
+function shouldAutoPlayTypewriter() {
+  return typeof window !== 'undefined' && !window.matchMedia('(prefers-reduced-motion: reduce)').matches
+}
+
+function hasCompletedTypewriter(trigger: string) {
+  if (completedTypewriterMessages.has(trigger)) return true
+  if (typeof window === 'undefined') return false
+  try {
+    const completed = JSON.parse(window.sessionStorage.getItem(completedTypewriterStorageKey) ?? '[]') as string[]
+    completed.forEach((item) => completedTypewriterMessages.add(item))
+    return completedTypewriterMessages.has(trigger)
+  } catch {
+    return false
+  }
+}
+
+function markCompletedTypewriter(trigger: string) {
+  completedTypewriterMessages.add(trigger)
+  if (typeof window === 'undefined') return
+  try {
+    window.sessionStorage.setItem(completedTypewriterStorageKey, JSON.stringify([...completedTypewriterMessages].slice(-100)))
+  } catch {
+    // Ignore storage failures; the in-memory set still prevents replay in this app session.
+  }
+}
+
+function hasStreamedAssistantRun(runId: string) {
+  if (streamedAssistantRuns.has(runId)) return true
+  if (typeof window === 'undefined') return false
+  try {
+    const streamed = JSON.parse(window.sessionStorage.getItem(streamedAssistantRunsStorageKey) ?? '[]') as string[]
+    streamed.forEach((item) => streamedAssistantRuns.add(item))
+    return streamedAssistantRuns.has(runId)
+  } catch {
+    return false
+  }
+}
+
+function markStreamedAssistantRun(runId: string) {
+  streamedAssistantRuns.add(runId)
+  if (typeof window === 'undefined') return
+  try {
+    window.sessionStorage.setItem(streamedAssistantRunsStorageKey, JSON.stringify([...streamedAssistantRuns].slice(-100)))
+  } catch {
+    // Best effort only; the current app session still knows this run streamed.
+  }
+}
+
+function MarkdownMessage({ content, typewriterTrigger }: { content: string; typewriterTrigger?: string }) {
+  const markdown = (
+    <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+      {normalizeMarkdownContent(content)}
+    </ReactMarkdown>
+  )
+  const [shouldPlayTypewriter, setShouldPlayTypewriter] = useState(() => Boolean(typewriterTrigger && shouldAutoPlayTypewriter() && !hasCompletedTypewriter(typewriterTrigger)))
+  if (!typewriterTrigger || !shouldPlayTypewriter) {
+    return <div className="message-markdown">{markdown}</div>
+  }
   return (
-    <div className="message-markdown">
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
-        {normalizeMarkdownContent(content)}
-      </ReactMarkdown>
+    <div className="message-markdown message-markdown-typewriter">
+      <Typewriter
+        speed={assistantTypewriterSpeed}
+        trigger={typewriterTrigger}
+        onDone={() => {
+          markCompletedTypewriter(typewriterTrigger)
+          setShouldPlayTypewriter(false)
+        }}
+      >
+        {markdown}
+      </Typewriter>
     </div>
   )
 }
@@ -205,20 +291,42 @@ function MessageActions({ message, locale, canRegenerate, onRetry, onRegenerate 
   )
 }
 
-function MessageHistory({ messages, locale, canRegenerate, onRegenerate }: { messages: Message[]; locale: Locale; canRegenerate?: boolean; onRegenerate?: () => void }) {
+function shouldTypewriteHistoryMessage(message: Message, run: Run | null, isLastAssistant: boolean) {
+  if (!isLastAssistant || !run || run.status !== 'completed' || message.role !== 'assistant') return false
+  if (hasStreamedAssistantRun(run.id)) return false
+  if (message.runId && message.runId === run.id) return true
+  return Boolean(run.assistantDraft?.status === 'completed' && message.content === run.assistantDraft.content)
+}
+
+function ConversationDivider() {
+  return (
+    <div className="conversation-divider" aria-hidden="true">
+      <Divider type="wave-yellow" />
+    </div>
+  )
+}
+
+function MessageHistory({ messages, run, locale, canRegenerate, onRegenerate }: { messages: Message[]; run: Run | null; locale: Locale; canRegenerate?: boolean; onRegenerate?: () => void }) {
   const copy = getDictionary(locale).chatCanvas
   const lastAssistant = [...messages].reverse().find((message) => message.role === 'assistant')
-  return messages.map((message, index) => (
-    <article key={`${message.id}-${index}`} className={`message-row ${message.role}`}>
-      <div className="message-avatar">{message.role === 'assistant' ? 'L' : 'U'}</div>
-      <div className="message-bubble">
-        <div className="message-meta">{message.role === 'assistant' ? copy.assistant : copy.user} · {displayMessageTime(message.createdAt, locale)}</div>
-        <MarkdownMessage content={message.content} />
-        {message.toolCalls?.length ? <ToolCallList toolCalls={message.toolCalls} locale={locale} /> : null}
-        <MessageActions message={message} locale={locale} canRegenerate={canRegenerate && message.id === lastAssistant?.id} onRegenerate={onRegenerate} />
-      </div>
-    </article>
-  ))
+  return messages.map((message, index) => {
+    const typewriterTrigger = shouldTypewriteHistoryMessage(message, run, message.id === lastAssistant?.id) ? `${message.id}:${run?.id}:${message.content.length}` : undefined
+    const showTurnDivider = index > 0 && message.role === 'user'
+    return (
+      <Fragment key={`${message.id}-${index}`}>
+        {showTurnDivider && <ConversationDivider />}
+        <article className={`message-row ${message.role}`}>
+          <div className="message-avatar">{message.role === 'assistant' ? 'L' : 'U'}</div>
+          <div className="message-bubble">
+            <div className="message-meta">{message.role === 'assistant' ? copy.assistant : copy.user} · {displayMessageTime(message.createdAt, locale)}</div>
+            <MarkdownMessage content={message.content} typewriterTrigger={typewriterTrigger} />
+            {message.toolCalls?.length ? <ToolCallList toolCalls={message.toolCalls} locale={locale} /> : null}
+            <MessageActions message={message} locale={locale} canRegenerate={canRegenerate && message.id === lastAssistant?.id} onRegenerate={onRegenerate} />
+          </div>
+        </article>
+      </Fragment>
+    )
+  })
 }
 
 function draftFallback(status: AssistantDraftState['status'], locale: Locale) {
@@ -228,6 +336,11 @@ function draftFallback(status: AssistantDraftState['status'], locale: Locale) {
   if (status === 'recovering') return copy.recoveringDraft
   if (status === 'stopping') return copy.stoppingDetail
   return copy.modelDrafting
+}
+
+function draftPendingText(run: Run, status: AssistantDraftState['status'], locale: Locale) {
+  if (status === 'recovering' || status === 'stopping') return draftFallback(status, locale)
+  return thinkingHintForRun(run.id, locale)
 }
 
 function draftStatusLabel(status: AssistantDraftState['status'], locale: Locale) {
@@ -241,17 +354,26 @@ function draftStatusLabel(status: AssistantDraftState['status'], locale: Locale)
   return copy.waitingRunTitle
 }
 
-function shouldRenderDraftContent(status: AssistantDraftState['status']) {
-  return status === 'completed' || status === 'failed' || status === 'stopped'
+function shouldRenderDraftContent(status: AssistantDraftState['status'], content: string) {
+  return status === 'completed' || status === 'failed' || status === 'stopped' || Boolean(content.trim())
 }
 
 function AssistantDraft({ run, locale, onRetry }: { run: Run | null; locale: Locale; onRetry?: () => void }) {
   const copy = getDictionary(locale).chatCanvas
   const draft = run?.assistantDraft
+
+  useEffect(() => {
+    if (!run || !draft) return
+    if (draft.content.trim() && (draft.status === 'streaming' || draft.status === 'drafting')) {
+      markStreamedAssistantRun(run.id)
+    }
+  }, [draft?.content, draft?.status, run?.id])
+
   if (!run || !draft || draft.status === 'empty') return null
 
-  const shouldRenderContent = shouldRenderDraftContent(draft.status)
+  const shouldRenderContent = shouldRenderDraftContent(draft.status, draft.content)
   const draftMessage: Message = { id: draft.messageId ?? run.id, threadId: run.threadId, role: 'assistant', content: draft.content || draftFallback(draft.status, locale), createdAt: run.completedAt ?? run.createdAt ?? new Date().toISOString(), runId: run.id }
+  const typewriterTrigger = draft.status === 'completed' && !hasStreamedAssistantRun(run.id) ? `${draftMessage.id}:${draftMessage.content.length}` : undefined
 
   return (
     <article className={`message-row assistant draft ${draft.status}`}>
@@ -259,11 +381,11 @@ function AssistantDraft({ run, locale, onRetry }: { run: Run | null; locale: Loc
       <div className="message-bubble">
         <div className="message-meta">{copy.assistant} · {draftStatusLabel(draft.status, locale)}</div>
         {shouldRenderContent ? (
-          <MarkdownMessage content={draftMessage.content} />
+          <MarkdownMessage content={draftMessage.content} typewriterTrigger={typewriterTrigger} />
         ) : (
           <div className="message-draft-status" role="status">
             <span aria-hidden="true" />
-            <p>{draftFallback(draft.status, locale)}</p>
+            <p className="thinking-shimmer">{draftPendingText(run, draft.status, locale)}</p>
           </div>
         )}
         {draft.status === 'failed' && <MessageActions message={draftMessage} locale={locale} onRetry={onRetry} />}
@@ -364,13 +486,10 @@ export function ChatCanvas({ thread, messages, run, loading, error, dataSourceMo
   const copy = getDictionary(locale).chatCanvas
   const stateCopy = createStateCopy(locale)
   const composerDisabled = state === 'loading' || state === 'error' || state === 'no-thread' || state === 'backend-unavailable' || state === 'waiting-run' || state === 'running' || state === 'recovering' || state === 'stopping'
-  const mode = thread?.mode ?? 'chat'
-  const composerPlaceholder = state === 'history' || !composerDisabled ? (mode === 'work' ? copy.describeTask : copy.messageLoomi) : stateCopy[state].title
+  const composerPlaceholder = state === 'history' || !composerDisabled ? copy.messageLoomi : stateCopy[state].title
   const providerUnavailableBeforeSend = shouldShowProviderUnavailableWarning(dataSourceMode, providerCapabilities)
   const providerUnavailableWarning = getProviderUnavailableWarning(providerCapabilities, locale)
-  const workspaceFolderStatus = mode === 'work'
-    ? workspaceRootSaveResult?.message || (workspaceRootConfig?.configured ? copy.workspaceRootSelected(workspaceRootConfig.displayName) : copy.workspaceRootHome)
-    : undefined
+  const workspaceFolderStatus = workspaceRootSaveResult?.message || (workspaceRootConfig?.configured ? copy.workspaceRootSelected(workspaceRootConfig.displayName) : copy.workspaceRootHome)
   const hasPersistedCompletedDraftMessage = visibleRun?.assistantDraft?.status === 'completed' && messages.some((message) => (
     message.role === 'assistant' && (
       message.id === visibleRun.assistantDraft?.messageId ||
@@ -405,13 +524,13 @@ export function ChatCanvas({ thread, messages, run, loading, error, dataSourceMo
       <div className="message-list">
         {state === 'history' ? (
           <>
-            <MessageHistory messages={messages} locale={locale} canRegenerate={canRegenerateAnswer} onRegenerate={onRegenerateRun} />
+            <MessageHistory messages={messages} run={visibleRun} locale={locale} canRegenerate={canRegenerateAnswer} onRegenerate={onRegenerateRun} />
             {shouldShowAssistantDraft && <AssistantDraft run={visibleRun} locale={locale} onRetry={onRetryRun} />}
             <ActiveToolCalls run={visibleRun} locale={locale} onApproveToolCall={onApproveToolCall} onDenyToolCall={onDenyToolCall} />
           </>
         ) : (
           <>
-            {shouldShowHistory && <MessageHistory messages={messages} locale={locale} canRegenerate={canRegenerateAnswer} onRegenerate={onRegenerateRun} />}
+            {shouldShowHistory && <MessageHistory messages={messages} run={visibleRun} locale={locale} canRegenerate={canRegenerateAnswer} onRegenerate={onRegenerateRun} />}
             {shouldShowAssistantDraft && <AssistantDraft run={visibleRun} locale={locale} onRetry={onRetryRun} />}
             <ActiveToolCalls run={visibleRun} locale={locale} onApproveToolCall={onApproveToolCall} onDenyToolCall={onDenyToolCall} />
             {(state === 'no-thread' || state === 'empty-thread' || state === 'loading' || state === 'error' || state === 'backend-unavailable') && <StatePanel state={state} error={state === 'error' ? error : null} locale={locale} />}
@@ -423,7 +542,6 @@ export function ChatCanvas({ thread, messages, run, loading, error, dataSourceMo
         disabled={composerDisabled}
         providerUnavailable={providerUnavailableBeforeSend}
         placeholder={composerPlaceholder}
-        mode={mode}
         threadSelected={Boolean(thread)}
         run={visibleRun}
         messages={messages}

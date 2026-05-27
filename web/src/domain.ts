@@ -459,6 +459,8 @@ export type Run = {
   scriptId?: RuntimeScriptId
   attemptOfMessageId?: string
   assistantDraft?: AssistantDraft
+  thinkingSummary?: string
+  thinkingDurationSeconds?: number
   createdAt?: string
   completedAt?: string
 }

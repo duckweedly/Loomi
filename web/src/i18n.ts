@@ -125,6 +125,7 @@ type Dictionary = {
     stoppedDraft: string
     recoveringDraft: string
     modelDrafting: string
+    thinkingHints: string[]
     generating: string
   }
   settings: {
@@ -240,7 +241,7 @@ export const dictionaries: Record<Locale, Dictionary> = {
       openRightTools: '打开右侧工具',
     },
     sidebar: {
-      newChat: '新对话',
+      newChat: '新会话',
       newWork: '新工作',
       projects: '项目',
       scheduled: '计划任务',
@@ -258,7 +259,7 @@ export const dictionaries: Record<Locale, Dictionary> = {
       loadingThreads: '加载会话中',
       retry: '重试',
       searchThreads: '搜索会话',
-      emptyThreads: (mode) => `暂无 ${mode} 会话`,
+      emptyThreads: () => '暂无会话',
     },
     runtime: {
       eventGroups: {
@@ -366,6 +367,7 @@ export const dictionaries: Record<Locale, Dictionary> = {
       stoppedDraft: '已停止生成，保留已生成内容',
       recoveringDraft: '恢复中…',
       modelDrafting: '模型正在生成回复',
+      thinkingHints: ['组织回复', '梳理线索', '核对上下文', '提炼重点', '推敲答案', '收束思路', '准备回答', '再看一眼'],
       generating: '生成中',
     },
     settings: {
@@ -479,7 +481,7 @@ export const dictionaries: Record<Locale, Dictionary> = {
       openRightTools: 'Open right tools',
     },
     sidebar: {
-      newChat: 'New Chat',
+      newChat: 'New thread',
       newWork: 'New Work',
       projects: 'Projects',
       scheduled: 'Scheduled',
@@ -497,7 +499,7 @@ export const dictionaries: Record<Locale, Dictionary> = {
       loadingThreads: 'Loading threads',
       retry: 'Retry',
       searchThreads: 'Search threads',
-      emptyThreads: (mode) => `No ${mode} threads`,
+      emptyThreads: () => 'No threads',
     },
     runtime: {
       eventGroups: {
@@ -605,6 +607,7 @@ export const dictionaries: Record<Locale, Dictionary> = {
       stoppedDraft: 'Generation stopped; generated content was preserved',
       recoveringDraft: 'Recovering…',
       modelDrafting: 'Model is drafting a reply',
+      thinkingHints: ['Organizing reply', 'Tracing context', 'Checking details', 'Sharpening answer', 'Gathering signal', 'Preparing reply'],
       generating: 'Generating',
     },
     settings: {

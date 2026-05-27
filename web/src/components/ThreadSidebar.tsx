@@ -1,14 +1,11 @@
 import { useState } from 'react'
-import { BriefcaseBusiness, Check, Clock3, FolderKanban, MessageCircle, MessageSquarePlus, MoreHorizontal, Pencil, Settings, Trash2, X } from 'lucide-react'
+import { Button } from 'animal-island-ui'
+import { Check, MessageSquarePlus, MoreHorizontal, Pencil, Settings, Trash2, X } from 'lucide-react'
 import type { Thread } from '../domain'
 import { createSidebarFooterItems } from './sidebarFooterItems'
-import { createSidebarModeMenuItems, type SidebarMode } from './sidebarModeMenuItems'
 
 type SidebarCopy = {
   newChat: string
-  newWork: string
-  projects: string
-  scheduled: string
   threads: string
   settings: string
   theme: string
@@ -22,25 +19,19 @@ type SidebarCopy = {
   loadingThreads: string
   retry: string
   searchThreads: string
-  emptyThreads: (mode: SidebarMode) => string
+  emptyThreads: (mode: Thread['mode']) => string
 }
 
 type Props = {
   collapsed: boolean
   threads: Thread[]
   selectedThreadId: string
-  selectedMode: SidebarMode
-  modeCopy: {
-    chat: string
-    work: string
-  }
   theme: 'dark' | 'light'
   loading?: boolean
   error?: string | null
   copy: SidebarCopy
   onRefresh: () => void
   onSelectThread: (threadId: string) => void
-  onSelectMode: (mode: SidebarMode) => void
   onCreateThread: () => void
   onRenameThread: (threadId: string, title: string) => void
   onArchiveThread: (threadId: string) => void
@@ -52,14 +43,11 @@ export function ThreadSidebar({
   collapsed,
   threads,
   selectedThreadId,
-  selectedMode,
-  modeCopy,
   loading = false,
   error = null,
   copy,
   onRefresh,
   onSelectThread,
-  onSelectMode,
   onCreateThread,
   onRenameThread,
   onArchiveThread,
@@ -69,7 +57,6 @@ export function ThreadSidebar({
   const [editingThreadId, setEditingThreadId] = useState<string | null>(null)
   const [renameDraft, setRenameDraft] = useState('')
   const footerItems = createSidebarFooterItems()
-  const modeMenuItems = createSidebarModeMenuItems(selectedMode, copy)
   const runStatusCopy: Record<Thread['runStatus'], string> = {
     pending: 'Pending',
     queued: 'Queued',
@@ -111,40 +98,17 @@ export function ThreadSidebar({
 
   return (
     <aside className="sidebar">
-      <div className="sidebar-mode-row" aria-label="Workspace mode">
-        <button className={selectedMode === 'chat' ? 'selected' : undefined} type="button" onClick={() => onSelectMode('chat')} title={modeCopy.chat}>
-          <MessageCircle size={17} />
-          <span>{modeCopy.chat}</span>
-        </button>
-        <button className={selectedMode === 'work' ? 'selected' : undefined} type="button" onClick={() => onSelectMode('work')} title={modeCopy.work}>
-          <BriefcaseBusiness size={17} />
-          <span>{modeCopy.work}</span>
-        </button>
-      </div>
-
-      <div className="sidebar-section nav-stack compact-nav">
-        {modeMenuItems.filter((item) => item.id !== 'new-chat').map((item) => (
-          <button className="nav-item" key={item.id} onClick={item.action === 'create-thread' ? onCreateThread : undefined}>
-            {item.id === 'projects' && <FolderKanban size={15} />}
-            {item.id === 'scheduled' && <Clock3 size={15} />}
-            {item.label}
-          </button>
-        ))}
-      </div>
-
-      <div className="sidebar-divider" />
-
       <div className="sidebar-section thread-list-section">
         <div className="section-label">
           <span>{copy.threads}</span>
-          <button className="thread-create-button" type="button" aria-label={copy.newChat} title={copy.newChat} onClick={onCreateThread}>
+          <Button className="thread-create-button" htmlType="button" aria-label={copy.newChat} title={copy.newChat} onClick={onCreateThread}>
             <MessageSquarePlus size={14} />
-          </button>
+          </Button>
         </div>
         <div className="thread-list">
           {loading && <div className="thread-state">{copy.loadingThreads}</div>}
           {error && <div className="thread-state error"><span>{error}</span><button type="button" onClick={onRefresh}>{copy.retry}</button></div>}
-          {threads.length === 0 && <div className="thread-state empty">{copy.emptyThreads(selectedMode)}</div>}
+          {threads.length === 0 && <div className="thread-state empty">{copy.emptyThreads('chat')}</div>}
           {threads.map((thread) => (
             <div className={thread.id === selectedThreadId ? 'thread-row selected' : 'thread-row'} key={thread.id}>
               {editingThreadId === thread.id ? (
@@ -170,14 +134,14 @@ export function ThreadSidebar({
                 </form>
               ) : (
                 <>
-                  <button
+                  <Button
                     className={thread.id === selectedThreadId ? 'thread-card selected' : 'thread-card'}
                     onClick={() => onSelectThread(thread.id)}
                   >
                     <span className={`run-dot ${thread.runStatus}`} aria-label={runStatusCopy[thread.runStatus]} title={runStatusCopy[thread.runStatus]} />
                     <span className="thread-title">{thread.title}</span>
-                  </button>
-                  <button
+                  </Button>
+                  <Button
                     className="thread-action"
                     aria-expanded={threadMenuId === thread.id}
                     aria-label={copy.threadActions}
@@ -187,7 +151,7 @@ export function ThreadSidebar({
                     }}
                   >
                     <MoreHorizontal size={14} />
-                  </button>
+                  </Button>
                 </>
               )}
               {threadMenuId === thread.id && (
@@ -202,9 +166,9 @@ export function ThreadSidebar({
       </div>
       <div className="sidebar-footer">
         {footerItems.map((item) => (
-          <button className="sidebar-settings-button" key={item.id} type="button" aria-label={copy.settings} title={copy.settings} onClick={onOpenSettings}>
+          <Button className="sidebar-settings-button" key={item.id} htmlType="button" aria-label={copy.settings} title={copy.settings} onClick={onOpenSettings}>
             <Settings size={18} />
-          </button>
+          </Button>
         ))}
       </div>
     </aside>

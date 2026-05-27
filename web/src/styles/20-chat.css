@@ -416,29 +416,32 @@
 }
 
 .message-draft-status span {
-  width: 7px;
-  height: 7px;
-  border-radius: 999px;
-  background: var(--accent);
-  opacity: 0.72;
-  animation: draft-pulse 1.2s ease-in-out infinite;
+  display: none;
 }
 
 .message-draft-status p {
   margin: 0;
 }
 
-@keyframes draft-pulse {
-  0%,
-  100% {
-    opacity: 0.35;
-    transform: scale(0.86);
-  }
+.run-thinking-status {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.35;
+}
 
-  50% {
-    opacity: 0.9;
-    transform: scale(1);
-  }
+@keyframes thinking-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+.thinking-shimmer {
+  background: linear-gradient(90deg, var(--text-secondary), var(--text-primary), var(--text-secondary));
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: thinking-shimmer 3s ease-in-out infinite;
 }
 
 .message-markdown {
@@ -485,10 +488,24 @@
 .message-markdown h2 { font-size: 18px; }
 .message-markdown h3 { font-size: 16px; }
 
+.conversation-divider {
+  display: grid;
+  width: min(520px, calc(var(--content-column-width) - 84px));
+  margin: 28px auto 18px;
+  justify-items: center;
+  opacity: 0.95;
+}
+
+.conversation-divider [class*='divider'],
+.conversation-divider div {
+  width: 100%;
+}
+
 .message-markdown code {
-  border-radius: 0;
-  padding: 0;
-  background: transparent;
+  border: 1px solid color-mix(in srgb, var(--border-subtle) 72%, transparent);
+  border-radius: 6px;
+  padding: 1px 5px;
+  background: color-mix(in srgb, var(--text-primary) 5%, transparent);
   color: inherit;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 0.92em;
@@ -500,43 +517,56 @@
   overflow-x: auto;
   border: 0;
   border-radius: 0;
-  padding: 8px 38px 8px 0;
+  padding: 48px 48px 24px 34px;
   background: transparent;
 }
 
 .message-markdown pre code {
+  border: 0;
+  border-radius: 0;
   padding: 0;
   background: transparent;
-  color: inherit;
+  color: var(--text-primary);
+  font-size: 15px;
+  line-height: 1.58;
   word-break: normal;
 }
 
 .message-code-block {
   position: relative;
-  margin: 10px 0 12px;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
+  margin: 14px 0 16px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--border-subtle) 86%, var(--text-primary) 14%);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface-primary) 82%, var(--bg-panel-muted) 18%);
 }
 
 .message-code-block-head {
   position: absolute;
-  top: 5px;
-  right: 0;
+  top: 20px;
+  left: 22px;
+  right: 22px;
   z-index: 1;
   display: flex;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: space-between;
   pointer-events: none;
+}
+
+.message-code-block-lang {
+  color: var(--text-secondary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 13px;
+  line-height: 28px;
 }
 
 .message-code-block-head button {
   display: inline-grid;
-  width: 24px;
-  height: 24px;
+  width: 28px;
+  height: 28px;
   place-items: center;
   border: 0;
-  border-radius: 5px;
+  border-radius: 6px;
   background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
@@ -545,7 +575,32 @@
 
 .message-code-block-head button:hover {
   color: var(--text-primary);
-  background: color-mix(in srgb, var(--surface-primary) 72%, transparent);
+  background: color-mix(in srgb, var(--text-primary) 7%, transparent);
+}
+
+.app-shell[data-theme='dark'] .message-markdown code {
+  border-color: rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.055);
+}
+
+.app-shell[data-theme='dark'] .message-markdown pre code {
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-primary);
+}
+
+.app-shell[data-theme='dark'] .message-code-block {
+  border-color: rgba(255, 255, 255, 0.13);
+  background: color-mix(in srgb, var(--surface-primary) 72%, #111111 28%);
+}
+
+.app-shell[data-theme='dark'] .message-code-block-head button {
+  color: var(--text-secondary);
+}
+
+.app-shell[data-theme='dark'] .message-code-block-head button:hover {
+  background: rgba(255, 255, 255, 0.075);
+  color: var(--text-primary);
 }
 
 .message-markdown a {

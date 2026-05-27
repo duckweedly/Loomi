@@ -41,10 +41,10 @@ describe('deriveWorkPlanProjection', () => {
     expect(projection?.recentEvents[0].detail).toBe('Plan updated')
   })
 
-  test('does not project chat mode even when events contain work metadata', () => {
-    const run: Run = { id: 'run-chat', threadId: chatThread.id, status: 'running', model: 'Mock', context: 'local_simulated', events: [{ id: 'evt-chat', type: 'work.plan.updated', label: 'Work', detail: 'Should not render', time: 'Now', status: 'running' }] }
+  test('projects safe plan metadata regardless of the legacy thread mode', () => {
+    const run: Run = { id: 'run-chat', threadId: chatThread.id, status: 'running', model: 'Mock', context: 'local_simulated', events: [{ id: 'evt-chat', type: 'work.plan.updated', label: 'Work', detail: 'Should not render', time: 'Now', status: 'running', metadata: { work_steps: [{ title: 'Review metadata', status: 'running' }] } }] }
 
-    expect(deriveWorkPlanProjection(chatThread, [], run)).toBeNull()
+    expect(deriveWorkPlanProjection(chatThread, [], run)?.recentEvents[0].detail).toBe('Should not render')
   })
 
   test('replays the latest safe todo snapshot from run event metadata', () => {
@@ -101,7 +101,7 @@ describe('deriveWorkPlanProjection', () => {
     expect(projection?.todoSnapshot?.items[1].summary).toBe('Reading safe metadata only')
   })
 
-  test('keeps todo snapshots work-only and strips unsafe todo metadata', () => {
+  test('projects todo snapshots by metadata and strips unsafe todo metadata', () => {
     const run: Run = {
       id: 'run-work',
       threadId: workThread.id,
@@ -131,7 +131,7 @@ describe('deriveWorkPlanProjection', () => {
       }],
     }
 
-    expect(deriveWorkPlanProjection(chatThread, [], { ...run, threadId: chatThread.id })).toBeNull()
+    expect(deriveWorkPlanProjection(chatThread, [], { ...run, threadId: chatThread.id })?.todoSnapshot?.redactionApplied).toBe(true)
 
     const projection = deriveWorkPlanProjection(workThread, messages, run)
     const serialized = JSON.stringify(projection?.todoSnapshot)

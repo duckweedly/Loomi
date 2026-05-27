@@ -1,3 +1,4 @@
+import { Select, Switch } from 'animal-island-ui'
 import { Check, ChevronDown, Eye, Filter, Pencil, Trash2, X } from 'lucide-react'
 import { useState } from 'react'
 import type { MemoryAuditItem, MemoryEntry, MemoryFilters, MemoryWriteProposal } from '../domain'
@@ -248,6 +249,17 @@ export function MemoryPanel({
   onDenyProposal,
 }: Props) {
   const copy = copyFor(locale)
+  const scopeTypeOptions = [
+    { key: '', label: copy.any },
+    { key: 'user', label: copy.user },
+    { key: 'thread', label: copy.thread },
+  ]
+  const sourceTypeOptions = [
+    { key: 'any', label: copy.any },
+    { key: 'manual', label: copy.manual },
+    { key: 'thread', label: copy.thread },
+    { key: 'run', label: copy.run },
+  ]
   const [filtersOpen, setFiltersOpen] = useState(isActiveFilter(filters))
   const [editingProposalID, setEditingProposalID] = useState<string | null>(null)
   const [proposalDrafts, setProposalDrafts] = useState<Record<string, { title: string; summary: string }>>({})
@@ -303,11 +315,7 @@ export function MemoryPanel({
       {filtersOpen && <div className="memory-filter-grid" aria-label="Memory filters">
         <label>
           <span>{copy.scopeType}</span>
-          <select value={filters.scopeType ?? ''} onChange={(event) => updateFilters({ ...filters, scopeType: event.target.value as MemoryFilters['scopeType'] })}>
-            <option value="">{copy.any}</option>
-            <option value="user">{copy.user}</option>
-            <option value="thread">{copy.thread}</option>
-          </select>
+          <Select options={scopeTypeOptions} value={filters.scopeType ?? ''} onChange={(key) => updateFilters({ ...filters, scopeType: key as MemoryFilters['scopeType'] })} />
         </label>
         <label>
           <span>{copy.scopeId}</span>
@@ -323,19 +331,14 @@ export function MemoryPanel({
         </label>
         <label>
           <span>{copy.sourceType}</span>
-          <select value={filters.sourceType ?? 'any'} onChange={(event) => updateFilters({ ...filters, sourceType: event.target.value as MemoryFilters['sourceType'] })}>
-            <option value="any">{copy.any}</option>
-            <option value="manual">{copy.manual}</option>
-            <option value="thread">{copy.thread}</option>
-            <option value="run">{copy.run}</option>
-          </select>
+          <Select options={sourceTypeOptions} value={filters.sourceType ?? 'any'} onChange={(key) => updateFilters({ ...filters, sourceType: key as MemoryFilters['sourceType'] })} />
         </label>
         <label>
           <span>{copy.limit}</span>
           <input type="number" min="1" max="100" value={filters.limit ?? 20} onChange={(event) => updateFilters({ ...filters, limit: Number(event.target.value) || undefined })} />
         </label>
         <label className="memory-checkbox-filter">
-          <input type="checkbox" checked={Boolean(filters.includeTombstoned)} onChange={(event) => updateFilters({ ...filters, includeTombstoned: event.target.checked })} />
+          <Switch checked={Boolean(filters.includeTombstoned)} onChange={(checked) => updateFilters({ ...filters, includeTombstoned: checked })} />
           <span>{copy.includeDeleted}</span>
         </label>
         {isActiveFilter(filters) && <button className="memory-clear-filters" type="button" onClick={clearFilters}>{copy.clearFilters}</button>}

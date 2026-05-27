@@ -3,23 +3,22 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
 describe('App thread mode sidebar wiring', () => {
-  test('passes only current-mode threads into ThreadSidebar', () => {
+  test('passes the unified thread list into ThreadSidebar', () => {
     const source = readFileSync(resolve(import.meta.dir, 'App.tsx'), 'utf8')
 
-    expect(source).toContain('const selectedMode = selectedThread?.mode ?? \'chat\'')
-    expect(source).toContain('const visibleThreads = filterThreadsByMode(threads, selectedMode)')
-    expect(source).toContain('threads={visibleThreads}')
-    expect(source).not.toContain('threads={threads}')
+    expect(source).not.toContain('filterThreadsByMode')
+    expect(source).not.toContain('const selectedMode')
+    expect(source).toContain('threads={threads}')
     expect(source).toContain('useWorkspaceState(shell.defaultWorkspaceMode)')
-    expect(source).toContain('void createThread(mode)')
+    expect(source).toContain('onCreateThread={() => void createThread()}')
   })
 
-  test('wires the collapsed titlebar compose button to create the current mode thread', () => {
+  test('wires the collapsed titlebar compose button to create one default thread kind', () => {
     const source = readFileSync(resolve(import.meta.dir, 'App.tsx'), 'utf8')
 
     expect(source).toContain('titlebar-create-thread')
-    expect(source).toContain("aria-label={selectedMode === 'work' ? dictionary.sidebar.newWork : dictionary.sidebar.newChat}")
-    expect(source).toContain('onClick={() => void createThread(selectedMode)}')
+    expect(source).toContain('aria-label={dictionary.sidebar.newChat}')
+    expect(source).toContain('onClick={() => void createThread()}')
     expect(source).toContain('SquarePen')
     expect(source).toContain('{shell.sidebarCollapsed && (')
   })

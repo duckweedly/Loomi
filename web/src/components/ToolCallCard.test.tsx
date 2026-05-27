@@ -1,9 +1,21 @@
 import { describe, expect, test } from 'bun:test'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { ToolCallCard } from './ToolCallCard'
 
 describe('ToolCallCard M7 approval-required state', () => {
+  test('uses animal-island-ui Button for approval actions and removes old lobe tags', () => {
+    const source = readFileSync(resolve(import.meta.dir, 'ToolCallCard.tsx'), 'utf8')
+
+    expect(source).toContain("import { Button } from 'animal-island-ui'")
+    expect(source).not.toContain("from '@lobehub/ui'")
+    expect(source).toContain('className="tool-status-pill"')
+    expect(source).toContain('<Button className="primary"')
+    expect(source).toContain('<Button disabled={actionsDisabled}')
+  })
+
   test('renders tool name redacted arguments and disabled approval controls', () => {
     const html = renderToStaticMarkup(createElement(ToolCallCard, {
       toolCall: {

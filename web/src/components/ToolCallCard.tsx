@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Tag } from '@lobehub/ui'
+import { Button } from 'animal-island-ui'
 import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Clock3, Search, ShieldCheck, Terminal, XCircle } from 'lucide-react'
 import type { ToolCall } from '../domain'
 import type { Locale } from '../i18n'
@@ -146,7 +146,7 @@ export function ToolCallCard({ toolCall, onApprove, onDeny, locale = 'en' }: { t
       <button className="tool-card-header" type="button" disabled={!hasDetails} aria-expanded={expanded} onClick={() => setExpanded((value) => !value)}>
         <span>{toolCall.name === 'web.search' ? <Search size={14} /> : <Terminal size={14} />} {displayName}</span>
         <span className="tool-card-meta">
-          <Tag variant="filled">{statusLabel(toolCall.status, locale)}</Tag>
+          <span className="tool-status-pill">{statusLabel(toolCall.status, locale)}</span>
           {hasDetails && (expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />)}
         </span>
       </button>
@@ -171,8 +171,8 @@ export function ToolCallCard({ toolCall, onApprove, onDeny, locale = 'en' }: { t
       )}
       {approvalRequired && (
         <div className="tool-actions">
-          <button className="primary" disabled={actionsDisabled} onClick={() => void runAction('approve', onApprove)}>{pendingAction === 'approve' ? text.approving : text.approve}</button>
-          <button disabled={actionsDisabled} onClick={() => void runAction('deny', onDeny)}>{pendingAction === 'deny' ? text.denying : text.deny}</button>
+          <Button className="primary" disabled={actionsDisabled} onClick={() => void runAction('approve', onApprove)} type="primary">{pendingAction === 'approve' ? text.approving : text.approve}</Button>
+          <Button disabled={actionsDisabled} onClick={() => void runAction('deny', onDeny)}>{pendingAction === 'deny' ? text.denying : text.deny}</Button>
         </div>
       )}
       {expanded && (

@@ -1,10 +1,12 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Check, ChevronDown, Minus } from 'lucide-react'
 import type { Run, RuntimeScriptId } from '../domain'
 import type { Locale } from '../i18n'
 import { getDictionary } from '../i18n'
 import type { BackendCapabilityStatus } from '../runtime/backendCapabilityStatus'
 import { getBackendCapabilityCopy } from '../runtime/backendCapabilityStatus'
+import { nextTypewriterFrame } from '../runtime/incrementalTypewriter'
+import { thinkingHintWithElapsed } from '../runtime/thinkingHint'
 import { buildToolEventPreview, redactPreviewText } from '../runtime/toolPreview'
 import { AgentStateMotion } from './AgentStateMotion'
 
@@ -16,6 +18,10 @@ type Props = {
   capabilityStatus?: BackendCapabilityStatus
   locale?: Locale
   onSelectRuntimeScript?: (scriptId: RuntimeScriptId) => void
+}
+
+function shouldShowCapabilityRail(status?: BackendCapabilityStatus) {
+  return Boolean(status && !['mock', 'local-simulated', 'model-gateway'].includes(status))
 }
 
 function getEventClassName(event: Run['events'][number]) {
@@ -55,6 +61,7 @@ const railCopy = {
     providerFailure: 'Provider 异常',
     toolBlocked: '等待工具确认',
     detailsRecorded: '详情已记录',
+    thinkingSummary: (seconds: number) => `思考 ${seconds}s`,
     tokens: (parts: string[]) => parts.join(' / '),
   },
   en: {
@@ -79,6 +86,7 @@ const railCopy = {
     providerFailure: 'Provider failure',
     toolBlocked: 'Waiting for tool confirmation',
     detailsRecorded: 'Details recorded',
+    thinkingSummary: (seconds: number) => `Thought ${seconds}s`,
     tokens: (parts: string[]) => parts.join(' / '),
   },
 }
@@ -263,6 +271,30 @@ function displayEventTime(value: string, locale: Locale) {
   return date.toLocaleTimeString(locale === 'zh' ? 'zh-CN' : 'en-US', { hour: '2-digit', minute: '2-digit' })
 }
 
+function shouldShowRunThinking(run: Run | null) {
+  if (!run?.assistantDraft) return false
+  if (run.assistantDraft.content.trim()) return false
+  return run.status === 'pending' || run.status === 'queued' || run.status === 'running' || run.status === 'retrying' || run.status === 'recovering'
+}
+
+function shouldShowThinkingSummary(run: Run | null) {
+  return Boolean(run?.thinkingSummary && run.thinkingDurationSeconds !== undefined && (run.status === 'completed' || run.status === 'failed' || run.status === 'stopped' || run.status === 'cancelled'))
+}
+
+function useThinkingStatusLabel(label: string) {
+  const [displayed, setDisplayed] = useState(label)
+  useEffect(() => {
+    if (typeof window === 'undefined' || window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      setDisplayed(label)
+      return
+    }
+    setDisplayed((current) => nextTypewriterFrame(current, label, 4))
+    const id = window.setTimeout(() => setDisplayed(label), 140)
+    return () => window.clearTimeout(id)
+  }, [label])
+  return displayed
+}
+
 export function RunRail({ run, open, onStopRun, selectedRuntimeScript = 'success', capabilityStatus, locale = 'en', onSelectRuntimeScript }: Props) {
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set())
   const toggleSection = (section: string) => {
@@ -274,9 +306,11 @@ export function RunRail({ run, open, onStopRun, selectedRuntimeScript = 'success
     })
   }
 
-  const capabilityCopy = capabilityStatus ? getBackendCapabilityCopy(capabilityStatus, locale) : null
+  const capabilityCopy = shouldShowCapabilityRail(capabilityStatus) && capabilityStatus ? getBackendCapabilityCopy(capabilityStatus, locale) : null
   const copy = railCopy[locale]
   const recentEvents = (run?.events ?? []).filter(isRecentActivityEvent).slice(-5).reverse()
+  const thinkingStatus = run && shouldShowRunThinking(run) ? thinkingHintWithElapsed(run.id, locale, run.createdAt) : ''
+  const displayedThinkingStatus = useThinkingStatusLabel(thinkingStatus)
 
   return (
     <aside className={open ? 'floating-rail open' : 'floating-rail'}>
@@ -295,6 +329,13 @@ export function RunRail({ run, open, onStopRun, selectedRuntimeScript = 'success
             </div>
           )}
           {capabilityCopy && <div className={`capability-rail ${capabilityStatus}`}><strong>{capabilityCopy.title}</strong><span>{capabilityCopy.detail}</span></div>}
+          {run && shouldShowRunThinking(run) && <p className="run-thinking-status thinking-shimmer">{displayedThinkingStatus}</p>}
+          {run && shouldShowThinkingSummary(run) && (
+            <button className="thinking-summary-row" type="button">
+              <span>{copy.thinkingSummary(run.thinkingDurationSeconds ?? 0)}</span>
+              <small>{run.thinkingSummary}</small>
+            </button>
+          )}
           {(run?.status === 'queued' || run?.status === 'running' || run?.status === 'retrying' || run?.status === 'recovering' || run?.status === 'blocked_on_tool_approval') && onStopRun && <button className="runtime-stop-button ghost" onClick={onStopRun}>{copy.stopRun}</button>}
           <section className="runtime-event-group recent">
             <h3>{copy.recent}</h3>

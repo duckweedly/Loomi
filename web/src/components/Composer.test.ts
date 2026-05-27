@@ -63,6 +63,20 @@ describe('Composer interactions', () => {
     expect(source).toContain('if (composerDisabled || !canSubmit || (!content && !hasAttachments)) return')
   })
 
+  test('uses animal-island-ui Button directly for composer primary action', () => {
+    const source = readFileSync(resolve(import.meta.dir, 'Composer.tsx'), 'utf8')
+
+    expect(source).toContain("import { Button, Select } from 'animal-island-ui'")
+    expect(source).not.toContain("import { Button } from '@lobehub/ui'")
+  })
+
+  test('uses animal-island-ui Select directly for composer model choice', () => {
+    const source = readFileSync(resolve(import.meta.dir, 'Composer.tsx'), 'utf8')
+
+    expect(source).toContain('<Select disabled={modelOptions.length === 0}')
+    expect(source).not.toContain('<select')
+  })
+
   test('renders attachment and model affordances without unused persona or voice controls', () => {
     const html = renderToStaticMarkup(createElement(Composer, {
       threadSelected: true,
@@ -83,16 +97,16 @@ describe('Composer interactions', () => {
     expect(html).not.toContain('lucide-mic')
   })
 
-  test('renders mode-specific placeholder and honest folder limitation state', () => {
+  test('renders one placeholder and surfaces folder state without a mode switch', () => {
     const chatHtml = renderToStaticMarkup(createElement(Composer, {
-      mode: 'chat',
       threadSelected: true,
       run: null,
       messages: [],
+      workspaceFolderStatus: 'Default Home',
       onSubmit: () => {},
+      onChooseWorkspaceFolder: () => {},
     }))
     const workHtml = renderToStaticMarkup(createElement(Composer, {
-      mode: 'work',
       threadSelected: true,
       run: null,
       messages: [],
@@ -105,7 +119,9 @@ describe('Composer interactions', () => {
     expect(chatHtml).toContain('placeholder="Message Loomi"')
     expect(chatHtml).not.toContain('No folder selected')
     expect(chatHtml).not.toContain('Work tools limited')
-    expect(workHtml).toContain('placeholder="Describe the task for Loomi"')
+    expect(chatHtml).toContain('选择目录')
+    expect(chatHtml).toContain('Default Home')
+    expect(workHtml).toContain('placeholder="Message Loomi"')
     expect(workHtml).not.toContain('No folder selected')
     expect(workHtml).not.toContain('Work tools limited')
     expect(workHtml).not.toContain('Mock demo mode')

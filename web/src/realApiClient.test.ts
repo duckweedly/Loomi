@@ -67,6 +67,18 @@ describe('real API response validation', () => {
     }
   })
 
+  test('listThreads accepts an empty array after every thread is archived', async () => {
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async () => new Response(JSON.stringify({ threads: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } })) as typeof fetch
+    try {
+      const threads = await realApiClient.listThreads()
+
+      expect(threads).toEqual([])
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
   test('listModelProviders reports invalid API bodies without pretending providers are missing', async () => {
     const originalFetch = globalThis.fetch
     globalThis.fetch = (async () => new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } })) as typeof fetch

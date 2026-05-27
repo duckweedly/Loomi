@@ -247,7 +247,7 @@ describe('ChatCanvas Work mode integration', () => {
     expect(html).toContain('<textarea class="composer-input" disabled=""')
   })
 
-  test('keeps Chat mode isolated from Work Plan View', () => {
+  test('keeps the unified conversation surface from rendering a separate Work Plan View', () => {
     const html = renderToStaticMarkup(createElement(ChatCanvas, {
       sidebarCollapsed: false,
       thread: chatThread,
@@ -262,7 +262,7 @@ describe('ChatCanvas Work mode integration', () => {
       locale: 'en',
     }))
 
-    expect(deriveWorkPlanProjection(chatThread, messages, run)).toBeNull()
+    expect(deriveWorkPlanProjection(chatThread, messages, run)?.goal).toBe('Projected goal')
     expect(html).not.toContain('Work plan')
     expect(html).not.toContain('Projected goal')
     expect(html).toContain('Build Work mode UI')

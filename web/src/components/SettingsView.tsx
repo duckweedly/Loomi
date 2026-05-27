@@ -1,3 +1,4 @@
+import { Button } from 'animal-island-ui'
 import { ArrowLeft, Check, ChevronDown, ChevronRight, Minus, Plus, RefreshCw, Search, Settings as SettingsIcon, X } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 import type { BackendCapabilityState, InstalledSkill, LocalProviderDetection, MCPServerConfigInput, MCPServerStatus, MemoryAuditItem, MemoryEntry, MemoryErrorEvent, MemoryFilters, MemoryImpressionSnapshot, MemoryOverviewSnapshot, MemoryProviderStatus, MemoryProviderUpdate, MemoryWriteProposal, Persona, ProviderCapability, Thread, ToolCatalogItem, WebSearchConfig, WorkspaceRootConfig } from '../domain'
@@ -656,9 +657,9 @@ function ProviderManagementPanel({
               { value: 'local' as const, label: t.providerFilterLocal },
               { value: 'cloud' as const, label: t.providerFilterCloud },
             ].map((item) => (
-              <button key={item.value} className={filter === item.value ? 'selected' : undefined} onClick={() => setFilter(item.value)}>
+              <Button key={item.value} className={filter === item.value ? 'selected' : undefined} onClick={() => setFilter(item.value)}>
                 {item.label}
-              </button>
+              </Button>
             ))}
           </div>
         </div>
@@ -666,7 +667,7 @@ function ProviderManagementPanel({
         {!providerCards.length && (
           <div className="provider-empty-state">
             <span>{t.providerConsoleEmpty}</span>
-            <button className="provider-secondary-action" onClick={onDetectLocalProviders}>{t.localProviderDetectAction}</button>
+            <Button className="provider-secondary-action" onClick={onDetectLocalProviders}>{t.localProviderDetectAction}</Button>
           </div>
         )}
         <div className="provider-card-grid">
@@ -695,19 +696,19 @@ function ProviderManagementPanel({
                 </div>
                 <div className="provider-card-actions">
                   {provider.localProvider && !provider.enabled && provider.detectedStatus === 'available' && (
-                    <button className="provider-card-test" onClick={() => onEnableLocalProvider(provider.id)}>
+                    <Button className="provider-card-test" onClick={() => onEnableLocalProvider(provider.id)}>
                       {t.localProviderEnableForSession}
-                    </button>
+                    </Button>
                   )}
                   {provider.localProvider && provider.enabled && (
-                    <button className="provider-card-test" onClick={() => onDisableLocalProvider(provider.id)}>
+                    <Button className="provider-card-test" onClick={() => onDisableLocalProvider(provider.id)}>
                       {t.localProviderDisableForSession}
-                    </button>
+                    </Button>
                   )}
                   {capabilityIds.has(provider.id) && (
-                    <button className="provider-card-test" onClick={() => onCheckProvider(provider.id)} disabled={result?.status === 'checking'}>
+                    <Button className="provider-card-test" onClick={() => onCheckProvider(provider.id)} disabled={result?.status === 'checking'}>
                       {result?.status === 'checking' ? t.providerChecking : t.providerTestConnection}
-                    </button>
+                    </Button>
                   )}
                 </div>
               </article>
@@ -1252,18 +1253,18 @@ export function SettingsView({
   return (
     <div className="settings-shell" aria-label={t.title}>
       <nav className="settings-sidebar" aria-label="Settings categories">
-        <button className="settings-back-button" onClick={onBack}>
+        <Button className="settings-back-button" onClick={onBack}>
           <ArrowLeft size={15} /> {t.back}
-        </button>
+        </Button>
         {categoryGroups.map((group) => (
           <div className="settings-nav-group" key={group}>
             <span>{settingsCategoryGroups[group][locale]}</span>
             {getSettingsCategoriesByGroup(group, locale).map((category) => (
-              <button key={category.id} className={category.id === selectedCategoryId ? 'selected' : undefined} onClick={() => onSelectCategory(category.id)}>
+              <Button key={category.id} className={category.id === selectedCategoryId ? 'selected' : undefined} onClick={() => onSelectCategory(category.id)}>
                 <span>{category.label}</span>
                 <small>{categoryStatusLabel(category, t)}</small>
                 <ChevronRight size={13} />
-              </button>
+              </Button>
             ))}
           </div>
         ))}
@@ -1277,9 +1278,9 @@ export function SettingsView({
             <p>{selectedCategory.description}</p>
           </div>
           {isProviders ? (
-            <button className="provider-add-button" onClick={() => setIsProviderAddOpen(true)}>
+            <Button className="provider-add-button" onClick={() => setIsProviderAddOpen(true)}>
               <Plus size={18} /> {t.providerAdd}
-            </button>
+            </Button>
           ) : (
             <span className={`settings-category-pill ${selectedCategory.status}`}>{categoryStatusLabel(selectedCategory, t)}</span>
           )}

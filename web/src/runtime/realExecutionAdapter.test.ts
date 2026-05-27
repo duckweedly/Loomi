@@ -65,6 +65,31 @@ describe('applyRealRunEvent', () => {
     expect(next.events[0].type).toBe('progress.tool_call_blocked')
   })
 
+  test('projects safe thinking summary metadata without raw hidden reasoning', () => {
+    const run = { id: 'run-a', threadId: 'thread-a', status: 'running', model: 'Model gateway', context: 'model_gateway', source: 'model_gateway', events: [] } as const
+    const event: RuntimeEvent = {
+      id: 'evt-thinking-summary',
+      runId: 'run-a',
+      threadId: 'thread-a',
+      type: 'run.completed',
+      label: 'Run',
+      detail: 'Run completed',
+      time: 'Now',
+      status: 'completed',
+      metadata: {
+        thinking_summary: '检查输入并收束答案',
+        thinking_duration_seconds: 12,
+        raw_thinking: 'do not expose this hidden chain',
+      },
+    }
+
+    const next = applyRealRunEvent(run, event)
+
+    expect(next.thinkingSummary).toBe('检查输入并收束答案')
+    expect(next.thinkingDurationSeconds).toBe(12)
+    expect(JSON.stringify(next)).not.toContain('hidden chain')
+  })
+
   test('maps M7 tool lifecycle events into stable tool call state', () => {
     const run = { id: 'run-a', threadId: 'thread-a', status: 'running', model: 'Model gateway', context: 'model_gateway', source: 'model_gateway', events: [], toolCalls: [] } as const
     const requested: RuntimeEvent = { id: 'evt-tool-1', runId: 'run-a', threadId: 'thread-a', sequence: 1, type: 'tool.call.requested', label: 'tool', detail: 'Tool call requested', time: 'Now', status: 'blocked_on_tool_approval', group: 'tool-call' }

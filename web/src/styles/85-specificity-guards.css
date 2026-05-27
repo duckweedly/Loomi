@@ -29,9 +29,6 @@
 
 .app-shell[data-theme='dark'] .sidebar-settings-button,
 .app-shell[data-theme='dark'] .thread-create-button,
-.app-shell[data-theme='dark'] .sidebar-mode-row,
-.app-shell[data-theme='dark'] .sidebar-mode-row button,
-.app-shell[data-theme='dark'] .sidebar-mode-row button.selected,
 .app-shell[data-theme='dark'] .thread-card,
 .app-shell[data-theme='dark'] .thread-card.selected,
 .app-shell[data-theme='dark'] .composer,

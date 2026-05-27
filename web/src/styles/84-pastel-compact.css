@@ -94,8 +94,6 @@
   height: 1px !important;
   background: var(--border-subtle) !important;
 }
-
-.sidebar-mode-row,
 .settings-segmented-control,
 .provider-filter-tabs,
 .mode-tabs {
@@ -105,8 +103,6 @@
   background: color-mix(in srgb, var(--main-surface) 62%, transparent) !important;
   box-shadow: none !important;
 }
-
-.sidebar-mode-row button,
 .settings-segmented-control button,
 .provider-filter-tabs button,
 .mode-tabs button {
@@ -115,8 +111,6 @@
   box-shadow: none !important;
   transform: none !important;
 }
-
-.sidebar-mode-row button.selected,
 .settings-segmented-control button.selected,
 .provider-filter-tabs button.selected,
 .mode-tabs button.selected {

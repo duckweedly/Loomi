@@ -34,4 +34,17 @@ describe('ThreadSidebar layout CSS', () => {
     expect(css).toContain(".app-shell[data-runtime='electron'] .titlebar-button")
     expect(css).toContain('transform: translateY(-3px);')
   })
+
+  test('applies the visible animal island shell to navigation chrome', () => {
+    const css = readFileSync(resolve(import.meta.dir, '../styles/87-ac-site-theme.css'), 'utf8')
+
+    expect(css).toContain('.sidebar-shell')
+    expect(css).toContain('.main-titlebar')
+    expect(css).toContain('.titlebar-button')
+    expect(css).not.toContain('.sidebar-mode-row')
+    expect(css).toContain('.thread-create-button')
+    expect(css).toContain('.sidebar-settings-button')
+    expect(css).toContain('.thread-card > span')
+    expect(css).toContain('box-shadow: 0 5px 0')
+  })
 })
