@@ -71,11 +71,12 @@ type ProviderCapability struct {
 }
 
 type ProviderRequest struct {
-	ThreadID  string
-	MessageID string
-	Messages  []ProviderMessage
-	Model     string
-	Tools     []ProviderToolDefinition
+	ThreadID     string
+	MessageID    string
+	SystemPrompt string
+	Messages     []ProviderMessage
+	Model        string
+	Tools        []ProviderToolDefinition
 }
 
 type ProviderToolDefinition struct {
@@ -204,7 +205,7 @@ func (p *HTTPProvider) buildRequest(ctx context.Context, request ProviderRequest
 }
 
 func (p *HTTPProvider) buildAnthropicRequest(ctx context.Context, request ProviderRequest) (*http.Request, error) {
-	body := anthropicRequestBody{Model: selectedModel(request.Model, p.providerConfig.Model), MaxTokens: 4096, Stream: true, Messages: anthropicMessages(request.Messages)}
+	body := anthropicRequestBody{Model: selectedModel(request.Model, p.providerConfig.Model), MaxTokens: 4096, Stream: true, System: request.SystemPrompt, Messages: anthropicMessages(request.Messages)}
 	if len(body.Messages) == 0 {
 		return nil, errors.New("Provider request messages are required.")
 	}
@@ -220,6 +221,10 @@ func (p *HTTPProvider) buildAnthropicRequest(ctx context.Context, request Provid
 
 func (p *HTTPProvider) buildOpenAICompatibleRequest(ctx context.Context, request ProviderRequest) (*http.Request, error) {
 	body := openAIRequestBody{Model: selectedModel(request.Model, p.providerConfig.Model), Stream: true, Messages: openAIMessages(request.Messages), Tools: openAITools(request.Tools)}
+	if strings.TrimSpace(request.SystemPrompt) != "" {
+		system := request.SystemPrompt
+		body.Messages = append([]openAIMessage{{Role: "system", Content: &system}}, body.Messages...)
+	}
 	if len(body.Messages) == 0 {
 		return nil, errors.New("Provider request messages are required.")
 	}
@@ -412,7 +417,7 @@ func dispatchAnthropicEvent(ctx context.Context, eventName string, data string, 
 		return true
 	}
 	if event.Type == "content_block_start" && event.ContentBlock.Type == "tool_use" {
-		_ = sendProviderEvent(ctx, ch, ProviderEvent{Type: ProviderEventToolCall, ToolName: event.ContentBlock.Name})
+		_ = sendProviderEvent(ctx, ch, providerToolCallEvent(event.ContentBlock.Name, nil))
 		return false
 	}
 	if event.Type == "content_block_delta" && event.Delta.Type == "text_delta" && event.Delta.Text != "" {
@@ -509,7 +514,7 @@ func (s *openAIStreamAccumulator) flushToolCall(ctx context.Context, ch chan<- P
 			if args := acc.Args.String(); args != "" {
 				metadata["arguments_summary"] = parseToolArgumentsSummary(args)
 			}
-			_ = sendProviderEvent(ctx, ch, ProviderEvent{Type: ProviderEventToolCall, ToolName: internalProviderToolName(acc.Name), Metadata: metadata})
+			_ = sendProviderEvent(ctx, ch, providerToolCallEvent(acc.Name, metadata))
 			delete(s.toolCalls, index)
 			return true
 		}
@@ -519,12 +524,24 @@ func (s *openAIStreamAccumulator) flushToolCall(ctx context.Context, ch chan<- P
 		if args := s.functionArgs.String(); args != "" {
 			metadata["arguments_summary"] = parseToolArgumentsSummary(args)
 		}
-		_ = sendProviderEvent(ctx, ch, ProviderEvent{Type: ProviderEventToolCall, ToolName: internalProviderToolName(s.functionName), Metadata: metadata})
+		_ = sendProviderEvent(ctx, ch, providerToolCallEvent(s.functionName, metadata))
 		s.functionName = ""
 		s.functionArgs.Reset()
 		return true
 	}
 	return false
+}
+
+func providerToolCallEvent(providerName string, metadata map[string]any) ProviderEvent {
+	normalized := internalProviderToolName(providerName)
+	next := map[string]any{}
+	for key, value := range metadata {
+		next[key] = value
+	}
+	if raw := strings.TrimSpace(providerName); raw != "" && raw != normalized {
+		next["provider_tool_name"] = raw
+	}
+	return ProviderEvent{Type: ProviderEventToolCall, ToolName: normalized, Metadata: next}
 }
 
 func parseToolArgumentsSummary(raw string) map[string]any {
@@ -577,7 +594,7 @@ func internalProviderToolName(name string) string {
 		return productdata.ToolNameLSPDefinition
 	case "lsp_hover":
 		return productdata.ToolNameLSPHover
-	case "web_fetch":
+	case "web_fetch", "web.fetch", "fetch":
 		return productdata.ToolNameWebFetch
 	case "browser_open":
 		return productdata.ToolNameBrowserOpen
@@ -591,6 +608,38 @@ func internalProviderToolName(name string) string {
 		return productdata.ToolNameBrowserType
 	case "browser_press":
 		return productdata.ToolNameBrowserPress
+	case "memory_search":
+		return productdata.ToolNameMemorySearch
+	case "memory_list":
+		return productdata.ToolNameMemoryList
+	case "memory_read":
+		return productdata.ToolNameMemoryRead
+	case "memory_write":
+		return productdata.ToolNameMemoryWrite
+	case "memory_edit":
+		return productdata.ToolNameMemoryEdit
+	case "memory_forget":
+		return productdata.ToolNameMemoryForget
+	case "memory_context":
+		return productdata.ToolNameMemoryContext
+	case "memory_timeline":
+		return productdata.ToolNameMemoryTimeline
+	case "memory_connections":
+		return productdata.ToolNameMemoryConnections
+	case "memory_thread_search":
+		return productdata.ToolNameMemoryThreadSearch
+	case "memory_thread_fetch":
+		return productdata.ToolNameMemoryThreadFetch
+	case "memory_status":
+		return productdata.ToolNameMemoryStatus
+	case "notebook_read":
+		return productdata.ToolNameNotebookRead
+	case "notebook_write":
+		return productdata.ToolNameNotebookWrite
+	case "notebook_edit":
+		return productdata.ToolNameNotebookEdit
+	case "notebook_forget":
+		return productdata.ToolNameNotebookForget
 	case "todo_write":
 		return productdata.ToolNameTodoWrite
 	default:
@@ -614,7 +663,7 @@ func dispatchGeminiEvent(ctx context.Context, data string, ch chan<- ProviderEve
 				_ = sendProviderEvent(ctx, ch, ProviderEvent{Type: ProviderEventTextDelta, Text: part.Text})
 			}
 			if part.FunctionCall.Name != "" {
-				_ = sendProviderEvent(ctx, ch, ProviderEvent{Type: ProviderEventToolCall, ToolName: part.FunctionCall.Name})
+				_ = sendProviderEvent(ctx, ch, providerToolCallEvent(part.FunctionCall.Name, nil))
 			}
 		}
 	}
@@ -762,6 +811,7 @@ type anthropicRequestBody struct {
 	Model     string             `json:"model"`
 	MaxTokens int                `json:"max_tokens"`
 	Stream    bool               `json:"stream"`
+	System    string             `json:"system,omitempty"`
 	Messages  []anthropicMessage `json:"messages"`
 }
 
@@ -847,7 +897,7 @@ func openAIMessages(messages []ProviderMessage) []openAIMessage {
 			continue
 		}
 		role := message.Role
-		if role != "assistant" {
+		if role != "assistant" && role != "system" {
 			role = "user"
 		}
 		content := message.Content
@@ -921,6 +971,38 @@ func providerToolName(name string) string {
 		return "browser_type"
 	case productdata.ToolNameBrowserPress:
 		return "browser_press"
+	case productdata.ToolNameMemorySearch:
+		return "memory_search"
+	case productdata.ToolNameMemoryList:
+		return "memory_list"
+	case productdata.ToolNameMemoryRead:
+		return "memory_read"
+	case productdata.ToolNameMemoryWrite:
+		return "memory_write"
+	case productdata.ToolNameMemoryEdit:
+		return "memory_edit"
+	case productdata.ToolNameMemoryForget:
+		return "memory_forget"
+	case productdata.ToolNameMemoryContext:
+		return "memory_context"
+	case productdata.ToolNameMemoryTimeline:
+		return "memory_timeline"
+	case productdata.ToolNameMemoryConnections:
+		return "memory_connections"
+	case productdata.ToolNameMemoryThreadSearch:
+		return "memory_thread_search"
+	case productdata.ToolNameMemoryThreadFetch:
+		return "memory_thread_fetch"
+	case productdata.ToolNameMemoryStatus:
+		return "memory_status"
+	case productdata.ToolNameNotebookRead:
+		return "notebook_read"
+	case productdata.ToolNameNotebookWrite:
+		return "notebook_write"
+	case productdata.ToolNameNotebookEdit:
+		return "notebook_edit"
+	case productdata.ToolNameNotebookForget:
+		return "notebook_forget"
 	case productdata.ToolNameTodoWrite:
 		return "todo_write"
 	default:

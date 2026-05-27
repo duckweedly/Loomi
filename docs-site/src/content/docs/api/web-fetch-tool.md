@@ -14,7 +14,7 @@ description: Catalog, arguments, and result contracts for web.fetch and web.sear
     "source": "builtin",
     "group": "web",
     "risk_level": "medium",
-    "approval_policy": "always_required",
+    "approval_policy": "read_only",
     "execution_state": "executable",
     "safe_metadata": {
       "scope": "web",
@@ -41,7 +41,7 @@ description: Catalog, arguments, and result contracts for web.fetch and web.sear
 ]
 ```
 
-Chat mode RunContext can include `web.search` when persona allowlist permits it. `web.fetch` remains Work-mode only. Work mode can include both web tools.
+Chat and Work RunContext can include `web.search` and `web.fetch` when persona allowlist permits them.
 
 ## web.fetch Arguments
 

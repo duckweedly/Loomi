@@ -139,6 +139,12 @@ func TestHTTPProviderMapsCommonSearchFunctionAlias(t *testing.T) {
 	if got := internalProviderToolName("web.search"); got != productdata.ToolNameWebSearch {
 		t.Fatalf("internalProviderToolName(web.search) = %q", got)
 	}
+	if got := internalProviderToolName("fetch"); got != productdata.ToolNameWebFetch {
+		t.Fatalf("internalProviderToolName(fetch) = %q", got)
+	}
+	if got := internalProviderToolName("web.fetch"); got != productdata.ToolNameWebFetch {
+		t.Fatalf("internalProviderToolName(web.fetch) = %q", got)
+	}
 }
 
 func TestHTTPProviderSerializesOpenAIToolResultContinuation(t *testing.T) {
@@ -179,6 +185,31 @@ func TestHTTPProviderSerializesOpenAIToolResultContinuation(t *testing.T) {
 	tool := body.Messages[2]
 	if tool["role"] != "tool" || tool["tool_call_id"] != "tc_1" || tool["content"] == "" {
 		t.Fatalf("tool result message = %+v", tool)
+	}
+}
+
+func TestHTTPProviderSendsSystemPromptAsOpenAISystemMessage(t *testing.T) {
+	var body struct {
+		Messages []map[string]any `json:"messages"`
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"done\"}}]}\n\n"))
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n"))
+	}))
+	defer server.Close()
+	provider := NewHTTPProvider(ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: server.URL + "/v1", APIKey: "secret-key", Model: "gpt-5.5", Enabled: true}, server.Client())
+
+	events := collectProviderEventsForRequest(t, provider, ProviderRequest{ThreadID: "thr_1", MessageID: "msg_1", Model: "gpt-5.5", SystemPrompt: "Use tools only when needed.", Messages: []ProviderMessage{{Role: "user", Content: "hello"}}})
+
+	if len(events) != 2 || events[1].Type != ProviderEventCompleted {
+		t.Fatalf("events = %+v", events)
+	}
+	if len(body.Messages) != 2 || body.Messages[0]["role"] != "system" || body.Messages[0]["content"] != "Use tools only when needed." {
+		t.Fatalf("messages = %+v", body.Messages)
 	}
 }
 

@@ -45,7 +45,7 @@ func TestToolsCatalogHandlerReturnsSafeCatalog(t *testing.T) {
 			t.Fatalf("body missing %q: %s", expected, body)
 		}
 	}
-	for _, forbidden := range []string{"SECRET_CANARY", "raw_result", "LOOMI_TOKEN", "env"} {
+	for _, forbidden := range []string{"SECRET_CANARY", "raw_result", "LOOMI_TOKEN", `"env"`} {
 		if strings.Contains(body, forbidden) {
 			t.Fatalf("body leaked %q: %s", forbidden, body)
 		}

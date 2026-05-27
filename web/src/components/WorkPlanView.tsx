@@ -19,6 +19,10 @@ const workPlanCopy: Record<Locale, {
   todos: string
   artifacts: string
   recent: string
+  planQueue: string
+  active: string
+  done: string
+  blocked: string
   noSteps: string
   noTodos: string
   noArtifacts: string
@@ -37,6 +41,10 @@ const workPlanCopy: Record<Locale, {
     todos: '待办',
     artifacts: '产物',
     recent: '最近进度',
+    planQueue: '计划队列',
+    active: '进行中',
+    done: '已完成',
+    blocked: '需处理',
     noSteps: '还没有步骤。',
     noTodos: '还没有待办。',
     noArtifacts: '还没有产物引用。',
@@ -69,6 +77,10 @@ const workPlanCopy: Record<Locale, {
     todos: 'Todos',
     artifacts: 'Artifacts',
     recent: 'Recent progress',
+    planQueue: 'Plan queue',
+    active: 'Active',
+    done: 'Done',
+    blocked: 'Needs attention',
     noSteps: 'No steps projected yet.',
     noTodos: 'No todo snapshot yet.',
     noArtifacts: 'No artifact references yet.',
@@ -108,8 +120,18 @@ function localizedProjectionText(value: string, locale: Locale) {
   return value
 }
 
+function countStatuses(projection: WorkPlanProjection) {
+  const items = [...projection.steps, ...(projection.todoSnapshot?.items ?? [])]
+  return {
+    active: items.filter((item) => item.status === 'running' || item.status === 'pending').length,
+    done: items.filter((item) => item.status === 'completed').length,
+    blocked: items.filter((item) => item.status === 'blocked' || item.status === 'failed').length,
+  }
+}
+
 export function WorkPlanView({ projection, loading, error, locale = 'en' }: Props) {
   const copy = workPlanCopy[locale]
+  const counts = countStatuses(projection)
   if (loading) {
     return (
       <section className="work-plan-view loading" aria-label={copy.aria}>
@@ -136,6 +158,14 @@ export function WorkPlanView({ projection, loading, error, locale = 'en' }: Prop
           <h2>{projection.goal}</h2>
         </div>
         <span className={`work-plan-status ${projection.status}`}>{copy.status[projection.status] ?? projection.status}</span>
+      </div>
+      <div className="work-plan-queue-strip" aria-label={copy.planQueue}>
+        <span><strong>{projection.steps.length}</strong>{copy.steps}</span>
+        <span><strong>{projection.todoSnapshot?.items.length ?? 0}</strong>{copy.todos}</span>
+        <span><strong>{counts.active}</strong>{copy.active}</span>
+        <span><strong>{counts.done}</strong>{copy.done}</span>
+        <span><strong>{counts.blocked}</strong>{copy.blocked}</span>
+        <span><strong>{projection.artifacts.length}</strong>{copy.artifacts}</span>
       </div>
 
       {projection.emptyReason ? (

@@ -2,6 +2,22 @@ import { describe, expect, test } from 'bun:test'
 import { mockApiClient, setMockRuntimeScript } from './mockApiClient'
 
 describe('mockApiClient thread runs', () => {
+  test('rebuilds mock memory snapshots for settings preview', async () => {
+    const overview = await mockApiClient.rebuildMemoryOverviewSnapshot?.()
+    const impression = await mockApiClient.rebuildMemoryImpressionSnapshot?.()
+
+    expect(overview).toMatchObject({ rebuilt: true, hits: [] })
+    expect(impression).toMatchObject({ rebuilt: true })
+    expect(impression?.impression).toContain('No approved memories')
+  })
+
+  test('returns safe mock memory content by snapshot uri', async () => {
+    const entry = await mockApiClient.createMemoryEntry?.({ title: 'Manual note', content: 'Remember compact manual memory' })
+    const content = await mockApiClient.getMemoryContent?.(`memory://${entry?.id}`, 'read')
+
+    expect(content).toContain('Remember compact manual memory')
+  })
+
   test('creates a retrievable idle run for a new mock thread', async () => {
     const thread = await mockApiClient.createThread?.('New thread', 'chat')
 

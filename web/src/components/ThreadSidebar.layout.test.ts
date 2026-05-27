@@ -4,7 +4,11 @@ import { resolve } from 'node:path'
 
 describe('ThreadSidebar layout CSS', () => {
   test('allocates a dedicated grid column for the archive action', () => {
-    const css = readFileSync(resolve(import.meta.dir, '../styles.css'), 'utf8')
+    const css = [
+      readFileSync(resolve(import.meta.dir, '../styles.css'), 'utf8'),
+      readFileSync(resolve(import.meta.dir, '../styles/10-sidebar.css'), 'utf8'),
+      readFileSync(resolve(import.meta.dir, '../styles/90-motion-icon-fixes.css'), 'utf8'),
+    ].join('\n')
 
     expect(css).toContain('grid-template-columns: 10px minmax(0, 1fr) 24px;')
     expect(css).toContain('position: absolute;')
@@ -21,7 +25,11 @@ describe('ThreadSidebar layout CSS', () => {
   })
 
   test('aligns electron titlebar icons with the native window controls', () => {
-    const css = readFileSync(resolve(import.meta.dir, '../styles.css'), 'utf8')
+    const css = [
+      readFileSync(resolve(import.meta.dir, '../styles.css'), 'utf8'),
+      readFileSync(resolve(import.meta.dir, '../styles/00-base-shell.css'), 'utf8'),
+      readFileSync(resolve(import.meta.dir, '../styles/90-motion-icon-fixes.css'), 'utf8'),
+    ].join('\n')
 
     expect(css).toContain(".app-shell[data-runtime='electron'] .titlebar-button")
     expect(css).toContain('transform: translateY(-3px);')

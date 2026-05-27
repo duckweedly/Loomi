@@ -25,16 +25,16 @@
 
 ---
 
-## Phase 3: User Story 1 - Approved Workspace Reading (Priority: P1)
+## Phase 3: User Story 1 - Auto-Approved Workspace Reading (Priority: P1)
 
-**Goal**: Work mode can request/approve/execute glob/read/grep and continue through provider result flow.
+**Goal**: Work mode can request/auto-approve/execute bounded glob/read/grep and continue through provider result flow.
 
-**Independent Test**: Backend smoke proves approval-required before execution and success after approval for all three tools.
+**Independent Test**: Backend smoke proves read-only auto-approval and success for all three tools.
 
 - [X] T008 [P] [US1] Add backend tests for workspace tool definitions and argument normalization in `internal/runtime/tools_test.go`
 - [X] T009 [P] [US1] Add ToolBroker tests proving workspace tools use one broker entrypoint in `internal/runtime/tool_broker_test.go`
-- [X] T010 [US1] Add backend smoke for approved glob/read/grep continuation in `internal/httpapi/workspace_read_tools_smoke_test.go`
-- [X] T011 [US1] Implement approved workspace tool execution until T008-T010 pass
+- [X] T010 [US1] Add backend smoke for auto-approved glob/read/grep continuation in `internal/httpapi/workspace_read_tools_smoke_test.go`
+- [X] T011 [US1] Implement workspace read-only tool execution until T008-T010 pass
 
 ---
 
@@ -46,7 +46,7 @@
 
 - [X] T012 [P] [US2] Add workspace root/path/sensitive/symlink tests in `internal/runtime/workspace_tools_test.go`
 - [X] T013 [US2] Implement path boundary and sensitive deny behavior until T012 passes
-- [X] T014 [US2] Extend backend smoke to assert denial after approval and no sensitive content leakage
+- [X] T014 [US2] Extend backend smoke to assert denied paths fail safely and do not leak sensitive content
 
 ---
 

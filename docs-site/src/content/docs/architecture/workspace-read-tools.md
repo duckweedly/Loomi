@@ -1,18 +1,16 @@
 ---
 title: M21 Workspace Read Tools
-description: Bounded read-only workspace tools through the existing catalog, approval, broker, worker, and timeline path.
+description: Bounded read-only workspace tools through the existing catalog, broker, worker, and timeline path.
 ---
 
 M21 adds three read-only workspace tools: `workspace.glob`, `workspace.grep`, and `workspace.read`.
 
-They are builtin workspace tools, but they still use the same runtime path as other approved tools:
+They are builtin workspace tools and use the same broker/worker continuation path as other tools:
 
 ```text
 provider tool request
 -> tool_call_requested
--> tool_call_approval_required
--> user approve
--> worker resume job
+-> tool_call_approved
 -> ToolBroker
 -> workspace executor
 -> tool_call_succeeded/failed
@@ -21,9 +19,9 @@ provider tool request
 
 ## Scope
 
-The workspace root is resolved from `LOOMI_WORKSPACE_ROOT` when set. Otherwise local desktop/dev runtime defaults to the user's home directory so common requests like `Downloads`, `Desktop`, and `Documents` can run without a prior folder picker.
+The workspace root is resolved from the persisted local user workspace root when available, then mirrored into `LOOMI_WORKSPACE_ROOT` for the current API process. If no folder has been saved, the local desktop/dev runtime defaults to the user's home directory so common requests like `Downloads`, `Desktop`, and `Documents` can run without a prior folder picker.
 
-The desktop shell can update the runtime root after the user explicitly chooses a folder. Tool arguments are still normalized as relative workspace paths. Absolute paths, home expansion, `..` traversal, symlink escape, and paths outside the resolved root are rejected before content access.
+The desktop shell can update the persisted runtime root after the user explicitly chooses a folder. Tool arguments are still normalized as relative workspace paths. Absolute paths, home expansion, `..` traversal, symlink escape, and paths outside the resolved root are rejected before content access.
 
 Sensitive paths are denied before opening files:
 
@@ -44,9 +42,13 @@ Sensitive paths are denied before opening files:
 
 ## Catalog And Persona
 
-The tool catalog exposes the three workspace tools under `group=workspace`, `source=builtin`, `risk_level=low`, and `approval_policy=always_required`. Safe metadata includes `scope=workspace` and `read_only=true`; it never includes the host absolute root.
+The tool catalog exposes the three workspace tools under `group=workspace`, `source=builtin`, `risk_level=low`, and `approval_policy=read_only`. Safe metadata includes `scope=workspace` and `read_only=true`; it never includes the host absolute root.
 
-The built-in persona may list workspace tools, but RunContext filters them out for Chat mode. Work mode can enable them through the existing persona/catolog resolution path.
+Once the desktop shell has selected a workspace root, `workspace.glob`, `workspace.grep`, and `workspace.read` are auto-approved bounded reads inside that root. Workspace mutation tools, sandbox commands, browser actions, artifacts, agents, MCP, memory writes, and notebook writes remain approval-gated.
+
+The built-in persona may list workspace tools, but RunContext filters them out for Chat mode. Work mode enables tools through the existing persona/catalog resolution path and then narrows the callable surface to the latest user intent. A casual greeting should not expose workspace, sandbox, agent, artifact, browser, or web tools. A folder listing/classification request exposes the bounded workspace read tools and hides sandbox/process tools unless the user explicitly asks to run a command.
+
+For folder listing or classification, the model is guided to make one broad `workspace.glob` call with a sufficient limit, summarize the visible result, and avoid repeating the same listing. After a successful `workspace.glob`, provider continuations omit `workspace.glob` while keeping `workspace.grep` and `workspace.read` available for targeted follow-up inspection.
 
 ## Non-Goals
 

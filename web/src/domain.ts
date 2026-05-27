@@ -50,7 +50,7 @@ export type ToolCatalogItem = {
   displayName: string
   description: string
   source: 'builtin' | 'mcp'
-  group: 'runtime' | 'mcp' | 'workspace' | 'artifact' | 'sandbox' | 'lsp' | 'web' | 'browser' | 'agent'
+  group: 'runtime' | 'mcp' | 'workspace' | 'artifact' | 'sandbox' | 'lsp' | 'web' | 'browser' | 'agent' | 'memory'
   inputSchemaHash?: string
   riskLevel: 'low' | 'medium' | 'high'
   approvalPolicy: 'always_required' | 'read_only' | 'disabled'
@@ -63,6 +63,97 @@ export type WebSearchConfig = {
   hasTavilyKey: boolean
   hasBraveKey: boolean
   enabled: boolean
+}
+
+export type MemoryProviderState = 'disabled' | 'available' | 'unconfigured' | 'healthy' | 'unhealthy' | 'degraded'
+
+export type MemoryProviderStatus = {
+  enabled: boolean
+  provider: 'local' | 'semantic' | 'openviking' | 'nowledge' | string
+  label: string
+  state: MemoryProviderState
+  configured: boolean
+  commitAfterRun: boolean
+  checkedAt?: string | null
+  openviking?: OpenVikingMemoryProviderConfig
+  nowledge?: NowledgeMemoryProviderConfig
+  diagnostic: {
+    code: string
+    message: string
+  }
+}
+
+export type OpenVikingMemoryProviderConfig = {
+  baseUrl?: string
+  rootApiKey?: string
+  rootApiKeySet?: boolean
+  embeddingSelector?: string
+  embeddingProvider?: string
+  embeddingModel?: string
+  embeddingApiKey?: string
+  embeddingApiKeySet?: boolean
+  embeddingApiBase?: string
+  embeddingDimension?: number
+  vlmSelector?: string
+  vlmProvider?: string
+  vlmModel?: string
+  vlmApiKey?: string
+  vlmApiKeySet?: boolean
+  vlmApiBase?: string
+  rerankSelector?: string
+  rerankProvider?: string
+  rerankModel?: string
+  rerankApiKey?: string
+  rerankApiKeySet?: boolean
+  rerankApiBase?: string
+}
+
+export type NowledgeMemoryProviderConfig = {
+  baseUrl?: string
+  apiKey?: string
+  apiKeySet?: boolean
+  requestTimeoutMs?: number
+}
+
+export type MemoryProviderUpdate = {
+  enabled: boolean
+  provider: 'local' | 'semantic' | 'openviking' | 'nowledge' | string
+  commitAfterRun: boolean
+  semanticEndpoint?: string
+  openviking?: OpenVikingMemoryProviderConfig
+  nowledge?: NowledgeMemoryProviderConfig
+}
+
+export type MemorySnapshotHit = {
+  uri: string
+  entryId: string
+  title: string
+  abstract: string
+  isLeaf: boolean
+  updatedAt: string
+}
+
+export type MemoryOverviewSnapshot = {
+  memoryBlock: string
+  hits: MemorySnapshotHit[]
+  updatedAt: string
+  rebuilt: boolean
+}
+
+export type MemoryImpressionSnapshot = {
+  impression: string
+  updatedAt: string
+  rebuilt: boolean
+}
+
+export type MemoryErrorEvent = {
+  code: string
+  message: string
+  provider: string
+  state: string
+  checkedAt?: string
+  runId?: string
+  eventType?: string
 }
 
 export type WorkspaceRootConfig = {
@@ -137,6 +228,24 @@ export type MemoryAuditItem = {
   sourceType?: string
   redactionApplied: boolean
   occurredAt: string
+}
+
+export type MemoryWriteProposal = {
+  id: string
+  title: string
+  summary: string
+  scopeType: 'user' | 'thread'
+  scopeId: string
+  status: 'pending' | 'approved' | 'denied'
+  safetyState?: 'safe' | 'redacted' | 'blocked'
+  sourceThreadId?: string
+  sourceRunId?: string
+  sourceEventId?: string
+  createdEntryId?: string
+  createdAt: string
+  decidedAt?: string
+  decisionReason?: string
+  redactionApplied: boolean
 }
 
 export type Persona = {

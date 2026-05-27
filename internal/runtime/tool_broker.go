@@ -44,6 +44,7 @@ type DefaultToolExecutor struct {
 	BrowserExecutor   BrowserToolExecutor
 	ArtifactExecutor  ArtifactToolExecutor
 	AgentExecutor     AgentToolExecutor
+	MemoryExecutor    MemoryToolExecutor
 }
 
 func ToolInvocationFromCall(call productdata.ToolCall, catalog []productdata.ToolCatalogEntry, enabledTools []productdata.ToolResolution) ToolInvocation {
@@ -168,6 +169,13 @@ func (e DefaultToolExecutor) ExecuteTool(ctx context.Context, invocation ToolInv
 	}
 	if productdata.IsAgentToolName(invocation.ToolName) {
 		result, err := e.AgentExecutor.Execute(ctx, invocation)
+		if err != nil {
+			return ToolResult{}, err
+		}
+		return ToolResult{ToolName: invocation.ToolName, ToolCallID: invocation.ToolCallID, ResultSummary: result}, nil
+	}
+	if productdata.IsMemoryToolName(invocation.ToolName) {
+		result, err := e.MemoryExecutor.Execute(ctx, invocation)
 		if err != nil {
 			return ToolResult{}, err
 		}

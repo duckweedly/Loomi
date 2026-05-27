@@ -164,7 +164,7 @@ export function Composer({ disabled, providerUnavailable = false, placeholder, m
               </select>
             )}
           </label>
-          <Button disabled={composerDisabled || !canSubmit || (value.trim().length === 0 && !hasAttachments)} htmlType="submit" icon={<ArrowUp size={15} />} type="primary" />
+          <Button aria-label="Send message" disabled={composerDisabled || !canSubmit || (value.trim().length === 0 && !hasAttachments)} htmlType="submit" icon={<ArrowUp size={15} />} type="primary" />
         </div>
       </div>
     </form>

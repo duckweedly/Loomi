@@ -49,6 +49,10 @@ type MemorySafetyState string
 
 type MemoryWriteStatus string
 
+type MemoryProviderID string
+
+type MemoryProviderState string
+
 type ToolCatalogSource string
 
 type ToolCatalogGroup string
@@ -73,6 +77,83 @@ type WebSearchConfig struct {
 	UserID       string `json:"user_id"`
 	TavilyAPIKey string `json:"-"`
 	BraveAPIKey  string `json:"-"`
+}
+
+type WorkspaceRootConfig struct {
+	UserID string `json:"user_id"`
+	Path   string `json:"-"`
+}
+
+type MemoryProviderConfig struct {
+	UserID           string           `json:"user_id"`
+	Enabled          bool             `json:"enabled"`
+	Provider         MemoryProviderID `json:"provider"`
+	CommitAfterRun   bool             `json:"commit_after_run"`
+	SemanticEndpoint string           `json:"-"`
+	OpenViking       OpenVikingMemoryConfig
+	Nowledge         NowledgeMemoryConfig
+	Diagnostic       string    `json:"-"`
+	UpdatedAt        time.Time `json:"updated_at"`
+}
+
+type OpenVikingMemoryConfig struct {
+	BaseURL            string `json:"base_url,omitempty"`
+	RootAPIKey         string `json:"-"`
+	RootAPIKeySet      bool   `json:"root_api_key_set,omitempty"`
+	EmbeddingSelector  string `json:"embedding_selector,omitempty"`
+	EmbeddingProvider  string `json:"embedding_provider,omitempty"`
+	EmbeddingModel     string `json:"embedding_model,omitempty"`
+	EmbeddingAPIKey    string `json:"-"`
+	EmbeddingAPIKeySet bool   `json:"embedding_api_key_set,omitempty"`
+	EmbeddingAPIBase   string `json:"embedding_api_base,omitempty"`
+	EmbeddingDimension int    `json:"embedding_dimension,omitempty"`
+	VLMSelector        string `json:"vlm_selector,omitempty"`
+	VLMProvider        string `json:"vlm_provider,omitempty"`
+	VLMModel           string `json:"vlm_model,omitempty"`
+	VLMAPIKey          string `json:"-"`
+	VLMAPIKeySet       bool   `json:"vlm_api_key_set,omitempty"`
+	VLMAPIBase         string `json:"vlm_api_base,omitempty"`
+	RerankSelector     string `json:"rerank_selector,omitempty"`
+	RerankProvider     string `json:"rerank_provider,omitempty"`
+	RerankModel        string `json:"rerank_model,omitempty"`
+	RerankAPIKey       string `json:"-"`
+	RerankAPIKeySet    bool   `json:"rerank_api_key_set,omitempty"`
+	RerankAPIBase      string `json:"rerank_api_base,omitempty"`
+}
+
+type NowledgeMemoryConfig struct {
+	BaseURL          string `json:"base_url,omitempty"`
+	APIKey           string `json:"-"`
+	APIKeySet        bool   `json:"api_key_set,omitempty"`
+	RequestTimeoutMS int    `json:"request_timeout_ms,omitempty"`
+}
+
+type MemoryProviderDiagnostic struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+type MemoryProviderStatus struct {
+	Enabled        bool                     `json:"enabled"`
+	Provider       MemoryProviderID         `json:"provider"`
+	Label          string                   `json:"label"`
+	State          MemoryProviderState      `json:"state"`
+	Configured     bool                     `json:"configured"`
+	CommitAfterRun bool                     `json:"commit_after_run"`
+	CheckedAt      *time.Time               `json:"checked_at,omitempty"`
+	OpenViking     OpenVikingMemoryConfig   `json:"openviking,omitempty"`
+	Nowledge       NowledgeMemoryConfig     `json:"nowledge,omitempty"`
+	Diagnostic     MemoryProviderDiagnostic `json:"diagnostic"`
+}
+
+type MemoryProviderErrorEvent struct {
+	Code      string              `json:"code"`
+	Message   string              `json:"message"`
+	Provider  MemoryProviderID    `json:"provider"`
+	State     MemoryProviderState `json:"state"`
+	CheckedAt time.Time           `json:"checked_at"`
+	RunID     string              `json:"run_id,omitempty"`
+	EventType string              `json:"event_type,omitempty"`
 }
 
 type MCPServerConfigRecord struct {
@@ -108,6 +189,75 @@ func normalizeWebSearchConfig(input WebSearchConfig) WebSearchConfig {
 		UserID:       strings.TrimSpace(input.UserID),
 		TavilyAPIKey: strings.TrimSpace(input.TavilyAPIKey),
 		BraveAPIKey:  strings.TrimSpace(input.BraveAPIKey),
+	}
+}
+
+func normalizeWorkspaceRootConfig(input WorkspaceRootConfig) WorkspaceRootConfig {
+	return WorkspaceRootConfig{
+		UserID: strings.TrimSpace(input.UserID),
+		Path:   strings.TrimSpace(input.Path),
+	}
+}
+
+func normalizeMemoryProviderConfig(input MemoryProviderConfig, now time.Time) MemoryProviderConfig {
+	provider := MemoryProviderID(strings.TrimSpace(string(input.Provider)))
+	if provider == "" {
+		provider = MemoryProviderLocal
+	}
+	return MemoryProviderConfig{
+		UserID:           strings.TrimSpace(input.UserID),
+		Enabled:          input.Enabled,
+		Provider:         provider,
+		CommitAfterRun:   input.CommitAfterRun,
+		SemanticEndpoint: strings.TrimSpace(input.SemanticEndpoint),
+		OpenViking:       normalizeOpenVikingMemoryConfig(input.OpenViking),
+		Nowledge:         normalizeNowledgeMemoryConfig(input.Nowledge),
+		Diagnostic:       RedactEventText(strings.TrimSpace(input.Diagnostic)),
+		UpdatedAt:        now,
+	}
+}
+
+func normalizeOpenVikingMemoryConfig(input OpenVikingMemoryConfig) OpenVikingMemoryConfig {
+	dimension := input.EmbeddingDimension
+	if dimension < 0 {
+		dimension = 0
+	}
+	return OpenVikingMemoryConfig{
+		BaseURL:            strings.TrimSpace(input.BaseURL),
+		RootAPIKey:         strings.TrimSpace(input.RootAPIKey),
+		RootAPIKeySet:      input.RootAPIKeySet || strings.TrimSpace(input.RootAPIKey) != "",
+		EmbeddingSelector:  strings.TrimSpace(input.EmbeddingSelector),
+		EmbeddingProvider:  strings.TrimSpace(input.EmbeddingProvider),
+		EmbeddingModel:     strings.TrimSpace(input.EmbeddingModel),
+		EmbeddingAPIKey:    strings.TrimSpace(input.EmbeddingAPIKey),
+		EmbeddingAPIKeySet: input.EmbeddingAPIKeySet || strings.TrimSpace(input.EmbeddingAPIKey) != "",
+		EmbeddingAPIBase:   strings.TrimSpace(input.EmbeddingAPIBase),
+		EmbeddingDimension: dimension,
+		VLMSelector:        strings.TrimSpace(input.VLMSelector),
+		VLMProvider:        strings.TrimSpace(input.VLMProvider),
+		VLMModel:           strings.TrimSpace(input.VLMModel),
+		VLMAPIKey:          strings.TrimSpace(input.VLMAPIKey),
+		VLMAPIKeySet:       input.VLMAPIKeySet || strings.TrimSpace(input.VLMAPIKey) != "",
+		VLMAPIBase:         strings.TrimSpace(input.VLMAPIBase),
+		RerankSelector:     strings.TrimSpace(input.RerankSelector),
+		RerankProvider:     strings.TrimSpace(input.RerankProvider),
+		RerankModel:        strings.TrimSpace(input.RerankModel),
+		RerankAPIKey:       strings.TrimSpace(input.RerankAPIKey),
+		RerankAPIKeySet:    input.RerankAPIKeySet || strings.TrimSpace(input.RerankAPIKey) != "",
+		RerankAPIBase:      strings.TrimSpace(input.RerankAPIBase),
+	}
+}
+
+func normalizeNowledgeMemoryConfig(input NowledgeMemoryConfig) NowledgeMemoryConfig {
+	timeout := input.RequestTimeoutMS
+	if timeout < 0 {
+		timeout = 0
+	}
+	return NowledgeMemoryConfig{
+		BaseURL:          strings.TrimSpace(input.BaseURL),
+		APIKey:           strings.TrimSpace(input.APIKey),
+		APIKeySet:        input.APIKeySet || strings.TrimSpace(input.APIKey) != "",
+		RequestTimeoutMS: timeout,
 	}
 }
 
@@ -219,34 +369,36 @@ const (
 	PersonaResolvedFromThread  PersonaResolvedFrom = "thread"
 	PersonaResolvedFromDefault PersonaResolvedFrom = "default"
 
-	EventRunQueued                = "run_queued"
-	EventJobClaimed               = "job_claimed"
-	EventLeaseRenewed             = "lease_renewed"
-	EventPipelineStepStarted      = "pipeline_step_started"
-	EventPipelineStepCompleted    = "pipeline_step_completed"
-	EventPipelineStepFailed       = "pipeline_step_failed"
-	EventJobRecovering            = "job_recovering"
-	EventJobRetryScheduled        = "job_retry_scheduled"
-	EventStopRequested            = "stop_requested"
-	EventJobAttemptFailed         = "job_attempt_failed"
-	EventJobRetryExhausted        = "job_retry_exhausted"
-	EventToolCallRequested        = "tool_call_requested"
-	EventToolCallApprovalRequired = "tool_call_approval_required"
-	EventToolCallApproved         = "tool_call_approved"
-	EventToolCallDenied           = "tool_call_denied"
-	EventToolCallExecuting        = "tool_call_executing"
-	EventToolCallSucceeded        = "tool_call_succeeded"
-	EventToolCallFailed           = "tool_call_failed"
-	EventToolCallCancelled        = "tool_call_cancelled"
-	EventRunCompleted             = "run_completed"
-	EventRunFailed                = "run_failed"
-	EventRunStopped               = "run_stopped"
-	EventMemorySnapshotLoaded     = "memory_snapshot_loaded"
-	EventMemoryWriteProposed      = "memory_write_proposed"
-	EventMemoryWriteApproved      = "memory_write_approved"
-	EventMemoryWriteDenied        = "memory_write_denied"
-	EventMemoryEntryDeleted       = "memory_entry_deleted"
-	EventWorkTodoUpdated          = "work.todo.updated"
+	EventRunQueued                    = "run_queued"
+	EventJobClaimed                   = "job_claimed"
+	EventLeaseRenewed                 = "lease_renewed"
+	EventPipelineStepStarted          = "pipeline_step_started"
+	EventPipelineStepCompleted        = "pipeline_step_completed"
+	EventPipelineStepFailed           = "pipeline_step_failed"
+	EventJobRecovering                = "job_recovering"
+	EventJobRetryScheduled            = "job_retry_scheduled"
+	EventStopRequested                = "stop_requested"
+	EventJobAttemptFailed             = "job_attempt_failed"
+	EventJobRetryExhausted            = "job_retry_exhausted"
+	EventToolCallRequested            = "tool_call_requested"
+	EventToolCallApprovalRequired     = "tool_call_approval_required"
+	EventToolCallApproved             = "tool_call_approved"
+	EventToolCallDenied               = "tool_call_denied"
+	EventToolCallExecuting            = "tool_call_executing"
+	EventToolCallSucceeded            = "tool_call_succeeded"
+	EventToolCallFailed               = "tool_call_failed"
+	EventToolCallCancelled            = "tool_call_cancelled"
+	EventRunCompleted                 = "run_completed"
+	EventRunFailed                    = "run_failed"
+	EventRunStopped                   = "run_stopped"
+	EventMemorySnapshotLoaded         = "memory_snapshot_loaded"
+	EventMemoryExternalSnapshotLoaded = "memory_external_snapshot_loaded"
+	EventMemoryExternalSnapshotFailed = "memory_external_snapshot_failed"
+	EventMemoryWriteProposed          = "memory_write_proposed"
+	EventMemoryWriteApproved          = "memory_write_approved"
+	EventMemoryWriteDenied            = "memory_write_denied"
+	EventMemoryEntryDeleted           = "memory_entry_deleted"
+	EventWorkTodoUpdated              = "work.todo.updated"
 
 	CodeInvalidRequest        Code = "invalid_request"
 	CodeThreadNotFound        Code = "thread_not_found"
@@ -261,85 +413,112 @@ const (
 )
 
 const (
-	MaxThreadTitleLength                                = 120
-	MaxClientMessageIDLength                            = 120
-	ToolNameCurrentTime                                 = "runtime.get_current_time"
-	ToolNameLoadTools                                   = "tool.load_tools"
-	ToolNameLoadSkill                                   = "skill.load_skill"
-	ToolNameWorkspaceGlob                               = "workspace.glob"
-	ToolNameWorkspaceGrep                               = "workspace.grep"
-	ToolNameWorkspaceRead                               = "workspace.read"
-	ToolNameWorkspaceWriteFile                          = "workspace.write_file"
-	ToolNameWorkspaceEdit                               = "workspace.edit"
-	ToolNameWorkspacePatchPreview                       = "workspace.patch_preview"
-	ToolNameWorkspacePatchApply                         = "workspace.patch_apply"
-	ToolNameSandboxExecCommand                          = "sandbox.exec_command"
-	ToolNameSandboxStartProcess                         = "sandbox.start_process"
-	ToolNameSandboxContinueProcess                      = "sandbox.continue_process"
-	ToolNameSandboxTerminateProcess                     = "sandbox.terminate_process"
-	ToolNameLSPDiagnostics                              = "lsp.diagnostics"
-	ToolNameLSPSymbols                                  = "lsp.symbols"
-	ToolNameLSPReferences                               = "lsp.references"
-	ToolNameLSPDefinition                               = "lsp.definition"
-	ToolNameLSPHover                                    = "lsp.hover"
-	ToolNameWebFetch                                    = "web.fetch"
-	ToolNameWebSearch                                   = "web.search"
-	ToolNameBrowserOpen                                 = "browser.open"
-	ToolNameBrowserSnapshot                             = "browser.snapshot"
-	ToolNameBrowserClickLink                            = "browser.click_link"
-	ToolNameBrowserScreenshot                           = "browser.screenshot"
-	ToolNameBrowserType                                 = "browser.type"
-	ToolNameBrowserPress                                = "browser.press"
-	ToolNameArtifactCreateText                          = "artifact.create_text"
-	ToolNameArtifactRead                                = "artifact.read"
-	ToolNameArtifactList                                = "artifact.list"
-	ToolNameAgentSpawn                                  = "agent.spawn"
-	ToolNameAgentList                                   = "agent.list"
-	ToolNameAgentComplete                               = "agent.complete"
-	ToolNameTodoWrite                                   = "todo.write"
-	ToolSourceInternal                                  = "internal"
-	ToolSourceMCP                                       = "mcp"
-	ToolCatalogSourceBuiltin         ToolCatalogSource  = "builtin"
-	ToolCatalogSourceMCP             ToolCatalogSource  = "mcp"
-	ToolCatalogGroupRuntime          ToolCatalogGroup   = "runtime"
-	ToolCatalogGroupDiscovery        ToolCatalogGroup   = "discovery"
-	ToolCatalogGroupMCP              ToolCatalogGroup   = "mcp"
-	ToolCatalogGroupWorkspace        ToolCatalogGroup   = "workspace"
-	ToolCatalogGroupArtifact         ToolCatalogGroup   = "artifact"
-	ToolCatalogGroupSandbox          ToolCatalogGroup   = "sandbox"
-	ToolCatalogGroupLSP              ToolCatalogGroup   = "lsp"
-	ToolCatalogGroupWeb              ToolCatalogGroup   = "web"
-	ToolCatalogGroupBrowser          ToolCatalogGroup   = "browser"
-	ToolCatalogGroupAgent            ToolCatalogGroup   = "agent"
-	ToolCatalogGroupTodo             ToolCatalogGroup   = "todo"
-	ToolRiskLow                      ToolRiskLevel      = "low"
-	ToolRiskMedium                   ToolRiskLevel      = "medium"
-	ToolRiskHigh                     ToolRiskLevel      = "high"
-	ToolApprovalAlwaysRequired       ToolApprovalPolicy = "always_required"
-	ToolApprovalReadOnly             ToolApprovalPolicy = "read_only"
-	ToolApprovalDisabled             ToolApprovalPolicy = "disabled"
-	ToolExecutionStateExecutable     ToolExecutionState = "executable"
-	ToolExecutionStateDisabled       ToolExecutionState = "disabled"
-	ToolExecutionStateNotDiscovered  ToolExecutionState = "not_discovered"
-	ToolExecutionStateNotAllowed     ToolExecutionState = "not_allowed"
-	ToolExecutionStateNonExecutable  ToolExecutionState = "non_executable"
-	DefaultMaxBoundedToolCallsPerRun                    = 6
-	LoopMetadataKeyIndex                                = "loop_index"
-	LoopMetadataKeyMax                                  = "loop_max"
-	MaxWorkTodoItems                                    = 8
-	MaxWorkTodoTitleLength                              = 160
-	MaxWorkTodoSummaryLength                            = 240
-	MemoryScopeUser                  MemoryScopeType    = "user"
-	MemoryScopeThread                MemoryScopeType    = "thread"
-	MemoryEntryApproved              MemoryEntryStatus  = "approved"
-	MemoryEntryTombstoned            MemoryEntryStatus  = "tombstoned"
-	MemoryEntryDisabled              MemoryEntryStatus  = "disabled"
-	MemorySafetySafe                 MemorySafetyState  = "safe"
-	MemorySafetyRedacted             MemorySafetyState  = "redacted"
-	MemorySafetyBlocked              MemorySafetyState  = "blocked"
-	MemoryWritePending               MemoryWriteStatus  = "pending"
-	MemoryWriteApproved              MemoryWriteStatus  = "approved"
-	MemoryWriteDenied                MemoryWriteStatus  = "denied"
+	MaxThreadTitleLength                                 = 120
+	MaxClientMessageIDLength                             = 120
+	ToolNameCurrentTime                                  = "runtime.get_current_time"
+	ToolNameLoadTools                                    = "tool.load_tools"
+	ToolNameLoadSkill                                    = "skill.load_skill"
+	ToolNameWorkspaceGlob                                = "workspace.glob"
+	ToolNameWorkspaceGrep                                = "workspace.grep"
+	ToolNameWorkspaceRead                                = "workspace.read"
+	ToolNameWorkspaceWriteFile                           = "workspace.write_file"
+	ToolNameWorkspaceEdit                                = "workspace.edit"
+	ToolNameWorkspacePatchPreview                        = "workspace.patch_preview"
+	ToolNameWorkspacePatchApply                          = "workspace.patch_apply"
+	ToolNameSandboxExecCommand                           = "sandbox.exec_command"
+	ToolNameSandboxStartProcess                          = "sandbox.start_process"
+	ToolNameSandboxContinueProcess                       = "sandbox.continue_process"
+	ToolNameSandboxTerminateProcess                      = "sandbox.terminate_process"
+	ToolNameLSPDiagnostics                               = "lsp.diagnostics"
+	ToolNameLSPSymbols                                   = "lsp.symbols"
+	ToolNameLSPReferences                                = "lsp.references"
+	ToolNameLSPDefinition                                = "lsp.definition"
+	ToolNameLSPHover                                     = "lsp.hover"
+	ToolNameWebFetch                                     = "web.fetch"
+	ToolNameWebSearch                                    = "web.search"
+	ToolNameBrowserOpen                                  = "browser.open"
+	ToolNameBrowserSnapshot                              = "browser.snapshot"
+	ToolNameBrowserClickLink                             = "browser.click_link"
+	ToolNameBrowserScreenshot                            = "browser.screenshot"
+	ToolNameBrowserType                                  = "browser.type"
+	ToolNameBrowserPress                                 = "browser.press"
+	ToolNameArtifactCreateText                           = "artifact.create_text"
+	ToolNameArtifactRead                                 = "artifact.read"
+	ToolNameArtifactList                                 = "artifact.list"
+	ToolNameAgentSpawn                                   = "agent.spawn"
+	ToolNameAgentList                                    = "agent.list"
+	ToolNameAgentComplete                                = "agent.complete"
+	ToolNameMemorySearch                                 = "memory.search"
+	ToolNameMemoryList                                   = "memory.list"
+	ToolNameMemoryRead                                   = "memory.read"
+	ToolNameMemoryWrite                                  = "memory.write"
+	ToolNameMemoryEdit                                   = "memory.edit"
+	ToolNameMemoryForget                                 = "memory.forget"
+	ToolNameMemoryContext                                = "memory.context"
+	ToolNameMemoryTimeline                               = "memory.timeline"
+	ToolNameMemoryConnections                            = "memory.connections"
+	ToolNameMemoryThreadSearch                           = "memory.thread_search"
+	ToolNameMemoryThreadFetch                            = "memory.thread_fetch"
+	ToolNameMemoryStatus                                 = "memory.status"
+	ToolNameNotebookRead                                 = "notebook.read"
+	ToolNameNotebookWrite                                = "notebook.write"
+	ToolNameNotebookEdit                                 = "notebook.edit"
+	ToolNameNotebookForget                               = "notebook.forget"
+	ToolNameTodoWrite                                    = "todo.write"
+	ToolSourceInternal                                   = "internal"
+	ToolSourceMCP                                        = "mcp"
+	ToolCatalogSourceBuiltin         ToolCatalogSource   = "builtin"
+	ToolCatalogSourceMCP             ToolCatalogSource   = "mcp"
+	ToolCatalogGroupRuntime          ToolCatalogGroup    = "runtime"
+	ToolCatalogGroupDiscovery        ToolCatalogGroup    = "discovery"
+	ToolCatalogGroupMCP              ToolCatalogGroup    = "mcp"
+	ToolCatalogGroupWorkspace        ToolCatalogGroup    = "workspace"
+	ToolCatalogGroupArtifact         ToolCatalogGroup    = "artifact"
+	ToolCatalogGroupMemory           ToolCatalogGroup    = "memory"
+	ToolCatalogGroupSandbox          ToolCatalogGroup    = "sandbox"
+	ToolCatalogGroupLSP              ToolCatalogGroup    = "lsp"
+	ToolCatalogGroupWeb              ToolCatalogGroup    = "web"
+	ToolCatalogGroupBrowser          ToolCatalogGroup    = "browser"
+	ToolCatalogGroupAgent            ToolCatalogGroup    = "agent"
+	ToolCatalogGroupTodo             ToolCatalogGroup    = "todo"
+	ToolRiskLow                      ToolRiskLevel       = "low"
+	ToolRiskMedium                   ToolRiskLevel       = "medium"
+	ToolRiskHigh                     ToolRiskLevel       = "high"
+	ToolApprovalAlwaysRequired       ToolApprovalPolicy  = "always_required"
+	ToolApprovalReadOnly             ToolApprovalPolicy  = "read_only"
+	ToolApprovalDisabled             ToolApprovalPolicy  = "disabled"
+	ToolExecutionStateExecutable     ToolExecutionState  = "executable"
+	ToolExecutionStateDisabled       ToolExecutionState  = "disabled"
+	ToolExecutionStateNotDiscovered  ToolExecutionState  = "not_discovered"
+	ToolExecutionStateNotAllowed     ToolExecutionState  = "not_allowed"
+	ToolExecutionStateNonExecutable  ToolExecutionState  = "non_executable"
+	DefaultMaxBoundedToolCallsPerRun                     = 6
+	LoopMetadataKeyIndex                                 = "loop_index"
+	LoopMetadataKeyMax                                   = "loop_max"
+	MaxWorkTodoItems                                     = 8
+	MaxWorkTodoTitleLength                               = 160
+	MaxWorkTodoSummaryLength                             = 240
+	MemoryScopeUser                  MemoryScopeType     = "user"
+	MemoryScopeThread                MemoryScopeType     = "thread"
+	MemoryEntryApproved              MemoryEntryStatus   = "approved"
+	MemoryEntryTombstoned            MemoryEntryStatus   = "tombstoned"
+	MemoryEntryDisabled              MemoryEntryStatus   = "disabled"
+	MemorySafetySafe                 MemorySafetyState   = "safe"
+	MemorySafetyRedacted             MemorySafetyState   = "redacted"
+	MemorySafetyBlocked              MemorySafetyState   = "blocked"
+	MemoryWritePending               MemoryWriteStatus   = "pending"
+	MemoryWriteApproved              MemoryWriteStatus   = "approved"
+	MemoryWriteDenied                MemoryWriteStatus   = "denied"
+	MemoryProviderLocal              MemoryProviderID    = "local"
+	MemoryProviderSemantic           MemoryProviderID    = "semantic"
+	MemoryProviderOpenViking         MemoryProviderID    = "openviking"
+	MemoryProviderNowledge           MemoryProviderID    = "nowledge"
+	MemoryProviderStateDisabled      MemoryProviderState = "disabled"
+	MemoryProviderStateAvailable     MemoryProviderState = "available"
+	MemoryProviderStateUnconfigured  MemoryProviderState = "unconfigured"
+	MemoryProviderStateHealthy       MemoryProviderState = "healthy"
+	MemoryProviderStateUnhealthy     MemoryProviderState = "unhealthy"
+	MemoryProviderStateDegraded      MemoryProviderState = "degraded"
 )
 
 type ProductError struct {
@@ -567,6 +746,8 @@ type RunContext struct {
 	ContinuationProjection ContinuationProjection
 	Persona                PersonaSnapshot
 	MemorySnapshot         MemorySnapshot
+	NotebookSnapshot       MemorySnapshot
+	MemoryReadiness        MemoryProviderStatus
 }
 
 type ProviderRoute struct {
@@ -672,11 +853,50 @@ type MemorySearchOutput struct {
 	ExcludedCount int                  `json:"excluded_count"`
 }
 
+type MemorySnapshotHit struct {
+	URI       string    `json:"uri"`
+	EntryID   string    `json:"entry_id"`
+	Title     string    `json:"title"`
+	Abstract  string    `json:"abstract"`
+	IsLeaf    bool      `json:"is_leaf"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+type MemoryOverviewSnapshot struct {
+	MemoryBlock string              `json:"memory_block"`
+	Hits        []MemorySnapshotHit `json:"hits"`
+	UpdatedAt   time.Time           `json:"updated_at"`
+	Rebuilt     bool                `json:"rebuilt"`
+}
+
+type MemoryImpressionSnapshot struct {
+	Impression string    `json:"impression"`
+	UpdatedAt  time.Time `json:"updated_at"`
+	Rebuilt    bool      `json:"rebuilt"`
+}
+
 type MemoryAuditInput struct {
 	ThreadID    string
 	SourceRunID string
 	EventType   string
 	Limit       int
+}
+
+type MemoryWriteProposalListInput struct {
+	Status      MemoryWriteStatus
+	ScopeType   MemoryScopeType
+	ScopeID     string
+	SourceRunID string
+	Limit       int
+}
+
+type MemoryWriteProposalListOutput struct {
+	Items []MemoryWriteProposal `json:"items"`
+}
+
+type MemoryWriteProposalUpdateInput struct {
+	Title   string `json:"title"`
+	Summary string `json:"summary"`
 }
 
 type MemoryEntryAccessInput struct {
@@ -765,6 +985,20 @@ func (c RunContext) SafeSummary() map[string]any {
 		summary["memory_status"] = c.MemorySnapshot.LoadStatus
 		summary["memory_entry_count"] = len(c.MemorySnapshot.Entries)
 		summary["memory_redaction_applied"] = c.MemorySnapshot.RedactionApplied
+	}
+	if c.NotebookSnapshot.LoadStatus != "" {
+		summary["notebook_status"] = c.NotebookSnapshot.LoadStatus
+		summary["notebook_entry_count"] = len(c.NotebookSnapshot.Entries)
+		summary["notebook_redaction_applied"] = c.NotebookSnapshot.RedactionApplied
+	}
+	if c.MemoryReadiness.Provider != "" || c.MemoryReadiness.State != "" {
+		summary["memory_enabled"] = c.MemoryReadiness.Enabled
+		summary["memory_provider"] = string(c.MemoryReadiness.Provider)
+		summary["memory_provider_state"] = string(c.MemoryReadiness.State)
+		summary["memory_provider_configured"] = c.MemoryReadiness.Configured
+		if c.MemoryReadiness.Diagnostic.Code != "" {
+			summary["memory_provider_diagnostic_code"] = c.MemoryReadiness.Diagnostic.Code
+		}
 	}
 	for key, value := range c.Persona.SafeSummary() {
 		summary[key] = value
@@ -1127,11 +1361,11 @@ func ValidateToolCallRequestInput(input RecordToolCallRequestInput) (RecordToolC
 	if input.ToolCallID == "" || input.ToolName == "" {
 		return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Tool call id and name are required.")
 	}
-	if input.ToolName != ToolNameCurrentTime && !IsDiscoveryToolName(input.ToolName) && !IsWorkspaceToolName(input.ToolName) && !IsSandboxToolName(input.ToolName) && !IsLSPToolName(input.ToolName) && !IsWebToolName(input.ToolName) && !IsBrowserToolName(input.ToolName) && !IsArtifactToolName(input.ToolName) && !IsAgentToolName(input.ToolName) && !IsTodoToolName(input.ToolName) && !IsMCPToolName(input.ToolName) {
+	if input.ToolName != ToolNameCurrentTime && !IsDiscoveryToolName(input.ToolName) && !IsWorkspaceToolName(input.ToolName) && !IsSandboxToolName(input.ToolName) && !IsLSPToolName(input.ToolName) && !IsWebToolName(input.ToolName) && !IsBrowserToolName(input.ToolName) && !IsArtifactToolName(input.ToolName) && !IsAgentToolName(input.ToolName) && !IsMemoryToolName(input.ToolName) && !IsTodoToolName(input.ToolName) && !IsMCPToolName(input.ToolName) {
 		return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Tool is not supported.")
 	}
-	if (input.ToolName == ToolNameWebSearch || IsDiscoveryToolName(input.ToolName)) && input.ApprovalStatus == ToolCallApprovalApproved && input.ExecutionStatus == ToolCallExecutionNotStarted {
-		// web.search and discovery tools are bounded reads; they may enter the queue without a manual approval row.
+	if ((input.ToolName == ToolNameWebSearch || input.ToolName == ToolNameWebFetch) || IsDiscoveryToolName(input.ToolName) || IsWorkspaceReadOnlyToolName(input.ToolName)) && input.ApprovalStatus == ToolCallApprovalApproved && input.ExecutionStatus == ToolCallExecutionNotStarted {
+		// Bounded read tools may enter the queue without a manual approval row.
 	} else if input.ApprovalStatus != ToolCallApprovalRequired || input.ExecutionStatus != ToolCallExecutionBlocked {
 		return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Tool call must start blocked on approval.")
 	}
@@ -1174,6 +1408,9 @@ func ValidateToolCallRequestInput(input RecordToolCallRequestInput) (RecordToolC
 	if IsAgentToolName(input.ToolName) {
 		return validateAgentToolCallArguments(input)
 	}
+	if IsMemoryToolName(input.ToolName) {
+		return validateMemoryToolCallArguments(input)
+	}
 	if IsTodoToolName(input.ToolName) {
 		return validateTodoToolCallArguments(input)
 	}
@@ -1197,6 +1434,15 @@ func ValidateToolCallRequestInput(input RecordToolCallRequestInput) (RecordToolC
 func IsWorkspaceToolName(name string) bool {
 	switch strings.TrimSpace(name) {
 	case ToolNameWorkspaceGlob, ToolNameWorkspaceGrep, ToolNameWorkspaceRead, ToolNameWorkspaceWriteFile, ToolNameWorkspaceEdit, ToolNameWorkspacePatchPreview, ToolNameWorkspacePatchApply:
+		return true
+	default:
+		return false
+	}
+}
+
+func IsWorkspaceReadOnlyToolName(name string) bool {
+	switch strings.TrimSpace(name) {
+	case ToolNameWorkspaceGlob, ToolNameWorkspaceGrep, ToolNameWorkspaceRead:
 		return true
 	default:
 		return false
@@ -1266,6 +1512,15 @@ func IsAgentToolName(name string) bool {
 	}
 }
 
+func IsMemoryToolName(name string) bool {
+	switch strings.TrimSpace(name) {
+	case ToolNameMemorySearch, ToolNameMemoryList, ToolNameMemoryRead, ToolNameMemoryWrite, ToolNameMemoryEdit, ToolNameMemoryForget, ToolNameMemoryContext, ToolNameMemoryTimeline, ToolNameMemoryConnections, ToolNameMemoryThreadSearch, ToolNameMemoryThreadFetch, ToolNameMemoryStatus, ToolNameNotebookRead, ToolNameNotebookWrite, ToolNameNotebookEdit, ToolNameNotebookForget:
+		return true
+	default:
+		return false
+	}
+}
+
 func IsTodoToolName(name string) bool {
 	switch strings.TrimSpace(name) {
 	case ToolNameTodoWrite:
@@ -1287,11 +1542,19 @@ func validateDiscoveryToolCallArguments(input RecordToolCallRequestInput) (Recor
 	}
 	switch input.ToolName {
 	case ToolNameLoadTools:
-		if _, ok := input.ArgumentsSummary["queries"]; ok && !safeStringListArgument(input.ArgumentsSummary["queries"], 5) {
-			return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Tool lookup queries are invalid.")
+		if value, ok := input.ArgumentsSummary["queries"]; ok {
+			normalized, valid := safeStringListArgument(value, 5)
+			if !valid {
+				return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Tool lookup queries are invalid.")
+			}
+			input.ArgumentsSummary["queries"] = normalized
 		}
-		if _, ok := input.ArgumentsSummary["names"]; ok && !safeStringListArgument(input.ArgumentsSummary["names"], 20) {
-			return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Tool lookup names are invalid.")
+		if value, ok := input.ArgumentsSummary["names"]; ok {
+			normalized, valid := safeStringListArgument(value, 20)
+			if !valid {
+				return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Tool lookup names are invalid.")
+			}
+			input.ArgumentsSummary["names"] = normalized
 		}
 		if _, ok := input.ArgumentsSummary["limit"]; ok && !positiveNumberArgument(input.ArgumentsSummary["limit"]) {
 			return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Tool lookup limit is invalid.")
@@ -1661,6 +1924,144 @@ func validateAgentToolCallArguments(input RecordToolCallRequestInput) (RecordToo
 	return input, nil
 }
 
+func validateMemoryToolCallArguments(input RecordToolCallRequestInput) (RecordToolCallRequestInput, error) {
+	allowed := map[string]map[string]struct{}{
+		ToolNameMemorySearch:       {"query": {}, "limit": {}, "scope_type": {}, "scope_id": {}, "source_thread_id": {}, "source_run_id": {}, "source_type": {}},
+		ToolNameMemoryList:         {"limit": {}, "scope_type": {}, "scope_id": {}, "source_thread_id": {}, "source_run_id": {}, "source_type": {}},
+		ToolNameMemoryRead:         {"entry_id": {}, "scope_type": {}, "scope_id": {}, "source_thread_id": {}, "source_run_id": {}},
+		ToolNameMemoryWrite:        {"title": {}, "content": {}, "scope_type": {}, "scope_id": {}, "source_thread_id": {}, "source_run_id": {}, "source_event_id": {}, "idempotency_key": {}},
+		ToolNameMemoryEdit:         {"proposal_id": {}, "entry_id": {}, "title": {}, "content": {}, "scope_type": {}, "scope_id": {}, "source_thread_id": {}, "source_run_id": {}, "source_event_id": {}, "idempotency_key": {}},
+		ToolNameMemoryForget:       {"entry_id": {}, "reason": {}, "scope_type": {}, "scope_id": {}, "source_thread_id": {}, "source_run_id": {}},
+		ToolNameMemoryContext:      {"query": {}, "limit": {}, "scope_type": {}, "scope_id": {}, "source_thread_id": {}, "source_run_id": {}, "source_type": {}},
+		ToolNameMemoryTimeline:     {"limit": {}, "scope_type": {}, "scope_id": {}, "source_thread_id": {}, "source_run_id": {}, "source_type": {}},
+		ToolNameMemoryConnections:  {"entry_id": {}, "query": {}, "limit": {}, "scope_type": {}, "scope_id": {}, "source_thread_id": {}, "source_run_id": {}},
+		ToolNameMemoryThreadSearch: {"query": {}, "limit": {}},
+		ToolNameMemoryThreadFetch:  {"thread_id": {}, "limit": {}},
+		ToolNameMemoryStatus:       {},
+		ToolNameNotebookRead:       {"entry_id": {}, "scope_type": {}, "scope_id": {}, "source_thread_id": {}, "source_run_id": {}},
+		ToolNameNotebookWrite:      {"title": {}, "content": {}, "scope_type": {}, "scope_id": {}, "source_thread_id": {}, "source_run_id": {}},
+		ToolNameNotebookEdit:       {"entry_id": {}, "title": {}, "content": {}, "scope_type": {}, "scope_id": {}, "source_thread_id": {}, "source_run_id": {}},
+		ToolNameNotebookForget:     {"entry_id": {}, "reason": {}, "scope_type": {}, "scope_id": {}, "source_thread_id": {}, "source_run_id": {}},
+	}
+	for key := range input.ArgumentsSummary {
+		if _, ok := allowed[input.ToolName][key]; !ok {
+			return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Tool call argument is not supported.")
+		}
+	}
+	switch input.ToolName {
+	case ToolNameMemorySearch:
+		query, ok := input.ArgumentsSummary["query"].(string)
+		if !ok || strings.TrimSpace(query) == "" || len(strings.TrimSpace(query)) > 400 {
+			return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Memory search query is required.")
+		}
+		input.ArgumentsSummary["query"] = strings.TrimSpace(query)
+		if _, ok := input.ArgumentsSummary["limit"]; ok && !positiveNumberArgument(input.ArgumentsSummary["limit"]) {
+			return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Memory search limit is invalid.")
+		}
+	case ToolNameMemoryList, ToolNameMemoryTimeline:
+		if _, ok := input.ArgumentsSummary["limit"]; ok && !positiveNumberArgument(input.ArgumentsSummary["limit"]) {
+			return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Memory list limit is invalid.")
+		}
+	case ToolNameMemoryRead:
+		if strings.TrimSpace(memoryArgumentString(input.ArgumentsSummary, "entry_id")) == "" {
+			return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Memory entry id is required.")
+		}
+	case ToolNameMemoryWrite, ToolNameNotebookWrite:
+		title := strings.TrimSpace(memoryArgumentString(input.ArgumentsSummary, "title"))
+		content := strings.TrimSpace(memoryArgumentString(input.ArgumentsSummary, "content"))
+		if title == "" || len([]rune(title)) > 160 {
+			return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Memory write title is required.")
+		}
+		if content == "" || len([]rune(content)) > 4096 {
+			return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Memory write content is required.")
+		}
+		input.ArgumentsSummary["title"] = title
+		input.ArgumentsSummary["content"] = content
+	case ToolNameMemoryEdit:
+		if strings.TrimSpace(memoryArgumentString(input.ArgumentsSummary, "proposal_id")) == "" && strings.TrimSpace(memoryArgumentString(input.ArgumentsSummary, "entry_id")) == "" {
+			return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Memory edit target is required.")
+		}
+		title := strings.TrimSpace(memoryArgumentString(input.ArgumentsSummary, "title"))
+		content := strings.TrimSpace(memoryArgumentString(input.ArgumentsSummary, "content"))
+		if title == "" || len([]rune(title)) > 160 {
+			return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Memory edit title is required.")
+		}
+		if content == "" || len([]rune(content)) > 4096 {
+			return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Memory edit content is required.")
+		}
+		input.ArgumentsSummary["title"] = title
+		input.ArgumentsSummary["content"] = content
+	case ToolNameNotebookEdit:
+		if strings.TrimSpace(memoryArgumentString(input.ArgumentsSummary, "entry_id")) == "" {
+			return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Notebook entry id is required.")
+		}
+		title := strings.TrimSpace(memoryArgumentString(input.ArgumentsSummary, "title"))
+		content := strings.TrimSpace(memoryArgumentString(input.ArgumentsSummary, "content"))
+		if title == "" || len([]rune(title)) > 160 {
+			return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Notebook edit title is required.")
+		}
+		if content == "" || len([]rune(content)) > 4096 {
+			return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Notebook edit content is required.")
+		}
+		input.ArgumentsSummary["title"] = title
+		input.ArgumentsSummary["content"] = content
+	case ToolNameMemoryForget:
+		if strings.TrimSpace(memoryArgumentString(input.ArgumentsSummary, "entry_id")) == "" {
+			return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Memory entry id is required.")
+		}
+	case ToolNameNotebookRead, ToolNameNotebookForget:
+		if strings.TrimSpace(memoryArgumentString(input.ArgumentsSummary, "entry_id")) == "" {
+			return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Notebook entry id is required.")
+		}
+	case ToolNameMemoryContext:
+		if _, ok := input.ArgumentsSummary["limit"]; ok && !positiveNumberArgument(input.ArgumentsSummary["limit"]) {
+			return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Memory context limit is invalid.")
+		}
+	case ToolNameMemoryConnections:
+		if strings.TrimSpace(memoryArgumentString(input.ArgumentsSummary, "entry_id")) == "" && strings.TrimSpace(memoryArgumentString(input.ArgumentsSummary, "query")) == "" {
+			return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Memory connection target is required.")
+		}
+		if _, ok := input.ArgumentsSummary["limit"]; ok && !positiveNumberArgument(input.ArgumentsSummary["limit"]) {
+			return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Memory connection limit is invalid.")
+		}
+	case ToolNameMemoryThreadSearch:
+		query, ok := input.ArgumentsSummary["query"].(string)
+		if !ok || strings.TrimSpace(query) == "" || len(strings.TrimSpace(query)) > 400 {
+			return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Memory thread search query is required.")
+		}
+		input.ArgumentsSummary["query"] = strings.TrimSpace(query)
+		if _, ok := input.ArgumentsSummary["limit"]; ok && !positiveNumberArgument(input.ArgumentsSummary["limit"]) {
+			return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Memory thread search limit is invalid.")
+		}
+	case ToolNameMemoryThreadFetch:
+		if strings.TrimSpace(memoryArgumentString(input.ArgumentsSummary, "thread_id")) == "" {
+			return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Memory thread id is required.")
+		}
+		if _, ok := input.ArgumentsSummary["limit"]; ok && !positiveNumberArgument(input.ArgumentsSummary["limit"]) {
+			return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Memory thread fetch limit is invalid.")
+		}
+	case ToolNameMemoryStatus:
+		if len(input.ArgumentsSummary) != 0 {
+			return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Memory status does not accept arguments.")
+		}
+	}
+	for _, key := range []string{"entry_id", "proposal_id", "thread_id", "scope_type", "scope_id", "source_thread_id", "source_run_id", "source_event_id", "source_type", "idempotency_key", "reason"} {
+		if value, ok := input.ArgumentsSummary[key]; ok {
+			text, ok := value.(string)
+			if !ok || len([]rune(strings.TrimSpace(text))) > 240 {
+				return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Memory tool argument is invalid.")
+			}
+			input.ArgumentsSummary[key] = strings.TrimSpace(text)
+		}
+	}
+	return input, nil
+}
+
+func memoryArgumentString(args map[string]any, key string) string {
+	value, _ := args[key].(string)
+	return strings.TrimSpace(value)
+}
+
 func validateTodoToolCallArguments(input RecordToolCallRequestInput) (RecordToolCallRequestInput, error) {
 	for key := range input.ArgumentsSummary {
 		if key != "items" {
@@ -1720,22 +2121,37 @@ func boolArgument(value any) bool {
 	return ok
 }
 
-func safeStringListArgument(value any, maxItems int) bool {
-	items, ok := value.([]any)
-	if !ok || len(items) == 0 || len(items) > maxItems {
-		return false
+func safeStringListArgument(value any, maxItems int) ([]any, bool) {
+	var items []any
+	switch typed := value.(type) {
+	case string:
+		items = []any{typed}
+	case []string:
+		items = make([]any, 0, len(typed))
+		for _, item := range typed {
+			items = append(items, item)
+		}
+	case []any:
+		items = typed
+	default:
+		return nil, false
 	}
+	if len(items) == 0 || len(items) > maxItems {
+		return nil, false
+	}
+	normalized := make([]any, 0, len(items))
 	for _, item := range items {
 		text, ok := item.(string)
 		if !ok {
-			return false
+			return nil, false
 		}
 		text = strings.TrimSpace(text)
 		if text == "" || len(text) > 160 {
-			return false
+			return nil, false
 		}
+		normalized = append(normalized, text)
 	}
-	return true
+	return normalized, true
 }
 
 func sandboxArgumentStringSliceNonEmpty(value any) bool {

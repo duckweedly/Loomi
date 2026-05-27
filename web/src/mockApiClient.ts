@@ -1,5 +1,5 @@
 import type { ApiClient } from './apiClient'
-import type { InstalledSkill, LocalProviderDetection, MCPServerConfigInput, MCPServerStatus, Message, Persona, ProviderCapability, Run, RuntimeScriptId, ToolCatalogItem } from './domain'
+import type { InstalledSkill, LocalProviderDetection, MCPServerConfigInput, MCPServerStatus, MemoryEntry, MemoryErrorEvent, MemoryImpressionSnapshot, MemoryOverviewSnapshot, MemoryProviderStatus, MemoryProviderUpdate, MemoryWriteProposal, Message, Persona, ProviderCapability, Run, RuntimeScriptId, ToolCatalogItem } from './domain'
 import { messages, runs, threads } from './mockData'
 import { isRuntimeTerminal } from './runtime/executionAdapter'
 import { mockExecutionAdapter } from './runtime/mockExecutionAdapter'
@@ -12,6 +12,29 @@ let runStore = runs.map((run) => ({ ...run, events: [...run.events] }))
 let selectedRuntimeScriptId: RuntimeScriptId = 'success'
 let mockLocalProviderDetections: LocalProviderDetection[] = []
 let mockProviderCapabilities: ProviderCapability[] = []
+let mockMemoryProposals: MemoryWriteProposal[] = []
+let mockMemoryEntries: MemoryEntry[] = []
+let mockMemoryErrors: MemoryErrorEvent[] = []
+let mockMemoryProviderStatus: MemoryProviderStatus = {
+  enabled: true,
+  provider: 'local',
+  label: 'Local',
+  state: 'available',
+  configured: true,
+  commitAfterRun: false,
+  diagnostic: { code: 'ok', message: 'Ready.' },
+}
+let mockMemoryOverviewSnapshot: MemoryOverviewSnapshot = {
+  memoryBlock: 'No approved memories yet.',
+  hits: [],
+  updatedAt: new Date().toISOString(),
+  rebuilt: false,
+}
+let mockMemoryImpressionSnapshot: MemoryImpressionSnapshot = {
+  impression: 'No approved memories have been saved yet.',
+  updatedAt: new Date().toISOString(),
+  rebuilt: false,
+}
 
 const mockPersonas: Persona[] = [{
   id: 'persona-default',
@@ -211,7 +234,7 @@ const mockToolCatalog: ToolCatalogItem[] = [{
   source: 'builtin',
   group: 'web',
   riskLevel: 'medium',
-  approvalPolicy: 'always_required',
+  approvalPolicy: 'read_only',
   enabled: true,
   executionState: 'executable',
   safeMetadata: { read_only: true, scope: 'web', network_access: 'public_http_only', arguments: ['url', 'max_bytes', 'timeout_ms'] },
@@ -222,7 +245,7 @@ const mockToolCatalog: ToolCatalogItem[] = [{
   source: 'builtin',
   group: 'web',
   riskLevel: 'medium',
-  approvalPolicy: 'always_required',
+  approvalPolicy: 'read_only',
   enabled: true,
   executionState: 'executable',
   safeMetadata: { read_only: true, scope: 'web', network_access: 'search_provider_api', providers: ['tavily', 'brave'], arguments: ['query', 'provider', 'limit', 'timeout_ms'] },
@@ -325,6 +348,138 @@ const mockToolCatalog: ToolCatalogItem[] = [{
   enabled: true,
   executionState: 'executable',
   safeMetadata: { read_only: false, scope: 'agent', coordination_only: true, autonomous_execution: false, arguments: ['task_id', 'result_summary'] },
+}, {
+  name: 'memory.search',
+  displayName: 'Memory search',
+  description: 'Search approved memory summaries in the current safe scope.',
+  source: 'builtin',
+  group: 'memory',
+  riskLevel: 'medium',
+  approvalPolicy: 'always_required',
+  enabled: true,
+  executionState: 'executable',
+  safeMetadata: { read_only: true, scope: 'memory', approval_gated: true, returns_raw_content: false, arguments: ['query', 'limit'] },
+}, {
+  name: 'memory.list',
+  displayName: 'Memory list',
+  description: 'List approved memory summaries in the current safe scope.',
+  source: 'builtin',
+  group: 'memory',
+  riskLevel: 'medium',
+  approvalPolicy: 'always_required',
+  enabled: true,
+  executionState: 'executable',
+  safeMetadata: { read_only: true, scope: 'memory', approval_gated: true, returns_raw_content: false, arguments: ['limit'] },
+}, {
+  name: 'memory.read',
+  displayName: 'Memory read',
+  description: 'Read one approved memory summary without raw content.',
+  source: 'builtin',
+  group: 'memory',
+  riskLevel: 'medium',
+  approvalPolicy: 'always_required',
+  enabled: true,
+  executionState: 'executable',
+  safeMetadata: { read_only: true, scope: 'memory', approval_gated: true, returns_raw_content: false, arguments: ['entry_id'] },
+}, {
+  name: 'memory.write',
+  displayName: 'Memory write',
+  description: 'Create one approval-gated memory write proposal.',
+  source: 'builtin',
+  group: 'memory',
+  riskLevel: 'medium',
+  approvalPolicy: 'always_required',
+  enabled: true,
+  executionState: 'executable',
+  safeMetadata: { read_only: false, scope: 'memory', approval_gated: true, returns_raw_content: false, arguments: ['title', 'content'] },
+}, {
+  name: 'memory.edit',
+  displayName: 'Memory edit',
+  description: 'Edit a pending memory proposal or create an approval-gated replacement proposal.',
+  source: 'builtin',
+  group: 'memory',
+  riskLevel: 'medium',
+  approvalPolicy: 'always_required',
+  enabled: true,
+  executionState: 'executable',
+  safeMetadata: { read_only: false, scope: 'memory', approval_gated: true, returns_raw_content: false, arguments: ['proposal_id', 'entry_id', 'title', 'content'] },
+}, {
+  name: 'memory.forget',
+  displayName: 'Memory forget',
+  description: 'Tombstone one approved memory entry through the audited memory boundary.',
+  source: 'builtin',
+  group: 'memory',
+  riskLevel: 'medium',
+  approvalPolicy: 'always_required',
+  enabled: true,
+  executionState: 'executable',
+  safeMetadata: { read_only: false, scope: 'memory', approval_gated: true, returns_raw_content: false, arguments: ['entry_id', 'reason'] },
+}, {
+  name: 'memory.context',
+  displayName: 'Memory context',
+  description: 'Return provider status plus bounded relevant memory summaries.',
+  source: 'builtin',
+  group: 'memory',
+  riskLevel: 'medium',
+  approvalPolicy: 'always_required',
+  enabled: true,
+  executionState: 'executable',
+  safeMetadata: { read_only: true, scope: 'memory', approval_gated: true, returns_raw_content: false, arguments: ['query', 'limit'] },
+}, {
+  name: 'memory.timeline',
+  displayName: 'Memory timeline',
+  description: 'List safe memory audit timeline items.',
+  source: 'builtin',
+  group: 'memory',
+  riskLevel: 'medium',
+  approvalPolicy: 'always_required',
+  enabled: true,
+  executionState: 'executable',
+  safeMetadata: { read_only: true, scope: 'memory', approval_gated: true, returns_raw_content: false, arguments: ['limit'] },
+}, {
+  name: 'memory.connections',
+  displayName: 'Memory connections',
+  description: 'Return bounded related memory summaries for one entry or query.',
+  source: 'builtin',
+  group: 'memory',
+  riskLevel: 'medium',
+  approvalPolicy: 'always_required',
+  enabled: true,
+  executionState: 'executable',
+  safeMetadata: { read_only: true, scope: 'memory', approval_gated: true, returns_raw_content: false, arguments: ['entry_id', 'query', 'limit'] },
+}, {
+  name: 'memory.thread_search',
+  displayName: 'Memory thread search',
+  description: 'Search local thread and message history with safe excerpts.',
+  source: 'builtin',
+  group: 'memory',
+  riskLevel: 'medium',
+  approvalPolicy: 'always_required',
+  enabled: true,
+  executionState: 'executable',
+  safeMetadata: { read_only: true, scope: 'memory', approval_gated: true, returns_raw_content: false, arguments: ['query', 'limit'] },
+}, {
+  name: 'memory.thread_fetch',
+  displayName: 'Memory thread fetch',
+  description: 'Fetch safe local thread message excerpts.',
+  source: 'builtin',
+  group: 'memory',
+  riskLevel: 'medium',
+  approvalPolicy: 'always_required',
+  enabled: true,
+  executionState: 'executable',
+  safeMetadata: { read_only: true, scope: 'memory', approval_gated: true, returns_raw_content: false, arguments: ['thread_id', 'limit'] },
+}, {
+  name: 'memory.status',
+  displayName: 'Memory status',
+  description: 'Return memory provider readiness and configuration state.',
+  source: 'builtin',
+  group: 'memory',
+  riskLevel: 'medium',
+  approvalPolicy: 'always_required',
+  enabled: true,
+  executionState: 'executable',
+  safeMetadata: { read_only: true, scope: 'memory', approval_gated: true, returns_raw_content: false, arguments: [] },
 }]
 
 let mockMCPServers: MCPServerStatus[] = [{
@@ -530,6 +685,140 @@ export const mockApiClient: ApiClient = {
 
   async listToolCatalog() {
     return mockToolCatalog
+  },
+
+  async listMemoryEntries() {
+    return mockMemoryEntries
+  },
+
+  async searchMemory(query: string) {
+    const needle = query.trim().toLowerCase()
+    if (!needle) return mockMemoryEntries
+    return mockMemoryEntries.filter((entry) => `${entry.title} ${entry.summary}`.toLowerCase().includes(needle))
+  },
+
+  async createMemoryEntry(input: { title: string; content: string; scopeType?: 'user' | 'thread'; scopeId?: string }) {
+    const now = new Date().toISOString()
+    const entry: MemoryEntry = {
+      id: `mem_mock_${mockId++}`,
+      title: input.title,
+      summary: input.content,
+      scopeType: input.scopeType ?? 'user',
+      scopeId: input.scopeId ?? '',
+      status: 'approved',
+      safetyState: 'safe',
+      sourceType: 'manual',
+      createdAt: now,
+      updatedAt: now,
+      redactionApplied: false,
+    }
+    mockMemoryEntries = [entry, ...mockMemoryEntries]
+    mockMemoryOverviewSnapshot = {
+      memoryBlock: mockMemoryEntries.map((item) => `- ${item.title}: ${item.summary}`).join('\n') || 'No approved memories yet.',
+      hits: mockMemoryEntries.map((item) => ({ uri: `memory://${item.id}`, entryId: item.id, title: item.title, abstract: item.summary, isLeaf: true, updatedAt: item.updatedAt })),
+      updatedAt: now,
+      rebuilt: false,
+    }
+    return entry
+  },
+
+  async getMemoryProviderStatus() {
+    return mockMemoryProviderStatus
+  },
+
+  async updateMemoryProvider(input: MemoryProviderUpdate) {
+    const openviking = input.openviking ?? mockMemoryProviderStatus.openviking ?? {}
+    const nowledge = input.nowledge ?? mockMemoryProviderStatus.nowledge ?? {}
+    const provider = input.provider
+    const configured = provider === 'local'
+      || (provider === 'openviking' && Boolean(openviking.baseUrl && (openviking.rootApiKey || openviking.rootApiKeySet) && openviking.embeddingModel && openviking.vlmModel))
+      || (provider === 'nowledge' && Boolean(nowledge.baseUrl))
+      || (provider === 'semantic' && Boolean(input.semanticEndpoint))
+    mockMemoryProviderStatus = {
+      enabled: input.enabled,
+      provider,
+      label: provider === 'openviking' ? 'OpenViking' : provider === 'nowledge' ? 'Nowledge' : provider === 'semantic' ? 'Semantic' : 'Local',
+      state: input.enabled ? (provider === 'local' ? 'available' : configured ? 'healthy' : 'unconfigured') : 'disabled',
+      configured: input.enabled && configured,
+      commitAfterRun: input.commitAfterRun,
+      checkedAt: new Date().toISOString(),
+      openviking: {
+        ...openviking,
+        rootApiKey: '',
+        rootApiKeySet: Boolean(openviking.rootApiKey || openviking.rootApiKeySet),
+        embeddingApiKey: '',
+        embeddingApiKeySet: Boolean(openviking.embeddingApiKey || openviking.embeddingApiKeySet),
+        vlmApiKey: '',
+        vlmApiKeySet: Boolean(openviking.vlmApiKey || openviking.vlmApiKeySet),
+        rerankApiKey: '',
+        rerankApiKeySet: Boolean(openviking.rerankApiKey || openviking.rerankApiKeySet),
+      },
+      nowledge: { ...nowledge, apiKey: '', apiKeySet: Boolean(nowledge.apiKey || nowledge.apiKeySet) },
+      diagnostic: { code: configured ? 'ok' : `${provider}_unconfigured`, message: configured ? 'Ready.' : 'Provider is not configured.' },
+    }
+    mockMemoryErrors = configured ? [] : [{ code: mockMemoryProviderStatus.diagnostic.code, message: mockMemoryProviderStatus.diagnostic.message, provider, state: mockMemoryProviderStatus.state, checkedAt: mockMemoryProviderStatus.checkedAt ?? undefined }]
+    return mockMemoryProviderStatus
+  },
+
+  async listMemoryErrors() {
+    return mockMemoryErrors
+  },
+
+  async detectNowledgeMemoryProvider() {
+    return { detected: true, baseUrl: 'http://127.0.0.1:14242', message: 'Nowledge local instance detected.' }
+  },
+
+  async detectOpenVikingMemoryProvider() {
+    return { detected: true, baseUrl: 'http://127.0.0.1:8282', message: 'OpenViking local instance detected.' }
+  },
+
+  async getMemoryOverviewSnapshot() {
+    return mockMemoryOverviewSnapshot
+  },
+
+  async rebuildMemoryOverviewSnapshot() {
+    mockMemoryOverviewSnapshot = { ...mockMemoryOverviewSnapshot, rebuilt: true, updatedAt: new Date().toISOString() }
+    return mockMemoryOverviewSnapshot
+  },
+
+  async getMemoryImpressionSnapshot() {
+    return mockMemoryImpressionSnapshot
+  },
+
+  async rebuildMemoryImpressionSnapshot() {
+    mockMemoryImpressionSnapshot = { ...mockMemoryImpressionSnapshot, rebuilt: true, updatedAt: new Date().toISOString() }
+    return mockMemoryImpressionSnapshot
+  },
+
+  async getMemoryContent(uri: string, layer: 'overview' | 'read' = 'overview') {
+    const hit = mockMemoryOverviewSnapshot.hits.find((item) => item.uri === uri)
+    if (!hit) return ''
+    return layer === 'read' ? `${hit.title}\n\n${hit.abstract}` : hit.abstract
+  },
+
+  async listMemoryWriteProposals() {
+    return mockMemoryProposals.filter((proposal) => proposal.status === 'pending')
+  },
+
+  async updateMemoryWriteProposal(proposalId: string, input: { title: string; summary: string }) {
+    mockMemoryProposals = mockMemoryProposals.map((proposal) => (proposal.id === proposalId ? { ...proposal, title: input.title.trim(), summary: input.summary.trim() } : proposal))
+    const proposal = mockMemoryProposals.find((item) => item.id === proposalId)
+    if (!proposal) throw new Error('Memory proposal not found.')
+    return proposal
+  },
+
+  async approveMemoryWriteProposal(proposalId: string) {
+    mockMemoryProposals = mockMemoryProposals.map((proposal) => (proposal.id === proposalId ? { ...proposal, status: 'approved', decidedAt: new Date().toISOString(), decisionReason: 'approved in settings' } : proposal))
+    const proposal = mockMemoryProposals.find((item) => item.id === proposalId)
+    if (!proposal) throw new Error('Memory proposal not found.')
+    return proposal
+  },
+
+  async denyMemoryWriteProposal(proposalId: string) {
+    mockMemoryProposals = mockMemoryProposals.map((proposal) => (proposal.id === proposalId ? { ...proposal, status: 'denied', decidedAt: new Date().toISOString(), decisionReason: 'denied in settings' } : proposal))
+    const proposal = mockMemoryProposals.find((item) => item.id === proposalId)
+    if (!proposal) throw new Error('Memory proposal not found.')
+    return proposal
   },
 
   async listMCPServers() {

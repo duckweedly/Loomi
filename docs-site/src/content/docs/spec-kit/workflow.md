@@ -36,7 +36,183 @@ Claude Code 项目内命令使用横线格式：
 
 `/speckit-implement` 按任务实现，并在必要时回到 spec 或 plan 修正前提。
 
-## 当前候选：Web Search Providers
+## 当前候选：Memory Provider Error UI
+
+当前 Spec Kit 功能目录：
+
+```text
+specs/070-memory-provider-error-ui/
+```
+
+关键产物：
+
+- `spec.md`：定义 Settings > Memory recent errors 展示 runtime run/event 线索的目标、安全边界和验收标准。
+- `plan.md`：确定复用现有 recent errors panel 和前端 error formatter。
+- `tasks.md`：按 runtime/docs/validation 拆分。
+
+状态：candidate。该轮只补 runtime error display；不做 run detail navigation、modal redesign 或 raw log viewer。
+
+## 近期候选完成：Memory Provider Runtime Errors
+
+当前 Spec Kit 功能目录：
+
+```text
+specs/069-memory-provider-runtime-errors/
+```
+
+关键产物：
+
+- `spec.md`：定义 Settings > Memory recent errors 纳入 runtime provider failure 的目标、安全边界和验收标准。
+- `plan.md`：确定复用 Gateway error event、provider error read model 和 `/v1/memory/errors`。
+- `tasks.md`：按 runtime/docs/validation 拆分。
+
+状态：candidate。该轮只补 safe runtime provider errors；不做 retry scheduler、provider process restart、raw provider log viewer 或 Settings UI redesign。
+
+## 近期候选完成：Memory Nowledge Prompt Snapshot Regression
+
+当前 Spec Kit 功能目录：
+
+```text
+specs/068-memory-nowledge-prompt-snapshot/
+```
+
+关键产物：
+
+- `spec.md`：定义 Nowledge prompt recall 与 OpenViking 同等可验证的目标、安全边界和验收标准。
+- `plan.md`：确定复用 Gateway prompt enrichment、Nowledge adapter 和 safe run event metadata。
+- `tasks.md`：按 runtime/docs/validation 拆分。
+
+状态：candidate。该轮只补 Nowledge-specific regression；不做 UI redesign、provider endpoint redesign、background snapshot cache 或 automatic provider install。
+
+## 近期候选完成：Memory External Snapshot Event
+
+当前 Spec Kit 功能目录：
+
+```text
+specs/067-memory-external-snapshot-event/
+```
+
+关键产物：
+
+- `spec.md`：定义 external provider prompt recall 的 timeline 可观测性目标、安全边界和验收标准。
+- `plan.md`：确定复用 Gateway prompt enrichment 和 safe run event metadata。
+- `tasks.md`：按 runtime/docs/validation 拆分。
+
+状态：candidate。该轮只补 `memory_external_snapshot_loaded` progress event；不做 UI redesign、memory audit history、background snapshot cache 或 raw provider payload event。
+
+## 近期候选完成：Memory External Prompt Snapshot
+
+当前 Spec Kit 功能目录：
+
+```text
+specs/066-memory-external-prompt-snapshot/
+```
+
+关键产物：
+
+- `spec.md`：定义外部 provider 在初始模型请求前贡献 safe memory prompt 的目标、安全边界和验收标准。
+- `plan.md`：确定复用 Gateway、`MemoryToolExecutor.externalMemorySearch` 和现有 `<memory>` prompt block。
+- `tasks.md`：按 runtime/docs/validation 拆分。
+
+状态：candidate。该轮只补 external provider recall before initial provider request；不做 background snapshot cache、LLM distill、recursive OpenViking tree snapshot 或 raw provider payload prompt injection。
+
+## 近期候选完成：Memory OpenViking Connections
+
+当前 Spec Kit 功能目录：
+
+```text
+specs/065-memory-openviking-connections/
+```
+
+关键产物：
+
+- `spec.md`：定义 OpenViking `memory.connections` 的用户目标、安全边界和验收标准。
+- `plan.md`：确定复用 `MemoryToolExecutor.connections`、OpenViking `/api/v1/fs/ls` 和 safe tool result projection。
+- `tasks.md`：按 runtime/docs/validation 拆分。
+
+状态：candidate。该轮只补 `viking://...` direct child connections；不做递归树遍历、raw provider payload、OpenViking install/start/restart bridge 或 provider write/delete 语义变更。
+
+## 近期候选完成：Memory OpenViking Detect
+
+当前 Spec Kit 功能目录：
+
+```text
+specs/064-memory-openviking-detect/
+```
+
+关键产物：
+
+- `spec.md`：定义 OpenViking 本地实例检测的用户目标、安全边界和验收标准。
+- `plan.md`：确定复用 Nowledge detect 模式、Memory provider modal、real/mock API client 和 docs-site。
+- `tasks.md`：按 httpapi/frontend/docs/validation 拆分。
+
+状态：candidate。该轮只补 OpenViking localhost detect convenience；不做 install/start/restart bridge、key discovery、remote scan、provider auto-enable 或外部 provider adapter 语义变更。
+
+## 近期候选完成：Memory Proposal Edit
+
+当前 Spec Kit 功能目录：
+
+```text
+specs/046-memory-proposal-edit/
+```
+
+关键产物：
+
+- `spec.md`：定义 pending proposal 审批前编辑标题/摘要的闭环。
+- `plan.md`：确定复用 `memory_write_proposals`、PATCH API、workspace state 和 MemoryPanel。
+- `tasks.md`：按 productdata/httpapi/frontend/docs/validation 拆分。
+
+状态：candidate。该轮只补待审批记忆的编辑闭环；不做 bulk edit、已审批内容编辑、LLM distillation、embedding/vector search 或外部 semantic provider 执行。
+
+## 近期候选完成：Memory Proposal Review
+
+当前 Spec Kit 功能目录：
+
+```text
+specs/045-memory-proposal-review/
+```
+
+关键产物：
+
+- `spec.md`：定义 pending proposal 安全列表和 Settings > Memory 审批/拒绝闭环。
+- `plan.md`：确定复用 `memory_write_proposals`、现有 approve/deny API、workspace state 和 MemoryPanel。
+- `tasks.md`：按 productdata/httpapi/frontend/docs/validation 拆分。
+
+状态：candidate。该轮只补待审批记忆的可见和决策闭环；不做 bulk approve、LLM distillation、embedding/vector search 或外部 semantic provider 执行。
+
+## 近期候选完成：Memory Post-run Proposals
+
+当前 Spec Kit 功能目录：
+
+```text
+specs/044-memory-post-run-proposals/
+```
+
+关键产物：
+
+- `spec.md`：定义 `commit_after_run` 打开后 completed run 生成待审批记忆提案，不自动批准。
+- `plan.md`：确定复用 runtime closeout、productdata provider status、assistant message、write-proposal/audit。
+- `tasks.md`：按 runtime helper、runner/gateway wiring、Settings 文案、docs、validation 拆分。
+
+状态：candidate。该轮只把每轮后自动整理接成 pending proposal；不做 LLM distillation、embedding/vector search、外部 semantic provider 执行或 background memory worker。
+
+## 近期候选完成：Memory Agent Tools
+
+当前 Spec Kit 功能目录：
+
+```text
+specs/043-memory-agent-tools/
+```
+
+关键产物：
+
+- `spec.md`：定义 `memory.search`、`memory.read`、`memory.write`、`memory.forget`、`memory.status` 的 Work-mode、approval-gated、safe-summary-only 行为。
+- `plan.md`：确定复用 ToolCatalog、provider schema、ToolBroker、worker continuation、productdata memory service、Settings > Tools。
+- `tasks.md`：按 productdata/runtime/provider/worker/web/docs/validation 拆分。
+
+状态：candidate。该轮补 agent 可调用的 memory tools；不做自动 distill、embedding/vector search、外部 semantic provider 执行或 background memory worker。
+
+## 近期候选：Web Search Providers
 
 当前 Spec Kit 功能目录：
 
@@ -50,7 +226,7 @@ specs/041-web-search-providers/
 - `plan.md`：确定复用 M26 WebToolExecutor、ToolBroker、worker continuation、RunRail；网页搜索配置放在 Settings > Web Search，Settings > Tools 保持只读 catalog，不新增 crawler/browser/social 搜索。
 - `tasks.md`：按 productdata/runtime/provider/worker/web/docs 验证拆分。
 
-状态：candidate。该轮只补真实 web search provider 能力；`web.fetch` 仍保持 Work-only，搜索结果只返回 bounded title/url/snippet safe summary。
+状态：candidate。该轮只补真实 web search provider 能力；`web.search` 与 `web.fetch` 都可在 Chat/Work 中按 persona allowlist 作为 read-only auto-approved public web 工具使用，搜索结果只返回 bounded title/url/snippet safe summary。
 
 ## 近期候选完成：UI-02 Real Usage Readiness
 
@@ -154,7 +330,7 @@ specs/034-web-fetch-tool-foundation/
 
 关键产物：
 
-- `spec.md`：定义 `web.fetch` 的 public HTTP(S)-only、approval-gated、Work-mode-only、bounded network read 和非目标。
+- `spec.md`：定义 `web.fetch` 的 public HTTP(S)-only、Chat/Work persona-gated、auto-approved bounded network read 和非目标。
 - `plan.md`：确定复用 ToolCatalog/RunContext/ToolBroker/worker continuation、Settings/RunRail 和 Go stdlib HTTP。
 - `research.md`：记录先做 fetch-only、拒绝 private/local network、只持久化 summaries 的决策。
 - `data-model.md`：定义 Web Fetch Tool、request summary 和 result summary。
@@ -162,7 +338,7 @@ specs/034-web-fetch-tool-foundation/
 - `quickstart.md`：记录 focused/full validation 和 manual smoke。
 - `tasks.md`：按 catalog/runtime/safety/UI/docs/validation 拆分。
 
-状态：M26 candidate。`web.fetch` 仅 Work mode 启用，always approval required，经 ToolBroker/worker continuation 执行一次 bounded public HTTP(S) 读取；生产默认拒绝 credentialed URL、非 HTTP(S)、localhost、loopback、private/link-local/multicast/unspecified host 和 blocked redirect；Settings > Tools 与 RunRail 显示 web scope、medium risk、public HTTP only。浏览器 smoke 需在本轮 closeout 单独记录。M26 不包含 browser automation、JavaScript rendering、cookies、authenticated fetch、crawler、search provider、artifact runtime、activity recorder 或多 agent 编排。
+状态：M26 candidate。`web.fetch` 可在 Chat/Work 中按 persona allowlist 启用，作为 read-only auto-approved public web 工具，经 ToolBroker/worker continuation 执行一次 bounded public HTTP(S) 读取；生产默认拒绝 credentialed URL、非 HTTP(S)、localhost、loopback、private/link-local/multicast/unspecified host 和 blocked redirect；Settings > Tools 与 RunRail 显示 web scope、medium risk、public HTTP only。浏览器 smoke 需在本轮 closeout 单独记录。M26 不包含 browser automation、JavaScript rendering、cookies、authenticated fetch、crawler、artifact runtime、activity recorder 或多 agent 编排。
 
 ## 近期已完成：M25 MCP Management + LSP Read-only Foundation
 
@@ -190,15 +366,15 @@ specs/029-workspace-read-tools/
 
 关键产物：
 
-- `spec.md`：定义 `workspace.glob`、`workspace.grep`、`workspace.read` 的 approval-gated read-only scope、边界保护、UI/timeline 可见性和非目标。
+- `spec.md`：定义 `workspace.glob`、`workspace.grep`、`workspace.read` 的 bounded read-only scope、边界保护、UI/timeline 可见性和非目标。
 - `plan.md`：确定复用 M18 ToolCatalog/ToolBroker/RunContext/worker approval path，并使用 Go stdlib 文件扫描。
 - `research.md`：记录单 workspace root、deny-before-read、bounded results 和 Arkloop mechanism-only reference 决策。
 - `data-model.md`：定义 Workspace Tool Definition、Workspace Scope、Tool Arguments、Tool Result 和 Tool Call Event。
-- `contracts/`：定义 catalog、approval、failure contract。
+- `contracts/`：定义 catalog、read-only auto-approval、failure contract。
 - `quickstart.md`：记录 backend smoke、UI smoke 和 required validation。
 - `tasks.md`：按 backend foundation、approved execution、安全边界、UI/docs/validation 拆分。
 
-状态：M21 candidate。Workspace tools 只在 Work mode RunContext 中启用；Chat mode 不扩大 workspace access。工具 root 来自 `LOOMI_WORKSPACE_ROOT`，未设置时本地桌面/dev 默认用户 Home；桌面端可由用户显式选择目录后切换运行时 root。路径边界继续拒绝 traversal、absolute escape、symlink escape 和敏感路径。浏览器 smoke 需在本轮 closeout 单独记录。M21 不包含 shell、write/edit、sandbox、browser automation、web search/fetch、artifact create 或多工具循环。
+状态：M21 candidate。Workspace tools 只在 Work mode RunContext 中启用，并按最新用户意图收窄 enabled tools；日常问候不暴露 workspace/sandbox/agent/artifact/browser/web 工具，文件/目录任务才暴露 workspace read 工具。Chat mode 不扩大 workspace access。工具 root 优先来自本地用户持久化的 workspace root，并同步到 `LOOMI_WORKSPACE_ROOT` 供当前进程执行；未设置时本地桌面/dev 默认用户 Home；桌面端可由用户显式选择目录后切换并持久化运行时 root。路径边界继续拒绝 traversal、absolute escape、symlink escape 和敏感路径。目录分类会先做一次 broad `workspace.glob` 后摘要，后续 continuation 不再重复暴露 `workspace.glob`，只保留 targeted grep/read。浏览器 smoke 需在本轮 closeout 单独记录。M21 不包含 shell、write/edit、sandbox、browser automation、web search/fetch、artifact create 或多工具循环。
 
 ## 近期已完成：M20 Local Codex Execution Bridge
 
@@ -379,6 +555,22 @@ specs/021-memory-management-audit-ux/
 - `tasks.md`：把 prep blockers 与后续完整 UX 实现任务分开。
 
 状态：full UX complete candidate。已完成 thread-scoped read/delete authorization、thread list/search missing `scope_id` invalid request、terminal-run durable memory audit、redaction hardening、search/list/audit filter shape 收口、Settings > Memory list/search/filter/detail/delete confirmation、真实 `/v1/memory/audit` history、backend unavailable/error/empty 不造假，以及 seeded browser smoke。M14.1 已修复 audit filter shape 与 latest-request guard，避免 M15 evidence 混入其它 thread history 或被旧响应覆盖。M14 仍不包含 distill、OpenViking、vector/embedding/RAG、activity recorder、MCP、worker queue、sandbox 或多 agent 重写。
+
+## 当前进行：M42 Memory Provider Foundation
+
+当前 Spec Kit 功能目录：
+
+```text
+specs/042-memory-provider-foundation/
+```
+
+关键产物：
+
+- `spec.md`：定义 memory provider foundation 第一薄片，覆盖 backend-owned provider config/status、semantic readiness diagnostics、安全 run readiness、Settings > Memory provider 状态和 M13/M14 行为不回归。
+- `plan.md`：确定复用 productdata/httpapi/runtime/web/docs-site 边界，不引入 full provider adapter、memory tools、distillation、embedding/vector store 或外部语义服务。
+- `tasks.md`：按 backend provider foundation、Settings UI、docs/validation 拆分。
+
+状态：M42 candidate。`GET/PUT /v1/memory/provider` 提供 enabled/provider/commit-after-run/status/diagnostic safe projection；默认 local provider 保留现有 approved memory store；semantic provider 仅作为 readiness-capable future mode，缺配置时返回 `unconfigured`，未知 provider 降级到 local。RunContext safe summary 增加 memory readiness metadata；Settings > Memory 增加 backend-derived Memory Service 面板。M42 不包含 agent memory tools、automatic distillation、external semantic read/write、embedding/vector search、activity recorder 或 multi-agent long-term memory。
 
 ## 当前已完成：M13 Memory Foundation + M13.5 Closeout
 

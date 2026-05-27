@@ -33,7 +33,7 @@ func (e DiscoveryToolExecutor) Execute(ctx context.Context, invocation ToolInvoc
 
 func (e DiscoveryToolExecutor) loadTools(invocation ToolInvocation) map[string]any {
 	limit := boundedInt(invocation.ArgumentsSummary, "limit", 12, 30)
-	names := stringListArg(invocation.ArgumentsSummary["names"])
+	names := normalizeDiscoveryToolNames(stringListArg(invocation.ArgumentsSummary["names"]))
 	queries := stringListArg(invocation.ArgumentsSummary["queries"])
 	enabled := map[string]bool{}
 	for _, tool := range invocation.EnabledTools {
@@ -150,8 +150,18 @@ func skillMatches(skill InstalledSkill, query string) bool {
 }
 
 func stringListArg(value any) []string {
-	items, ok := value.([]any)
-	if !ok {
+	var items []any
+	switch typed := value.(type) {
+	case string:
+		items = []any{typed}
+	case []string:
+		items = make([]any, 0, len(typed))
+		for _, item := range typed {
+			items = append(items, item)
+		}
+	case []any:
+		items = typed
+	default:
 		return nil
 	}
 	out := make([]string, 0, len(items))
@@ -162,4 +172,19 @@ func stringListArg(value any) []string {
 		}
 	}
 	return out
+}
+
+func normalizeDiscoveryToolNames(names []string) []string {
+	if len(names) == 0 {
+		return nil
+	}
+	normalized := make([]string, 0, len(names))
+	for _, name := range names {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		normalized = append(normalized, internalProviderToolName(name))
+	}
+	return normalized
 }

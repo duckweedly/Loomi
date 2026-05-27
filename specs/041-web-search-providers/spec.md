@@ -5,14 +5,14 @@
 
 ## User Goal
 
-Chat should be able to answer current/news/search questions by using an approval-gated web search tool backed by Tavily or Brave Search, instead of saying it cannot access real-time information.
+Chat should be able to answer current/news/search questions by using an auto-approved read-only web search tool backed by Tavily or Brave Search, instead of saying it cannot access real-time information.
 
 ## Functional Requirements
 
 - Add builtin `web.search` to the tool catalog with safe metadata for provider, query, limit, and timeout.
 - Allow `web.search` in Chat and Work RunContext when the selected persona allowlist includes it.
-- Keep `web.fetch` Work-only.
-- Execute `web.search` through the existing ToolBroker, approval, worker resume, continuation, and run-event path.
+- Keep public `web.fetch` available to Chat and Work through persona allowlists.
+- Execute `web.search` through the existing ToolBroker, worker resume, continuation, and run-event path.
 - Support `LOOMI_TAVILY_API_KEY` and `LOOMI_BRAVE_SEARCH_API_KEY`.
 - Return only bounded safe result summaries: provider, query, result count, and item title/url/snippet.
 - Never expose provider API keys, request headers, raw provider bodies, cookies, raw page content, or local paths in events/UI/docs examples.

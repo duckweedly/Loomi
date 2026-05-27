@@ -53,9 +53,15 @@ type Service interface {
 	GetMemoryEntry(context.Context, identity.LocalIdentity, string, MemoryEntryAccessInput) (MemoryEntry, error)
 	DeleteMemoryEntry(context.Context, identity.LocalIdentity, string, DeleteMemoryEntryInput) (MemoryTombstone, error)
 	ListMemoryAudit(context.Context, identity.LocalIdentity, MemoryAuditInput) (MemoryAuditOutput, error)
+	ListMemoryWriteProposals(context.Context, identity.LocalIdentity, MemoryWriteProposalListInput) (MemoryWriteProposalListOutput, error)
 	ProposeMemoryWrite(context.Context, identity.LocalIdentity, ProposeMemoryWriteInput) (MemoryWriteProposal, error)
+	UpdateMemoryWriteProposal(context.Context, identity.LocalIdentity, string, MemoryWriteProposalUpdateInput) (MemoryWriteProposal, error)
 	ApproveMemoryWrite(context.Context, identity.LocalIdentity, string, MemoryWriteDecisionInput) (MemoryWriteDecision, error)
 	DenyMemoryWrite(context.Context, identity.LocalIdentity, string, MemoryWriteDecisionInput) (MemoryWriteDecision, error)
+	SaveMemoryProviderConfig(context.Context, identity.LocalIdentity, MemoryProviderConfig) (MemoryProviderConfig, error)
+	GetMemoryProviderConfig(context.Context, identity.LocalIdentity) (MemoryProviderConfig, error)
+	GetMemoryProviderStatus(context.Context, identity.LocalIdentity) (MemoryProviderStatus, error)
+	ListMemoryProviderErrors(context.Context, identity.LocalIdentity, int) ([]MemoryProviderErrorEvent, error)
 }
 
 type ArtifactService interface {
@@ -70,11 +76,27 @@ type AgentTaskService interface {
 	CompleteAgentTask(context.Context, identity.LocalIdentity, CompleteAgentTaskInput) (AgentTask, error)
 }
 
+type MemorySnapshotService interface {
+	GetMemoryOverviewSnapshot(context.Context, identity.LocalIdentity) (MemoryOverviewSnapshot, error)
+	RebuildMemoryOverviewSnapshot(context.Context, identity.LocalIdentity) (MemoryOverviewSnapshot, error)
+	GetMemoryImpressionSnapshot(context.Context, identity.LocalIdentity) (MemoryImpressionSnapshot, error)
+	RebuildMemoryImpressionSnapshot(context.Context, identity.LocalIdentity) (MemoryImpressionSnapshot, error)
+}
+
 type ModelProviderConfigStore interface {
 	SaveModelProviderConfig(context.Context, identity.LocalIdentity, ModelProviderConfig) (ModelProviderConfig, error)
 	ListModelProviderConfigs(context.Context, identity.LocalIdentity) ([]ModelProviderConfig, error)
 	SaveWebSearchConfig(context.Context, identity.LocalIdentity, WebSearchConfig) (WebSearchConfig, error)
 	GetWebSearchConfig(context.Context, identity.LocalIdentity) (WebSearchConfig, error)
+	SaveMemoryProviderConfig(context.Context, identity.LocalIdentity, MemoryProviderConfig) (MemoryProviderConfig, error)
+	GetMemoryProviderConfig(context.Context, identity.LocalIdentity) (MemoryProviderConfig, error)
+	GetMemoryProviderStatus(context.Context, identity.LocalIdentity) (MemoryProviderStatus, error)
+	ListMemoryProviderErrors(context.Context, identity.LocalIdentity, int) ([]MemoryProviderErrorEvent, error)
+}
+
+type WorkspaceRootConfigStore interface {
+	SaveWorkspaceRootConfig(context.Context, identity.LocalIdentity, WorkspaceRootConfig) (WorkspaceRootConfig, error)
+	GetWorkspaceRootConfig(context.Context, identity.LocalIdentity) (WorkspaceRootConfig, error)
 }
 
 type MCPServerConfigStore interface {
@@ -115,6 +137,8 @@ type MemoryService struct {
 	agentTasks         map[string]AgentTask
 	modelProviders     map[string]ModelProviderConfig
 	webSearchConfigs   map[string]WebSearchConfig
+	workspaceRoots     map[string]WorkspaceRootConfig
+	memoryProviders    map[string]MemoryProviderConfig
 	mcpServerConfigs   map[string]MCPServerConfigRecord
 }
 
@@ -140,6 +164,8 @@ func NewMemoryService() *MemoryService {
 		agentTasks:         map[string]AgentTask{},
 		modelProviders:     map[string]ModelProviderConfig{},
 		webSearchConfigs:   map[string]WebSearchConfig{},
+		workspaceRoots:     map[string]WorkspaceRootConfig{},
+		memoryProviders:    map[string]MemoryProviderConfig{},
 		mcpServerConfigs:   map[string]MCPServerConfigRecord{},
 	}
 }
@@ -195,6 +221,91 @@ func (s *MemoryService) GetWebSearchConfig(_ context.Context, ident identity.Loc
 	config := s.webSearchConfigs[user.ID]
 	config.UserID = user.ID
 	return config, nil
+}
+
+func (s *MemoryService) SaveWorkspaceRootConfig(_ context.Context, ident identity.LocalIdentity, input WorkspaceRootConfig) (WorkspaceRootConfig, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user := s.ensureUserLocked(ident)
+	next := normalizeWorkspaceRootConfig(input)
+	if next.Path == "" {
+		return WorkspaceRootConfig{}, NewError(CodeInvalidRequest, "Workspace folder is required.")
+	}
+	next.UserID = user.ID
+	s.workspaceRoots[user.ID] = next
+	return next, nil
+}
+
+func (s *MemoryService) GetWorkspaceRootConfig(_ context.Context, ident identity.LocalIdentity) (WorkspaceRootConfig, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user := s.ensureUserLocked(ident)
+	config := s.workspaceRoots[user.ID]
+	config.UserID = user.ID
+	return config, nil
+}
+
+func (s *MemoryService) SaveMemoryProviderConfig(_ context.Context, ident identity.LocalIdentity, input MemoryProviderConfig) (MemoryProviderConfig, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user := s.ensureUserLocked(ident)
+	next := normalizeMemoryProviderConfig(input, s.now())
+	next.UserID = user.ID
+	s.memoryProviders[user.ID] = next
+	return next, nil
+}
+
+func (s *MemoryService) GetMemoryProviderStatus(_ context.Context, ident identity.LocalIdentity) (MemoryProviderStatus, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user := s.ensureUserLocked(ident)
+	config := s.memoryProviders[user.ID]
+	if config.UserID == "" {
+		config = defaultMemoryProviderConfig(user.ID, s.now())
+	}
+	return memoryProviderStatus(config, s.now()), nil
+}
+
+func (s *MemoryService) GetMemoryProviderConfig(_ context.Context, ident identity.LocalIdentity) (MemoryProviderConfig, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user := s.ensureUserLocked(ident)
+	config := s.memoryProviders[user.ID]
+	if config.UserID == "" {
+		config = defaultMemoryProviderConfig(user.ID, s.now())
+	}
+	return config, nil
+}
+
+func (s *MemoryService) ListMemoryProviderErrors(_ context.Context, ident identity.LocalIdentity, limit int) ([]MemoryProviderErrorEvent, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user := s.ensureUserLocked(ident)
+	config := s.memoryProviders[user.ID]
+	if config.UserID == "" {
+		config = defaultMemoryProviderConfig(user.ID, s.now())
+	}
+	status := memoryProviderStatus(config, s.now())
+	items := []MemoryProviderErrorEvent{}
+	if status.Diagnostic.Code != "" && status.Diagnostic.Code != "ok" {
+		checkedAt := s.now()
+		if status.CheckedAt != nil {
+			checkedAt = *status.CheckedAt
+		}
+		items = append(items, MemoryProviderErrorEvent{Code: status.Diagnostic.Code, Message: status.Diagnostic.Message, Provider: status.Provider, State: status.State, CheckedAt: checkedAt})
+	}
+	for _, runEvents := range s.runEvents {
+		for _, event := range runEvents {
+			if event.UserID != user.ID || !isMemoryProviderRuntimeErrorEvent(event.Type) {
+				continue
+			}
+			items = append(items, memoryProviderErrorFromRunEvent(event))
+		}
+	}
+	sort.SliceStable(items, func(i, j int) bool {
+		return items[i].CheckedAt.After(items[j].CheckedAt)
+	})
+	return limitMemoryProviderErrors(items, limit), nil
 }
 
 func (s *MemoryService) SaveMCPServerConfig(_ context.Context, ident identity.LocalIdentity, input MCPServerConfigRecord) (MCPServerConfigRecord, error) {
@@ -713,7 +824,7 @@ func (s *MemoryService) AppendRunEvent(_ context.Context, ident identity.LocalId
 	if !ok || run.UserID != user.ID {
 		return RunEvent{}, NewError(CodeRunNotFound, "Run not found.")
 	}
-	if IsRunTerminal(run.Status) {
+	if IsRunTerminal(run.Status) && !isTerminalRunEventAppendAllowed(input.Type) {
 		return RunEvent{}, NewError(CodeInvalidRequest, "Terminal run cannot accept new events.")
 	}
 	now := s.now()
@@ -769,6 +880,12 @@ func (s *MemoryService) PrepareRunContext(ctx context.Context, ident identity.Lo
 	applyPersonaToRunContext(&context, events)
 	snapshot := s.buildMemorySnapshot(ctx, ident, run, thread)
 	context.MemorySnapshot = snapshot
+	context.NotebookSnapshot = s.buildNotebookSnapshot(ctx, ident, run, thread)
+	status, err := s.GetMemoryProviderStatus(ctx, ident)
+	if err == nil {
+		context.MemoryReadiness = status
+		context.EnabledTools = FilterMemoryToolResolutionsForProvider(context.EnabledTools, status)
+	}
 	_, _ = s.AppendRunEvent(ctx, ident, run.ID, AppendRunEventInput{Category: RunEventCategoryProgress, Type: EventMemorySnapshotLoaded, Summary: "Memory snapshot loaded", Metadata: memorySnapshotEventMetadata(snapshot)})
 	return context, nil
 }
@@ -785,7 +902,11 @@ func (s *MemoryService) ListToolCatalog(_ context.Context, ident identity.LocalI
 			}
 		}
 	}
-	return SafeToolCatalogFromEvents(events), nil
+	config := s.memoryProviders[user.ID]
+	if config.UserID == "" {
+		config = defaultMemoryProviderConfig(user.ID, s.now())
+	}
+	return ApplyMemoryToolAvailability(SafeToolCatalogFromEvents(events), memoryProviderStatus(config, s.now())), nil
 }
 
 func (s *MemoryService) ListMCPDiscoveryEvents(_ context.Context, ident identity.LocalIdentity) ([]RunEvent, error) {
@@ -852,6 +973,38 @@ func (s *MemoryService) SearchMemory(_ context.Context, ident identity.LocalIden
 	return MemorySearchOutput{Items: items, ExcludedCount: excluded}, nil
 }
 
+func (s *MemoryService) GetMemoryOverviewSnapshot(ctx context.Context, ident identity.LocalIdentity) (MemoryOverviewSnapshot, error) {
+	return s.memoryOverviewSnapshot(ctx, ident, false)
+}
+
+func (s *MemoryService) RebuildMemoryOverviewSnapshot(ctx context.Context, ident identity.LocalIdentity) (MemoryOverviewSnapshot, error) {
+	return s.memoryOverviewSnapshot(ctx, ident, true)
+}
+
+func (s *MemoryService) GetMemoryImpressionSnapshot(ctx context.Context, ident identity.LocalIdentity) (MemoryImpressionSnapshot, error) {
+	return s.memoryImpressionSnapshot(ctx, ident, false)
+}
+
+func (s *MemoryService) RebuildMemoryImpressionSnapshot(ctx context.Context, ident identity.LocalIdentity) (MemoryImpressionSnapshot, error) {
+	return s.memoryImpressionSnapshot(ctx, ident, true)
+}
+
+func (s *MemoryService) memoryOverviewSnapshot(ctx context.Context, ident identity.LocalIdentity, rebuilt bool) (MemoryOverviewSnapshot, error) {
+	output, err := s.SearchMemory(ctx, ident, MemorySearchInput{Limit: 7, Purpose: "snapshot"})
+	if err != nil {
+		return MemoryOverviewSnapshot{}, err
+	}
+	return buildMemoryOverviewSnapshot(semanticMemorySnapshotItems(output.Items), s.now(), rebuilt), nil
+}
+
+func (s *MemoryService) memoryImpressionSnapshot(ctx context.Context, ident identity.LocalIdentity, rebuilt bool) (MemoryImpressionSnapshot, error) {
+	output, err := s.SearchMemory(ctx, ident, MemorySearchInput{Limit: 7, Purpose: "impression"})
+	if err != nil {
+		return MemoryImpressionSnapshot{}, err
+	}
+	return buildMemoryImpressionSnapshot(semanticMemorySnapshotItems(output.Items), s.now(), rebuilt), nil
+}
+
 func (s *MemoryService) GetMemoryEntry(_ context.Context, ident identity.LocalIdentity, entryID string, input MemoryEntryAccessInput) (MemoryEntry, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -916,6 +1069,38 @@ func (s *MemoryService) ListMemoryAudit(_ context.Context, ident identity.LocalI
 	return MemoryAuditOutput{Items: items}, nil
 }
 
+func (s *MemoryService) ListMemoryWriteProposals(_ context.Context, ident identity.LocalIdentity, input MemoryWriteProposalListInput) (MemoryWriteProposalListOutput, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user := s.ensureUserLocked(ident)
+	limit := memoryLimit(input.Limit)
+	status := input.Status
+	if status == "" {
+		status = MemoryWritePending
+	}
+	items := make([]MemoryWriteProposal, 0, limit)
+	for _, proposal := range s.memoryProposals {
+		if proposal.UserID != user.ID || proposal.Status != status {
+			continue
+		}
+		if input.ScopeType != "" && proposal.ScopeType != input.ScopeType {
+			continue
+		}
+		if strings.TrimSpace(input.ScopeID) != "" && proposal.ScopeID != strings.TrimSpace(input.ScopeID) {
+			continue
+		}
+		if strings.TrimSpace(input.SourceRunID) != "" && proposal.SourceRunID != strings.TrimSpace(input.SourceRunID) {
+			continue
+		}
+		items = append(items, safeMemoryProposal(proposal))
+	}
+	sort.SliceStable(items, func(i, j int) bool { return items[i].CreatedAt.After(items[j].CreatedAt) })
+	if len(items) > limit {
+		items = items[:limit]
+	}
+	return MemoryWriteProposalListOutput{Items: items}, nil
+}
+
 func (s *MemoryService) ProposeMemoryWrite(_ context.Context, ident identity.LocalIdentity, input ProposeMemoryWriteInput) (MemoryWriteProposal, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -945,6 +1130,32 @@ func (s *MemoryService) ProposeMemoryWrite(_ context.Context, ident identity.Loc
 	}
 	s.appendMemoryAuditEventLocked(user.ID, proposal.SourceRunID, EventMemoryWriteProposed, "Memory write proposed", memoryProposalAuditMetadata(proposal, ""))
 	return proposal, nil
+}
+
+func (s *MemoryService) UpdateMemoryWriteProposal(_ context.Context, ident identity.LocalIdentity, proposalID string, input MemoryWriteProposalUpdateInput) (MemoryWriteProposal, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user := s.ensureUserLocked(ident)
+	proposal, ok := s.memoryProposals[strings.TrimSpace(proposalID)]
+	if !ok || proposal.UserID != user.ID {
+		return MemoryWriteProposal{}, NewError(CodeMemoryNotFound, "Memory proposal not found.")
+	}
+	if proposal.Status != MemoryWritePending || proposal.SafetyState == MemorySafetyBlocked {
+		return MemoryWriteProposal{}, NewError(CodeInvalidRequest, "Only pending memory proposals can be edited.")
+	}
+	title, summary, content, safety, err := normalizeMemoryContent(input.Title, input.Summary)
+	if err != nil {
+		return MemoryWriteProposal{}, err
+	}
+	if safety == MemorySafetyBlocked {
+		return MemoryWriteProposal{}, NewError(CodeInvalidRequest, "Memory proposal edit contains sensitive content.")
+	}
+	proposal.Title = title
+	proposal.Summary = summary
+	proposal.Content = content
+	proposal.SafetyState = safety
+	s.memoryProposals[proposal.ID] = proposal
+	return safeMemoryProposal(proposal), nil
 }
 
 func (s *MemoryService) ApproveMemoryWrite(_ context.Context, ident identity.LocalIdentity, proposalID string, input MemoryWriteDecisionInput) (MemoryWriteDecision, error) {
@@ -1162,6 +1373,118 @@ func (s *MemoryService) buildMemorySnapshot(ctx context.Context, ident identity.
 	return MemorySnapshot{RunID: run.ID, ThreadID: thread.ID, Entries: output.Items, Limit: 5, TotalCandidates: len(output.Items), LoadStatus: status, RedactionApplied: true}
 }
 
+func (s *MemoryService) buildNotebookSnapshot(ctx context.Context, ident identity.LocalIdentity, run Run, thread Thread) MemorySnapshot {
+	output, err := s.SearchMemory(ctx, ident, MemorySearchInput{ScopeType: MemoryScopeThread, ScopeID: thread.ID, SourceType: "notebook", Limit: 5, Purpose: "run_context_notebook"})
+	if err != nil {
+		return MemorySnapshot{RunID: run.ID, ThreadID: thread.ID, Limit: 5, LoadStatus: "unavailable"}
+	}
+	status := "loaded"
+	if len(output.Items) == 0 {
+		status = "empty"
+	}
+	return MemorySnapshot{RunID: run.ID, ThreadID: thread.ID, Entries: output.Items, Limit: 5, TotalCandidates: len(output.Items), LoadStatus: status, RedactionApplied: true}
+}
+
+func defaultMemoryProviderConfig(userID string, now time.Time) MemoryProviderConfig {
+	return MemoryProviderConfig{UserID: userID, Enabled: true, Provider: MemoryProviderLocal, UpdatedAt: now}
+}
+
+func memoryProviderStatus(config MemoryProviderConfig, now time.Time) MemoryProviderStatus {
+	checkedAt := now
+	openviking := safeOpenVikingMemoryConfig(config.OpenViking)
+	nowledge := safeNowledgeMemoryConfig(config.Nowledge)
+	status := MemoryProviderStatus{
+		Enabled:        config.Enabled,
+		Provider:       config.Provider,
+		Label:          memoryProviderLabel(config.Provider),
+		Configured:     true,
+		CommitAfterRun: config.CommitAfterRun,
+		CheckedAt:      &checkedAt,
+		OpenViking:     openviking,
+		Nowledge:       nowledge,
+		Diagnostic:     MemoryProviderDiagnostic{Code: "ok", Message: "Ready."},
+	}
+	if status.Provider == "" {
+		status.Provider = MemoryProviderLocal
+		status.Label = memoryProviderLabel(status.Provider)
+	}
+	if !config.Enabled {
+		status.State = MemoryProviderStateDisabled
+		status.Configured = false
+		status.Diagnostic = MemoryProviderDiagnostic{Code: "memory_disabled", Message: "Memory is disabled."}
+		return status
+	}
+	switch config.Provider {
+	case MemoryProviderLocal:
+		status.State = MemoryProviderStateAvailable
+	case MemoryProviderSemantic:
+		status.Configured = strings.TrimSpace(config.SemanticEndpoint) != ""
+		if !status.Configured {
+			status.State = MemoryProviderStateUnconfigured
+			status.Diagnostic = MemoryProviderDiagnostic{Code: "semantic_unconfigured", Message: "Semantic memory provider is not configured."}
+			return status
+		}
+		status.State = MemoryProviderStateHealthy
+	case MemoryProviderOpenViking:
+		status.Configured = openviking.BaseURL != "" && openviking.RootAPIKeySet && openviking.EmbeddingModel != "" && openviking.VLMModel != ""
+		if !status.Configured {
+			status.State = MemoryProviderStateUnconfigured
+			status.Diagnostic = MemoryProviderDiagnostic{Code: "openviking_unconfigured", Message: "OpenViking memory provider requires a base URL, root key, embedding model, and VLM model."}
+			return status
+		}
+		status.State = MemoryProviderStateHealthy
+	case MemoryProviderNowledge:
+		status.Configured = nowledge.BaseURL != ""
+		if !status.Configured {
+			status.State = MemoryProviderStateUnconfigured
+			status.Diagnostic = MemoryProviderDiagnostic{Code: "nowledge_unconfigured", Message: "Nowledge memory provider requires a base URL."}
+			return status
+		}
+		status.State = MemoryProviderStateHealthy
+	default:
+		status.Provider = MemoryProviderLocal
+		status.Label = memoryProviderLabel(status.Provider)
+		status.State = MemoryProviderStateDegraded
+		status.Configured = true
+		status.Diagnostic = MemoryProviderDiagnostic{Code: "unknown_provider", Message: "Unknown memory provider was normalized to local memory."}
+	}
+	if config.Diagnostic != "" && config.Diagnostic != "[redacted]" {
+		status.Diagnostic.Message = config.Diagnostic
+	}
+	return status
+}
+
+func memoryProviderLabel(provider MemoryProviderID) string {
+	switch provider {
+	case MemoryProviderSemantic:
+		return "Semantic"
+	case MemoryProviderOpenViking:
+		return "OpenViking"
+	case MemoryProviderNowledge:
+		return "Nowledge"
+	default:
+		return "Local"
+	}
+}
+
+func safeOpenVikingMemoryConfig(config OpenVikingMemoryConfig) OpenVikingMemoryConfig {
+	config.RootAPIKeySet = config.RootAPIKeySet || config.RootAPIKey != ""
+	config.EmbeddingAPIKeySet = config.EmbeddingAPIKeySet || config.EmbeddingAPIKey != ""
+	config.VLMAPIKeySet = config.VLMAPIKeySet || config.VLMAPIKey != ""
+	config.RerankAPIKeySet = config.RerankAPIKeySet || config.RerankAPIKey != ""
+	config.RootAPIKey = ""
+	config.EmbeddingAPIKey = ""
+	config.VLMAPIKey = ""
+	config.RerankAPIKey = ""
+	return config
+}
+
+func safeNowledgeMemoryConfig(config NowledgeMemoryConfig) NowledgeMemoryConfig {
+	config.APIKeySet = config.APIKeySet || config.APIKey != ""
+	config.APIKey = ""
+	return config
+}
+
 func (s *MemoryService) newMemoryEntryLocked(userID string, input CreateMemoryEntryInput) (MemoryEntry, error) {
 	scopeType, scopeID, err := normalizeMemoryScope(userID, input.ScopeType, input.ScopeID)
 	if err != nil {
@@ -1271,8 +1594,10 @@ func memoryEntryVisibleTo(entry MemoryEntry, userID string, input MemorySearchIn
 		return entry.SourceRunID != ""
 	case "thread":
 		return entry.SourceThreadID != ""
+	case "notebook":
+		return entry.SourceEventID == "notebook"
 	case "manual":
-		return entry.SourceRunID == "" && entry.SourceThreadID == ""
+		return entry.SourceRunID == "" && entry.SourceThreadID == "" && entry.SourceEventID != "notebook"
 	default:
 		return false
 	}
@@ -1308,12 +1633,19 @@ func memoryEntryMatches(entry MemoryEntry, terms []string) bool {
 }
 
 func memorySearchResult(entry MemoryEntry) MemorySearchResult {
-	return MemorySearchResult{ID: entry.ID, Title: entry.Title, Summary: entry.Summary, ScopeType: entry.ScopeType, ScopeID: entry.ScopeID, Status: string(entry.Status), SafetyState: string(entry.SafetyState), SourceThreadID: entry.SourceThreadID, SourceRunID: entry.SourceRunID, SourceEventID: entry.SourceEventID, SourceType: memorySourceType(entry.SourceThreadID, entry.SourceRunID), CreatedAt: entry.CreatedAt, UpdatedAt: entry.UpdatedAt, DeletedAt: entry.DeletedAt, RankReason: "text_match", RedactionApplied: entry.SafetyState != MemorySafetySafe || entry.Content != entry.Summary}
+	return MemorySearchResult{ID: entry.ID, Title: entry.Title, Summary: entry.Summary, ScopeType: entry.ScopeType, ScopeID: entry.ScopeID, Status: string(entry.Status), SafetyState: string(entry.SafetyState), SourceThreadID: entry.SourceThreadID, SourceRunID: entry.SourceRunID, SourceEventID: entry.SourceEventID, SourceType: memorySourceType(entry.SourceThreadID, entry.SourceRunID, entry.SourceEventID), CreatedAt: entry.CreatedAt, UpdatedAt: entry.UpdatedAt, DeletedAt: entry.DeletedAt, RankReason: "text_match", RedactionApplied: entry.SafetyState != MemorySafetySafe || entry.Content != entry.Summary}
 }
 
 func safeMemoryEntry(entry MemoryEntry) MemoryEntry {
 	entry.Content = ""
 	return entry
+}
+
+func safeMemoryProposal(proposal MemoryWriteProposal) MemoryWriteProposal {
+	proposal.Content = ""
+	proposal.IdempotencyKey = ""
+	proposal.DecidedBy = ""
+	return proposal
 }
 
 func memorySnapshotEventMetadata(snapshot MemorySnapshot) map[string]any {
@@ -1327,6 +1659,81 @@ func isMemoryAuditEvent(eventType string) bool {
 	default:
 		return false
 	}
+}
+
+func isTerminalRunEventAppendAllowed(eventType string) bool {
+	switch eventType {
+	case "memory_provider_commit_completed", "memory_provider_commit_failed":
+		return true
+	default:
+		return false
+	}
+}
+
+func isMemoryProviderRuntimeErrorEvent(eventType string) bool {
+	switch eventType {
+	case EventMemoryExternalSnapshotFailed, "memory_provider_commit_failed":
+		return true
+	default:
+		return false
+	}
+}
+
+func memoryProviderErrorFromRunEvent(event RunEvent) MemoryProviderErrorEvent {
+	code := firstEventString(event.Metadata, "error_code")
+	if code == "" {
+		code = event.Type
+	}
+	message := event.Summary
+	return MemoryProviderErrorEvent{
+		Code:      RedactEventText(code),
+		Message:   RedactEventText(message),
+		Provider:  MemoryProviderID(firstEventString(event.Metadata, "provider")),
+		State:     MemoryProviderStateUnhealthy,
+		CheckedAt: event.CreatedAt,
+		RunID:     event.RunID,
+		EventType: event.Type,
+	}
+}
+
+func firstEventString(metadata map[string]any, key string) string {
+	if metadata == nil {
+		return ""
+	}
+	value, ok := metadata[key]
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(RedactEventText(eventValueString(value)))
+}
+
+func eventValueString(value any) string {
+	switch typed := value.(type) {
+	case string:
+		return strings.TrimSpace(typed)
+	case []byte:
+		return strings.TrimSpace(string(typed))
+	default:
+		return ""
+	}
+}
+
+func limitMemoryProviderErrors(items []MemoryProviderErrorEvent, limit int) []MemoryProviderErrorEvent {
+	limit = limitMemoryProviderErrorQueryLimit(limit)
+	if len(items) <= limit {
+		return items
+	}
+	return items[:limit]
+}
+
+func limitMemoryProviderErrorQueryLimit(limit int) int {
+	if limit <= 0 {
+		limit = 10
+	}
+	if limit > 20 {
+		limit = 20
+	}
+	return limit
 }
 
 func memoryAuditEventType(eventType string) string {
@@ -1353,7 +1760,10 @@ func memoryAuditItem(event RunEvent) MemoryAuditItem {
 	}
 }
 
-func memorySourceType(sourceThreadID string, sourceRunID string) string {
+func memorySourceType(sourceThreadID string, sourceRunID string, sourceEventID string) string {
+	if strings.TrimSpace(sourceEventID) == "notebook" {
+		return "notebook"
+	}
 	if strings.TrimSpace(sourceRunID) != "" {
 		return "run"
 	}
@@ -1422,15 +1832,114 @@ func applyPersonaToRunContext(context *RunContext, events []RunEvent) {
 		context.EnabledTools = toolResolutionsForNamesAndEvents(context.Persona.AllowedToolNames, events)
 		if context.Thread.Mode != ThreadModeWork {
 			context.EnabledTools = withoutWorkModeToolResolutions(context.EnabledTools)
+		} else {
+			context.EnabledTools = workToolResolutionsForLatestIntent(context.EnabledTools, context.Messages)
 		}
 	}
 	context.MCPAvailability = mcpAvailabilityForToolResolutions(context.EnabledTools, events)
 }
 
+func workToolResolutionsForLatestIntent(tools []ToolResolution, messages []Message) []ToolResolution {
+	intent := latestUserIntent(messages)
+	if !intent.scoped {
+		return tools
+	}
+	filtered := make([]ToolResolution, 0, len(tools))
+	for _, tool := range tools {
+		if workToolAllowedForIntent(tool.Name, intent) {
+			filtered = append(filtered, tool)
+		}
+	}
+	return filtered
+}
+
+type workIntent struct {
+	scoped         bool
+	workspaceRead  bool
+	workspaceWrite bool
+	command        bool
+	lsp            bool
+	web            bool
+	browser        bool
+	artifact       bool
+	agent          bool
+	memory         bool
+	todo           bool
+}
+
+func latestUserIntent(messages []Message) workIntent {
+	content := ""
+	for index := len(messages) - 1; index >= 0; index-- {
+		if messages[index].Role == MessageRoleUser {
+			content = strings.ToLower(messages[index].Content)
+			break
+		}
+	}
+	intent := workIntent{}
+	if content == "" {
+		return intent
+	}
+	intent.workspaceRead = containsAny(content, []string{"文件", "目录", "folder", "file", "list", "列", "看下", "看看", "读取", "read", "grep", "搜索代码", "查找", "分类", "下载", "downloads", "desktop", "documents", "项目", "仓库", "repo", "github"})
+	intent.workspaceWrite = containsAny(content, []string{"修改", "编辑", "写入", "创建文件", "保存", "删除文件", "改代码", "edit", "write", "create file", "delete file", "patch"})
+	intent.command = containsAny(content, []string{"运行命令", "执行命令", "终端", "shell", "命令行", "跑测试", "测试", "验证", "verify", "构建", "启动服务", "go test", "bun test", "npm", "pnpm", "build", "lint"})
+	intent.lsp = containsAny(content, []string{"定义", "引用", "符号", "诊断", "lsp", "definition", "references", "symbols", "diagnostics"})
+	intent.web = strings.Contains(content, "http://") || strings.Contains(content, "https://") || containsAny(content, []string{"网页", "联网", "搜索", "新闻", "最新", "web", "search", "fetch", "github"})
+	intent.browser = containsAny(content, []string{"浏览器", "打开网页", "点击", "截图", "browser", "screenshot", "click"})
+	intent.artifact = containsAny(content, []string{"产物", "artifact", "文档", "报告", "生成文件"})
+	intent.agent = containsAny(content, []string{"子任务", "并行", "多agent", "multi-agent", "spawn", "reviewer"})
+	intent.memory = containsAny(content, []string{"记忆", "memory", "记住", "偏好"})
+	intent.todo = containsAny(content, []string{"计划", "步骤", "待办", "todo", "plan"})
+	intent.scoped = intent.workspaceRead || intent.workspaceWrite || intent.command || intent.lsp || intent.web || intent.browser || intent.artifact || intent.agent || intent.memory || intent.todo || isChineseCasualGreeting(content)
+	return intent
+}
+
+func isChineseCasualGreeting(content string) bool {
+	trimmed := strings.TrimSpace(content)
+	return trimmed == "你好" || trimmed == "你好呀" || trimmed == "你好啊"
+}
+
+func workToolAllowedForIntent(name string, intent workIntent) bool {
+	switch {
+	case name == ToolNameCurrentTime || name == ToolNameLoadTools || name == ToolNameLoadSkill:
+		return true
+	case IsWorkspaceReadOnlyToolName(name):
+		return intent.workspaceRead || intent.workspaceWrite || intent.lsp || intent.todo
+	case IsWorkspaceToolName(name):
+		return intent.workspaceWrite
+	case IsSandboxToolName(name):
+		return intent.command
+	case IsLSPToolName(name):
+		return intent.lsp
+	case IsWebToolName(name):
+		return intent.web
+	case IsBrowserToolName(name):
+		return intent.browser
+	case IsArtifactToolName(name):
+		return intent.artifact
+	case IsAgentToolName(name):
+		return intent.agent
+	case IsMemoryToolName(name):
+		return intent.memory
+	case IsTodoToolName(name):
+		return intent.todo
+	default:
+		return true
+	}
+}
+
+func containsAny(value string, needles []string) bool {
+	for _, needle := range needles {
+		if strings.Contains(value, needle) {
+			return true
+		}
+	}
+	return false
+}
+
 func withoutWorkModeToolResolutions(tools []ToolResolution) []ToolResolution {
 	filtered := make([]ToolResolution, 0, len(tools))
 	for _, tool := range tools {
-		if tool.Name == ToolNameWebSearch || (!IsWorkspaceToolName(tool.Name) && !IsSandboxToolName(tool.Name) && !IsLSPToolName(tool.Name) && !IsWebToolName(tool.Name) && !IsBrowserToolName(tool.Name) && !IsArtifactToolName(tool.Name) && !IsAgentToolName(tool.Name) && !IsTodoToolName(tool.Name)) {
+		if tool.Name == ToolNameWebSearch || tool.Name == ToolNameWebFetch || (!IsWorkspaceToolName(tool.Name) && !IsSandboxToolName(tool.Name) && !IsLSPToolName(tool.Name) && !IsWebToolName(tool.Name) && !IsBrowserToolName(tool.Name) && !IsArtifactToolName(tool.Name) && !IsAgentToolName(tool.Name) && !IsMemoryToolName(tool.Name) && !IsTodoToolName(tool.Name)) {
 			filtered = append(filtered, tool)
 		}
 	}
@@ -1466,7 +1975,7 @@ func validateBuiltInPersonaConfigs(configs []BuiltInPersonaConfig) error {
 		}
 		for _, name := range config.AllowedToolNames {
 			toolName := strings.TrimSpace(name)
-			if toolName != ToolNameCurrentTime && !IsDiscoveryToolName(toolName) && !IsWorkspaceToolName(toolName) && !IsSandboxToolName(toolName) && !IsLSPToolName(toolName) && !IsWebToolName(toolName) && !IsBrowserToolName(toolName) && !IsArtifactToolName(toolName) && !IsAgentToolName(toolName) && !IsTodoToolName(toolName) && !IsMCPToolName(toolName) {
+			if toolName != ToolNameCurrentTime && !IsDiscoveryToolName(toolName) && !IsWorkspaceToolName(toolName) && !IsSandboxToolName(toolName) && !IsLSPToolName(toolName) && !IsWebToolName(toolName) && !IsBrowserToolName(toolName) && !IsArtifactToolName(toolName) && !IsAgentToolName(toolName) && !IsMemoryToolName(toolName) && !IsTodoToolName(toolName) && !IsMCPToolName(toolName) {
 				return NewError(CodeInvalidRequest, "Built-in persona references an unsupported tool.")
 			}
 		}
@@ -1880,9 +2389,6 @@ func (s *MemoryService) RecordToolCallRequest(_ context.Context, ident identity.
 	metadata := toolCallEventMetadataForRun(s.runEvents[run.ID], call)
 	requested := s.appendRunEventLocked(run, RunEventCategoryProgress, EventToolCallRequested, "Tool call requested", nil, metadata, now)
 	if autoApproved {
-		jobID := NewBackgroundJobID()
-		jobMetadata := RedactEventMetadata(map[string]any{"source": string(run.Source), "job_id": jobID, "tool_call_id": call.ToolCallID, "resume_reason": "tool_call_auto_approved"})
-		s.backgroundJobs[jobID] = BackgroundJob{ID: jobID, RunID: run.ID, ThreadID: run.ThreadID, UserID: user.ID, Kind: BackgroundJobKindRunExecution, Status: BackgroundJobStatusQueued, Priority: 50, MaxAttempts: 3, ScheduledAt: now, Metadata: jobMetadata, CreatedAt: now, UpdatedAt: now}
 		approved := s.appendRunEventLocked(run, RunEventCategoryProgress, EventToolCallApproved, "Tool call auto-approved", nil, metadata, now)
 		return call, []RunEvent{requested, approved}, nil
 	}
@@ -2143,6 +2649,9 @@ func toolCallEventMetadata(call ToolCall) map[string]any {
 	} else if IsAgentToolName(call.ToolName) {
 		metadata["tool_source"] = string(ToolCatalogSourceBuiltin)
 		metadata["tool_group"] = string(ToolCatalogGroupAgent)
+	} else if IsMemoryToolName(call.ToolName) {
+		metadata["tool_source"] = string(ToolCatalogSourceBuiltin)
+		metadata["tool_group"] = string(ToolCatalogGroupMemory)
 	} else if IsTodoToolName(call.ToolName) {
 		metadata["tool_source"] = string(ToolCatalogSourceBuiltin)
 		metadata["tool_group"] = string(ToolCatalogGroupTodo)
@@ -2569,6 +3078,51 @@ func statusFromFinalType(eventType string) RunStatus {
 	default:
 		return RunStatusCompleted
 	}
+}
+
+func buildMemoryOverviewSnapshot(items []MemorySearchResult, now time.Time, rebuilt bool) MemoryOverviewSnapshot {
+	hits := make([]MemorySnapshotHit, 0, len(items))
+	lines := []string{}
+	for _, item := range items {
+		abstract := strings.TrimSpace(item.Summary)
+		if abstract == "" {
+			abstract = strings.TrimSpace(item.Title)
+		}
+		hits = append(hits, MemorySnapshotHit{URI: "memory://" + item.ID, EntryID: item.ID, Title: item.Title, Abstract: abstract, IsLeaf: true, UpdatedAt: item.UpdatedAt})
+		lines = append(lines, "- "+item.Title+": "+abstract)
+	}
+	block := strings.Join(lines, "\n")
+	if block == "" {
+		block = "No approved memories yet."
+	}
+	return MemoryOverviewSnapshot{MemoryBlock: block, Hits: hits, UpdatedAt: now, Rebuilt: rebuilt}
+}
+
+func semanticMemorySnapshotItems(items []MemorySearchResult) []MemorySearchResult {
+	filtered := make([]MemorySearchResult, 0, len(items))
+	for _, item := range items {
+		if item.SourceType == "notebook" {
+			continue
+		}
+		filtered = append(filtered, item)
+	}
+	return filtered
+}
+
+func buildMemoryImpressionSnapshot(items []MemorySearchResult, now time.Time, rebuilt bool) MemoryImpressionSnapshot {
+	lines := []string{}
+	for _, item := range items {
+		summary := strings.TrimSpace(item.Summary)
+		if summary == "" {
+			summary = strings.TrimSpace(item.Title)
+		}
+		lines = append(lines, "- "+summary)
+	}
+	impression := strings.Join(lines, "\n")
+	if impression == "" {
+		impression = "No approved memories have been saved yet."
+	}
+	return MemoryImpressionSnapshot{Impression: impression, UpdatedAt: now, Rebuilt: rebuilt}
 }
 
 func (s *MemoryService) upsertMessageLocked(id string, threadID string, userID string, content string, clientMessageID *string) (Message, bool, error) {

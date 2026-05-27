@@ -3,7 +3,7 @@ title: M18 Tool Runtime Catalog
 description: Tool catalog, broker, approval, and execution boundaries for builtin and MCP tools.
 ---
 
-M18 makes tools first-class runtime objects without adding new powerful tools. Later slices extend the same catalog and broker boundary with discovery, workspace, bounded command, LSP, web, browser, artifact, coordination, and Work todo tools.
+M18 makes tools first-class runtime objects without adding new powerful tools. Later slices extend the same catalog and broker boundary with discovery, workspace, bounded command, LSP, web, browser, artifact, coordination, memory, and Work todo tools.
 
 ## Catalog
 
@@ -23,11 +23,27 @@ The discovery thin slice adds `tool.load_tools` and `skill.load_skill` as safe b
 
 Approved tool resume jobs call the broker before any concrete executor. The broker checks scoped thread/run/tool-call identity, approval status, execution status, catalog membership, enabled state, persona allowed tool resolution, and MCP candidate schema hash.
 
-Only after those checks does the broker dispatch to the concrete executor. Builtin executors currently include current time, discovery, workspace read/mutation, bounded command, LSP, web, browser, artifact, coordination task, and `todo.write`; MCP tools dispatch through the local stdio MCP executor. Provider and worker code should not call concrete executors directly.
+Only after those checks does the broker dispatch to the concrete executor. Builtin executors currently include current time, discovery, workspace read/mutation, bounded command, LSP, web, browser, artifact, coordination task, memory tools, and `todo.write`; MCP tools dispatch through the local stdio MCP executor. Provider and worker code should not call concrete executors directly.
 
 ## RunContext
 
-RunContext tool resolution now uses the catalog plus persona allowlist plus MCP discovery metadata. Builtin tools appear when allowed by the persona. Discovery tools are available in Chat and Work when persona-allowed. Work-scoped tools, including workspace, bounded command, LSP, web fetch, browser, artifact, coordination task, and `todo.write`, are filtered out unless the thread is in Work mode. `web.search` remains available to Chat when configured and allowed. MCP tools appear only when namespaced, discovered, schema-hashed, and persona-allowed.
+RunContext tool resolution now uses the catalog plus persona allowlist plus MCP discovery metadata. Builtin tools appear when allowed by the persona. Discovery tools and public web tools (`web.search`, `web.fetch`) are available in Chat and Work when persona-allowed. Work-scoped tools, including workspace, bounded command, LSP, browser, artifact, coordination task, memory tools, and `todo.write`, are filtered out unless the thread is in Work mode. MCP tools appear only when namespaced, discovered, schema-hashed, and persona-allowed.
+
+Memory tool availability also depends on the selected memory provider. Local, semantic, and OpenViking expose the full current Loomi memory tool set. Nowledge disables `memory.edit` and prepared RunContexts omit it. Disabled or unconfigured memory disables all memory catalog entries and removes memory tools from prepared RunContexts. Disabled catalog metadata uses safe reason codes only.
+
+The memory tool slice adds Work-mode, always-approval-required tools:
+
+- `memory.search`: searches approved safe memory summaries in the current thread/user boundary.
+- `memory.read`: reads one safe memory detail without raw content.
+- `memory.write`: creates a pending memory write proposal; it does not approve or commit the memory.
+- `memory.forget`: tombstones one visible memory entry through the existing delete/audit boundary.
+- `memory.status`: returns the safe provider readiness summary.
+- `notebook.read`: reads one approved structured notebook entry without raw content.
+- `notebook.write`: writes one scoped structured notebook entry through the audited memory boundary.
+- `notebook.edit`: tombstones an existing notebook entry and writes a replacement entry.
+- `notebook.forget`: tombstones one notebook entry through the audited memory boundary.
+
+Provider schemas expose only bounded fields. Tool results are redacted by the broker and must not include raw memory content, content hashes, credentials, local paths, provider traces, or secret-like values.
 
 ## Events
 

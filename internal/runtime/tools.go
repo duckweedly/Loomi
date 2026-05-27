@@ -46,10 +46,14 @@ func ToolResolutionsForPersona(allowedToolNames []string) []productdata.ToolReso
 		}
 		if productdata.IsWorkspaceToolName(name) {
 			riskLevel := productdata.ToolRiskLow
+			approvalPolicy := string(ToolApprovalAlwaysRequired)
+			if productdata.IsWorkspaceReadOnlyToolName(name) {
+				approvalPolicy = string(ToolApprovalNotRequired)
+			}
 			if name == productdata.ToolNameWorkspaceWriteFile || name == productdata.ToolNameWorkspaceEdit || name == productdata.ToolNameWorkspacePatchPreview || name == productdata.ToolNameWorkspacePatchApply {
 				riskLevel = productdata.ToolRiskHigh
 			}
-			resolutions = append(resolutions, productdata.ToolResolution{Name: name, ApprovalPolicy: string(ToolApprovalAlwaysRequired), ExecutionState: string(productdata.ToolExecutionStateExecutable), Source: string(productdata.ToolCatalogSourceBuiltin), Group: string(productdata.ToolCatalogGroupWorkspace), RiskLevel: string(riskLevel)})
+			resolutions = append(resolutions, productdata.ToolResolution{Name: name, ApprovalPolicy: approvalPolicy, ExecutionState: string(productdata.ToolExecutionStateExecutable), Source: string(productdata.ToolCatalogSourceBuiltin), Group: string(productdata.ToolCatalogGroupWorkspace), RiskLevel: string(riskLevel)})
 			continue
 		}
 		if productdata.IsSandboxToolName(name) {
@@ -62,7 +66,7 @@ func ToolResolutionsForPersona(allowedToolNames []string) []productdata.ToolReso
 		}
 		if productdata.IsWebToolName(name) {
 			approvalPolicy := string(ToolApprovalAlwaysRequired)
-			if name == productdata.ToolNameWebSearch {
+			if name == productdata.ToolNameWebSearch || name == productdata.ToolNameWebFetch {
 				approvalPolicy = string(ToolApprovalNotRequired)
 			}
 			resolutions = append(resolutions, productdata.ToolResolution{Name: name, ApprovalPolicy: approvalPolicy, ExecutionState: string(productdata.ToolExecutionStateExecutable), Source: string(productdata.ToolCatalogSourceBuiltin), Group: string(productdata.ToolCatalogGroupWeb), RiskLevel: string(productdata.ToolRiskMedium)})
@@ -78,6 +82,10 @@ func ToolResolutionsForPersona(allowedToolNames []string) []productdata.ToolReso
 		}
 		if productdata.IsAgentToolName(name) {
 			resolutions = append(resolutions, productdata.ToolResolution{Name: name, ApprovalPolicy: string(ToolApprovalAlwaysRequired), ExecutionState: string(productdata.ToolExecutionStateExecutable), Source: string(productdata.ToolCatalogSourceBuiltin), Group: string(productdata.ToolCatalogGroupAgent), RiskLevel: string(productdata.ToolRiskMedium)})
+			continue
+		}
+		if productdata.IsMemoryToolName(name) {
+			resolutions = append(resolutions, productdata.ToolResolution{Name: name, ApprovalPolicy: string(ToolApprovalAlwaysRequired), ExecutionState: string(productdata.ToolExecutionStateExecutable), Source: string(productdata.ToolCatalogSourceBuiltin), Group: string(productdata.ToolCatalogGroupMemory), RiskLevel: string(productdata.ToolRiskMedium)})
 			continue
 		}
 		if name != productdata.ToolNameCurrentTime {

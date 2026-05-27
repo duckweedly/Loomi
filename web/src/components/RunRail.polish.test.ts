@@ -24,7 +24,11 @@ describe('RunRail restrained runtime polish', () => {
   })
 
   test('styles timeline with quiet dots and compact agent card', () => {
-    const css = readFileSync(resolve(import.meta.dir, '../styles.css'), 'utf8')
+    const css = [
+      readFileSync(resolve(import.meta.dir, '../styles.css'), 'utf8'),
+      readFileSync(resolve(import.meta.dir, '../styles/30-runtime-panels.css'), 'utf8'),
+      readFileSync(resolve(import.meta.dir, '../styles/91-commercial-product.css'), 'utf8'),
+    ].join('\n')
 
     expect(css).toContain('.progress-row::before')
     expect(css).toContain('width: 7px')

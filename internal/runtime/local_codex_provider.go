@@ -63,7 +63,7 @@ func streamLocalCodexResponses(ctx context.Context, snapshot LocalCodexCredentia
 func buildLocalCodexResponsesRequest(ctx context.Context, snapshot LocalCodexCredentialSnapshot, request ProviderRequest) (*http.Request, error) {
 	body := map[string]any{
 		"model":               selectedModel(request.Model, snapshot.Model),
-		"instructions":        "",
+		"instructions":        request.SystemPrompt,
 		"input":               localCodexResponsesInput(request.Messages),
 		"tools":               localCodexTools(request.Tools),
 		"tool_choice":         "auto",

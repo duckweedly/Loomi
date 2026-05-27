@@ -50,7 +50,7 @@ type WebToolExecutor struct {
 
 func WebToolDefinitions() []ToolDefinition {
 	return []ToolDefinition{
-		{Name: productdata.ToolNameWebFetch, ApprovalPolicy: ToolApprovalAlwaysRequired, SafetyClass: ToolSafetyPublicNetworkRead, Source: ToolSourceInternal, ExecutionState: ToolExecutionAllowlisted},
+		{Name: productdata.ToolNameWebFetch, ApprovalPolicy: ToolApprovalNotRequired, SafetyClass: ToolSafetyPublicNetworkRead, Source: ToolSourceInternal, ExecutionState: ToolExecutionAllowlisted},
 		{Name: productdata.ToolNameWebSearch, ApprovalPolicy: ToolApprovalNotRequired, SafetyClass: ToolSafetyPublicNetworkRead, Source: ToolSourceInternal, ExecutionState: ToolExecutionAllowlisted},
 	}
 }

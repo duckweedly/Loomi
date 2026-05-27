@@ -1,0 +1,68 @@
+@media (prefers-reduced-motion: no-preference) {
+  .thread-card,
+  .thread-create-button,
+  .sidebar-settings-button,
+  .sidebar-mode-row button,
+  .settings-segmented-control button,
+  .composer-action,
+  .composer-icon-action,
+  .titlebar-button {
+    transition:
+      background-color 140ms ease,
+      border-color 140ms ease,
+      color 140ms ease,
+      transform 140ms ease !important;
+  }
+}
+
+/* Icon-only affordances: no extra circular wrapper unless the control is primary. */
+.titlebar-button,
+.thread-row > .thread-action {
+  border: 0 !important;
+  border-radius: 8px !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.titlebar-button:hover,
+.thread-row > .thread-action:hover,
+.titlebar-button:focus-visible,
+.thread-row > .thread-action:focus-visible {
+  background: color-mix(in srgb, var(--accent) 10%, transparent) !important;
+  box-shadow: none !important;
+}
+
+.thread-card.selected .thread-action {
+  background: transparent !important;
+}
+
+.sidebar-footer {
+  display: flex !important;
+  align-items: center;
+  justify-content: flex-start;
+  padding-bottom: 14px;
+}
+
+.sidebar-footer .sidebar-settings-button {
+  display: inline-grid;
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  min-width: 34px;
+  place-items: center;
+  border: 1px solid transparent !important;
+  border-radius: 10px !important;
+  padding: 0 !important;
+  background: transparent !important;
+  color: var(--text-secondary) !important;
+  box-shadow: none !important;
+}
+
+.sidebar-footer .sidebar-settings-button:hover,
+.sidebar-footer .sidebar-settings-button:focus-visible {
+  border-color: var(--border-subtle) !important;
+  background: color-mix(in srgb, var(--loomi-panel) 48%, transparent) !important;
+  color: var(--text-primary) !important;
+  box-shadow: none !important;
+  transform: none !important;
+}

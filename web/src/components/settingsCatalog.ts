@@ -42,18 +42,18 @@ export type SettingSection = {
 
 export const settingsCategoryGroups: Record<SettingsCategoryGroup, Record<Locale, string>> = {
   primary: { zh: '工作区', en: 'Workspace' },
-  agent_core: { zh: 'Agent Core', en: 'Agent Core' },
-  management: { zh: '管理', en: 'Management' },
+  agent_core: { zh: '模型与上下文', en: 'Models & Context' },
+  management: { zh: '能力与安全', en: 'Capabilities & Safety' },
 }
 
 const categoryCopy: Record<SettingsCategoryId, Record<Locale, Pick<SettingsCategory, 'label' | 'description'>>> = {
   general: { zh: { label: '通用', description: '当前会话的基础偏好。' }, en: { label: 'General', description: 'Basic preferences for the current session.' } },
-  providers: { zh: { label: '供应商', description: '管理模型供应商与可用模型。' }, en: { label: 'Providers', description: 'Manage model providers and available models.' } },
+  providers: { zh: { label: '模型连接', description: '管理模型供应商、可用模型与本地执行通道。' }, en: { label: 'Model Connections', description: 'Manage model providers, available models, and local execution channels.' } },
   'web-search': { zh: { label: '网页搜索', description: '管理 Tavily 和 Brave Search 的网页搜索能力。' }, en: { label: 'Web Search', description: 'Manage Tavily and Brave Search web search capability.' } },
   skill: { zh: { label: '技能', description: '查看本机已安装的 Codex、Claude Code 和项目技能。' }, en: { label: 'Skill', description: 'View installed Codex, Claude Code, and project skills.' } },
   mcp: { zh: { label: 'MCP', description: '管理本地 stdio MCP server 配置、保存状态和连接测试。' }, en: { label: 'MCP', description: 'Manage local stdio MCP server config, saved state, and connection tests.' } },
-  memory: { zh: { label: 'Memory', description: '查看、检索并删除已批准的本地记忆。' }, en: { label: 'Memory', description: 'View, search, and delete approved local memories.' } },
-  tools: { zh: { label: '工具', description: '只读查看 builtin 和 MCP 工具目录、安全策略和执行状态。' }, en: { label: 'Tools', description: 'Read-only catalog for builtin and MCP tools, safety policy, and execution state.' } },
+  memory: { zh: { label: '记忆与上下文', description: '审批记忆提案、查看运行上下文并管理安全记忆。' }, en: { label: 'Memory & Context', description: 'Review memory proposals, inspect runtime context, and manage safe memory.' } },
+  tools: { zh: { label: '工具权限', description: '只读查看 builtin 和 MCP 工具目录、安全策略和执行状态。' }, en: { label: 'Tool Permissions', description: 'Read-only catalog for builtin and MCP tools, safety policy, and execution state.' } },
   about: { zh: { label: '关于', description: '已知本地应用状态和占位构建信息。' }, en: { label: 'About', description: 'Known local app state plus placeholder build metadata.' } },
 }
 

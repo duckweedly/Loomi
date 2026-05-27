@@ -5,12 +5,12 @@ describe('settings catalog', () => {
   test('defines every required M5.5 settings category', () => {
     expect(settingsCategories.map((category) => category.label)).toEqual([
       'General',
-      'Providers',
+      'Model Connections',
       'Web Search',
       'Skill',
       'MCP',
-      'Memory',
-      'Tools',
+      'Memory & Context',
+      'Tool Permissions',
       'About',
     ])
   })
@@ -27,6 +27,8 @@ describe('settings catalog', () => {
 
   test('keeps required navigation groups and working row vocabulary', () => {
     expect(settingsCategoryGroups.primary).toEqual({ zh: '工作区', en: 'Workspace' })
+    expect(settingsCategoryGroups.agent_core).toEqual({ zh: '模型与上下文', en: 'Models & Context' })
+    expect(settingsCategoryGroups.management).toEqual({ zh: '能力与安全', en: 'Capabilities & Safety' })
     expect(getLocalizedSettingsCategories('zh').find((category) => category.id === 'general')?.label).toBe('通用')
     expect(generalSettingSections.flatMap((section) => section.rows.map((row) => row.id))).toEqual([
       'default-workspace-mode',

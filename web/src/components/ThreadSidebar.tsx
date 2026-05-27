@@ -202,9 +202,8 @@ export function ThreadSidebar({
       </div>
       <div className="sidebar-footer">
         {footerItems.map((item) => (
-          <button className="sidebar-settings-button" key={item.id} type="button" onClick={onOpenSettings}>
-            <Settings size={16} />
-            <span>{copy.settings}</span>
+          <button className="sidebar-settings-button" key={item.id} type="button" aria-label={copy.settings} title={copy.settings} onClick={onOpenSettings}>
+            <Settings size={18} />
           </button>
         ))}
       </div>

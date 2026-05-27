@@ -1,5 +1,9 @@
+import type { ReactNode } from 'react'
 import { useState } from 'react'
 import { Copy, ChevronDown, ChevronRight, RefreshCcw, RotateCcw } from 'lucide-react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
+import type { Components } from 'react-markdown'
 import type { AssistantDraft as AssistantDraftState, BackendCapabilityState, ChatCanvasState, Message, Persona, ProviderCapability, Run, StreamState, Thread, WorkspaceRootConfig } from '../domain'
 import type { Locale } from '../i18n'
 import { getDictionary } from '../i18n'
@@ -7,11 +11,9 @@ import { getProviderUnavailableWarning, shouldShowProviderUnavailableWarning } f
 import { deriveChatCanvasState } from '../runtime/chatCanvasState'
 import { humanToolName } from '../runtime/toolPreview'
 import type { ProviderSaveResult } from '../state'
-import { deriveWorkPlanProjection } from '../workModeProjection'
 import { Composer } from './Composer'
 import type { ComposerAttachment, ComposerModelOption } from './Composer'
 import { ToolCallCard } from './ToolCallCard'
-import { WorkPlanView } from './WorkPlanView'
 
 const activeRunStatuses = new Set<Run['status']>(['pending', 'queued', 'running', 'recovering', 'blocked_on_tool_approval', 'stopping', 'retrying'])
 
@@ -71,103 +73,73 @@ function safeHref(href: string) {
   return /^(https?:|mailto:)/i.test(href) ? href : '#'
 }
 
-function renderInlineMarkdown(text: string, blockKey: string) {
-  const parts = text.split(/(`[^`]+`|\*\*[^*]+\*\*|\[[^\]]+\]\([^)]+\))/g)
-  return parts.filter(Boolean).map((part, index) => {
-    const key = `${blockKey}-${index}`
-    if (part.startsWith('`') && part.endsWith('`')) return <code key={key}>{part.slice(1, -1)}</code>
-    if (part.startsWith('**') && part.endsWith('**')) return <strong key={key}>{part.slice(2, -2)}</strong>
-    const link = part.match(/^\[([^\]]+)\]\(([^)]+)\)$/)
-    if (link) return <a key={key} href={safeHref(link[2])} rel="noreferrer" target="_blank">{link[1]}</a>
-    return part
-  })
+function normalizeMarkdownContent(content: string) {
+  return content
+    .replace(/\r\n/g, '\n')
+    .split(/(```[\s\S]*?```)/g)
+    .map((part, index) => {
+      if (index % 2 === 1) return part
+      return part
+        .replace(/\s*---\s*(#{1,6})/g, '\n\n$1')
+        .replace(/([^\n])\s+(#{1,6})(?=\S)/g, '$1\n\n$2')
+        .replace(/^(#{1,6})(?=\S)/gm, '$1 ')
+        .replace(/^(#{1,6}\s+\d+)\.(?=\S)/gm, '$1. ')
+    })
+    .join('')
 }
 
-function isMarkdownTableSeparator(line: string) {
-  const cells = line.trim().split('|').map((cell) => cell.trim()).filter(Boolean)
-  return cells.length > 0 && cells.every((cell) => /^:?-{3,}:?$/.test(cell))
+function textFromChildren(children: ReactNode): string {
+  if (typeof children === 'string') return children
+  if (typeof children === 'number') return String(children)
+  if (Array.isArray(children)) return children.map(textFromChildren).join('')
+  return ''
 }
 
-function parseMarkdownTableRow(line: string) {
-  const trimmed = line.trim().replace(/^\|/, '').replace(/\|$/, '')
-  return trimmed.split('|').map((cell) => cell.trim())
+function codeLanguage(className?: string) {
+  const match = /(?:^|\s)language-([a-z0-9_-]+)(?:\s|$)/i.exec(className ?? '')
+  const language = match?.[1]?.toLowerCase()
+  if (!language || language === 'plaintext' || language === 'plain' || language === 'txt') return 'text'
+  return language
 }
 
-function isMarkdownTableStart(lines: string[], index: number) {
-  return lines[index]?.includes('|') && isMarkdownTableSeparator(lines[index + 1] ?? '')
+function MarkdownCodeBlock({ className, children }: { className?: string; children?: ReactNode }) {
+  const language = codeLanguage(className)
+  const text = textFromChildren(children).replace(/\n$/, '')
+  return (
+    <div className="message-code-block">
+      <div className="message-code-block-head">
+        <span>{language}</span>
+        <button type="button" onClick={() => void navigator.clipboard?.writeText(text)} aria-label="Copy code">
+          <Copy size={13} />
+        </button>
+      </div>
+      <pre><code className={className}>{text}</code></pre>
+    </div>
+  )
+}
+
+const markdownComponents: Components = {
+  a: ({ href, children }) => <a href={safeHref(href ?? '')} rel="noreferrer" target="_blank">{children}</a>,
+  pre: ({ children }) => {
+    const child = Array.isArray(children) ? children[0] : children
+    if (typeof child === 'object' && child && 'props' in child) {
+      const props = child.props as { className?: string; children?: ReactNode }
+      return <MarkdownCodeBlock className={props.className}>{props.children}</MarkdownCodeBlock>
+    }
+    return <MarkdownCodeBlock>{children}</MarkdownCodeBlock>
+  },
+  code: ({ className, children }) => <code className={className}>{children}</code>,
+  table: ({ children }) => <div className="message-table-wrap"><table>{children}</table></div>,
 }
 
 function MarkdownMessage({ content }: { content: string }) {
-  const lines = content.replace(/\r\n/g, '\n').split('\n')
-  const blocks = []
-  for (let index = 0; index < lines.length;) {
-    const line = lines[index]
-    if (line.trim() === '') {
-      index += 1
-      continue
-    }
-    if (line.trim().startsWith('```')) {
-      const codeLines = []
-      index += 1
-      while (index < lines.length && !lines[index].trim().startsWith('```')) {
-        codeLines.push(lines[index])
-        index += 1
-      }
-      index += 1
-      blocks.push(<pre key={`code-${index}`}><code>{codeLines.join('\n')}</code></pre>)
-      continue
-    }
-    if (isMarkdownTableStart(lines, index)) {
-      const headers = parseMarkdownTableRow(lines[index])
-      index += 2
-      const rows = []
-      while (index < lines.length && lines[index].trim() !== '' && lines[index].includes('|') && !lines[index].trim().startsWith('```')) {
-        rows.push(parseMarkdownTableRow(lines[index]))
-        index += 1
-      }
-      blocks.push(
-        <div className="message-table-wrap" key={`table-${index}`}>
-          <table>
-            <thead>
-              <tr>{headers.map((header, cellIndex) => <th key={`th-${cellIndex}`}>{renderInlineMarkdown(header, `th-${index}-${cellIndex}`)}</th>)}</tr>
-            </thead>
-            <tbody>
-              {rows.map((row, rowIndex) => (
-                <tr key={`tr-${index}-${rowIndex}`}>
-                  {headers.map((_, cellIndex) => <td key={`td-${index}-${rowIndex}-${cellIndex}`}>{renderInlineMarkdown(row[cellIndex] ?? '', `td-${index}-${rowIndex}-${cellIndex}`)}</td>)}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>,
-      )
-      continue
-    }
-    const heading = line.match(/^(#{1,3})\s+(.+)$/)
-    if (heading) {
-      const children = renderInlineMarkdown(heading[2], `heading-${index}`)
-      blocks.push(heading[1].length === 1 ? <h1 key={`heading-${index}`}>{children}</h1> : heading[1].length === 2 ? <h2 key={`heading-${index}`}>{children}</h2> : <h3 key={`heading-${index}`}>{children}</h3>)
-      index += 1
-      continue
-    }
-    if (/^\s*[-*]\s+/.test(line)) {
-      const items = []
-      while (index < lines.length && /^\s*[-*]\s+/.test(lines[index])) {
-        items.push(<li key={`li-${index}`}>{renderInlineMarkdown(lines[index].replace(/^\s*[-*]\s+/, ''), `li-${index}`)}</li>)
-        index += 1
-      }
-      blocks.push(<ul key={`ul-${index}`}>{items}</ul>)
-      continue
-    }
-    const paragraph = [line.trim()]
-    index += 1
-    while (index < lines.length && lines[index].trim() !== '' && !lines[index].trim().startsWith('```') && !/^(#{1,3})\s+/.test(lines[index]) && !/^\s*[-*]\s+/.test(lines[index]) && !isMarkdownTableStart(lines, index)) {
-      paragraph.push(lines[index].trim())
-      index += 1
-    }
-    blocks.push(<p key={`p-${index}`}>{renderInlineMarkdown(paragraph.join(' '), `p-${index}`)}</p>)
-  }
-  return <div className="message-markdown">{blocks}</div>
+  return (
+    <div className="message-markdown">
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+        {normalizeMarkdownContent(content)}
+      </ReactMarkdown>
+    </div>
+  )
 }
 
 function displayMessageTime(value: string, locale: Locale) {
@@ -268,20 +240,32 @@ function draftStatusLabel(status: AssistantDraftState['status'], locale: Locale)
   return copy.waitingRunTitle
 }
 
+function shouldRenderDraftContent(status: AssistantDraftState['status']) {
+  return status === 'completed' || status === 'failed' || status === 'stopped'
+}
+
 function AssistantDraft({ run, locale, onRetry }: { run: Run | null; locale: Locale; onRetry?: () => void }) {
   const copy = getDictionary(locale).chatCanvas
   const draft = run?.assistantDraft
   if (!run || !draft || draft.status === 'empty') return null
 
-  const failedMessage: Message = { id: draft.messageId ?? run.id, threadId: run.threadId, role: 'assistant', content: draft.content || draftFallback(draft.status, locale), createdAt: run.completedAt ?? run.createdAt ?? new Date().toISOString(), runId: run.id }
+  const shouldRenderContent = shouldRenderDraftContent(draft.status)
+  const draftMessage: Message = { id: draft.messageId ?? run.id, threadId: run.threadId, role: 'assistant', content: draft.content || draftFallback(draft.status, locale), createdAt: run.completedAt ?? run.createdAt ?? new Date().toISOString(), runId: run.id }
 
   return (
     <article className={`message-row assistant draft ${draft.status}`}>
       <div className="message-avatar">L</div>
       <div className="message-bubble">
         <div className="message-meta">{copy.assistant} · {draftStatusLabel(draft.status, locale)}</div>
-        <MarkdownMessage content={failedMessage.content} />
-        {draft.status === 'failed' && <MessageActions message={failedMessage} locale={locale} onRetry={onRetry} />}
+        {shouldRenderContent ? (
+          <MarkdownMessage content={draftMessage.content} />
+        ) : (
+          <div className="message-draft-status" role="status">
+            <span aria-hidden="true" />
+            <p>{draftFallback(draft.status, locale)}</p>
+          </div>
+        )}
+        {draft.status === 'failed' && <MessageActions message={draftMessage} locale={locale} onRetry={onRetry} />}
       </div>
     </article>
   )
@@ -395,7 +379,6 @@ export function ChatCanvas({ thread, messages, run, loading, error, dataSourceMo
   ))
   const shouldShowAssistantDraft = Boolean(visibleRun && !hasPersistedCompletedDraftMessage)
   const shouldShowHistory = state === 'history' || state === 'waiting-run' || state === 'running' || state === 'completed' || state === 'failed' || state === 'stopped' || state === 'recovering' || state === 'stopping'
-  const workPlanProjection = deriveWorkPlanProjection(thread, messages, visibleRun)
   const composerModelOptions: ComposerModelOption[] = providerCapabilities
     .filter((provider) => provider.status === 'available' && provider.executionState !== 'unsupported')
     .map((provider) => ({
@@ -419,7 +402,6 @@ export function ChatCanvas({ thread, messages, run, loading, error, dataSourceMo
       )}
 
       <div className="message-list">
-        {workPlanProjection && <WorkPlanView projection={workPlanProjection} loading={loading} error={error} locale={locale} />}
         {state === 'history' ? (
           <>
             <MessageHistory messages={messages} locale={locale} canRegenerate={canRegenerateAnswer} onRegenerate={onRegenerateRun} />

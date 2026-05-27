@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { apiClient, executionAdapter } from './apiClient'
 import { setMockRuntimeScript } from './mockApiClient'
-import type { BackendCapabilityState, InstalledSkill, LocalProviderDetection, MCPServerConfigInput, MCPServerStatus, MemoryAuditItem, MemoryEntry, MemoryFilters, Message, Persona, ProviderCapability, Run, RunEvent, RuntimeEvent, RuntimeScriptId, StaleEventGuard, StreamState, Thread, ThreadRuntimeState, ToolCall, ToolCatalogItem, WebSearchConfig, WorkspaceRootConfig } from './domain'
+import type { BackendCapabilityState, InstalledSkill, LocalProviderDetection, MCPServerConfigInput, MCPServerStatus, MemoryAuditItem, MemoryEntry, MemoryErrorEvent, MemoryFilters, MemoryImpressionSnapshot, MemoryOverviewSnapshot, MemoryProviderStatus, MemoryProviderUpdate, MemoryWriteProposal, Message, Persona, ProviderCapability, Run, RunEvent, RuntimeEvent, RuntimeScriptId, StaleEventGuard, StreamState, Thread, ThreadRuntimeState, ToolCall, ToolCatalogItem, WebSearchConfig, WorkspaceRootConfig } from './domain'
 import { isRuntimeActive, isRuntimeTerminal } from './runtime/executionAdapter'
 import { deriveCapabilitySignalFromEvent } from './runtime/backendCapabilityStatus'
 import { applyRealRunEvent, mapRealRuntimeCapabilitySignal } from './runtime/realExecutionAdapter'
@@ -157,7 +157,7 @@ export function applyModelGatewayEventToRun(run: Run, event: RuntimeEvent): Run 
 }
 
 export function shouldApplyIncomingRunEvent(run: Run, event: RunEvent) {
-  if (shouldIgnoreTerminalRuntimeEvent(run)) return false
+  if (shouldIgnoreTerminalRuntimeEvent(run) && !isAssistantFinalContentEvent(event)) return false
   return !run.events.some((existing) => (existing.id || String(existing.sequence)) === (event.id || String(event.sequence)))
 }
 
@@ -169,8 +169,25 @@ export function shouldIgnoreTerminalRuntimeEvent(run: Run) {
   return isRuntimeTerminal(run.status)
 }
 
+function isAssistantFinalContentEvent(event: RunEvent) {
+  return Boolean(event.content?.trim()) && (event.type === 'assistant.message.completed' || event.type === 'message.model_output_completed' || event.type === 'model.final')
+}
+
 export function applyRunStreamEventToRun(run: Run, event: RunEvent): Run {
-  if (isRuntimeTerminal(run.status)) return run
+  if (isRuntimeTerminal(run.status)) {
+    if (run.status !== 'completed') return run
+    if (!isAssistantFinalContentEvent(event) || run.events.some((existing) => existing.id === event.id)) return run
+    return {
+      ...run,
+      events: mergeRunEvents(run.events, [event]),
+      assistantDraft: {
+        content: event.content ?? run.assistantDraft?.content ?? '',
+        status: 'completed',
+        messageId: run.assistantDraft?.messageId,
+        lastEventId: event.id,
+      },
+    }
+  }
   if (run.events.some((existing) => existing.id === event.id)) return run
 
   const maxSequence = getMaxRunEventSequence(run.events, -1)
@@ -311,11 +328,21 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
   const [memoryAuditItems, setMemoryAuditItems] = useState<MemoryAuditItem[]>([])
   const [memoryAuditLoading, setMemoryAuditLoading] = useState(false)
   const [memoryAuditError, setMemoryAuditError] = useState<string | null>(null)
+  const [memoryWriteProposals, setMemoryWriteProposals] = useState<MemoryWriteProposal[]>([])
+  const [memoryProposalsLoading, setMemoryProposalsLoading] = useState(false)
+  const [memoryProposalsError, setMemoryProposalsError] = useState<string | null>(null)
+  const [memoryProviderStatus, setMemoryProviderStatus] = useState<MemoryProviderStatus | null>(null)
+  const [memoryErrors, setMemoryErrors] = useState<MemoryErrorEvent[]>([])
+  const [memoryProviderSaveResult, setMemoryProviderSaveResult] = useState<ProviderSaveResult>({ status: 'idle' })
+  const [memoryOverviewSnapshot, setMemoryOverviewSnapshot] = useState<MemoryOverviewSnapshot | null>(null)
+  const [memoryImpressionSnapshot, setMemoryImpressionSnapshot] = useState<MemoryImpressionSnapshot | null>(null)
+  const [memorySnapshotLoading, setMemorySnapshotLoading] = useState(false)
   const [pendingDeleteMemoryEntry, setPendingDeleteMemoryEntry] = useState<MemoryEntry | null>(null)
   const selectedThreadIdRef = useRef(selectedThreadId)
   const runRef = useRef<Run | null>(run)
   const memoryEntriesRequestRef = useRef(0)
   const memoryAuditRequestRef = useRef(0)
+  const memoryProposalsRequestRef = useRef(0)
   const memoryDetailRequestRef = useRef(0)
 
   selectedThreadIdRef.current = selectedThreadId
@@ -634,11 +661,34 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
     }
   }, [memoryFilters])
 
+  const loadMemoryWriteProposals = useCallback(async (filters = memoryFilters) => {
+    const requestID = memoryProposalsRequestRef.current + 1
+    memoryProposalsRequestRef.current = requestID
+    if (!apiClient.listMemoryWriteProposals) {
+      setMemoryWriteProposals([])
+      return
+    }
+    setMemoryProposalsLoading(true)
+    setMemoryProposalsError(null)
+    try {
+      const proposals = await apiClient.listMemoryWriteProposals(filters)
+      if (!shouldApplyLatestRequest(requestID, memoryProposalsRequestRef.current)) return
+      setMemoryWriteProposals(proposals)
+    } catch (err) {
+      if (!shouldApplyLatestRequest(requestID, memoryProposalsRequestRef.current)) return
+      setMemoryWriteProposals([])
+      setMemoryProposalsError(err instanceof Error ? err.message : 'Memory proposals failed to load')
+    } finally {
+      if (shouldApplyLatestRequest(requestID, memoryProposalsRequestRef.current)) setMemoryProposalsLoading(false)
+    }
+  }, [memoryFilters])
+
   const updateMemoryFilters = useCallback((filters: MemoryFilters) => {
     setMemoryFilters(filters)
     void loadMemoryEntries(memoryQuery, filters)
     void loadMemoryAudit(filters)
-  }, [loadMemoryAudit, loadMemoryEntries, memoryQuery])
+    void loadMemoryWriteProposals(filters)
+  }, [loadMemoryAudit, loadMemoryEntries, loadMemoryWriteProposals, memoryQuery])
 
   const openMemoryDetail = useCallback(async (entry: MemoryEntry) => {
     const requestID = memoryDetailRequestRef.current + 1
@@ -693,6 +743,135 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
   useEffect(() => {
     void loadMemoryAudit(memoryFilters)
   }, [loadMemoryAudit])
+
+  useEffect(() => {
+    void loadMemoryWriteProposals(memoryFilters)
+  }, [loadMemoryWriteProposals])
+
+  const approveMemoryWriteProposal = useCallback(async (proposal: MemoryWriteProposal) => {
+    if (!apiClient.approveMemoryWriteProposal) return
+    setMemoryProposalsError(null)
+    try {
+      await apiClient.approveMemoryWriteProposal(proposal.id)
+      await loadMemoryWriteProposals(memoryFilters)
+      await loadMemoryEntries(memoryQuery, memoryFilters)
+      await loadMemoryAudit(memoryFilters)
+    } catch (err) {
+      setMemoryProposalsError(err instanceof Error ? err.message : 'Memory proposal approval failed')
+    }
+  }, [loadMemoryAudit, loadMemoryEntries, loadMemoryWriteProposals, memoryFilters, memoryQuery])
+
+  const updateMemoryWriteProposal = useCallback(async (proposal: MemoryWriteProposal, input: { title: string; summary: string }) => {
+    if (!apiClient.updateMemoryWriteProposal) return
+    setMemoryProposalsError(null)
+    try {
+      const updated = await apiClient.updateMemoryWriteProposal(proposal.id, input)
+      setMemoryWriteProposals((current) => current.map((item) => (item.id === updated.id ? updated : item)))
+    } catch (err) {
+      setMemoryProposalsError(err instanceof Error ? err.message : 'Memory proposal update failed')
+    }
+  }, [])
+
+  const denyMemoryWriteProposal = useCallback(async (proposal: MemoryWriteProposal) => {
+    if (!apiClient.denyMemoryWriteProposal) return
+    setMemoryProposalsError(null)
+    try {
+      await apiClient.denyMemoryWriteProposal(proposal.id)
+      await loadMemoryWriteProposals(memoryFilters)
+      await loadMemoryAudit(memoryFilters)
+    } catch (err) {
+      setMemoryProposalsError(err instanceof Error ? err.message : 'Memory proposal denial failed')
+    }
+  }, [loadMemoryAudit, loadMemoryWriteProposals, memoryFilters])
+
+  const refreshMemoryProviderStatus = useCallback(async () => {
+    if (!apiClient.getMemoryProviderStatus) {
+      setMemoryProviderStatus(null)
+      return
+    }
+    try {
+      setMemoryProviderStatus(await apiClient.getMemoryProviderStatus())
+    } catch {
+      setMemoryProviderStatus(null)
+    }
+  }, [])
+
+  const refreshMemoryErrors = useCallback(async () => {
+    if (!apiClient.listMemoryErrors) {
+      setMemoryErrors([])
+      return
+    }
+    try {
+      setMemoryErrors(await apiClient.listMemoryErrors())
+    } catch {
+      setMemoryErrors([])
+    }
+  }, [])
+
+  const refreshMemorySnapshots = useCallback(async () => {
+    setMemorySnapshotLoading(true)
+    try {
+      const [overview, impression] = await Promise.all([
+        apiClient.getMemoryOverviewSnapshot?.(),
+        apiClient.getMemoryImpressionSnapshot?.(),
+      ])
+      if (overview) setMemoryOverviewSnapshot(overview)
+      if (impression) setMemoryImpressionSnapshot(impression)
+    } finally {
+      setMemorySnapshotLoading(false)
+    }
+  }, [])
+
+  const rebuildMemoryOverviewSnapshot = useCallback(async () => {
+    if (!apiClient.rebuildMemoryOverviewSnapshot) return
+    setMemorySnapshotLoading(true)
+    try {
+      setMemoryOverviewSnapshot(await apiClient.rebuildMemoryOverviewSnapshot())
+    } finally {
+      setMemorySnapshotLoading(false)
+    }
+  }, [])
+
+  const rebuildMemoryImpressionSnapshot = useCallback(async () => {
+    if (!apiClient.rebuildMemoryImpressionSnapshot) return
+    setMemorySnapshotLoading(true)
+    try {
+      setMemoryImpressionSnapshot(await apiClient.rebuildMemoryImpressionSnapshot())
+    } finally {
+      setMemorySnapshotLoading(false)
+    }
+  }, [])
+
+  const getMemoryContent = useCallback(async (uri: string, layer: 'overview' | 'read' = 'overview') => {
+    return apiClient.getMemoryContent?.(uri, layer) ?? ''
+  }, [])
+
+  const detectNowledgeMemoryProvider = useCallback(async () => {
+    return apiClient.detectNowledgeMemoryProvider?.() ?? { detected: false, message: 'Nowledge detect endpoint unavailable' }
+  }, [])
+
+  const detectOpenVikingMemoryProvider = useCallback(async () => {
+    return apiClient.detectOpenVikingMemoryProvider?.() ?? { detected: false, message: 'OpenViking detect endpoint unavailable' }
+  }, [])
+
+  const createMemoryEntry = useCallback(async (input: { title: string; content: string; scopeType?: 'user' | 'thread'; scopeId?: string }) => {
+    if (!apiClient.createMemoryEntry) return
+    setMemoryError(null)
+    try {
+      await apiClient.createMemoryEntry(input)
+      await loadMemoryEntries(memoryQuery, memoryFilters)
+      await loadMemoryAudit(memoryFilters)
+      await refreshMemorySnapshots()
+    } catch (err) {
+      setMemoryError(err instanceof Error ? err.message : 'Memory create failed')
+    }
+  }, [loadMemoryAudit, loadMemoryEntries, memoryFilters, memoryQuery, refreshMemorySnapshots])
+
+  useEffect(() => {
+    void refreshMemoryProviderStatus()
+    void refreshMemoryErrors()
+    void refreshMemorySnapshots()
+  }, [refreshMemoryErrors, refreshMemoryProviderStatus, refreshMemorySnapshots])
 
   useEffect(() => {
     if (!run || !shouldBlockRuntimeSubmit(run) || !apiClient.subscribeRunEvents) {
@@ -959,6 +1138,19 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
     }
   }, [])
 
+  const updateMemoryProvider = useCallback(async (input: MemoryProviderUpdate) => {
+    if (!apiClient.updateMemoryProvider) return
+    setMemoryProviderSaveResult({ status: 'saving' })
+    try {
+      const status = await apiClient.updateMemoryProvider(input)
+      setMemoryProviderStatus(status)
+      void refreshMemoryErrors()
+      setMemoryProviderSaveResult({ status: status.state === 'healthy' || status.state === 'available' ? 'success' : 'failed', message: status.diagnostic.message })
+    } catch (err) {
+      setMemoryProviderSaveResult({ status: 'failed', message: redactProviderCheckMessage(err instanceof Error ? err.message : 'Memory provider update failed') })
+    }
+  }, [refreshMemoryErrors])
+
   const chooseWorkspaceFolder = useCallback(async () => {
     if (!apiClient.saveWorkspaceRoot) {
       setWorkspaceRootSaveResult({ status: 'failed', message: 'Workspace folder endpoint unavailable' })
@@ -1027,6 +1219,15 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
     memoryAuditItems,
     memoryAuditLoading,
     memoryAuditError,
+    memoryWriteProposals,
+    memoryProposalsLoading,
+    memoryProposalsError,
+    memoryProviderStatus,
+    memoryErrors,
+    memoryProviderSaveResult,
+    memoryOverviewSnapshot,
+    memoryImpressionSnapshot,
+    memorySnapshotLoading,
     pendingDeleteMemoryEntry,
     selectRuntimeScript,
     setSelectedPersonaId,
@@ -1036,6 +1237,15 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
     disableLocalProvider,
     saveProvider,
     saveWebSearchKeys,
+    refreshMemoryProviderStatus,
+    refreshMemoryErrors,
+    updateMemoryProvider,
+    detectNowledgeMemoryProvider,
+    detectOpenVikingMemoryProvider,
+    refreshMemorySnapshots,
+    rebuildMemoryOverviewSnapshot,
+    rebuildMemoryImpressionSnapshot,
+    getMemoryContent,
     chooseWorkspaceFolder,
     saveMCPServer,
     deleteMCPServer,
@@ -1046,7 +1256,11 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
     closeMemoryDetail: () => setMemoryDetail(null),
     requestDeleteMemoryEntry,
     cancelDeleteMemoryEntry,
+    createMemoryEntry,
     deleteMemoryEntry,
+    approveMemoryWriteProposal,
+    updateMemoryWriteProposal,
+    denyMemoryWriteProposal,
     refresh,
     selectThread,
     createThread,

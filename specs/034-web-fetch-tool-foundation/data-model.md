@@ -10,7 +10,7 @@ Fields:
 - `source`: `builtin`
 - `group`: `web`
 - `risk_level`: `medium`
-- `approval_policy`: `always_required`
+- `approval_policy`: `read_only`
 - `execution_state`: `executable`
 - `safe_metadata.scope`: `web`
 - `safe_metadata.read_only`: `true`

@@ -1001,6 +1001,64 @@ func TestWorkerExecutesApprovedArtifactCreateAndContinuesModel(t *testing.T) {
 	}
 }
 
+func TestWorkerExecutesApprovedMemorySearchAndContinuesModel(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	if _, err := svc.SyncBuiltInPersonas(context.Background(), ident, productdata.BuiltInPersonas()); err != nil {
+		t.Fatal(err)
+	}
+	thread, err := svc.CreateThread(context.Background(), ident, productdata.CreateThreadInput{Title: "Memory search", Mode: productdata.ThreadModeWork})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _, err := svc.CreateMessage(context.Background(), ident, thread.ID, productdata.CreateMessageInput{Content: "search memory"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, productdata.StartRunInput{Source: productdata.RunSourceModelGateway, MessageID: message.ID, ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.CreateMemoryEntry(context.Background(), ident, productdata.CreateMemoryEntryInput{ScopeType: productdata.MemoryScopeThread, ScopeID: thread.ID, Title: "Memory Tool", Content: "Memory search results stay redacted.", SourceThreadID: thread.ID, SourceRunID: run.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.RecordToolCallRequest(context.Background(), ident, run.ID, productdata.RecordToolCallRequestInput{ToolCallID: "tc_memory_search_1", ToolName: productdata.ToolNameMemorySearch, ArgumentsSummary: map[string]any{"query": "memory search", "limit": 5}, ArgumentsHash: "hash_memory_search_1", ApprovalStatus: productdata.ToolCallApprovalRequired, ExecutionStatus: productdata.ToolCallExecutionBlocked}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.ApproveToolCall(context.Background(), ident, thread.ID, run.ID, "tc_memory_search_1"); err != nil {
+		t.Fatal(err)
+	}
+	provider := &capturingProvider{config: ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: "https://example.test/v1", APIKey: "key", Model: "model", Enabled: true}, events: []ProviderEvent{{Type: ProviderEventCompleted, Text: "Used memory."}}}
+	worker := NewWorker(svc, nil, QueuedRunRouter{Gateway: NewGateway(svc, nil, []Provider{provider})})
+	worker.WorkerID = "worker_memory_search"
+
+	ok, err := worker.ProcessOne(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("ProcessOne() ok = false")
+	}
+	call, err := svc.GetToolCall(context.Background(), ident, thread.ID, run.ID, "tc_memory_search_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, _ := call.ResultSummary["items"].([]map[string]any)
+	if call.ExecutionStatus != productdata.ToolCallExecutionSucceeded || call.ResultSummary["operation"] != "search" || call.ResultSummary["scope"] != "memory" || call.ResultSummary["content"] != nil || len(items) != 1 {
+		t.Fatalf("call = %+v", call)
+	}
+	got, err := svc.GetRun(context.Background(), ident, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != productdata.RunStatusCompleted {
+		t.Fatalf("run = %+v", got)
+	}
+	if len(provider.request.Messages) != 3 || provider.request.Messages[1].Role != ProviderMessageRoleAssistantToolCall || provider.request.Messages[2].Role != ProviderMessageRoleToolResult {
+		t.Fatalf("continuation request = %+v", provider.request.Messages)
+	}
+}
+
 func TestWorkerExecutesApprovedAgentSpawnAndContinuesModel(t *testing.T) {
 	svc := productdata.NewMemoryService()
 	ident := identity.LocalDevIdentity()

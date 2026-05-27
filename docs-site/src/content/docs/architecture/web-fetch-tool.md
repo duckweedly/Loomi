@@ -1,24 +1,24 @@
 ---
 title: M26 Web Fetch Tool Foundation
-description: Approval-gated public HTTP(S) fetch tool architecture.
+description: Public HTTP(S) fetch tool architecture.
 ---
 
 M26 adds the first web runtime slice as one builtin tool: `web.fetch`.
 
-The tool reuses the existing `ToolCatalog -> RunContext -> approval -> ToolBroker -> worker continuation` path. It does not introduce a browser runtime, JavaScript rendering, cookies, crawler behavior, search provider integration, authenticated fetch, or artifact capture.
+The tool reuses the existing `ToolCatalog -> RunContext -> ToolBroker -> worker continuation` path. It does not introduce a browser runtime, JavaScript rendering, cookies, crawler behavior, authenticated fetch, or artifact capture.
 
 ## Boundaries
 
 `web.fetch` is:
 
 - builtin
-- Work mode only
-- approval required
+- available to Chat and Work when persona allowlist permits it
+- auto-approved
 - read-only
 - medium risk
 - public HTTP(S) only
 
-Chat mode filters it out with workspace, sandbox, and LSP tools. Production execution rejects credentialed URLs, non-HTTP schemes, localhost, loopback, link-local, private, multicast, and unspecified hosts before dialing. Redirect targets pass the same validation before response bodies are read.
+Production execution rejects credentialed URLs, non-HTTP schemes, localhost, loopback, link-local, private, multicast, and unspecified hosts before dialing. Redirect targets pass the same validation before response bodies are read.
 
 ## Execution
 
@@ -28,4 +28,4 @@ Events store summaries, not full response bodies. They do not include cookies, a
 
 ## Visibility
 
-Settings > Tools shows `web.fetch` as web-scoped, read-only, approval-required, and public HTTP only. RunRail labels web fetch lifecycle rows separately from workspace, sandbox, MCP, LSP, and runtime tools.
+Settings > Tools shows `web.fetch` as web-scoped, read-only, auto-approved, and public HTTP only. RunRail labels web fetch lifecycle rows separately from workspace, sandbox, MCP, LSP, and runtime tools.

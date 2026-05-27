@@ -36,5 +36,5 @@ bun run --cwd docs-site build
 ## Manual Smoke
 
 1. Start the API and web dev server.
-2. Open Settings > Tools and confirm `web.fetch` appears as builtin, web-scoped, read-only, approval-required, medium risk.
-3. Trigger or replay a Work mode `web.fetch` lifecycle and confirm RunRail shows approval, execution, status/final URL/truncation metadata, and no raw body/cookie/credential content.
+2. Open Settings > Tools and confirm `web.fetch` appears as builtin, web-scoped, read-only, auto-approved, medium risk.
+3. Trigger or replay a Chat or Work `web.fetch` lifecycle and confirm RunRail shows execution, status/final URL/truncation metadata, and no raw body/cookie/credential content.

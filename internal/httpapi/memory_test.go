@@ -49,6 +49,175 @@ func TestMemoryHandlersListSearchApproveAndDelete(t *testing.T) {
 	}
 }
 
+func TestMemorySnapshotAndImpressionHandlers(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	srv := NewServerWithProduct(config.Config{AppEnv: "local"}, fakeChecker{}, svc)
+
+	propose := requestJSON(t, srv, http.MethodPost, "/v1/memory/write-proposals", `{"scope_type":"user","title":"Preference","content":"Prefers compact memory UI with safe summaries","idempotency_key":"snapshot-p1"}`)
+	if propose.Code != http.StatusCreated {
+		t.Fatalf("propose status=%d body=%s", propose.Code, propose.Body.String())
+	}
+	proposalID := decodeStringField(t, propose.Body.Bytes(), "proposal", "id")
+	approve := requestJSON(t, srv, http.MethodPost, "/v1/memory/write-proposals/"+proposalID+"/approve", `{"reason":"approved"}`)
+	if approve.Code != http.StatusOK {
+		t.Fatalf("approve status=%d body=%s", approve.Code, approve.Body.String())
+	}
+
+	snapshot := requestJSON(t, srv, http.MethodGet, "/v1/memory/snapshot", "")
+	if snapshot.Code != http.StatusOK || !strings.Contains(snapshot.Body.String(), `"memory_block"`) || !strings.Contains(snapshot.Body.String(), `"hits"`) || strings.Contains(snapshot.Body.String(), `"content"`) || strings.Contains(snapshot.Body.String(), "sk-secret") {
+		t.Fatalf("snapshot status=%d body=%s", snapshot.Code, snapshot.Body.String())
+	}
+	rebuildSnapshot := requestJSON(t, srv, http.MethodPost, "/v1/memory/snapshot/rebuild", "")
+	if rebuildSnapshot.Code != http.StatusOK || !strings.Contains(rebuildSnapshot.Body.String(), `"rebuilt":true`) {
+		t.Fatalf("rebuild snapshot status=%d body=%s", rebuildSnapshot.Code, rebuildSnapshot.Body.String())
+	}
+	impression := requestJSON(t, srv, http.MethodGet, "/v1/memory/impression", "")
+	if impression.Code != http.StatusOK || !strings.Contains(impression.Body.String(), `"impression"`) || strings.Contains(impression.Body.String(), `"content"`) || strings.Contains(impression.Body.String(), "sk-secret") {
+		t.Fatalf("impression status=%d body=%s", impression.Code, impression.Body.String())
+	}
+	rebuildImpression := requestJSON(t, srv, http.MethodPost, "/v1/memory/impression/rebuild", "")
+	if rebuildImpression.Code != http.StatusOK || !strings.Contains(rebuildImpression.Body.String(), `"rebuilt":true`) {
+		t.Fatalf("rebuild impression status=%d body=%s", rebuildImpression.Code, rebuildImpression.Body.String())
+	}
+	entryID := decodeStringField(t, approve.Body.Bytes(), "entry", "id")
+	content := requestJSON(t, srv, http.MethodGet, "/v1/memory/content?uri=memory://"+entryID+"&layer=read", "")
+	if content.Code != http.StatusOK || !strings.Contains(content.Body.String(), `"content"`) || !strings.Contains(content.Body.String(), "Preference") {
+		t.Fatalf("content status=%d body=%s", content.Code, content.Body.String())
+	}
+	if strings.Contains(content.Body.String(), `"content_hash"`) || strings.Contains(content.Body.String(), "sk-secret") {
+		t.Fatalf("unsafe content fields leaked: %s", content.Body.String())
+	}
+}
+
+func TestMemoryHandlersCreateManualEntry(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	srv := NewServerWithProduct(config.Config{AppEnv: "local"}, fakeChecker{}, svc)
+
+	create := requestJSON(t, srv, http.MethodPost, "/v1/memory/entries", `{"scope_type":"user","title":"Manual note","content":"Remember compact manual memory"}`)
+	if create.Code != http.StatusCreated || !strings.Contains(create.Body.String(), "Manual note") || strings.Contains(create.Body.String(), `"content"`) {
+		t.Fatalf("create status=%d body=%s", create.Code, create.Body.String())
+	}
+	entryID := decodeStringField(t, create.Body.Bytes(), "entry", "id")
+	list := requestJSON(t, srv, http.MethodGet, "/v1/memory", "")
+	if list.Code != http.StatusOK || !strings.Contains(list.Body.String(), entryID) {
+		t.Fatalf("list status=%d body=%s", list.Code, list.Body.String())
+	}
+}
+
+func TestMemoryErrorsReportsProviderDiagnostic(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	srv := NewServerWithProduct(config.Config{AppEnv: "local"}, fakeChecker{}, svc)
+
+	update := requestJSON(t, srv, http.MethodPut, "/v1/memory/provider", `{"enabled":true,"provider":"nowledge","commit_after_run":true,"nowledge":{"base_url":""}}`)
+	if update.Code != http.StatusOK {
+		t.Fatalf("update status=%d body=%s", update.Code, update.Body.String())
+	}
+	errors := requestJSON(t, srv, http.MethodGet, "/v1/memory/errors", "")
+	if errors.Code != http.StatusOK || !strings.Contains(errors.Body.String(), "nowledge_unconfigured") || strings.Contains(errors.Body.String(), "api_key") {
+		t.Fatalf("errors status=%d body=%s", errors.Code, errors.Body.String())
+	}
+}
+
+func TestMemoryErrorsReportsRuntimeProviderFailures(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, productdata.CreateThreadInput{Title: "Runtime memory error", Mode: productdata.ThreadModeWork})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, productdata.StartRunInput{Source: productdata.RunSourceModelGateway, ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.AppendRunEvent(context.Background(), ident, run.ID, productdata.AppendRunEventInput{Category: productdata.RunEventCategoryError, Type: productdata.EventMemoryExternalSnapshotFailed, Summary: "External memory snapshot failed", Metadata: map[string]any{"provider": "nowledge", "error_code": productdata.EventMemoryExternalSnapshotFailed, "raw": "sk-secret"}}); err != nil {
+		t.Fatal(err)
+	}
+	srv := NewServerWithProduct(config.Config{AppEnv: "local"}, fakeChecker{}, svc)
+
+	errors := requestJSON(t, srv, http.MethodGet, "/v1/memory/errors", "")
+	if errors.Code != http.StatusOK || !strings.Contains(errors.Body.String(), productdata.EventMemoryExternalSnapshotFailed) || !strings.Contains(errors.Body.String(), `"run_id":"`+run.ID+`"`) || strings.Contains(errors.Body.String(), "sk-secret") {
+		t.Fatalf("errors status=%d body=%s", errors.Code, errors.Body.String())
+	}
+}
+
+func TestMemoryNowledgeDetectSafeMiss(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	srv := NewServerWithProduct(config.Config{AppEnv: "local"}, fakeChecker{}, svc)
+
+	detect := requestJSON(t, srv, http.MethodGet, "/v1/memory/provider/nowledge/detect", "")
+	if detect.Code != http.StatusOK || !strings.Contains(detect.Body.String(), `"detected":false`) || strings.Contains(detect.Body.String(), "api_key") {
+		t.Fatalf("detect status=%d body=%s", detect.Code, detect.Body.String())
+	}
+}
+
+func TestMemoryOpenVikingDetectSafeMiss(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	srv := NewServerWithProduct(config.Config{AppEnv: "local"}, fakeChecker{}, svc)
+
+	detect := requestJSON(t, srv, http.MethodGet, "/v1/memory/provider/openviking/detect", "")
+	if detect.Code != http.StatusOK || !strings.Contains(detect.Body.String(), `"detected":false`) || strings.Contains(detect.Body.String(), "api_key") {
+		t.Fatalf("detect status=%d body=%s", detect.Code, detect.Body.String())
+	}
+}
+
+func TestMemoryHandlersListPendingWriteProposals(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	srv := NewServerWithProduct(config.Config{AppEnv: "local"}, fakeChecker{}, svc)
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, productdata.CreateThreadInput{Title: "Proposal UI", Mode: productdata.ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	propose := requestJSON(t, srv, http.MethodPost, "/v1/memory/write-proposals", `{"scope_type":"thread","scope_id":"`+thread.ID+`","title":"Pending review","content":"This safe proposal should be reviewable","source_thread_id":"`+thread.ID+`","idempotency_key":"pending-review"}`)
+	if propose.Code != http.StatusCreated {
+		t.Fatalf("propose status=%d body=%s", propose.Code, propose.Body.String())
+	}
+	proposalID := decodeStringField(t, propose.Body.Bytes(), "proposal", "id")
+
+	list := requestJSON(t, srv, http.MethodGet, "/v1/memory/write-proposals?status=pending&scope_type=thread&scope_id="+thread.ID, "")
+	if list.Code != http.StatusOK || !strings.Contains(list.Body.String(), proposalID) || !strings.Contains(list.Body.String(), "Pending review") {
+		t.Fatalf("list proposals status=%d body=%s", list.Code, list.Body.String())
+	}
+	if strings.Contains(list.Body.String(), `"content"`) || strings.Contains(list.Body.String(), "pending-review") {
+		t.Fatalf("unsafe proposal fields leaked: %s", list.Body.String())
+	}
+	approve := requestJSON(t, srv, http.MethodPost, "/v1/memory/write-proposals/"+proposalID+"/approve", `{"reason":"approved"}`)
+	if approve.Code != http.StatusOK {
+		t.Fatalf("approve status=%d body=%s", approve.Code, approve.Body.String())
+	}
+	afterApproval := requestJSON(t, srv, http.MethodGet, "/v1/memory/write-proposals?status=pending&scope_type=thread&scope_id="+thread.ID, "")
+	if afterApproval.Code != http.StatusOK || !strings.Contains(afterApproval.Body.String(), `"items":[]`) {
+		t.Fatalf("after approval status=%d body=%s", afterApproval.Code, afterApproval.Body.String())
+	}
+}
+
+func TestMemoryHandlersUpdateWriteProposal(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	srv := NewServerWithProduct(config.Config{AppEnv: "local"}, fakeChecker{}, svc)
+	propose := requestJSON(t, srv, http.MethodPost, "/v1/memory/write-proposals", `{"scope_type":"user","title":"Original","content":"Original memory summary"}`)
+	if propose.Code != http.StatusCreated {
+		t.Fatalf("propose status=%d body=%s", propose.Code, propose.Body.String())
+	}
+	proposalID := decodeStringField(t, propose.Body.Bytes(), "proposal", "id")
+
+	update := requestJSON(t, srv, http.MethodPatch, "/v1/memory/write-proposals/"+proposalID, `{"title":"Edited","summary":"Edited memory summary"}`)
+	if update.Code != http.StatusOK || !strings.Contains(update.Body.String(), `"title":"Edited"`) || !strings.Contains(update.Body.String(), "Edited memory summary") {
+		t.Fatalf("update status=%d body=%s", update.Code, update.Body.String())
+	}
+	if strings.Contains(update.Body.String(), `"content"`) {
+		t.Fatalf("update leaked raw content: %s", update.Body.String())
+	}
+
+	approve := requestJSON(t, srv, http.MethodPost, "/v1/memory/write-proposals/"+proposalID+"/approve", `{"reason":"approved"}`)
+	if approve.Code != http.StatusOK || !strings.Contains(approve.Body.String(), `"title":"Edited"`) || !strings.Contains(approve.Body.String(), "Edited memory summary") {
+		t.Fatalf("approve status=%d body=%s", approve.Code, approve.Body.String())
+	}
+	tooLate := requestJSON(t, srv, http.MethodPatch, "/v1/memory/write-proposals/"+proposalID, `{"title":"Too late","summary":"Already approved"}`)
+	if tooLate.Code != http.StatusBadRequest {
+		t.Fatalf("too late status=%d body=%s", tooLate.Code, tooLate.Body.String())
+	}
+}
+
 func TestMemoryHandlersRequireScopeForThreadEntryReadDelete(t *testing.T) {
 	svc := productdata.NewMemoryService()
 	srv := NewServerWithProduct(config.Config{AppEnv: "local"}, fakeChecker{}, svc)
@@ -102,6 +271,52 @@ func TestMemoryHandlersRejectThreadSearchWithoutScopeID(t *testing.T) {
 	search := requestJSON(t, srv, http.MethodPost, "/v1/memory/search", `{"scope_type":"thread","query":"management"}`)
 	if search.Code != http.StatusBadRequest || !strings.Contains(search.Body.String(), `"code":"invalid_request"`) {
 		t.Fatalf("search status=%d body=%s", search.Code, search.Body.String())
+	}
+}
+
+func TestMemoryProviderHandlersGetAndUpdateSafeStatus(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	srv := NewServerWithProduct(config.Config{AppEnv: "local"}, fakeChecker{}, svc)
+
+	initial := requestJSON(t, srv, http.MethodGet, "/v1/memory/provider", "")
+	if initial.Code != http.StatusOK || !strings.Contains(initial.Body.String(), `"provider":"local"`) || !strings.Contains(initial.Body.String(), `"state":"available"`) {
+		t.Fatalf("initial status=%d body=%s", initial.Code, initial.Body.String())
+	}
+
+	update := requestJSON(t, srv, http.MethodPut, "/v1/memory/provider", `{"enabled":true,"provider":"semantic","commit_after_run":true}`)
+	if update.Code != http.StatusOK || !strings.Contains(update.Body.String(), `"provider":"semantic"`) || !strings.Contains(update.Body.String(), `"state":"unconfigured"`) {
+		t.Fatalf("semantic update status=%d body=%s", update.Code, update.Body.String())
+	}
+
+	openviking := requestJSON(t, srv, http.MethodPut, "/v1/memory/provider", `{"enabled":true,"provider":"openviking","commit_after_run":true,"openviking":{"base_url":"http://127.0.0.1:8282","root_api_key":"ov-root-secret","embedding_model":"text-embedding-3-large","embedding_api_key":"ov-embedding-secret","embedding_dimension":3072,"vlm_model":"gpt-5.5","vlm_api_key":"ov-vlm-secret"}}`)
+	openvikingBody := openviking.Body.String()
+	if openviking.Code != http.StatusOK || !strings.Contains(openvikingBody, `"provider":"openviking"`) || !strings.Contains(openvikingBody, `"state":"healthy"`) || !strings.Contains(openvikingBody, `"root_api_key_set":true`) {
+		t.Fatalf("openviking update status=%d body=%s", openviking.Code, openvikingBody)
+	}
+	for _, leaked := range []string{"ov-root-secret", "ov-embedding-secret", "ov-vlm-secret"} {
+		if strings.Contains(openvikingBody, leaked) {
+			t.Fatalf("provider status leaked %q: %s", leaked, openvikingBody)
+		}
+	}
+
+	nowledge := requestJSON(t, srv, http.MethodPut, "/v1/memory/provider", `{"enabled":true,"provider":"nowledge","nowledge":{"base_url":"http://127.0.0.1:7727","api_key":"nowledge-secret","request_timeout_ms":30000}}`)
+	nowledgeBody := nowledge.Body.String()
+	if nowledge.Code != http.StatusOK || !strings.Contains(nowledgeBody, `"provider":"nowledge"`) || !strings.Contains(nowledgeBody, `"state":"healthy"`) || !strings.Contains(nowledgeBody, `"api_key_set":true`) {
+		t.Fatalf("nowledge update status=%d body=%s", nowledge.Code, nowledgeBody)
+	}
+	if strings.Contains(nowledgeBody, "nowledge-secret") {
+		t.Fatalf("provider status leaked nowledge key: %s", nowledgeBody)
+	}
+
+	fallback := requestJSON(t, srv, http.MethodPut, "/v1/memory/provider", `{"enabled":true,"provider":"arkloop-private","semantic_endpoint":"https://memory.example.test?api_key=sk-secret"}`)
+	body := fallback.Body.String()
+	if fallback.Code != http.StatusOK || !strings.Contains(body, `"provider":"local"`) || !strings.Contains(body, `"state":"degraded"`) {
+		t.Fatalf("fallback status=%d body=%s", fallback.Code, body)
+	}
+	for _, leaked := range []string{"sk-secret", "Authorization", "api_key"} {
+		if strings.Contains(body, leaked) {
+			t.Fatalf("provider status leaked %q: %s", leaked, body)
+		}
 	}
 }
 

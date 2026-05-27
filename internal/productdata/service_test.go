@@ -96,6 +96,40 @@ func TestThreadValidation(t *testing.T) {
 	}
 }
 
+func TestWorkToolResolutionsFollowLatestUserIntent(t *testing.T) {
+	all := toolResolutionsForNamesAndEvents(BuiltInPersonas()[0].AllowedToolNames, nil)
+	listFiles := workToolResolutionsForLatestIntent(all, []Message{{Role: MessageRoleUser, Content: "列一下当前工作目录里的文件，简单分类。"}})
+	if !hasToolResolution(listFiles, ToolNameWorkspaceGlob) || !hasToolResolution(listFiles, ToolNameWorkspaceRead) {
+		t.Fatalf("file listing tools missing: %+v", listFiles)
+	}
+	for _, disallowed := range []string{ToolNameSandboxExecCommand, ToolNameAgentSpawn, ToolNameArtifactCreateText, ToolNameBrowserOpen} {
+		if hasToolResolution(listFiles, disallowed) {
+			t.Fatalf("file listing exposed %s: %+v", disallowed, listFiles)
+		}
+	}
+
+	hello := workToolResolutionsForLatestIntent(all, []Message{{Role: MessageRoleUser, Content: "你好呀"}})
+	for _, disallowed := range []string{ToolNameWorkspaceGlob, ToolNameSandboxExecCommand, ToolNameAgentSpawn, ToolNameArtifactCreateText, ToolNameBrowserOpen, ToolNameWebSearch} {
+		if hasToolResolution(hello, disallowed) {
+			t.Fatalf("casual greeting exposed %s: %+v", disallowed, hello)
+		}
+	}
+
+	runTests := workToolResolutionsForLatestIntent(all, []Message{{Role: MessageRoleUser, Content: "帮我运行 go test ./..."}})
+	if !hasToolResolution(runTests, ToolNameSandboxExecCommand) {
+		t.Fatalf("command intent did not expose sandbox exec: %+v", runTests)
+	}
+}
+
+func hasToolResolution(tools []ToolResolution, name string) bool {
+	for _, tool := range tools {
+		if tool.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
 func TestMessageCreationIsIdempotent(t *testing.T) {
 	svc := NewMemoryService()
 	ident := identity.LocalDevIdentity()
@@ -472,8 +506,11 @@ func TestWorkModeScopedToolsOnlyEnabledForWorkModeRunContext(t *testing.T) {
 		hasArtifactCreate := catalogResolutionByName(ctxData.EnabledTools, ToolNameArtifactCreateText).Name != ""
 		hasAgentSpawn := catalogResolutionByName(ctxData.EnabledTools, ToolNameAgentSpawn).Name != ""
 		hasTodoWrite := catalogResolutionByName(ctxData.EnabledTools, ToolNameTodoWrite).Name != ""
-		if mode == ThreadModeChat && (hasWorkspaceRead || hasWorkspaceWrite || hasWorkspacePatchPreview || hasWorkspacePatchApply || hasSandboxExec || hasLSPSymbols || hasWebFetch || hasBrowserOpen || hasArtifactCreate || hasAgentSpawn || hasTodoWrite) {
+		if mode == ThreadModeChat && (hasWorkspaceRead || hasWorkspaceWrite || hasWorkspacePatchPreview || hasWorkspacePatchApply || hasSandboxExec || hasLSPSymbols || hasBrowserOpen || hasArtifactCreate || hasAgentSpawn || hasTodoWrite) {
 			t.Fatalf("chat enabled work-mode tools: %+v", ctxData.EnabledTools)
+		}
+		if mode == ThreadModeChat && !hasWebFetch {
+			t.Fatalf("chat missing public web fetch tool: %+v", ctxData.EnabledTools)
 		}
 		if mode == ThreadModeWork && (!hasWorkspaceRead || !hasWorkspaceWrite || !hasWorkspacePatchPreview || !hasWorkspacePatchApply || !hasSandboxExec || !hasLSPSymbols || !hasWebFetch || !hasBrowserOpen || !hasArtifactCreate || !hasAgentSpawn || !hasTodoWrite) {
 			t.Fatalf("work missing work-mode tools: %+v", ctxData.EnabledTools)

@@ -32,24 +32,24 @@
 
 **Goal**: Approved Work mode `web.fetch` executes one bounded public HTTP(S) read and returns a safe summary.
 
-**Independent Test**: A Work mode run requests `web.fetch`, approval executes exactly one bounded fetch, events show approval/execution/success, and provider continuation completes.
+**Independent Test**: A Chat or Work run requests `web.fetch`, Loomi auto-approves exactly one bounded fetch, events show approval/execution/success, and provider continuation completes.
 
 - [X] T007 [P] [US1] Add web executor tests for allowed HTTP(S) fetch, title/excerpt extraction, byte truncation, timeout clamp, unsupported content type, and safe metadata in `internal/runtime/web_tools_test.go`
 - [X] T008 [US1] Implement bounded read-only web fetch execution in `internal/runtime/web_tools.go`
 - [X] T009 [P] [US1] Add ToolBroker web dispatch tests in `internal/runtime/tool_broker_test.go`
 - [X] T010 [US1] Route web tools through ToolBroker and runtime tool resolution in `internal/runtime/tool_broker.go`, `internal/runtime/tools.go`, and `internal/runtime/queued_runner.go`
-- [X] T011 [P] [US1] Add worker tests proving approve-before-exec, provider continuation, and one web fetch execution only in `internal/runtime/worker_test.go`
-- [X] T012 [P] [US1] Add HTTP smoke for web fetch approve -> execute -> final in `internal/httpapi/web_fetch_tool_smoke_test.go`
+- [X] T011 [P] [US1] Add worker tests proving safe auto-approval, provider continuation, and one web fetch execution only in `internal/runtime/worker_test.go`
+- [X] T012 [P] [US1] Add HTTP smoke for web fetch auto-approve -> execute -> final in `internal/httpapi/web_fetch_tool_smoke_test.go`
 
 ---
 
 ## Phase 4: User Story 2 - Keep Web Fetch Out of Chat and Private Networks (Priority: P2)
 
-**Goal**: Unsafe mode, URL, redirect, and lifecycle states fail before network execution.
+**Goal**: Unsafe URL, redirect, and lifecycle states fail before network execution.
 
-**Independent Test**: Chat mode and unsafe/private targets are rejected before approval/execution or before reading redirected bodies.
+**Independent Test**: Unsafe/private targets are rejected before execution or before reading redirected bodies.
 
-- [X] T013 [P] [US2] Add safety tests for Chat-mode rejection, unsafe schemes, credentialed URLs, localhost/private/link-local hosts, blocked redirects, denied/stopped/terminal no-exec, and duplicate/out-of-scope calls in `internal/productdata/web_models_test.go`, `internal/runtime/web_tools_test.go`, `internal/runtime/worker_test.go`, and existing lifecycle guard tests
+- [X] T013 [P] [US2] Add safety tests for Chat-mode availability, unsafe schemes, credentialed URLs, localhost/private/link-local hosts, blocked redirects, stopped/terminal no-exec, and duplicate/out-of-scope calls in `internal/productdata/web_models_test.go`, `internal/runtime/web_tools_test.go`, `internal/runtime/worker_test.go`, and existing lifecycle guard tests
 - [X] T014 [US2] Implement web validation, DNS/private-network checks, redirect validation, and safe no-exec metadata paths in `internal/runtime/web_tools.go`, `internal/runtime/gateway.go`, and `internal/productdata/service.go`
 
 ---

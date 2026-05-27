@@ -6,13 +6,13 @@
 
 ## Summary
 
-M26 adds one read-only network tool, `web.fetch`, routed through the existing ToolCatalog, RunContext, ToolBroker, approval, worker resume, run-event, Settings, and RunRail boundaries. It proves the web runtime boundary without browser automation, JavaScript rendering, search provider integration, crawler behavior, authenticated sessions, or artifact runtime.
+M26 adds one read-only network tool, `web.fetch`, routed through the existing ToolCatalog, RunContext, ToolBroker, worker resume, run-event, Settings, and RunRail boundaries. It proves the web runtime boundary without browser automation, JavaScript rendering, crawler behavior, authenticated sessions, or artifact runtime.
 
 ## Technical Context
 
 **Language/Version**: Go backend; TypeScript/React frontend; Astro/Starlight docs
 
-**Primary Dependencies**: Existing productdata/runtime/httpapi services, existing ToolBroker and worker approval resume path, React Settings/RunRail components, Go stdlib `net/http`
+**Primary Dependencies**: Existing productdata/runtime/httpapi services, existing ToolBroker and worker resume path, React Settings/RunRail components, Go stdlib `net/http`
 
 **Storage**: Existing run events and tool_calls projections; no new database tables
 
@@ -22,19 +22,19 @@ M26 adds one read-only network tool, `web.fetch`, routed through the existing To
 
 **Project Type**: Go API/worker plus web/desktop-feeling shell
 
-**Performance Goals**: One bounded fetch per approved tool call; default timeout and byte limits keep requests short and stored excerpts small
+**Performance Goals**: One bounded fetch per tool call; default timeout and byte limits keep requests short and stored excerpts small
 
-**Constraints**: Work-mode only, approval required, HTTP(S) only, no credentials, no private/local hosts, redirect validation, no cookies/auth/session/browser reuse, no raw response body persistence
+**Constraints**: Chat/Work persona-gated, auto-approved public read, HTTP(S) only, no credentials, no private/local hosts, redirect validation, no cookies/auth/session/browser reuse, no raw response body persistence
 
-**Scale/Scope**: One local user, single explicit URL fetch per approved call
+**Scale/Scope**: One local user, single explicit URL fetch per call
 
 ## Constitution Check
 
 - **Mechanism Parity, Original Expression**: PASS. The feature uses Loomi-owned web tool vocabulary and does not copy another product's expression layer.
-- **Runnable Vertical Slices**: PASS. The slice has executable backend approval -> fetch -> continuation evidence and visible Settings/RunRail states.
+- **Runnable Vertical Slices**: PASS. The slice has executable backend request -> fetch -> continuation evidence and visible Settings/RunRail states.
 - **Core Flow Before Platform Complexity**: PASS. This follows workspace/mutation/sandbox/MCP/LSP foundations and deliberately defers browser/search/artifact runtimes.
 - **Observable Agent Execution**: PASS. Web fetch requests/results are persisted through existing tool lifecycle events and visible in RunRail.
-- **Safety, Permissions, and Data Boundaries**: PASS. Network reads are approval-gated, bounded, Work-mode only, and reject private/local/credentialed URLs.
+- **Safety, Permissions, and Data Boundaries**: PASS. Network reads are auto-approved bounded public reads and reject private/local/credentialed URLs.
 
 ## Project Structure
 

@@ -308,6 +308,24 @@ describe('M18.5 local provider detection mapping', () => {
     expect(url.pathname).toBe('/v1/local-provider-detections')
   })
 
+  test('calls dedicated memory provider detection endpoints', async () => {
+    const originalFetch = globalThis.fetch
+    const requested: string[] = []
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      requested.push(String(input))
+      return new Response(JSON.stringify({ detected: true, base_url: 'http://127.0.0.1:8282', message: 'detected', request_id: 'req_memory_detect' }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    }) as typeof fetch
+    try {
+      await realApiClient.detectNowledgeMemoryProvider?.()
+      await realApiClient.detectOpenVikingMemoryProvider?.()
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+
+    expect(new URL(requested[0], 'http://loomi.local').pathname).toBe('/v1/memory/provider/nowledge/detect')
+    expect(new URL(requested[1], 'http://loomi.local').pathname).toBe('/v1/memory/provider/openviking/detect')
+  })
+
   test('calls explicit local provider enable and disable endpoints', async () => {
     const originalFetch = globalThis.fetch
     const requested: { url: string; method: string }[] = []

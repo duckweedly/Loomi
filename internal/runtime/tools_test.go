@@ -58,7 +58,7 @@ func TestToolDefinitionsForPersonaIntersectAllowlist(t *testing.T) {
 	}
 }
 
-func TestToolResolutionsMarkWebSearchAsNoApproval(t *testing.T) {
+func TestToolResolutionsMarkWebToolsAsNoApproval(t *testing.T) {
 	tools := ToolResolutionsForPersona([]string{productdata.ToolNameWebSearch, productdata.ToolNameWebFetch})
 	if len(tools) != 2 {
 		t.Fatalf("tools = %+v", tools)
@@ -66,7 +66,7 @@ func TestToolResolutionsMarkWebSearchAsNoApproval(t *testing.T) {
 	if tools[0].Name != productdata.ToolNameWebSearch || tools[0].ApprovalPolicy != string(ToolApprovalNotRequired) {
 		t.Fatalf("web search resolution = %+v", tools[0])
 	}
-	if tools[1].Name != productdata.ToolNameWebFetch || tools[1].ApprovalPolicy != string(ToolApprovalAlwaysRequired) {
+	if tools[1].Name != productdata.ToolNameWebFetch || tools[1].ApprovalPolicy != string(ToolApprovalNotRequired) {
 		t.Fatalf("web fetch resolution = %+v", tools[1])
 	}
 }
@@ -77,8 +77,14 @@ func TestWorkspaceToolDefinitionsSeparateReadAndMutationRisk(t *testing.T) {
 		t.Fatalf("defs = %+v", defs)
 	}
 	for _, def := range defs {
-		if !productdata.IsWorkspaceToolName(def.Name) || def.ApprovalPolicy != ToolApprovalAlwaysRequired {
+		if !productdata.IsWorkspaceToolName(def.Name) {
 			t.Fatalf("workspace definition = %+v", def)
+		}
+		if productdata.IsWorkspaceReadOnlyToolName(def.Name) && def.ApprovalPolicy != ToolApprovalNotRequired {
+			t.Fatalf("workspace read definition = %+v", def)
+		}
+		if !productdata.IsWorkspaceReadOnlyToolName(def.Name) && def.ApprovalPolicy != ToolApprovalAlwaysRequired {
+			t.Fatalf("workspace mutation definition = %+v", def)
 		}
 		if def.Name == productdata.ToolNameWorkspaceWriteFile || def.Name == productdata.ToolNameWorkspaceEdit || def.Name == productdata.ToolNameWorkspacePatchApply {
 			if def.SafetyClass != ToolSafetyWorkspaceMutation {
@@ -100,6 +106,27 @@ func TestSandboxToolDefinitionsAreHighRisk(t *testing.T) {
 	for _, def := range defs {
 		if def.ApprovalPolicy != ToolApprovalAlwaysRequired || def.SafetyClass != ToolSafetySandboxCommand || def.ExecutionState != ToolExecutionAllowlisted {
 			t.Fatalf("sandbox definition = %+v", def)
+		}
+	}
+}
+
+func TestMemoryToolDefinitionsAreApprovalGated(t *testing.T) {
+	defs := MemoryToolDefinitions()
+	if len(defs) != 16 || defs[0].Name != productdata.ToolNameMemorySearch || defs[len(defs)-1].Name != productdata.ToolNameNotebookForget {
+		t.Fatalf("defs = %+v", defs)
+	}
+	for _, def := range defs {
+		if def.ApprovalPolicy != ToolApprovalAlwaysRequired || def.ExecutionState != ToolExecutionAllowlisted {
+			t.Fatalf("memory definition = %+v", def)
+		}
+		if def.Name == productdata.ToolNameMemoryWrite || def.Name == productdata.ToolNameMemoryEdit || def.Name == productdata.ToolNameMemoryForget || def.Name == productdata.ToolNameNotebookWrite || def.Name == productdata.ToolNameNotebookEdit || def.Name == productdata.ToolNameNotebookForget {
+			if def.SafetyClass != ToolSafetyWorkspaceMutation {
+				t.Fatalf("memory mutation definition = %+v", def)
+			}
+			continue
+		}
+		if def.SafetyClass != ToolSafetyNoSideEffectInternal {
+			t.Fatalf("memory read definition = %+v", def)
 		}
 	}
 }

@@ -22,15 +22,15 @@ go test ./internal/runtime -run 'TestWorkspaceReadTools|TestToolBrokerExecutesWo
 
 Expected backend evidence:
 
-1. Fixture root is set through `LOOMI_WORKSPACE_ROOT`; when unset in local desktop/dev, the runtime defaults to the user's home directory.
+1. Fixture root can be set through `LOOMI_WORKSPACE_ROOT`; in desktop/API runs, `/v1/workspace/root` persists the chosen folder for the local user and restores it into the process after restart. When unset, local desktop/dev defaults to the user's home directory.
 2. Work mode run requests `workspace.glob`, `workspace.grep`, or `workspace.read`.
-3. Run emits `tool_call_requested` and `tool_call_approval_required`.
-4. No filesystem content is returned before approval.
-5. HTTP approval queues the worker resume job.
-6. Worker executes through ToolBroker and emits `tool_call_executing` then success or failure.
-7. Success triggers provider continuation and final assistant message.
-8. Sensitive paths and symlink escape fail without leaking fixture secret content.
-9. Desktop Work composer can choose a folder; the local API updates the runtime workspace root for subsequent tool calls.
+3. Run emits `tool_call_requested`, `tool_call_approved`, `tool_call_executing`, then success or failure for bounded read-only workspace tools.
+4. Worker executes through ToolBroker without per-call confirmation after the workspace root has been selected.
+5. Success triggers provider continuation and final assistant message, including auto-approved read-only calls created during continuation.
+6. Sensitive paths and symlink escape fail without leaking fixture secret content.
+7. Desktop Work composer can choose a folder; the local API persists and updates the runtime workspace root for subsequent tool calls.
+8. A casual Work greeting does not expose workspace, sandbox, agent, artifact, browser, or web tools.
+9. A folder listing/classification run uses `workspace.glob` without approval and should not repeat broad directory listing calls after the first successful result.
 
 ## UI Check
 
@@ -41,7 +41,7 @@ Open Settings > Tools and confirm workspace tools show:
 - `read-only`
 - `workspace scope`
 - `low`
-- `always_required`
+- `read_only`
 - `executable`
 
 No local absolute workspace path should be visible.

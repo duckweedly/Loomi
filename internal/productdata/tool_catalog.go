@@ -26,6 +26,7 @@ func toolCatalogFromEvents(events []RunEvent, mcpExecutionState ToolExecutionSta
 	entries = append(entries, builtinBrowserCatalogEntries()...)
 	entries = append(entries, builtinArtifactCatalogEntries()...)
 	entries = append(entries, builtinAgentCatalogEntries()...)
+	entries = append(entries, builtinMemoryCatalogEntries()...)
 	entries = append(entries, builtinTodoCatalogEntries()...)
 	byName := map[string]ToolCatalogEntry{}
 	for _, entry := range entries {
@@ -152,7 +153,7 @@ func builtinWorkspaceReadCatalogEntry(name string, displayName string, descripti
 		Source:         ToolCatalogSourceBuiltin,
 		Group:          ToolCatalogGroupWorkspace,
 		RiskLevel:      ToolRiskLow,
-		ApprovalPolicy: ToolApprovalAlwaysRequired,
+		ApprovalPolicy: ToolApprovalReadOnly,
 		Enabled:        true,
 		ExecutionState: ToolExecutionStateExecutable,
 		SafeMetadata: map[string]any{
@@ -281,7 +282,7 @@ func builtinWebCatalogEntries() []ToolCatalogEntry {
 			Source:         ToolCatalogSourceBuiltin,
 			Group:          ToolCatalogGroupWeb,
 			RiskLevel:      ToolRiskMedium,
-			ApprovalPolicy: ToolApprovalAlwaysRequired,
+			ApprovalPolicy: ToolApprovalReadOnly,
 			Enabled:        true,
 			ExecutionState: ToolExecutionStateExecutable,
 			SafeMetadata: map[string]any{
@@ -398,6 +399,125 @@ func builtinAgentCatalogEntry(name string, displayName string, description strin
 			"coordination_only":    true,
 			"read_only":            readOnly,
 			"scope":                "agent",
+		},
+	}
+}
+
+func builtinMemoryCatalogEntries() []ToolCatalogEntry {
+	return []ToolCatalogEntry{
+		builtinMemoryCatalogEntry(ToolNameMemorySearch, "Memory search", "Search approved memory summaries in the current safe scope.", []string{"query", "limit", "scope_type", "scope_id", "source_thread_id", "source_run_id", "source_type"}, true),
+		builtinMemoryCatalogEntry(ToolNameMemoryList, "Memory list", "List approved memory summaries in the current safe scope.", []string{"limit", "scope_type", "scope_id", "source_thread_id", "source_run_id", "source_type"}, true),
+		builtinMemoryCatalogEntry(ToolNameMemoryRead, "Memory read", "Read one approved memory summary without raw content.", []string{"entry_id", "scope_type", "scope_id", "source_thread_id", "source_run_id"}, true),
+		builtinMemoryCatalogEntry(ToolNameMemoryWrite, "Memory write", "Create one approval-gated memory write proposal.", []string{"title", "content", "scope_type", "scope_id", "source_thread_id", "source_run_id", "source_event_id", "idempotency_key"}, false),
+		builtinMemoryCatalogEntry(ToolNameMemoryEdit, "Memory edit", "Edit a pending memory proposal or create an approval-gated replacement proposal.", []string{"proposal_id", "entry_id", "title", "content", "scope_type", "scope_id", "source_thread_id", "source_run_id", "source_event_id", "idempotency_key"}, false),
+		builtinMemoryCatalogEntry(ToolNameMemoryForget, "Memory forget", "Tombstone one approved memory entry through the audited memory boundary.", []string{"entry_id", "reason", "scope_type", "scope_id", "source_thread_id", "source_run_id"}, false),
+		builtinMemoryCatalogEntry(ToolNameMemoryContext, "Memory context", "Return provider status plus bounded relevant memory summaries.", []string{"query", "limit", "scope_type", "scope_id", "source_thread_id", "source_run_id", "source_type"}, true),
+		builtinMemoryCatalogEntry(ToolNameMemoryTimeline, "Memory timeline", "List safe memory audit timeline items.", []string{"limit", "scope_type", "scope_id", "source_thread_id", "source_run_id", "source_type"}, true),
+		builtinMemoryCatalogEntry(ToolNameMemoryConnections, "Memory connections", "Return bounded related memory summaries for one entry or query.", []string{"entry_id", "query", "limit", "scope_type", "scope_id", "source_thread_id", "source_run_id"}, true),
+		builtinMemoryCatalogEntry(ToolNameMemoryThreadSearch, "Memory thread search", "Search local thread and message history with safe excerpts.", []string{"query", "limit"}, true),
+		builtinMemoryCatalogEntry(ToolNameMemoryThreadFetch, "Memory thread fetch", "Fetch safe local thread message excerpts.", []string{"thread_id", "limit"}, true),
+		builtinMemoryCatalogEntry(ToolNameMemoryStatus, "Memory status", "Return memory provider readiness and configuration state.", []string{}, true),
+		builtinMemoryCatalogEntry(ToolNameNotebookRead, "Notebook read", "Read one approved structured notebook entry.", []string{"entry_id", "scope_type", "scope_id", "source_thread_id", "source_run_id"}, true),
+		builtinMemoryCatalogEntry(ToolNameNotebookWrite, "Notebook write", "Write one approved structured notebook entry through the audited memory boundary.", []string{"title", "content", "scope_type", "scope_id", "source_thread_id", "source_run_id"}, false),
+		builtinMemoryCatalogEntry(ToolNameNotebookEdit, "Notebook edit", "Replace one structured notebook entry by tombstoning the old entry and writing a new approved entry.", []string{"entry_id", "title", "content", "scope_type", "scope_id", "source_thread_id", "source_run_id"}, false),
+		builtinMemoryCatalogEntry(ToolNameNotebookForget, "Notebook forget", "Tombstone one structured notebook entry.", []string{"entry_id", "reason", "scope_type", "scope_id", "source_thread_id", "source_run_id"}, false),
+	}
+}
+
+func ApplyMemoryToolAvailability(entries []ToolCatalogEntry, status MemoryProviderStatus) []ToolCatalogEntry {
+	allowed := memoryToolProviderAllowlist(status)
+	next := make([]ToolCatalogEntry, 0, len(entries))
+	for _, entry := range entries {
+		if !IsMemoryToolName(entry.Name) {
+			next = append(next, entry)
+			continue
+		}
+		entry.SafeMetadata = cloneSafeMetadata(entry.SafeMetadata)
+		entry.SafeMetadata["active_provider"] = string(status.Provider)
+		entry.SafeMetadata["available_providers"] = memoryToolAvailableProviders(entry.Name)
+		if !allowed[entry.Name] {
+			entry.Enabled = false
+			entry.ExecutionState = ToolExecutionStateDisabled
+			entry.ApprovalPolicy = ToolApprovalDisabled
+			entry.SafeMetadata["disabled_reason"] = memoryToolDisabledReason(status)
+		}
+		next = append(next, entry)
+	}
+	return next
+}
+
+func FilterMemoryToolResolutionsForProvider(tools []ToolResolution, status MemoryProviderStatus) []ToolResolution {
+	allowed := memoryToolProviderAllowlist(status)
+	next := make([]ToolResolution, 0, len(tools))
+	for _, tool := range tools {
+		if IsMemoryToolName(tool.Name) && !allowed[tool.Name] {
+			continue
+		}
+		next = append(next, tool)
+	}
+	return next
+}
+
+func memoryToolProviderAllowlist(status MemoryProviderStatus) map[string]bool {
+	tools := map[string]bool{}
+	if !status.Enabled || status.State == MemoryProviderStateDisabled || status.State == MemoryProviderStateUnconfigured {
+		return tools
+	}
+	for _, name := range []string{ToolNameMemorySearch, ToolNameMemoryList, ToolNameMemoryRead, ToolNameMemoryWrite, ToolNameMemoryEdit, ToolNameMemoryForget, ToolNameMemoryContext, ToolNameMemoryTimeline, ToolNameMemoryConnections, ToolNameMemoryThreadSearch, ToolNameMemoryThreadFetch, ToolNameMemoryStatus, ToolNameNotebookRead, ToolNameNotebookWrite, ToolNameNotebookEdit, ToolNameNotebookForget} {
+		tools[name] = true
+	}
+	if status.Provider == MemoryProviderNowledge {
+		delete(tools, ToolNameMemoryEdit)
+	}
+	return tools
+}
+
+func memoryToolAvailableProviders(name string) []string {
+	providers := []string{string(MemoryProviderLocal), string(MemoryProviderSemantic), string(MemoryProviderOpenViking)}
+	if name != ToolNameMemoryEdit {
+		providers = append(providers, string(MemoryProviderNowledge))
+	}
+	return providers
+}
+
+func memoryToolDisabledReason(status MemoryProviderStatus) string {
+	if !status.Enabled || status.State == MemoryProviderStateDisabled {
+		return "memory_disabled"
+	}
+	if status.State == MemoryProviderStateUnconfigured {
+		return "memory_provider_unconfigured"
+	}
+	if status.Provider == MemoryProviderNowledge {
+		return "not_supported_by_nowledge"
+	}
+	return "not_supported_by_provider"
+}
+
+func cloneSafeMetadata(metadata map[string]any) map[string]any {
+	next := make(map[string]any, len(metadata)+3)
+	for key, value := range metadata {
+		next[key] = value
+	}
+	return next
+}
+
+func builtinMemoryCatalogEntry(name string, displayName string, description string, arguments []string, readOnly bool) ToolCatalogEntry {
+	return ToolCatalogEntry{
+		Name:           name,
+		DisplayName:    displayName,
+		Description:    description,
+		Source:         ToolCatalogSourceBuiltin,
+		Group:          ToolCatalogGroupMemory,
+		RiskLevel:      ToolRiskMedium,
+		ApprovalPolicy: ToolApprovalAlwaysRequired,
+		Enabled:        true,
+		ExecutionState: ToolExecutionStateExecutable,
+		SafeMetadata: map[string]any{
+			"arguments":           append([]string(nil), arguments...),
+			"approval_gated":      true,
+			"read_only":           readOnly,
+			"returns_raw_content": false,
+			"scope":               "memory",
 		},
 	}
 }

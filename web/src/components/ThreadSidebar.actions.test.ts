@@ -75,12 +75,14 @@ describe('ThreadSidebar loading and retry states', () => {
     expect(html).toContain('No chat threads')
   })
 
-  test('keeps settings as the only fixed sidebar footer action', () => {
+  test('keeps settings as the fixed sidebar footer action', () => {
     const source = readFileSync(resolve(import.meta.dir, 'ThreadSidebar.tsx'), 'utf8')
 
     expect(source).not.toContain('sidebar-search-field')
     expect(source).toContain('className="sidebar-footer"')
     expect(source).toContain('className="sidebar-settings-button"')
+    expect(source).not.toContain('className="sidebar-theme-toggle"')
+    expect(source).not.toContain('settings-button-sky')
     expect(source).toContain('createSidebarFooterItems')
     expect(source).not.toContain('sidebar-bottom-actions')
     expect(source).not.toContain('sidebar-search-button')

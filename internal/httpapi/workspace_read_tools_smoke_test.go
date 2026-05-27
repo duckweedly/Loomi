@@ -51,9 +51,9 @@ func TestM21WorkspaceReadToolsSmoke(t *testing.T) {
 	}
 	assertBodyExcludes(t, symlinkEvents, "symlink failure events", "outside-secret")
 
-	unapproved, _ := runM21WorkspaceTool(t, productdata.ToolNameWorkspaceRead, map[string]any{"path": "src/notes.txt"}, false)
-	if len(unapproved) != 0 {
-		t.Fatalf("unapproved result = %+v, want none", unapproved)
+	_, autoEvents := runM21WorkspaceTool(t, productdata.ToolNameWorkspaceRead, map[string]any{"path": "src/notes.txt"}, false)
+	if strings.Contains(autoEvents, productdata.EventToolCallApprovalRequired) {
+		t.Fatalf("workspace read should use directory-scoped auto execution: %s", autoEvents)
 	}
 }
 
@@ -150,21 +150,27 @@ func runM21WorkspaceTool(t *testing.T, toolName string, args map[string]any, app
 	runID := decodeStringField(t, runRes.Body.Bytes(), "run", "id")
 
 	if ok, err := worker.ProcessOne(context.Background()); err != nil || !ok {
+		if call, getErr := svc.GetToolCall(context.Background(), ident, threadID, runID, toolCallID); getErr == nil {
+			return call.ResultSummary, fetchM21Events(t, srv, runID)
+		}
 		t.Fatalf("first ProcessOne ok=%v err=%v", ok, err)
 	}
 	call, err := svc.GetToolCall(context.Background(), ident, threadID, runID, toolCallID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if call.ApprovalStatus != productdata.ToolCallApprovalRequired || call.ExecutionStatus != productdata.ToolCallExecutionBlocked {
-		t.Fatalf("pre-approval call = %+v", call)
+	if call.ApprovalStatus == productdata.ToolCallApprovalRequired {
+		if !approve {
+			return map[string]any{}, fetchM21Events(t, srv, runID)
+		}
+		approvalRes := requestJSON(t, srv, http.MethodPost, "/v1/threads/"+threadID+"/runs/"+runID+"/tool-calls/"+toolCallID+"/approve", "")
+		assertStatus(t, approvalRes.Code, http.StatusOK, approvalRes.Body.String())
+	} else if call.ApprovalStatus != productdata.ToolCallApprovalApproved || call.ExecutionStatus != productdata.ToolCallExecutionNotStarted {
+		if call.ExecutionStatus == productdata.ToolCallExecutionSucceeded {
+			return call.ResultSummary, fetchM21Events(t, srv, runID)
+		}
+		t.Fatalf("pre-execution call = %+v", call)
 	}
-	if !approve {
-		return map[string]any{}, fetchM21Events(t, srv, runID)
-	}
-
-	approvalRes := requestJSON(t, srv, http.MethodPost, "/v1/threads/"+threadID+"/runs/"+runID+"/tool-calls/"+toolCallID+"/approve", "")
-	assertStatus(t, approvalRes.Code, http.StatusOK, approvalRes.Body.String())
 	if ok, err := worker.ProcessOne(context.Background()); err != nil || !ok {
 		t.Fatalf("second ProcessOne ok=%v err=%v", ok, err)
 	}

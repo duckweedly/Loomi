@@ -68,3 +68,19 @@ func TestValidateWebSearchToolCallNormalizesProviderArgumentAliases(t *testing.T
 		t.Fatalf("count alias leaked into normalized arguments: %+v", input.ArgumentsSummary)
 	}
 }
+
+func TestValidateWebFetchAllowsAutoApprovedPublicRead(t *testing.T) {
+	input, err := ValidateToolCallRequestInput(RecordToolCallRequestInput{
+		ToolCallID:       "tc_fetch",
+		ToolName:         ToolNameWebFetch,
+		ArgumentsSummary: map[string]any{"url": " https://example.com/repo ", "max_bytes": 4096},
+		ApprovalStatus:   ToolCallApprovalApproved,
+		ExecutionStatus:  ToolCallExecutionNotStarted,
+	})
+	if err != nil {
+		t.Fatalf("ValidateToolCallRequestInput() error = %v", err)
+	}
+	if input.ArgumentsSummary["url"] != "https://example.com/repo" {
+		t.Fatalf("arguments = %+v", input.ArgumentsSummary)
+	}
+}

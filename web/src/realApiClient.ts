@@ -1,5 +1,5 @@
 import type { ApiClient } from './apiClient'
-import type { InstalledSkill, LocalProviderDetection, MCPServerConfigInput, MCPServerStatus, MemoryAuditItem, MemoryEntry, MemoryFilters, Message, Persona, ProviderCapability, ProviderFamily, Run, RunEvent, RunSource, RunStatus, Thread, ToolCall, ToolCatalogItem, WebSearchConfig, WorkerQueueDiagnostics, WorkerQueueStatus, WorkerStatus, WorkspaceRootConfig } from './domain'
+import type { InstalledSkill, LocalProviderDetection, MCPServerConfigInput, MCPServerStatus, MemoryAuditItem, MemoryEntry, MemoryErrorEvent, MemoryFilters, MemoryImpressionSnapshot, MemoryOverviewSnapshot, MemoryProviderStatus, MemoryProviderUpdate, MemoryWriteProposal, Message, Persona, ProviderCapability, ProviderFamily, Run, RunEvent, RunSource, RunStatus, Thread, ToolCall, ToolCatalogItem, WebSearchConfig, WorkerQueueDiagnostics, WorkerQueueStatus, WorkerStatus, WorkspaceRootConfig } from './domain'
 import { isRuntimeActive, isRuntimeTerminal } from './runtime/executionAdapter'
 import { applyRealRunEvent } from './runtime/realExecutionAdapter'
 
@@ -193,6 +193,92 @@ export type ApiMemoryAuditItem = {
   source_type?: string | null
   redaction_applied?: boolean
   occurred_at: string
+}
+
+export type ApiMemoryProviderStatus = {
+  enabled: boolean
+  provider: string
+  label: string
+  state: MemoryProviderStatus['state']
+  configured: boolean
+  commit_after_run: boolean
+  checked_at?: string | null
+  openviking?: {
+    base_url?: string
+    root_api_key_set?: boolean
+    embedding_selector?: string
+    embedding_provider?: string
+    embedding_model?: string
+    embedding_api_key_set?: boolean
+    embedding_api_base?: string
+    embedding_dimension?: number
+    vlm_selector?: string
+    vlm_provider?: string
+    vlm_model?: string
+    vlm_api_key_set?: boolean
+    vlm_api_base?: string
+    rerank_selector?: string
+    rerank_provider?: string
+    rerank_model?: string
+    rerank_api_key_set?: boolean
+    rerank_api_base?: string
+  }
+  nowledge?: {
+    base_url?: string
+    api_key_set?: boolean
+    request_timeout_ms?: number
+  }
+  diagnostic: {
+    code: string
+    message: string
+  }
+}
+
+type ApiMemoryOverviewSnapshot = {
+  memory_block: string
+  hits?: {
+    uri: string
+    entry_id: string
+    title: string
+    abstract: string
+    is_leaf: boolean
+    updated_at: string
+  }[]
+  updated_at: string
+  rebuilt: boolean
+}
+
+type ApiMemoryImpressionSnapshot = {
+  impression: string
+  updated_at: string
+  rebuilt: boolean
+}
+
+type ApiMemoryErrorEvent = {
+  code: string
+  message: string
+  provider: string
+  state: string
+  checked_at?: string
+  run_id?: string | null
+  event_type?: string | null
+}
+
+export type ApiMemoryWriteProposal = {
+  id: string
+  title: string
+  summary: string
+  scope_type: 'user' | 'thread'
+  scope_id: string
+  status: MemoryWriteProposal['status']
+  safety_state?: MemoryWriteProposal['safetyState']
+  source_thread_id?: string | null
+  source_run_id?: string | null
+  source_event_id?: string | null
+  created_entry_id?: string | null
+  created_at: string
+  decided_at?: string | null
+  decision_reason?: string | null
 }
 
 type ApiRunEvent = {
@@ -551,6 +637,84 @@ export function mapApiMemoryAuditItem(item: ApiMemoryAuditItem): MemoryAuditItem
   }
 }
 
+export function mapApiMemoryProviderStatus(status: ApiMemoryProviderStatus): MemoryProviderStatus {
+  return {
+    enabled: status.enabled,
+    provider: status.provider,
+    label: status.label,
+    state: status.state,
+    configured: status.configured,
+    commitAfterRun: status.commit_after_run,
+    checkedAt: status.checked_at ?? undefined,
+    openviking: status.openviking ? {
+      baseUrl: status.openviking.base_url,
+      rootApiKeySet: status.openviking.root_api_key_set,
+      embeddingSelector: status.openviking.embedding_selector,
+      embeddingProvider: status.openviking.embedding_provider,
+      embeddingModel: status.openviking.embedding_model,
+      embeddingApiKeySet: status.openviking.embedding_api_key_set,
+      embeddingApiBase: status.openviking.embedding_api_base,
+      embeddingDimension: status.openviking.embedding_dimension,
+      vlmSelector: status.openviking.vlm_selector,
+      vlmProvider: status.openviking.vlm_provider,
+      vlmModel: status.openviking.vlm_model,
+      vlmApiKeySet: status.openviking.vlm_api_key_set,
+      vlmApiBase: status.openviking.vlm_api_base,
+      rerankSelector: status.openviking.rerank_selector,
+      rerankProvider: status.openviking.rerank_provider,
+      rerankModel: status.openviking.rerank_model,
+      rerankApiKeySet: status.openviking.rerank_api_key_set,
+      rerankApiBase: status.openviking.rerank_api_base,
+    } : undefined,
+    nowledge: status.nowledge ? {
+      baseUrl: status.nowledge.base_url,
+      apiKeySet: status.nowledge.api_key_set,
+      requestTimeoutMs: status.nowledge.request_timeout_ms,
+    } : undefined,
+    diagnostic: {
+      code: status.diagnostic?.code ?? 'unknown',
+      message: status.diagnostic?.message ?? 'Memory provider status unavailable.',
+    },
+  }
+}
+
+export function mapApiMemoryOverviewSnapshot(snapshot: ApiMemoryOverviewSnapshot): MemoryOverviewSnapshot {
+  return {
+    memoryBlock: snapshot.memory_block,
+    hits: (snapshot.hits ?? []).map((hit) => ({ uri: hit.uri, entryId: hit.entry_id, title: hit.title, abstract: hit.abstract, isLeaf: hit.is_leaf, updatedAt: hit.updated_at })),
+    updatedAt: snapshot.updated_at,
+    rebuilt: Boolean(snapshot.rebuilt),
+  }
+}
+
+export function mapApiMemoryImpressionSnapshot(snapshot: ApiMemoryImpressionSnapshot): MemoryImpressionSnapshot {
+  return { impression: snapshot.impression, updatedAt: snapshot.updated_at, rebuilt: Boolean(snapshot.rebuilt) }
+}
+
+export function mapApiMemoryErrorEvent(event: ApiMemoryErrorEvent): MemoryErrorEvent {
+  return { code: event.code, message: event.message, provider: event.provider, state: event.state, checkedAt: event.checked_at, runId: event.run_id ?? undefined, eventType: event.event_type ?? undefined }
+}
+
+export function mapApiMemoryWriteProposal(proposal: ApiMemoryWriteProposal): MemoryWriteProposal {
+  return {
+    id: proposal.id,
+    title: proposal.title,
+    summary: proposal.summary,
+    scopeType: proposal.scope_type,
+    scopeId: proposal.scope_id,
+    status: proposal.status,
+    safetyState: proposal.safety_state,
+    sourceThreadId: proposal.source_thread_id ?? undefined,
+    sourceRunId: proposal.source_run_id ?? undefined,
+    sourceEventId: proposal.source_event_id ?? undefined,
+    createdEntryId: proposal.created_entry_id ?? undefined,
+    createdAt: proposal.created_at,
+    decidedAt: proposal.decided_at ?? undefined,
+    decisionReason: proposal.decision_reason ?? undefined,
+    redactionApplied: proposal.safety_state === 'redacted' || proposal.safety_state === 'blocked',
+  }
+}
+
 function memoryQueryString(filters: MemoryFilters = {}, query = '') {
   const params = new URLSearchParams()
   if (query.trim()) params.set('q', query.trim())
@@ -815,6 +979,14 @@ export const realApiClient: ApiClient = {
     return requireArrayField<ApiMemoryEntry>(body, 'items', 'Memory list response was invalid.').map(mapApiMemoryEntry)
   },
 
+  async createMemoryEntry(input: { title: string; content: string; scopeType?: 'user' | 'thread'; scopeId?: string }) {
+    const body = await requestJSON<{ entry: ApiMemoryEntry }>('/v1/memory/entries', {
+      method: 'POST',
+      body: JSON.stringify({ title: input.title, content: input.content, scope_type: input.scopeType ?? 'user', scope_id: input.scopeId ?? '' }),
+    })
+    return mapApiMemoryEntry(body.entry)
+  },
+
   async searchMemory(query: string, filters = {}) {
     const body = await requestJSON<unknown>('/v1/memory/search', {
       method: 'POST',
@@ -835,6 +1007,111 @@ export const realApiClient: ApiClient = {
   async listMemoryAudit(filters = {}) {
     const body = await requestJSON<unknown>(`/v1/memory/audit${memoryQueryString(filters)}`)
     return requireArrayField<ApiMemoryAuditItem>(body, 'items', 'Memory audit response was invalid.').map(mapApiMemoryAuditItem)
+  },
+
+  async listMemoryWriteProposals(filters = {}) {
+    const separator = memoryQueryString(filters).includes('?') ? '&' : '?'
+    const body = await requestJSON<unknown>(`/v1/memory/write-proposals${memoryQueryString(filters)}${separator}status=pending`)
+    return requireArrayField<ApiMemoryWriteProposal>(body, 'items', 'Memory proposal response was invalid.').map(mapApiMemoryWriteProposal)
+  },
+
+  async updateMemoryWriteProposal(proposalId: string, input: { title: string; summary: string }) {
+    const body = await requestJSON<{ proposal: ApiMemoryWriteProposal }>(`/v1/memory/write-proposals/${proposalId}`, { method: 'PATCH', body: JSON.stringify(input) })
+    return mapApiMemoryWriteProposal(body.proposal)
+  },
+
+  async approveMemoryWriteProposal(proposalId: string) {
+    const body = await requestJSON<{ proposal: ApiMemoryWriteProposal }>(`/v1/memory/write-proposals/${proposalId}/approve`, { method: 'POST', body: JSON.stringify({ reason: 'approved in settings' }) })
+    return mapApiMemoryWriteProposal(body.proposal)
+  },
+
+  async denyMemoryWriteProposal(proposalId: string) {
+    const body = await requestJSON<{ proposal: ApiMemoryWriteProposal }>(`/v1/memory/write-proposals/${proposalId}/deny`, { method: 'POST', body: JSON.stringify({ reason: 'denied in settings' }) })
+    return mapApiMemoryWriteProposal(body.proposal)
+  },
+
+  async getMemoryProviderStatus() {
+    const body = await requestJSON<{ status: ApiMemoryProviderStatus }>('/v1/memory/provider')
+    return mapApiMemoryProviderStatus(body.status)
+  },
+
+  async listMemoryErrors() {
+    const body = await requestJSON<{ errors: ApiMemoryErrorEvent[] }>('/v1/memory/errors')
+    return (body.errors ?? []).map(mapApiMemoryErrorEvent)
+  },
+
+  async detectNowledgeMemoryProvider() {
+    const body = await requestJSON<{ detected: boolean; base_url?: string; message: string }>('/v1/memory/provider/nowledge/detect')
+    return { detected: Boolean(body.detected), baseUrl: body.base_url, message: body.message }
+  },
+
+  async detectOpenVikingMemoryProvider() {
+    const body = await requestJSON<{ detected: boolean; base_url?: string; message: string }>('/v1/memory/provider/openviking/detect')
+    return { detected: Boolean(body.detected), baseUrl: body.base_url, message: body.message }
+  },
+
+  async updateMemoryProvider(input: MemoryProviderUpdate) {
+    const body = await requestJSON<{ status: ApiMemoryProviderStatus }>('/v1/memory/provider', {
+      method: 'PUT',
+      body: JSON.stringify({
+        enabled: input.enabled,
+        provider: input.provider,
+        commit_after_run: input.commitAfterRun,
+        semantic_endpoint: input.semanticEndpoint ?? '',
+        openviking: input.openviking ? {
+          base_url: input.openviking.baseUrl ?? '',
+          root_api_key: input.openviking.rootApiKey ?? '',
+          embedding_selector: input.openviking.embeddingSelector ?? '',
+          embedding_provider: input.openviking.embeddingProvider ?? '',
+          embedding_model: input.openviking.embeddingModel ?? '',
+          embedding_api_key: input.openviking.embeddingApiKey ?? '',
+          embedding_api_base: input.openviking.embeddingApiBase ?? '',
+          embedding_dimension: input.openviking.embeddingDimension ?? 0,
+          vlm_selector: input.openviking.vlmSelector ?? '',
+          vlm_provider: input.openviking.vlmProvider ?? '',
+          vlm_model: input.openviking.vlmModel ?? '',
+          vlm_api_key: input.openviking.vlmApiKey ?? '',
+          vlm_api_base: input.openviking.vlmApiBase ?? '',
+          rerank_selector: input.openviking.rerankSelector ?? '',
+          rerank_provider: input.openviking.rerankProvider ?? '',
+          rerank_model: input.openviking.rerankModel ?? '',
+          rerank_api_key: input.openviking.rerankApiKey ?? '',
+          rerank_api_base: input.openviking.rerankApiBase ?? '',
+        } : undefined,
+        nowledge: input.nowledge ? {
+          base_url: input.nowledge.baseUrl ?? '',
+          api_key: input.nowledge.apiKey ?? '',
+          request_timeout_ms: input.nowledge.requestTimeoutMs ?? 0,
+        } : undefined,
+      }),
+    })
+    return mapApiMemoryProviderStatus(body.status)
+  },
+
+  async getMemoryOverviewSnapshot() {
+    const body = await requestJSON<{ snapshot: ApiMemoryOverviewSnapshot }>('/v1/memory/snapshot')
+    return mapApiMemoryOverviewSnapshot(body.snapshot)
+  },
+
+  async rebuildMemoryOverviewSnapshot() {
+    const body = await requestJSON<{ snapshot: ApiMemoryOverviewSnapshot }>('/v1/memory/snapshot/rebuild', { method: 'POST' })
+    return mapApiMemoryOverviewSnapshot(body.snapshot)
+  },
+
+  async getMemoryImpressionSnapshot() {
+    const body = await requestJSON<{ impression: ApiMemoryImpressionSnapshot }>('/v1/memory/impression')
+    return mapApiMemoryImpressionSnapshot(body.impression)
+  },
+
+  async rebuildMemoryImpressionSnapshot() {
+    const body = await requestJSON<{ impression: ApiMemoryImpressionSnapshot }>('/v1/memory/impression/rebuild', { method: 'POST' })
+    return mapApiMemoryImpressionSnapshot(body.impression)
+  },
+
+  async getMemoryContent(uri: string, layer: 'overview' | 'read' = 'overview') {
+    const params = new URLSearchParams({ uri, layer })
+    const body = await requestJSON<{ content: string }>(`/v1/memory/content?${params.toString()}`)
+    return body.content ?? ''
   },
 
   async startRun(threadId: string, input: { messageId?: string; source?: RunSource; providerId?: string; model?: string; personaId?: string } = {}) {

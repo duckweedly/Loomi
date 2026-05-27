@@ -51,20 +51,9 @@ func TestM22BoundedAgentLoopWorkspaceSmoke(t *testing.T) {
 	if ok, err := worker.ProcessOne(context.Background()); err != nil || !ok {
 		t.Fatalf("initial ProcessOne ok=%v err=%v", ok, err)
 	}
-	assertM22ToolBlocked(t, svc, threadID, runID, "tc_glob_1", productdata.ToolNameWorkspaceGlob)
-	approveGlob := requestJSON(t, srv, http.MethodPost, "/v1/threads/"+threadID+"/runs/"+runID+"/tool-calls/tc_glob_1/approve", "")
-	assertStatus(t, approveGlob.Code, http.StatusOK, approveGlob.Body.String())
-
-	if ok, err := worker.ProcessOne(context.Background()); err != nil || !ok {
-		t.Fatalf("glob resume ProcessOne ok=%v err=%v", ok, err)
-	}
-	assertM22ToolBlocked(t, svc, threadID, runID, "tc_read_2", productdata.ToolNameWorkspaceRead)
-	approveRead := requestJSON(t, srv, http.MethodPost, "/v1/threads/"+threadID+"/runs/"+runID+"/tool-calls/tc_read_2/approve", "")
-	assertStatus(t, approveRead.Code, http.StatusOK, approveRead.Body.String())
-
-	if ok, err := worker.ProcessOne(context.Background()); err != nil || !ok {
-		t.Fatalf("read resume ProcessOne ok=%v err=%v", ok, err)
-	}
+	drainM22Worker(t, worker, svc, ident, runID)
+	assertM22ToolSucceeded(t, svc, threadID, runID, "tc_glob_1", productdata.ToolNameWorkspaceGlob)
+	assertM22ToolSucceeded(t, svc, threadID, runID, "tc_read_2", productdata.ToolNameWorkspaceRead)
 	run, err := svc.GetRun(context.Background(), ident, runID)
 	if err != nil {
 		t.Fatal(err)
@@ -87,10 +76,13 @@ func TestM22BoundedAgentLoopWorkspaceSmoke(t *testing.T) {
 		t.Fatalf("read call = %+v", readCall)
 	}
 	eventsBody := fetchM21Events(t, srv, runID)
-	for _, expected := range []string{productdata.EventToolCallApprovalRequired, productdata.EventToolCallSucceeded, `"tool_call_id":"tc_read_2"`, `"loop_index":2`, `"loop_max":6`, `"model_phase":"continuation"`, productdata.EventRunCompleted} {
+	for _, expected := range []string{productdata.EventToolCallSucceeded, `"tool_call_id":"tc_read_2"`, `"loop_index":2`, `"loop_max":6`, `"model_phase":"continuation"`, productdata.EventRunCompleted} {
 		if !strings.Contains(eventsBody, expected) {
 			t.Fatalf("events missing %s: %s", expected, eventsBody)
 		}
+	}
+	if strings.Contains(eventsBody, productdata.EventToolCallApprovalRequired) {
+		t.Fatalf("read-only workspace loop should not require approval: %s", eventsBody)
 	}
 	assertBodyExcludes(t, eventsBody, "m22 bounded loop events", root, "fixture-secret", ".env", "secrets/token")
 }
@@ -131,14 +123,19 @@ func TestM22CodeAgentReadEditExecReadLoopSmoke(t *testing.T) {
 	assertStatus(t, runRes.Code, http.StatusAccepted, runRes.Body.String())
 	runID := decodeStringField(t, runRes.Body.Bytes(), "run", "id")
 
+	if ok, err := worker.ProcessOne(context.Background()); err != nil || !ok {
+		t.Fatalf("read-before ProcessOne ok=%v err=%v", ok, err)
+	}
+	assertM22ToolSucceeded(t, svc, threadID, runID, "tc_read_before_1", productdata.ToolNameWorkspaceRead)
+	assertM22ToolBlocked(t, svc, threadID, runID, "tc_edit_2", productdata.ToolNameWorkspaceEdit)
+	approveEdit := requestJSON(t, srv, http.MethodPost, "/v1/threads/"+threadID+"/runs/"+runID+"/tool-calls/tc_edit_2/approve", "")
+	assertStatus(t, approveEdit.Code, http.StatusOK, approveEdit.Body.String())
+
 	for _, step := range []struct {
 		id   string
 		name string
 	}{
-		{"tc_read_before_1", productdata.ToolNameWorkspaceRead},
-		{"tc_edit_2", productdata.ToolNameWorkspaceEdit},
 		{"tc_exec_3", productdata.ToolNameSandboxExecCommand},
-		{"tc_read_after_4", productdata.ToolNameWorkspaceRead},
 	} {
 		if ok, err := worker.ProcessOne(context.Background()); err != nil || !ok {
 			run, _ := svc.GetRun(context.Background(), ident, runID)
@@ -158,8 +155,11 @@ func TestM22CodeAgentReadEditExecReadLoopSmoke(t *testing.T) {
 	}
 
 	if ok, err := worker.ProcessOne(context.Background()); err != nil || !ok {
-		t.Fatalf("final ProcessOne ok=%v err=%v", ok, err)
+		t.Fatalf("read-after ProcessOne ok=%v err=%v", ok, err)
 	}
+	drainM22Worker(t, worker, svc, ident, runID)
+	assertM22ToolSucceeded(t, svc, threadID, runID, "tc_read_after_4", productdata.ToolNameWorkspaceRead)
+
 	run, err := svc.GetRun(context.Background(), ident, runID)
 	if err != nil {
 		t.Fatal(err)
@@ -198,6 +198,37 @@ func assertM22ToolBlocked(t *testing.T, svc productdata.Service, threadID string
 	}
 	if call.ToolName != toolName || call.ApprovalStatus != productdata.ToolCallApprovalRequired || call.ExecutionStatus != productdata.ToolCallExecutionBlocked {
 		t.Fatalf("call = %+v", call)
+	}
+}
+
+func assertM22ToolSucceeded(t *testing.T, svc productdata.Service, threadID string, runID string, toolCallID string, toolName string) {
+	t.Helper()
+	call, err := svc.GetToolCall(context.Background(), identity.LocalDevIdentity(), threadID, runID, toolCallID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if call.ToolName != toolName || call.ApprovalStatus != productdata.ToolCallApprovalApproved || call.ExecutionStatus != productdata.ToolCallExecutionSucceeded {
+		t.Fatalf("call = %+v", call)
+	}
+}
+
+func drainM22Worker(t *testing.T, worker *productruntime.Worker, svc productdata.Service, ident identity.LocalIdentity, runID string) {
+	t.Helper()
+	for i := 0; i < 6; i++ {
+		run, err := svc.GetRun(context.Background(), ident, runID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if productdata.IsRunTerminal(run.Status) || run.Status == productdata.RunStatusBlockedOnToolApproval {
+			return
+		}
+		ok, err := worker.ProcessOne(context.Background())
+		if err != nil {
+			t.Fatalf("drain ProcessOne ok=%v err=%v", ok, err)
+		}
+		if !ok {
+			return
+		}
 	}
 }
 

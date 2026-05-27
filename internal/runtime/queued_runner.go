@@ -16,6 +16,7 @@ type QueuedRunRouter struct {
 	BrowserExecutor  BrowserToolExecutor
 	ArtifactService  productdata.ArtifactService
 	AgentTaskService productdata.AgentTaskService
+	MemoryService    productdata.Service
 }
 
 type MCPToolExecutor interface {
@@ -59,7 +60,16 @@ func (r QueuedRunRouter) dispatch(ctx context.Context, run productdata.Run, job 
 	}
 	if run.Source == productdata.RunSourceModelGateway {
 		if r.Gateway != nil {
-			r.Gateway.run(ctx, run, gatewayInputFromJob(run, job))
+			r.Gateway.runWithContext(ctx, run, gatewayInputFromJob(run, job), prepared)
+			for {
+				toolCallID := r.nextAutoApprovedToolCall(ctx, run.ID)
+				if toolCallID == "" {
+					break
+				}
+				if err := r.runApprovedTool(ctx, run, toolCallID, prepared); err != nil {
+					return err
+				}
+			}
 			return r.gatewayResult(ctx, run.ID)
 		}
 		return nil
@@ -68,6 +78,36 @@ func (r QueuedRunRouter) dispatch(ctx context.Context, run productdata.Run, job 
 		return r.Local.Run(ctx, run, job)
 	}
 	return nil
+}
+
+func (r QueuedRunRouter) nextAutoApprovedToolCall(ctx context.Context, runID string) string {
+	if r.Gateway == nil || r.Gateway.Service == nil {
+		return ""
+	}
+	events, err := r.Gateway.Service.ListRunEvents(ctx, identity.LocalDevIdentity(), runID, 0)
+	if err != nil {
+		return ""
+	}
+	completed := map[string]bool{}
+	approved := []string{}
+	for _, event := range events {
+		toolCallID := metadataString(event.Metadata, "tool_call_id")
+		if toolCallID == "" {
+			continue
+		}
+		switch event.Type {
+		case productdata.EventToolCallSucceeded, productdata.EventToolCallFailed:
+			completed[toolCallID] = true
+		case productdata.EventToolCallApproved:
+			approved = append(approved, toolCallID)
+		}
+	}
+	for _, toolCallID := range approved {
+		if !completed[toolCallID] {
+			return toolCallID
+		}
+	}
+	return ""
 }
 
 func (r QueuedRunRouter) service() productdata.Service {
@@ -116,7 +156,7 @@ func (r QueuedRunRouter) runApprovedTool(ctx context.Context, run productdata.Ru
 		enabledTools = prepared.EnabledTools
 	}
 	catalog := toolCatalogForExecution(enabledTools)
-	broker := ToolBroker{Executor: DefaultToolExecutor{MCPExecutor: r.MCPExecutor, WebExecutor: r.WebExecutor, BrowserExecutor: r.BrowserExecutor, ArtifactExecutor: ArtifactToolExecutor{Artifacts: r.artifactService()}, AgentExecutor: AgentToolExecutor{Tasks: r.agentTaskService()}}}
+	broker := ToolBroker{Executor: DefaultToolExecutor{MCPExecutor: r.MCPExecutor, WorkspaceExecutor: WorkspaceToolExecutor{}, SandboxExecutor: SandboxToolExecutor{}, LSPExecutor: LSPToolExecutor{}, WebExecutor: r.WebExecutor, BrowserExecutor: r.BrowserExecutor, ArtifactExecutor: ArtifactToolExecutor{Artifacts: r.artifactService()}, AgentExecutor: AgentToolExecutor{Tasks: r.agentTaskService()}, MemoryExecutor: MemoryToolExecutor{Service: r.memoryService(), Ident: identity.LocalDevIdentity()}}}
 	result, err := broker.Execute(ctx, ToolInvocationFromCall(call, catalog, enabledTools))
 	if err != nil {
 		_, _, _ = r.Gateway.Service.FailToolCallExecution(ctx, identity.LocalDevIdentity(), run.ThreadID, run.ID, toolCallID, "tool_execution_failed", err.Error())
@@ -137,6 +177,15 @@ func (r QueuedRunRouter) runApprovedTool(ctx context.Context, run productdata.Ru
 		return productdata.NewError(productdata.CodeInvalidRequest, "Continuation context is missing.")
 	}
 	r.Gateway.ContinueAfterToolResult(ctx, run, input)
+	for {
+		nextToolCallID := r.nextAutoApprovedToolCall(ctx, run.ID)
+		if nextToolCallID == "" {
+			break
+		}
+		if err := r.runApprovedTool(ctx, run, nextToolCallID, prepared); err != nil {
+			return err
+		}
+	}
 	return r.gatewayResult(ctx, run.ID)
 }
 
@@ -166,6 +215,13 @@ func (r QueuedRunRouter) agentTaskService() productdata.AgentTaskService {
 		return svc
 	}
 	return nil
+}
+
+func (r QueuedRunRouter) memoryService() productdata.Service {
+	if r.MemoryService != nil {
+		return r.MemoryService
+	}
+	return r.service()
 }
 
 func toolCatalogForExecution(enabledTools []productdata.ToolResolution) []productdata.ToolCatalogEntry {

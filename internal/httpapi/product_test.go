@@ -114,6 +114,36 @@ func TestSkillHandlerListsInstalledSkills(t *testing.T) {
 	}
 }
 
+func TestWorkspaceRootEndpointPersistsSelectedFolder(t *testing.T) {
+	t.Setenv("LOOMI_WORKSPACE_ROOT", "")
+	root := t.TempDir()
+	svc := productdata.NewMemoryService()
+	srv := NewServerWithProduct(config.Config{AppEnv: "local"}, fakeChecker{}, svc)
+
+	save := requestJSON(t, srv, http.MethodPost, "/v1/workspace/root", `{"path":"`+root+`"}`)
+	if save.Code != http.StatusOK || !strings.Contains(save.Body.String(), `"configured":true`) || !strings.Contains(save.Body.String(), filepath.Base(root)) {
+		t.Fatalf("save status=%d body=%s", save.Code, save.Body.String())
+	}
+	if got := os.Getenv("LOOMI_WORKSPACE_ROOT"); got == "" {
+		t.Fatal("workspace root was not applied to runtime process")
+	}
+
+	if err := os.Unsetenv("LOOMI_WORKSPACE_ROOT"); err != nil {
+		t.Fatal(err)
+	}
+	nextServer := NewServerWithProduct(config.Config{AppEnv: "local"}, fakeChecker{}, svc)
+	if got := os.Getenv("LOOMI_WORKSPACE_ROOT"); got == "" {
+		t.Fatal("persisted workspace root was not restored when the server started")
+	}
+	load := requestJSON(t, nextServer, http.MethodGet, "/v1/workspace/root", "")
+	if load.Code != http.StatusOK || !strings.Contains(load.Body.String(), `"configured":true`) || !strings.Contains(load.Body.String(), filepath.Base(root)) {
+		t.Fatalf("load status=%d body=%s", load.Code, load.Body.String())
+	}
+	if got := os.Getenv("LOOMI_WORKSPACE_ROOT"); got == "" {
+		t.Fatal("persisted workspace root was not restored into runtime process")
+	}
+}
+
 func TestThreadPersonaHandlersRejectUnknownPersona(t *testing.T) {
 	srv := NewServerWithProduct(config.Config{AppEnv: "local"}, fakeChecker{}, productdata.NewMemoryService())
 	create := requestJSON(t, srv, http.MethodPost, "/v1/threads", `{"title":"Thread","mode":"chat","persona_id":"persona_unknown"}`)
@@ -188,7 +218,7 @@ func TestAPIPreflightAllowsBrowserWrites(t *testing.T) {
 			if res.Header().Get("Access-Control-Allow-Origin") != origin {
 				t.Fatalf("allow origin = %q", res.Header().Get("Access-Control-Allow-Origin"))
 			}
-			if res.Header().Get("Access-Control-Allow-Methods") != "GET, POST, PATCH, DELETE, OPTIONS" {
+			if res.Header().Get("Access-Control-Allow-Methods") != "GET, POST, PUT, PATCH, DELETE, OPTIONS" {
 				t.Fatalf("allow methods = %q", res.Header().Get("Access-Control-Allow-Methods"))
 			}
 			if res.Header().Get("Access-Control-Allow-Headers") != "Content-Type" {

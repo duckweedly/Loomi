@@ -6,7 +6,7 @@
 
 ## Summary
 
-M21 adds the first bounded workspace read loop: `workspace.glob`, `workspace.grep`, and `workspace.read`. The implementation reuses the existing M18 catalog, ToolBroker, RunContext, provider tool-call request, approval, worker execution, result persistence, and continuation path. Workspace tools are executable only in Work mode persona scope, always approval-gated, rooted at `LOOMI_WORKSPACE_ROOT` or the Loomi repo root, deny traversal/symlink/sensitive paths, and return bounded safe text metadata.
+M21 adds the first bounded workspace read loop: `workspace.glob`, `workspace.grep`, and `workspace.read`. The implementation reuses the existing M18 catalog, ToolBroker, RunContext, provider tool-call request, worker execution, result persistence, and continuation path. Workspace read tools are executable only in Work mode persona scope, auto-approved as bounded read-only operations after a workspace root is selected, rooted at persisted local config / `LOOMI_WORKSPACE_ROOT` / local Home fallback, deny traversal/symlink/sensitive paths, and return bounded safe text metadata. Mutating workspace tools remain approval-gated.
 
 ## Technical Context
 
@@ -24,17 +24,17 @@ M21 adds the first bounded workspace read loop: `workspace.glob`, `workspace.gre
 
 **Performance Goals**: Glob/grep/read complete on fixture roots within normal unit/smoke test time; grep/glob/read enforce bounded result sizes and do not scan unbounded output into memory.
 
-**Constraints**: No shell/rg production implementation; no write/edit/shell/browser/web/artifact/sandbox tools; no host absolute path in UI; no sensitive content leakage in events or tool results.
+**Constraints**: No shell/rg production implementation; no write/edit/shell/browser/web/artifact/sandbox tools in this slice; no host absolute path in UI; no sensitive content leakage in events or tool results.
 
-**Scale/Scope**: Single configured workspace root per local backend process; one tool call per run remains the existing milestone boundary.
+**Scale/Scope**: Single configured workspace root per local user; bounded read-only tool calls may continue automatically within the same run loop.
 
 ## Constitution Check
 
 - **I. Mechanism Parity, Original Expression**: PASS. Arkloop is used only for mechanism study; Loomi keeps its own ToolCatalog, ToolBroker, RunContext, event, and UI language.
-- **II. Runnable Vertical Slices**: PASS. Backend smoke covers successful glob/read/grep, denial until approval, boundary rejections, and continuation.
+- **II. Runnable Vertical Slices**: PASS. Backend smoke covers successful auto-approved glob/read/grep, boundary rejections, and continuation.
 - **III. Core Flow Before Platform Complexity**: PASS. Adds only read-only workspace tools; explicitly defers shell, write, edit, sandbox, browser, web, artifact, and multi-tool loops.
 - **IV. Observable Agent Execution**: PASS. Existing persisted tool-call events and timeline states remain the observable execution model.
-- **V. Safety, Permissions, and Data Boundaries**: PASS. Workspace root, sensitive denylist, symlink boundary, approval gate, and redacted result metadata are required.
+- **V. Safety, Permissions, and Data Boundaries**: PASS. Workspace root, sensitive denylist, symlink boundary, read-only auto-approval boundary, and redacted result metadata are required.
 
 Post-design check: PASS. No constitution violations.
 

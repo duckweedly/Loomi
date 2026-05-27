@@ -10,7 +10,7 @@
   "source": "builtin",
   "group": "workspace",
   "risk_level": "low",
-  "approval_policy": "always_required",
+  "approval_policy": "read_only",
   "enabled": true,
   "execution_state": "executable",
   "safe_metadata": {
@@ -23,7 +23,7 @@
 
 The response must not expose the host absolute root.
 
-## Approval Contract
+## Read-Only Execution Contract
 
 Provider tool call metadata:
 
@@ -38,23 +38,17 @@ Provider tool call metadata:
 }
 ```
 
-Expected pre-approval result:
+Expected read-only result:
 
 ```text
-tool_call_requested -> tool_call_approval_required
+tool_call_requested -> tool_call_approved -> tool_call_executing -> tool_call_succeeded -> model continuation
 ```
 
-No filesystem content may be read before approval.
-
-Expected post-approval result:
-
-```text
-tool_call_approved -> tool_call_executing -> tool_call_succeeded -> model continuation
-```
+`workspace.glob`, `workspace.grep`, and `workspace.read` are auto-approved bounded reads after the user has selected a workspace root. Workspace mutation tools remain approval-gated.
 
 ## Failure Contract
 
-Rejected paths return a failed tool execution after approval:
+Rejected paths return a failed tool execution:
 
 ```json
 {

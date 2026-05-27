@@ -36,6 +36,31 @@ func TestDiscoveryLoadToolsReturnsEnabledToolDescriptions(t *testing.T) {
 	}
 }
 
+func TestDiscoveryLoadToolsAcceptsStringArgsAndProviderSafeNames(t *testing.T) {
+	invocation := ToolInvocation{
+		RunID:    "run_discovery",
+		ToolName: productdata.ToolNameLoadTools,
+		ArgumentsSummary: map[string]any{
+			"names": "workspace_read",
+			"limit": 2,
+		},
+		Catalog: []productdata.ToolCatalogEntry{
+			{Name: productdata.ToolNameWorkspaceRead, DisplayName: "Workspace read", Description: "Read file", Group: productdata.ToolCatalogGroupWorkspace, RiskLevel: productdata.ToolRiskLow, ApprovalPolicy: productdata.ToolApprovalAlwaysRequired},
+			{Name: productdata.ToolNameWorkspaceGrep, DisplayName: "Workspace grep", Description: "Search files", Group: productdata.ToolCatalogGroupWorkspace, RiskLevel: productdata.ToolRiskLow, ApprovalPolicy: productdata.ToolApprovalAlwaysRequired},
+		},
+		EnabledTools: ToolResolutionsForPersona([]string{productdata.ToolNameWorkspaceRead, productdata.ToolNameWorkspaceGrep}),
+	}
+
+	result, err := (DiscoveryToolExecutor{}).Execute(context.Background(), invocation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tools, ok := result["tools"].([]map[string]any)
+	if !ok || len(tools) != 1 || tools[0]["name"] != productdata.ToolNameWorkspaceRead {
+		t.Fatalf("tools = %+v", result["tools"])
+	}
+}
+
 func TestDiscoveryLoadSkillReturnsSafeManifestOnly(t *testing.T) {
 	home := t.TempDir()
 	writeSkill(t, filepath.Join(home, ".codex", "skills", "review", "SKILL.md"), "---\nname: review\ndescription: Review code.\n---\nSECRET_BODY")

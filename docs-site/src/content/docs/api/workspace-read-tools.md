@@ -15,7 +15,7 @@ description: Catalog, event, and result contracts for M21 workspace.glob, worksp
   "source": "builtin",
   "group": "workspace",
   "risk_level": "low",
-  "approval_policy": "always_required",
+  "approval_policy": "read_only",
   "enabled": true,
   "execution_state": "executable",
   "safe_metadata": {
@@ -36,7 +36,7 @@ The API never returns the local absolute workspace root.
 { "config": { "configured": false, "display_name": "Home" } }
 ```
 
-`POST /v1/workspace/root` accepts an absolute folder path chosen by the local desktop shell and updates the process runtime root for subsequent workspace tool calls. The response still returns only `configured` and `display_name`; it does not echo the absolute path.
+`POST /v1/workspace/root` accepts an absolute folder path chosen by the local desktop shell, persists it for the local user, and updates the current process runtime root for subsequent workspace tool calls. `GET /v1/workspace/root` restores the persisted folder into the current process after restart when the folder is still available. Responses still return only `configured` and `display_name`; they do not echo the absolute path.
 
 ## Tool Arguments
 
@@ -64,12 +64,13 @@ Workspace tool events use the existing tool lifecycle event names:
 
 ```text
 tool_call_requested
-tool_call_approval_required
 tool_call_approved
 tool_call_executing
 tool_call_succeeded
 tool_call_failed
 ```
+
+`workspace.glob`, `workspace.grep`, and `workspace.read` are bounded read-only tools. After the user has selected a workspace root, they are recorded as auto-approved and executed by the worker without a per-call confirmation prompt. Mutating workspace tools still require explicit approval.
 
 Metadata includes `tool_source=builtin`, `tool_group=workspace`, redacted arguments, approval status, execution status, and safe result/error metadata.
 

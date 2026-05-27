@@ -21,6 +21,10 @@ describe('WorkPlanView', () => {
     const html = renderToStaticMarkup(createElement(WorkPlanView, { projection, loading: false, error: null }))
 
     expect(html).toContain('Ship M16 work mode foundation')
+    expect(html).toContain('Plan queue')
+    expect(html).toContain('Active')
+    expect(html).toContain('Done')
+    expect(html).toContain('Needs attention')
     expect(html).toContain('Build projection')
     expect(html).toContain('Render view')
     expect(html).toContain('Find candidate files')
@@ -45,6 +49,8 @@ describe('WorkPlanView', () => {
     const html = renderToStaticMarkup(createElement(WorkPlanView, { projection, loading: false, error: null, locale: 'zh' }))
 
     expect(html).toContain('工作计划')
+    expect(html).toContain('计划队列')
+    expect(html).toContain('进行中')
     expect(html).toContain('运行中')
     expect(html).toContain('完成')
     expect(html).toContain('待办')
@@ -87,7 +93,7 @@ describe('ChatCanvas Work mode integration', () => {
     events: [{ id: 'evt-1', type: 'work.plan.updated', label: 'Work', detail: 'Projected from run events', time: 'Now', status: 'running', metadata: { work_goal: 'Projected goal', work_steps: [{ title: 'Projected step', status: 'running' }] } }],
   }
 
-  test('mounts Work Plan View for Work mode threads', () => {
+  test('keeps Work Plan View out of the main chat transcript for Work mode threads', () => {
     const html = renderToStaticMarkup(createElement(ChatCanvas, {
       sidebarCollapsed: false,
       thread: workThread,
@@ -102,9 +108,9 @@ describe('ChatCanvas Work mode integration', () => {
       locale: 'en',
     }))
 
-    expect(html).toContain('Work plan')
-    expect(html).toContain('Projected goal')
-    expect(html).toContain('Projected step')
+    expect(html).not.toContain('Work plan')
+    expect(html).not.toContain('Projected goal')
+    expect(html).not.toContain('Projected step')
     expect(html).toContain('<textarea class="composer-input" disabled=""')
     expect(html).toContain('Stop</button>')
   })
@@ -158,7 +164,7 @@ describe('ChatCanvas Work mode integration', () => {
 
     expect(html).toContain('等待你确认')
     expect(html).toContain('停止</button>')
-    expect(html).toContain('工作计划')
+    expect(html).not.toContain('工作计划')
     expect(html).not.toContain('Waiting for your confirmation')
   })
 
@@ -189,7 +195,7 @@ describe('ChatCanvas Work mode integration', () => {
       locale: 'en',
     }))
 
-    expect(html).toContain('Work plan')
+    expect(html).not.toContain('Work plan')
     expect(html).toContain('Waiting for your confirmation')
     expect(html).toContain('<textarea class="composer-input" disabled=""')
     expect(html).toContain('Approve')
@@ -208,14 +214,16 @@ describe('ChatCanvas Work mode integration', () => {
       dataSourceMode: 'real_api',
       streamState: 'closed',
       providerCapabilities: [{ id: 'local_codex', family: 'openai_compatible', model: 'gpt-5.5', status: 'available', executionState: 'supported' }],
+      workspaceRootConfig: { configured: true, displayName: 'Downloads' },
       onSendMessage: () => {},
       onStopRun: () => {},
       locale: 'en',
     }))
 
-    expect(html).toContain('Work plan')
+    expect(html).not.toContain('Work plan')
     expect(html).toContain('<textarea class="composer-input"')
     expect(html).not.toContain('<textarea class="composer-input" disabled=""')
+    expect(html).toContain('Folder: Downloads')
     expect(html).not.toContain('M16 Work mode is read-only for plan and progress')
   })
 

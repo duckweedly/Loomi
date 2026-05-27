@@ -53,18 +53,11 @@ func TestDiscoveryLoadToolsAutoApprovedSmoke(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if call.ApprovalStatus != productdata.ToolCallApprovalApproved || call.ExecutionStatus != productdata.ToolCallExecutionNotStarted {
+	if call.ApprovalStatus != productdata.ToolCallApprovalApproved || call.ExecutionStatus != productdata.ToolCallExecutionSucceeded {
 		t.Fatalf("auto-approved call = %+v", call)
 	}
-	if ok, err := worker.ProcessOne(context.Background()); err != nil || !ok {
-		t.Fatalf("second ProcessOne ok=%v err=%v", ok, err)
-	}
-	finalCall, err := svc.GetToolCall(context.Background(), ident, threadID, runID, toolCallID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if finalCall.ExecutionStatus != productdata.ToolCallExecutionSucceeded || finalCall.ResultSummary["operation"] != "load_tools" || finalCall.ResultSummary["scope"] != "runtime_catalog" {
-		t.Fatalf("final call = %+v", finalCall)
+	if call.ResultSummary["operation"] != "load_tools" || call.ResultSummary["scope"] != "runtime_catalog" {
+		t.Fatalf("final call = %+v", call)
 	}
 	eventsBody := fetchM21Events(t, srv, runID)
 	for _, expected := range []string{`"tool_name":"tool.load_tools"`, productdata.EventToolCallExecuting, productdata.EventToolCallSucceeded, `"runtime_catalog"`} {

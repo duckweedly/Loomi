@@ -1,6 +1,6 @@
-import { ArrowLeft, Check, ChevronDown, ChevronRight, Minus, Plus, Search, X } from 'lucide-react'
+import { ArrowLeft, Check, ChevronDown, ChevronRight, Minus, Plus, RefreshCw, Search, Settings as SettingsIcon, X } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
-import type { BackendCapabilityState, InstalledSkill, LocalProviderDetection, MCPServerConfigInput, MCPServerStatus, MemoryAuditItem, MemoryEntry, MemoryFilters, Persona, ProviderCapability, Thread, ToolCatalogItem, WebSearchConfig, WorkspaceRootConfig } from '../domain'
+import type { BackendCapabilityState, InstalledSkill, LocalProviderDetection, MCPServerConfigInput, MCPServerStatus, MemoryAuditItem, MemoryEntry, MemoryErrorEvent, MemoryFilters, MemoryImpressionSnapshot, MemoryOverviewSnapshot, MemoryProviderStatus, MemoryProviderUpdate, MemoryWriteProposal, Persona, ProviderCapability, Thread, ToolCatalogItem, WebSearchConfig, WorkspaceRootConfig } from '../domain'
 import type { ProviderCheckResult, ProviderSaveResult } from '../state'
 import type { ProviderDraftSettings } from '../useWorkspaceShellState'
 import type { Locale } from '../i18n'
@@ -39,6 +39,15 @@ type Props = {
   memoryAuditItems: MemoryAuditItem[]
   memoryAuditLoading: boolean
   memoryAuditError?: string | null
+  memoryWriteProposals?: MemoryWriteProposal[]
+  memoryProposalsLoading?: boolean
+  memoryProposalsError?: string | null
+  memoryProviderStatus?: MemoryProviderStatus | null
+  memoryErrors?: MemoryErrorEvent[]
+  memoryProviderSaveResult?: ProviderSaveResult
+  memoryOverviewSnapshot?: MemoryOverviewSnapshot | null
+  memoryImpressionSnapshot?: MemoryImpressionSnapshot | null
+  memorySnapshotLoading?: boolean
   pendingDeleteMemoryEntry?: MemoryEntry | null
   providerCheckResults: Record<string, ProviderCheckResult>
   providerSaveResult: ProviderSaveResult
@@ -50,6 +59,13 @@ type Props = {
   onProviderDraftSettingsChange: (settings: ProviderDraftSettings) => void
   onSaveProvider: (settings: ProviderDraftSettings) => void
   onSaveWebSearchKeys?: (input: { tavilyApiKey?: string; braveApiKey?: string }) => void
+  onRefreshMemoryProviderStatus?: () => void
+  onUpdateMemoryProvider?: (input: MemoryProviderUpdate) => void
+  onDetectNowledgeMemoryProvider?: () => Promise<{ detected: boolean; baseUrl?: string; message: string }>
+  onDetectOpenVikingMemoryProvider?: () => Promise<{ detected: boolean; baseUrl?: string; message: string }>
+  onRebuildMemoryOverviewSnapshot?: () => void
+  onRebuildMemoryImpressionSnapshot?: () => void
+  onGetMemoryContent?: (uri: string, layer?: 'overview' | 'read') => Promise<string>
   onSaveMCPServer?: (input: MCPServerConfigInput) => void
   onDeleteMCPServer?: (slug: string) => void
   onDiscoverMCPServer?: (slug: string) => void
@@ -63,7 +79,11 @@ type Props = {
   onCloseMemoryDetail: () => void
   onRequestDeleteMemoryEntry: (entry: MemoryEntry) => void
   onCancelDeleteMemoryEntry: () => void
+  onCreateMemoryEntry?: (input: { title: string; content: string; scopeType?: 'user' | 'thread'; scopeId?: string }) => void
   onConfirmDeleteMemoryEntry: (entry: MemoryEntry) => void
+  onApproveMemoryProposal?: (proposal: MemoryWriteProposal) => void
+  onUpdateMemoryProposal?: (proposal: MemoryWriteProposal, input: { title: string; summary: string }) => void
+  onDenyMemoryProposal?: (proposal: MemoryWriteProposal) => void
   onBack: () => void
 }
 
@@ -107,6 +127,392 @@ function SettingRow({ label, helperText, status, control, t }: { label: string; 
       </div>
       <div className="setting-row-control">{control}</div>
     </div>
+  )
+}
+
+function memoryProviderErrorSummary(item: MemoryErrorEvent, locale: Locale) {
+  const details = [item.provider, item.state, item.message]
+  if (item.eventType) details.push(item.eventType)
+  if (item.runId) details.push(`${locale === 'zh' ? '运行' : 'run'} ${item.runId}`)
+  return details.filter(Boolean).join(' · ')
+}
+
+function MemoryProviderFoundationPanel({ status, errors = [], saveResult, locale, onRefresh, onUpdate, onDetectNowledge, onDetectOpenViking }: { status?: MemoryProviderStatus | null; errors?: MemoryErrorEvent[]; saveResult?: ProviderSaveResult; locale: Locale; onRefresh?: () => void; onUpdate?: (input: MemoryProviderUpdate) => void; onDetectNowledge?: () => Promise<{ detected: boolean; baseUrl?: string; message: string }>; onDetectOpenViking?: () => Promise<{ detected: boolean; baseUrl?: string; message: string }> }) {
+  const [detectMessage, setDetectMessage] = useState('')
+  const [configOpen, setConfigOpen] = useState(false)
+  const copy = locale === 'zh'
+    ? {
+        title: '记忆服务',
+        subtitle: '运行前读取安全记忆；每轮后整理会生成待审批提案。',
+        enabled: '启用记忆',
+        commit: '每轮后自动整理',
+        local: '本地',
+        nowledge: 'Nowledge',
+        openviking: 'OpenViking',
+        localDescription: '使用 Loomi 本地已批准记忆。',
+        nowledgeDescription: '语义召回与本地 Nowledge 服务。',
+        openvikingDescription: '自动整理的记忆，由召回服务按相关性提供。',
+        refresh: '刷新',
+        state: '状态',
+        configured: '配置',
+        configuredYes: '已配置',
+        configuredNo: '未配置',
+        baseUrl: '服务地址',
+        rootKey: 'Root API Key',
+        apiKey: 'API Key',
+        timeout: '超时 ms',
+        embedding: 'Embedding 模型',
+        vlm: 'VLM 模型',
+        rerank: 'Rerank 模型',
+        selector: '选择器',
+        providerName: 'Provider',
+        model: '模型',
+        apiBase: 'API Base',
+        dimension: '维度',
+        stored: '已保存',
+        recentErrors: '近期异常',
+        detect: '检测本地实例',
+        configure: '配置',
+        configTitle: '记忆服务配置',
+        close: '关闭',
+      }
+    : {
+        title: 'Memory Service',
+        subtitle: 'Reads safe memory before runs; post-run organization creates approval-gated proposals.',
+        enabled: 'Enable memory',
+        commit: 'Organize after each run',
+        local: 'Local',
+        nowledge: 'Nowledge',
+        openviking: 'OpenViking',
+        localDescription: 'Use Loomi approved local memory.',
+        nowledgeDescription: 'Semantic recall through the local Nowledge service.',
+        openvikingDescription: 'Organized memory provided by relevance from the recall service.',
+        refresh: 'Refresh',
+        state: 'State',
+        configured: 'Config',
+        configuredYes: 'Configured',
+        configuredNo: 'Unconfigured',
+        baseUrl: 'Base URL',
+        rootKey: 'Root API Key',
+        apiKey: 'API Key',
+        timeout: 'Timeout ms',
+        embedding: 'Embedding model',
+        vlm: 'VLM model',
+        rerank: 'Rerank model',
+        selector: 'Selector',
+        providerName: 'Provider',
+        model: 'Model',
+        apiBase: 'API Base',
+        dimension: 'Dimension',
+        stored: 'Stored',
+        recentErrors: 'Recent Errors',
+        detect: 'Detect local instance',
+        configure: 'Configure',
+        configTitle: 'Memory Service Configuration',
+        close: 'Close',
+      }
+  const current = status ?? {
+    enabled: true,
+    provider: 'local',
+    label: copy.local,
+    state: 'available',
+    configured: true,
+    commitAfterRun: false,
+    diagnostic: { code: 'loading', message: locale === 'zh' ? '正在读取记忆服务状态。' : 'Loading memory provider status.' },
+  } satisfies MemoryProviderStatus
+  const update = (patch: Partial<MemoryProviderUpdate>) => onUpdate?.({
+    enabled: current.enabled,
+    provider: current.provider,
+    commitAfterRun: current.commitAfterRun,
+    openviking: current.openviking,
+    nowledge: current.nowledge,
+    ...patch,
+  })
+  const openviking = current.openviking ?? {}
+  const nowledge = current.nowledge ?? {}
+  const selectedProvider = current.provider === 'openviking' || current.provider === 'nowledge' ? current.provider : 'local'
+  const showProviderConfig = selectedProvider === 'nowledge' || selectedProvider === 'openviking'
+  const updateOpenViking = (patch: NonNullable<MemoryProviderUpdate['openviking']>) => update({ openviking: { ...openviking, ...patch } })
+  const updateNowledge = (patch: NonNullable<MemoryProviderUpdate['nowledge']>) => update({ nowledge: { ...nowledge, ...patch } })
+  const providerOptions = [
+    { value: 'local', label: copy.local, description: copy.localDescription },
+    { value: 'nowledge', label: copy.nowledge, description: copy.nowledgeDescription },
+    { value: 'openviking', label: copy.openviking, description: copy.openvikingDescription },
+  ] as const
+  const detectNowledge = async () => {
+    if (!onDetectNowledge) return
+    try {
+      const result = await onDetectNowledge()
+      setDetectMessage(result.message)
+      if (result.detected && result.baseUrl) updateNowledge({ baseUrl: result.baseUrl })
+    } catch (err) {
+      setDetectMessage(err instanceof Error ? err.message : 'Nowledge detect failed')
+    }
+  }
+  const detectOpenViking = async () => {
+    if (!onDetectOpenViking) return
+    try {
+      const result = await onDetectOpenViking()
+      setDetectMessage(result.message)
+      if (result.detected && result.baseUrl) updateOpenViking({ baseUrl: result.baseUrl })
+    } catch (err) {
+      setDetectMessage(err instanceof Error ? err.message : 'OpenViking detect failed')
+    }
+  }
+
+  return (
+    <section className="memory-provider-panel">
+      <div className="memory-provider-header">
+        <div>
+          <h3>{copy.title}</h3>
+          <p>{copy.subtitle}</p>
+        </div>
+        <button className="settings-icon-button" type="button" aria-label={copy.refresh} onClick={onRefresh}>
+          <RefreshCw size={16} />
+        </button>
+      </div>
+      <div className="memory-provider-controls">
+        <label>
+          <input type="checkbox" checked={current.enabled} onChange={(event) => update({ enabled: event.currentTarget.checked })} />
+          <span>{copy.enabled}</span>
+        </label>
+        <label>
+          <input type="checkbox" checked={current.commitAfterRun} onChange={(event) => update({ commitAfterRun: event.currentTarget.checked })} />
+          <span>{copy.commit}</span>
+        </label>
+      </div>
+      <div className="memory-provider-choice-grid">
+        {providerOptions.map((provider) => (
+          <button key={provider.value} className={provider.value === selectedProvider ? 'selected' : undefined} type="button" onClick={() => update({ provider: provider.value })}>
+            <span className="memory-provider-choice-dot" />
+            <strong>{provider.label}</strong>
+            <small>{provider.description}</small>
+          </button>
+        ))}
+      </div>
+      <div className="memory-provider-status-row">
+        <div className="memory-provider-status-grid">
+          <span>{copy.state}</span>
+          <strong>{current.state}</strong>
+          <span>{copy.configured}</span>
+          <strong>{current.configured ? copy.configuredYes : copy.configuredNo}</strong>
+        </div>
+        <button className="settings-secondary-button" type="button" onClick={() => setConfigOpen(true)} disabled={!showProviderConfig}>
+          <SettingsIcon size={14} />
+          <span>{copy.configure}</span>
+        </button>
+      </div>
+      <p className="memory-provider-diagnostic">{current.diagnostic.message}</p>
+      {errors.length > 0 && (
+        <div className="memory-provider-errors">
+          <strong>{copy.recentErrors}</strong>
+          {errors.slice(0, 3).map((item) => <span className="memory-provider-error-item" key={`${item.code}-${item.checkedAt ?? ''}-${item.runId ?? ''}`}>{memoryProviderErrorSummary(item, locale)}</span>)}
+        </div>
+      )}
+      {saveResult?.status === 'saving' && <p className="memory-provider-diagnostic">Saving</p>}
+      {saveResult?.message && saveResult.status !== 'saving' && <p className="memory-provider-diagnostic">{saveResult.message}</p>}
+      {configOpen && showProviderConfig && (
+        <div className="memory-provider-modal-backdrop" role="presentation" onClick={() => setConfigOpen(false)}>
+          <section className="memory-provider-modal" role="dialog" aria-modal="true" aria-label={copy.configTitle} onClick={(event) => event.stopPropagation()}>
+            <div className="memory-provider-modal-header">
+              <div>
+                <h3>{copy.configTitle}</h3>
+                <p>{selectedProvider === 'nowledge' ? copy.nowledge : copy.openviking}</p>
+              </div>
+              <button className="settings-icon-button" type="button" aria-label={copy.close} onClick={() => setConfigOpen(false)}>
+                <X size={16} />
+              </button>
+            </div>
+            {selectedProvider === 'nowledge' && (
+              <div className="memory-provider-config-grid">
+                <label>
+                  <span>{copy.baseUrl}</span>
+                  <input value={nowledge.baseUrl ?? ''} onChange={(event) => updateNowledge({ baseUrl: event.currentTarget.value })} placeholder="http://127.0.0.1:7727" />
+                </label>
+                <label>
+                  <span>{copy.apiKey}{nowledge.apiKeySet ? ` · ${copy.stored}` : ''}</span>
+                  <input type="password" value={nowledge.apiKey ?? ''} onChange={(event) => updateNowledge({ apiKey: event.currentTarget.value })} placeholder={nowledge.apiKeySet ? copy.stored : ''} />
+                </label>
+                <label>
+                  <span>{copy.timeout}</span>
+                  <input type="number" min={0} value={nowledge.requestTimeoutMs ?? 0} onChange={(event) => updateNowledge({ requestTimeoutMs: Number(event.currentTarget.value) || 0 })} />
+                </label>
+                <button className="settings-secondary-button" type="button" onClick={() => void detectNowledge()} disabled={!onDetectNowledge}>
+                  <RefreshCw size={14} />
+                  <span>{copy.detect}</span>
+                </button>
+                {detectMessage && <p className="memory-provider-diagnostic">{detectMessage}</p>}
+              </div>
+            )}
+            {selectedProvider === 'openviking' && (
+              <div className="memory-provider-config-grid">
+                <label>
+                  <span>{copy.baseUrl}</span>
+                  <input value={openviking.baseUrl ?? ''} onChange={(event) => updateOpenViking({ baseUrl: event.currentTarget.value })} placeholder="http://127.0.0.1:8282" />
+                </label>
+                <label>
+                  <span>{copy.rootKey}{openviking.rootApiKeySet ? ` · ${copy.stored}` : ''}</span>
+                  <input type="password" value={openviking.rootApiKey ?? ''} onChange={(event) => updateOpenViking({ rootApiKey: event.currentTarget.value })} placeholder={openviking.rootApiKeySet ? copy.stored : ''} />
+                </label>
+                <button className="settings-secondary-button" type="button" onClick={() => void detectOpenViking()} disabled={!onDetectOpenViking}>
+                  <RefreshCw size={14} />
+                  <span>{copy.detect}</span>
+                </button>
+                {detectMessage && <p className="memory-provider-diagnostic">{detectMessage}</p>}
+                {[
+                  ['embedding', copy.embedding],
+                  ['vlm', copy.vlm],
+                  ['rerank', copy.rerank],
+                ].map(([prefix, label]) => (
+                  <div className="memory-provider-config-group" key={prefix}>
+                    <strong>{label}</strong>
+                    <label>
+                      <span>{copy.selector}</span>
+                      <input value={String(openviking[`${prefix}Selector` as keyof typeof openviking] ?? '')} onChange={(event) => updateOpenViking({ [`${prefix}Selector`]: event.currentTarget.value })} />
+                    </label>
+                    <label>
+                      <span>{copy.providerName}</span>
+                      <input value={String(openviking[`${prefix}Provider` as keyof typeof openviking] ?? '')} onChange={(event) => updateOpenViking({ [`${prefix}Provider`]: event.currentTarget.value })} />
+                    </label>
+                    <label>
+                      <span>{copy.model}</span>
+                      <input value={String(openviking[`${prefix}Model` as keyof typeof openviking] ?? '')} onChange={(event) => updateOpenViking({ [`${prefix}Model`]: event.currentTarget.value })} />
+                    </label>
+                    <label>
+                      <span>{copy.apiKey}{openviking[`${prefix}ApiKeySet` as keyof typeof openviking] ? ` · ${copy.stored}` : ''}</span>
+                      <input type="password" value={String(openviking[`${prefix}ApiKey` as keyof typeof openviking] ?? '')} onChange={(event) => updateOpenViking({ [`${prefix}ApiKey`]: event.currentTarget.value })} placeholder={openviking[`${prefix}ApiKeySet` as keyof typeof openviking] ? copy.stored : ''} />
+                    </label>
+                    <label>
+                      <span>{copy.apiBase}</span>
+                      <input value={String(openviking[`${prefix}ApiBase` as keyof typeof openviking] ?? '')} onChange={(event) => updateOpenViking({ [`${prefix}ApiBase`]: event.currentTarget.value })} />
+                    </label>
+                    {prefix === 'embedding' && (
+                      <label>
+                        <span>{copy.dimension}</span>
+                        <input type="number" min={0} value={openviking.embeddingDimension ?? 0} onChange={(event) => updateOpenViking({ embeddingDimension: Number(event.currentTarget.value) || 0 })} />
+                      </label>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+        </div>
+      )}
+    </section>
+  )
+}
+
+function MemorySnapshotPanel({ overview, impression, loading, locale, onRebuildOverview, onRebuildImpression, onGetContent }: { overview?: MemoryOverviewSnapshot | null; impression?: MemoryImpressionSnapshot | null; loading?: boolean; locale: Locale; onRebuildOverview?: () => void; onRebuildImpression?: () => void; onGetContent?: (uri: string, layer?: 'overview' | 'read') => Promise<string> }) {
+  const [contentOpen, setContentOpen] = useState(false)
+  const [contentTitle, setContentTitle] = useState('')
+  const [contentText, setContentText] = useState('')
+  const [contentLoading, setContentLoading] = useState(false)
+  const copy = locale === 'zh'
+    ? {
+        title: '运行记忆',
+        subtitle: '查看本地已批准记忆生成的快照和画像；原始对话与工具输出不会出现在这里。',
+        overview: '记忆快照',
+        impression: '记忆画像',
+        rebuild: '重建',
+        loading: '更新中',
+        updated: '更新时间',
+        hits: '命中',
+        emptyOverview: '暂无已保存记忆。',
+        emptyImpression: '暂无记忆画像。',
+        view: '查看记忆',
+        close: '关闭',
+      }
+    : {
+        title: 'Runtime Memory',
+        subtitle: 'Inspect the local approved-memory snapshot and impression without raw conversations or tool output.',
+        overview: 'Memory Snapshot',
+        impression: 'Memory Impression',
+        rebuild: 'Rebuild',
+        loading: 'Updating',
+        updated: 'Updated',
+        hits: 'Hits',
+        emptyOverview: 'No approved memories yet.',
+        emptyImpression: 'No memory impression yet.',
+        view: 'View Memory',
+        close: 'Close',
+      }
+  const overviewText = overview?.memoryBlock || copy.emptyOverview
+  const impressionText = impression?.impression || copy.emptyImpression
+  const openHit = async (uri: string, title: string) => {
+    if (!onGetContent) return
+    setContentOpen(true)
+    setContentTitle(title)
+    setContentText('')
+    setContentLoading(true)
+    try {
+      setContentText(await onGetContent(uri, 'read'))
+    } finally {
+      setContentLoading(false)
+    }
+  }
+
+  return (
+    <section className="memory-snapshot-panel">
+      <div className="memory-provider-header">
+        <div>
+          <h3>{copy.title}</h3>
+          <p>{copy.subtitle}</p>
+        </div>
+        {loading && <span className="memory-snapshot-loading">{copy.loading}</span>}
+      </div>
+      <div className="memory-snapshot-grid">
+        <article className="memory-snapshot-card">
+          <div className="memory-snapshot-card-header">
+            <div>
+              <h4>{copy.impression}</h4>
+              <p>{copy.updated}: {impression?.updatedAt ? new Date(impression.updatedAt).toLocaleString() : '-'}</p>
+            </div>
+            <button className="settings-secondary-button" type="button" onClick={onRebuildImpression} disabled={!onRebuildImpression || loading}>
+              <RefreshCw size={14} />
+              <span>{copy.rebuild}</span>
+            </button>
+          </div>
+          <p className="memory-snapshot-text">{impressionText}</p>
+        </article>
+        <article className="memory-snapshot-card">
+          <div className="memory-snapshot-card-header">
+            <div>
+              <h4>{copy.overview}</h4>
+              <p>{copy.hits}: {overview?.hits.length ?? 0} · {copy.updated}: {overview?.updatedAt ? new Date(overview.updatedAt).toLocaleString() : '-'}</p>
+            </div>
+            <button className="settings-secondary-button" type="button" onClick={onRebuildOverview} disabled={!onRebuildOverview || loading}>
+              <RefreshCw size={14} />
+              <span>{copy.rebuild}</span>
+            </button>
+          </div>
+          <p className="memory-snapshot-text">{overviewText}</p>
+          {overview?.hits?.length ? (
+            <div className="memory-snapshot-hit-list">
+              {overview.hits.slice(0, 4).map((hit) => (
+                <button key={hit.uri} type="button" onClick={() => void openHit(hit.uri, hit.title || hit.uri)} disabled={!onGetContent}>{hit.title || hit.uri}</button>
+              ))}
+            </div>
+          ) : null}
+        </article>
+      </div>
+      {contentOpen && (
+        <div className="memory-content-modal-backdrop" role="presentation" onClick={() => setContentOpen(false)}>
+          <div className="memory-content-modal" role="dialog" aria-modal="true" aria-label={copy.view} onClick={(event) => event.stopPropagation()}>
+            <div className="memory-content-modal-header">
+              <div>
+                <h4>{contentTitle || copy.view}</h4>
+                <p>{copy.view}</p>
+              </div>
+              <button className="settings-icon-button" type="button" aria-label={copy.close} onClick={() => setContentOpen(false)}>
+                <X size={16} />
+              </button>
+            </div>
+            <pre>{contentLoading ? copy.loading : contentText || copy.emptyOverview}</pre>
+          </div>
+        </div>
+      )}
+    </section>
   )
 }
 
@@ -402,6 +808,22 @@ const toolDisplayCopy: Record<string, { zh: { name: string; description: string 
   'agent.spawn': { zh: { name: '创建子任务', description: '创建一个有边界的子协调任务。' }, en: { name: 'Agent spawn', description: 'Create one bounded child coordination task.' } },
   'agent.list': { zh: { name: '列出子任务', description: '列出有边界的子协调任务摘要。' }, en: { name: 'Agent list', description: 'List bounded child coordination task summaries.' } },
   'agent.complete': { zh: { name: '完成子任务', description: '用有边界的结果摘要完成一个子协调任务。' }, en: { name: 'Agent complete', description: 'Complete one child coordination task with a bounded result summary.' } },
+  'memory.search': { zh: { name: '搜索记忆', description: '在当前安全范围内搜索已批准的记忆摘要。' }, en: { name: 'Memory search', description: 'Search approved memory summaries in the current safe scope.' } },
+  'memory.list': { zh: { name: '列出记忆', description: '列出当前安全范围内已批准的记忆摘要。' }, en: { name: 'Memory list', description: 'List approved memory summaries in the current safe scope.' } },
+  'memory.read': { zh: { name: '读取记忆', description: '读取一个已批准的记忆摘要，不返回原始内容。' }, en: { name: 'Memory read', description: 'Read one approved memory summary without raw content.' } },
+  'memory.write': { zh: { name: '写入记忆提案', description: '创建一个需要审批的记忆写入提案。' }, en: { name: 'Memory write', description: 'Create one approval-gated memory write proposal.' } },
+  'memory.edit': { zh: { name: '编辑记忆提案', description: '编辑待审批提案，或创建替换记忆提案。' }, en: { name: 'Memory edit', description: 'Edit a pending proposal or create a replacement proposal.' } },
+  'memory.forget': { zh: { name: '遗忘记忆', description: '通过审计边界删除一个已批准的记忆条目。' }, en: { name: 'Memory forget', description: 'Tombstone one approved memory entry through the audited memory boundary.' } },
+  'memory.context': { zh: { name: '记忆上下文', description: '返回 provider 状态和相关记忆摘要。' }, en: { name: 'Memory context', description: 'Return provider status and relevant memory summaries.' } },
+  'memory.timeline': { zh: { name: '记忆时间线', description: '列出安全的记忆审计时间线。' }, en: { name: 'Memory timeline', description: 'List safe memory audit timeline items.' } },
+  'memory.connections': { zh: { name: '记忆关联', description: '返回与条目或查询相关的记忆摘要。' }, en: { name: 'Memory connections', description: 'Return related memory summaries for an entry or query.' } },
+  'memory.thread_search': { zh: { name: '线程记忆搜索', description: '搜索本地线程和消息历史的安全摘录。' }, en: { name: 'Memory thread search', description: 'Search local thread and message history with safe excerpts.' } },
+  'memory.thread_fetch': { zh: { name: '线程记忆读取', description: '读取本地线程消息的安全摘录。' }, en: { name: 'Memory thread fetch', description: 'Fetch safe local thread message excerpts.' } },
+  'memory.status': { zh: { name: '记忆状态', description: '返回记忆 provider 的配置和可用状态。' }, en: { name: 'Memory status', description: 'Return memory provider readiness and configuration state.' } },
+  'notebook.read': { zh: { name: 'Notebook 读取', description: '读取一个已批准的结构化 notebook 条目。' }, en: { name: 'Notebook read', description: 'Read one approved structured notebook entry.' } },
+  'notebook.write': { zh: { name: 'Notebook 写入', description: '通过审批和审计边界写入结构化 notebook 条目。' }, en: { name: 'Notebook write', description: 'Write one approval-gated structured notebook entry.' } },
+  'notebook.edit': { zh: { name: 'Notebook 编辑', description: '替换一个结构化 notebook 条目并保留审计记录。' }, en: { name: 'Notebook edit', description: 'Replace one structured notebook entry with audit history.' } },
+  'notebook.forget': { zh: { name: 'Notebook 遗忘', description: '通过审计边界删除一个结构化 notebook 条目。' }, en: { name: 'Notebook forget', description: 'Tombstone one structured notebook entry through the audited memory boundary.' } },
 }
 
 function toolCopy(tool: ToolCatalogItem, locale: Locale) {
@@ -425,12 +847,14 @@ function toolBadgeLabel(value: string, locale: Locale) {
     web: '网页',
     browser: '浏览器',
     agent: 'Agent',
+    memory: '记忆',
     'read-only': '只读',
     'write-capable': '可写',
     'exec-capable': '可执行命令',
     'non-executable': '不可执行',
     'coordination-only': '仅协调',
     'no autonomous execution': '不自主执行',
+    'approval-gated': '需审批',
     'public HTTP only': '仅公开 HTTP',
     low: '低风险',
     medium: '中风险',
@@ -568,6 +992,7 @@ function ToolsPanel({ tools, locale }: { tools: ToolCatalogItem[]; locale: Local
               {tool.safeMetadata?.non_executable === true && <span>{toolBadgeLabel('non-executable', locale)}</span>}
               {tool.safeMetadata?.coordination_only === true && <span>{toolBadgeLabel('coordination-only', locale)}</span>}
               {tool.safeMetadata?.autonomous_execution === false && <span>{toolBadgeLabel('no autonomous execution', locale)}</span>}
+              {tool.safeMetadata?.approval_gated === true && <span>{toolBadgeLabel('approval-gated', locale)}</span>}
               <span>{toolScopeLabel(tool, locale)}</span>
               {tool.safeMetadata?.network_access === 'public_http_only' && <span>{toolBadgeLabel('public HTTP only', locale)}</span>}
               <span>{toolBadgeLabel(tool.riskLevel, locale)}</span>
@@ -757,6 +1182,15 @@ export function SettingsView({
   memoryAuditItems,
   memoryAuditLoading,
   memoryAuditError,
+  memoryWriteProposals = [],
+  memoryProposalsLoading,
+  memoryProposalsError,
+  memoryProviderStatus,
+  memoryErrors = [],
+  memoryProviderSaveResult,
+  memoryOverviewSnapshot,
+  memoryImpressionSnapshot,
+  memorySnapshotLoading,
   pendingDeleteMemoryEntry,
   providerCheckResults,
   providerSaveResult,
@@ -768,6 +1202,13 @@ export function SettingsView({
   onProviderDraftSettingsChange,
   onSaveProvider,
   onSaveWebSearchKeys,
+  onRefreshMemoryProviderStatus,
+  onUpdateMemoryProvider,
+  onDetectNowledgeMemoryProvider,
+  onDetectOpenVikingMemoryProvider,
+  onRebuildMemoryOverviewSnapshot,
+  onRebuildMemoryImpressionSnapshot,
+  onGetMemoryContent,
   onSaveMCPServer,
   onDeleteMCPServer,
   onDiscoverMCPServer,
@@ -781,7 +1222,11 @@ export function SettingsView({
   onCloseMemoryDetail,
   onRequestDeleteMemoryEntry,
   onCancelDeleteMemoryEntry,
+  onCreateMemoryEntry,
   onConfirmDeleteMemoryEntry,
+  onApproveMemoryProposal,
+  onUpdateMemoryProposal,
+  onDenyMemoryProposal,
   onBack,
 }: Props) {
   const dictionary = getDictionary(locale)
@@ -924,6 +1369,9 @@ export function SettingsView({
               auditItems={memoryAuditItems}
               auditLoading={memoryAuditLoading}
               auditError={memoryAuditError}
+              writeProposals={memoryWriteProposals}
+              proposalsLoading={memoryProposalsLoading}
+              proposalsError={memoryProposalsError}
               pendingDeleteEntry={pendingDeleteMemoryEntry}
               onQueryChange={onMemoryQueryChange}
               onFiltersChange={onMemoryFiltersChange}
@@ -931,7 +1379,30 @@ export function SettingsView({
               onCloseDetail={onCloseMemoryDetail}
               onRequestDelete={onRequestDeleteMemoryEntry}
               onCancelDelete={onCancelDeleteMemoryEntry}
+              onCreateMemory={onCreateMemoryEntry}
               onConfirmDelete={onConfirmDeleteMemoryEntry}
+              onApproveProposal={onApproveMemoryProposal}
+              onUpdateProposal={onUpdateMemoryProposal}
+              onDenyProposal={onDenyMemoryProposal}
+            />
+            <MemorySnapshotPanel
+              overview={memoryOverviewSnapshot}
+              impression={memoryImpressionSnapshot}
+              loading={memorySnapshotLoading}
+              locale={locale}
+              onRebuildOverview={onRebuildMemoryOverviewSnapshot}
+              onRebuildImpression={onRebuildMemoryImpressionSnapshot}
+              onGetContent={onGetMemoryContent}
+            />
+            <MemoryProviderFoundationPanel
+              status={memoryProviderStatus}
+              errors={memoryErrors}
+              saveResult={memoryProviderSaveResult}
+              locale={locale}
+              onRefresh={onRefreshMemoryProviderStatus}
+              onUpdate={onUpdateMemoryProvider}
+              onDetectNowledge={onDetectNowledgeMemoryProvider}
+              onDetectOpenViking={onDetectOpenVikingMemoryProvider}
             />
           </div>
         )}

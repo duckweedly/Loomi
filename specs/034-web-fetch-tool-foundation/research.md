@@ -2,11 +2,11 @@
 
 ## Decision: Start with `web.fetch` Only
 
-**Rationale**: A single explicit URL fetch is the smallest runnable network-read slice after workspace, sandbox, MCP, and LSP tools. It proves catalog, approval, execution, event, and UI semantics before search, browser automation, crawler, or artifact complexity.
+**Rationale**: A single explicit URL fetch is the smallest runnable network-read slice after workspace, sandbox, MCP, and LSP tools. It proves catalog, execution, event, and UI semantics before browser automation, crawler, or artifact complexity.
 
 **Alternatives considered**:
 
-- Add `web.search`: deferred because it needs provider choice, quotas, result trust policy, and network credentials.
+- Add `web.search`: initially deferred, then added as a separate provider-backed read-only web tool once Tavily/Brave configuration existed.
 - Add browser automation first: rejected because it adds cookies, profile state, JavaScript, screenshots, and DOM/action permissions.
 - Add crawler behavior: rejected because multi-URL traversal needs robots/rate/scope policy and much larger safety review.
 

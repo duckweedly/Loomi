@@ -106,6 +106,19 @@ func TestLocalCodexProviderProducesAssistantMessageThroughGateway(t *testing.T) 
 	}
 }
 
+func TestRunSystemPromptGuidesWorkModeToWorkspaceTools(t *testing.T) {
+	chat := runSystemPrompt(&productdata.RunContext{Thread: productdata.Thread{Mode: productdata.ThreadModeChat}})
+	if strings.Contains(chat, "File and folder tasks are tool-first") {
+		t.Fatalf("chat prompt contains work-only policy: %s", chat)
+	}
+	work := runSystemPrompt(&productdata.RunContext{Thread: productdata.Thread{Mode: productdata.ThreadModeWork}})
+	for _, expected := range []string{"workspace_glob", "workspace_grep", "workspace_read", "Do not tell the user to run shell commands", "use \".\" for it and do not repeat the root folder name"} {
+		if !strings.Contains(work, expected) {
+			t.Fatalf("work prompt missing %q: %s", expected, work)
+		}
+	}
+}
+
 func TestGatewayRemoveProviderPreventsSelection(t *testing.T) {
 	gateway := NewGateway(productdata.NewMemoryService(), nil, []Provider{
 		StaticProvider{ProviderConfig: ProviderConfig{ID: "local_codex", Family: ProviderFamilyOpenAICompatible, APIKey: "redacted", Model: "gpt-local-fixture", Enabled: true}},
@@ -212,6 +225,44 @@ func TestGatewayAutoApprovesWebSearchToolCall(t *testing.T) {
 	}
 	if events[len(events)-1].Type != productdata.EventToolCallApproved {
 		t.Fatalf("events = %+v", events)
+	}
+}
+
+func TestGatewayAutoApprovesChatWebFetchToolCall(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, productdata.CreateThreadInput{Title: "Gateway", Mode: productdata.ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _, err := svc.CreateMessage(context.Background(), ident, thread.ID, productdata.CreateMessageInput{Content: "Analyze https://example.com/repo"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, productdata.StartRunInput{Source: productdata.RunSourceModelGateway, MessageID: message.ID, ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.AppendRunEvent(context.Background(), ident, run.ID, productdata.AppendRunEventInput{Category: productdata.RunEventCategoryProgress, Type: productdata.EventPipelineStepCompleted, Summary: "Pipeline step completed", Metadata: map[string]any{"step": string(productdata.PipelineStepResolveTools), "enabled_tools": []string{productdata.ToolNameWebFetch}}}); err != nil {
+		t.Fatal(err)
+	}
+	provider := StaticProvider{ProviderConfig: ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: "https://example.test/v1", APIKey: "key", Model: "model", Enabled: true}, Events: []ProviderEvent{{Type: ProviderEventToolCall, ToolName: productdata.ToolNameWebFetch, Metadata: map[string]any{"tool_call_id": "tc_fetch_1", "arguments_summary": map[string]any{"url": "https://example.com/repo", "max_bytes": 4096}}}}}
+
+	NewGateway(svc, nil, []Provider{provider}).run(context.Background(), run, GatewayRunInput{ThreadID: thread.ID, MessageID: message.ID, ProviderID: "custom"})
+
+	got, err := svc.GetRun(context.Background(), ident, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != productdata.RunStatusQueued {
+		t.Fatalf("run = %+v", got)
+	}
+	call, err := svc.GetToolCall(context.Background(), ident, thread.ID, run.ID, "tc_fetch_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if call.ToolName != productdata.ToolNameWebFetch || call.ApprovalStatus != productdata.ToolCallApprovalApproved || call.ExecutionStatus != productdata.ToolCallExecutionNotStarted {
+		t.Fatalf("call = %+v", call)
 	}
 }
 
@@ -675,14 +726,14 @@ func TestGatewayContinuationRequestsSecondWorkspaceToolForApproval(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Status != productdata.RunStatusBlockedOnToolApproval {
+	if got.Status != productdata.RunStatusQueued {
 		t.Fatalf("run = %+v", got)
 	}
 	call, err := svc.GetToolCall(context.Background(), ident, thread.ID, run.ID, "tc_read_2")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if call.ToolName != productdata.ToolNameWorkspaceRead || call.ApprovalStatus != productdata.ToolCallApprovalRequired || call.ExecutionStatus != productdata.ToolCallExecutionBlocked {
+	if call.ToolName != productdata.ToolNameWorkspaceRead || call.ApprovalStatus != productdata.ToolCallApprovalApproved || call.ExecutionStatus != productdata.ToolCallExecutionNotStarted {
 		t.Fatalf("call = %+v", call)
 	}
 	messages, err := svc.ListMessages(context.Background(), ident, thread.ID)
@@ -790,6 +841,45 @@ func TestGatewayContinuationOmitsToolsAtLoopLimitSoProviderCanFinalize(t *testin
 	}
 }
 
+func TestGatewayContinuationOmitsWorkspaceGlobAfterSuccessfulListing(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, productdata.CreateThreadInput{Title: "Workspace listing", Mode: productdata.ThreadModeWork})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _, err := svc.CreateMessage(context.Background(), ident, thread.ID, productdata.CreateMessageInput{Content: "List files"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, productdata.StartRunInput{Source: productdata.RunSourceModelGateway, MessageID: message.ID, ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	enabled := []string{productdata.ToolNameWorkspaceGlob, productdata.ToolNameWorkspaceGrep, productdata.ToolNameWorkspaceRead}
+	if _, err := svc.AppendRunEvent(context.Background(), ident, run.ID, productdata.AppendRunEventInput{Category: productdata.RunEventCategoryProgress, Type: productdata.EventPipelineStepCompleted, Summary: "Pipeline step completed", Metadata: map[string]any{"step": string(productdata.PipelineStepResolveTools), "enabled_tools": enabled}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.AppendRunEvent(context.Background(), ident, run.ID, productdata.AppendRunEventInput{Category: productdata.RunEventCategoryProgress, Type: productdata.EventToolCallRequested, Summary: "Tool call requested", Metadata: map[string]any{"tool_call_id": "tc_glob", "tool_name": productdata.ToolNameWorkspaceGlob, "arguments_summary": map[string]any{"pattern": "**/*", "limit": 500}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.AppendRunEvent(context.Background(), ident, run.ID, productdata.AppendRunEventInput{Category: productdata.RunEventCategoryProgress, Type: productdata.EventToolCallSucceeded, Summary: "Tool call succeeded", Metadata: map[string]any{"tool_call_id": "tc_glob", "tool_name": productdata.ToolNameWorkspaceGlob, "result_summary": map[string]any{"count": 3, "truncated": false}}}); err != nil {
+		t.Fatal(err)
+	}
+	provider := &capturingProvider{config: ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: "https://example.test/v1", APIKey: "key", Model: "model", Enabled: true}, events: []ProviderEvent{{Type: ProviderEventCompleted, Text: "Final answer."}}}
+
+	NewGateway(svc, nil, []Provider{provider}).ContinueAfterToolResult(context.Background(), run, GatewayContinuationInput{ThreadID: thread.ID, MessageID: message.ID, ProviderID: "custom", Model: "model", ToolCallID: "tc_glob"})
+
+	for _, tool := range provider.request.Tools {
+		if tool.Name == productdata.ToolNameWorkspaceGlob {
+			t.Fatalf("workspace.glob should be omitted after successful listing: %+v", provider.request.Tools)
+		}
+	}
+	if !providerHasTool(provider.request.Tools, productdata.ToolNameWorkspaceRead) || !providerHasTool(provider.request.Tools, productdata.ToolNameWorkspaceGrep) {
+		t.Fatalf("continuation should still expose read/grep tools: %+v", provider.request.Tools)
+	}
+}
+
 func TestGatewayExposesCodeAgentToolsToProvider(t *testing.T) {
 	svc := productdata.NewMemoryService()
 	ident := identity.LocalDevIdentity()
@@ -805,7 +895,7 @@ func TestGatewayExposesCodeAgentToolsToProvider(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	enabled := []string{productdata.ToolNameLoadTools, productdata.ToolNameLoadSkill, productdata.ToolNameWorkspaceRead, productdata.ToolNameWorkspaceEdit, productdata.ToolNameWorkspacePatchPreview, productdata.ToolNameWorkspacePatchApply, productdata.ToolNameSandboxExecCommand, productdata.ToolNameSandboxStartProcess, productdata.ToolNameSandboxContinueProcess, productdata.ToolNameSandboxTerminateProcess, productdata.ToolNameLSPSymbols, productdata.ToolNameLSPDefinition, productdata.ToolNameLSPHover, productdata.ToolNameWebSearch, productdata.ToolNameBrowserOpen, productdata.ToolNameBrowserScreenshot, productdata.ToolNameBrowserType, productdata.ToolNameBrowserPress, productdata.ToolNameTodoWrite}
+	enabled := []string{productdata.ToolNameLoadTools, productdata.ToolNameLoadSkill, productdata.ToolNameWorkspaceRead, productdata.ToolNameWorkspaceEdit, productdata.ToolNameWorkspacePatchPreview, productdata.ToolNameWorkspacePatchApply, productdata.ToolNameSandboxExecCommand, productdata.ToolNameSandboxStartProcess, productdata.ToolNameSandboxContinueProcess, productdata.ToolNameSandboxTerminateProcess, productdata.ToolNameLSPSymbols, productdata.ToolNameLSPDefinition, productdata.ToolNameLSPHover, productdata.ToolNameWebSearch, productdata.ToolNameBrowserOpen, productdata.ToolNameBrowserScreenshot, productdata.ToolNameBrowserType, productdata.ToolNameBrowserPress, productdata.ToolNameMemorySearch, productdata.ToolNameMemoryList, productdata.ToolNameMemoryRead, productdata.ToolNameMemoryWrite, productdata.ToolNameMemoryEdit, productdata.ToolNameMemoryForget, productdata.ToolNameMemoryContext, productdata.ToolNameMemoryTimeline, productdata.ToolNameMemoryConnections, productdata.ToolNameMemoryThreadSearch, productdata.ToolNameMemoryThreadFetch, productdata.ToolNameMemoryStatus, productdata.ToolNameNotebookRead, productdata.ToolNameNotebookWrite, productdata.ToolNameNotebookEdit, productdata.ToolNameNotebookForget, productdata.ToolNameTodoWrite}
 	if _, err := svc.AppendRunEvent(context.Background(), ident, run.ID, productdata.AppendRunEventInput{Category: productdata.RunEventCategoryProgress, Type: productdata.EventPipelineStepCompleted, Summary: "Pipeline step completed", Metadata: map[string]any{"step": string(productdata.PipelineStepResolveTools), "enabled_tools": enabled}}); err != nil {
 		t.Fatal(err)
 	}
@@ -818,12 +908,192 @@ func TestGatewayExposesCodeAgentToolsToProvider(t *testing.T) {
 			t.Fatalf("tool missing provider schema: %+v", tool)
 		}
 	}
-	want := []string{"tool_load_tools", "skill_load_skill", "workspace_read", "workspace_edit", "workspace_patch_preview", "workspace_patch_apply", "sandbox_exec_command", "sandbox_start_process", "sandbox_continue_process", "sandbox_terminate_process", "lsp_symbols", "lsp_definition", "lsp_hover", "web_search", "browser_open", "browser_screenshot", "browser_type", "browser_press", "todo_write"}
+	want := []string{"tool_load_tools", "skill_load_skill", "workspace_read", "workspace_edit", "workspace_patch_preview", "workspace_patch_apply", "sandbox_exec_command", "sandbox_start_process", "sandbox_continue_process", "sandbox_terminate_process", "lsp_symbols", "lsp_definition", "lsp_hover", "web_search", "browser_open", "browser_screenshot", "browser_type", "browser_press", "memory_search", "memory_list", "memory_read", "memory_write", "memory_edit", "memory_forget", "memory_context", "memory_timeline", "memory_connections", "memory_thread_search", "memory_thread_fetch", "memory_status", "notebook_read", "notebook_write", "notebook_edit", "notebook_forget", "todo_write"}
 	if strings.Join(names, ",") != strings.Join(want, ",") {
 		t.Fatalf("provider tools = %+v", names)
 	}
-	if internalProviderToolName("tool_load_tools") != productdata.ToolNameLoadTools || providerToolName(productdata.ToolNameLoadSkill) != "skill_load_skill" || internalProviderToolName("workspace_edit") != productdata.ToolNameWorkspaceEdit || internalProviderToolName("workspace_patch_preview") != productdata.ToolNameWorkspacePatchPreview || providerToolName(productdata.ToolNameWorkspacePatchApply) != "workspace_patch_apply" || providerToolName(productdata.ToolNameSandboxExecCommand) != "sandbox_exec_command" || internalProviderToolName("sandbox_start_process") != productdata.ToolNameSandboxStartProcess || internalProviderToolName("browser_type") != productdata.ToolNameBrowserType || providerToolName(productdata.ToolNameLSPDefinition) != "lsp_definition" || internalProviderToolName("todo_write") != productdata.ToolNameTodoWrite {
+	if internalProviderToolName("tool_load_tools") != productdata.ToolNameLoadTools || providerToolName(productdata.ToolNameLoadSkill) != "skill_load_skill" || internalProviderToolName("workspace_edit") != productdata.ToolNameWorkspaceEdit || internalProviderToolName("workspace_patch_preview") != productdata.ToolNameWorkspacePatchPreview || providerToolName(productdata.ToolNameWorkspacePatchApply) != "workspace_patch_apply" || providerToolName(productdata.ToolNameSandboxExecCommand) != "sandbox_exec_command" || internalProviderToolName("sandbox_start_process") != productdata.ToolNameSandboxStartProcess || internalProviderToolName("browser_type") != productdata.ToolNameBrowserType || providerToolName(productdata.ToolNameLSPDefinition) != "lsp_definition" || internalProviderToolName("memory_search") != productdata.ToolNameMemorySearch || internalProviderToolName("memory_thread_fetch") != productdata.ToolNameMemoryThreadFetch || providerToolName(productdata.ToolNameMemoryStatus) != "memory_status" || internalProviderToolName("notebook_write") != productdata.ToolNameNotebookWrite || providerToolName(productdata.ToolNameNotebookForget) != "notebook_forget" || internalProviderToolName("todo_write") != productdata.ToolNameTodoWrite {
 		t.Fatalf("provider tool name mapping failed")
+	}
+}
+
+func TestRunSystemPromptIncludesSafeMemoryAndNotebookSnapshots(t *testing.T) {
+	prompt := runSystemPrompt(&productdata.RunContext{
+		Persona: productdata.PersonaSnapshot{SystemPrompt: "Use safe context."},
+		Thread:  productdata.Thread{Mode: productdata.ThreadModeWork},
+		MemorySnapshot: productdata.MemorySnapshot{Entries: []productdata.MemorySearchResult{{
+			Title:      "Preference",
+			Summary:    "Keep memory concise.",
+			SourceType: "manual",
+		}, {
+			Title:      "Notebook duplicate",
+			Summary:    "Should only appear in notebook block.",
+			SourceType: "notebook",
+		}}},
+		NotebookSnapshot: productdata.MemorySnapshot{Entries: []productdata.MemorySearchResult{{
+			Title:      "Project notebook",
+			Summary:    "Use structured notes for durable facts.",
+			SourceType: "notebook",
+		}}},
+	})
+	if !strings.Contains(prompt, "<memory>\n- Preference: Keep memory concise.\n</memory>") {
+		t.Fatalf("prompt missing memory block: %s", prompt)
+	}
+	if strings.Contains(prompt, "Notebook duplicate") {
+		t.Fatalf("memory block should not include notebook entries: %s", prompt)
+	}
+	if !strings.Contains(prompt, "<notebook>\n- Project notebook: Use structured notes for durable facts.\n</notebook>") {
+		t.Fatalf("prompt missing notebook block: %s", prompt)
+	}
+	if strings.Contains(prompt, "sk-") || strings.Contains(prompt, "/Users/") {
+		t.Fatalf("prompt leaked unsafe content: %s", prompt)
+	}
+}
+
+func TestGatewayEnrichesPromptMemorySnapshotFromExternalProvider(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, productdata.CreateThreadInput{Title: "External memory", Mode: productdata.ThreadModeWork})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, productdata.StartRunInput{Source: productdata.RunSourceModelGateway, ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/search/find" {
+			t.Fatalf("path = %s", r.URL.Path)
+		}
+		if r.Header.Get("X-API-Key") != "root-secret" {
+			t.Fatalf("missing openviking root key")
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"result": map[string]any{"memories": []map[string]any{{"uri": "viking://user/user_local_dev/memories/pref", "abstract": "Preference\nUse provider memory before answering.", "score": 0.9, "match_reason": "query"}}}})
+	}))
+	defer server.Close()
+	if _, err := svc.SaveMemoryProviderConfig(context.Background(), ident, productdata.MemoryProviderConfig{Enabled: true, Provider: productdata.MemoryProviderOpenViking, OpenViking: productdata.OpenVikingMemoryConfig{BaseURL: server.URL, RootAPIKey: "root-secret", EmbeddingModel: "embed", VLMModel: "vlm"}}); err != nil {
+		t.Fatal(err)
+	}
+	prepared := &productdata.RunContext{Run: run, Thread: thread}
+	enriched := NewGateway(svc, nil, nil).withExternalMemorySnapshot(context.Background(), prepared, []ProviderMessage{{Role: "user", Content: "What should I remember?"}})
+	prompt := runSystemPrompt(enriched)
+	if !strings.Contains(prompt, "<memory>\n- Preference: Use provider memory before answering.\n</memory>") {
+		t.Fatalf("prompt missing external memory: %s", prompt)
+	}
+	if len(prepared.MemorySnapshot.Entries) != 0 {
+		t.Fatalf("original prepared context should not be mutated: %+v", prepared.MemorySnapshot)
+	}
+	events, err := svc.ListRunEvents(context.Background(), ident, run.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, event := range events {
+		if event.Type == productdata.EventMemoryExternalSnapshotLoaded {
+			found = true
+			if event.Metadata["provider"] != string(productdata.MemoryProviderOpenViking) || fmt.Sprint(event.Metadata["entry_count"]) != "1" {
+				t.Fatalf("external snapshot metadata = %+v", event.Metadata)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("external snapshot event not recorded: %+v", events)
+	}
+}
+
+func TestGatewayEnrichesPromptMemorySnapshotFromNowledgeProvider(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, productdata.CreateThreadInput{Title: "Nowledge external memory", Mode: productdata.ThreadModeWork})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, productdata.StartRunInput{Source: productdata.RunSourceModelGateway, ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/memories/search" {
+			t.Fatalf("path = %s", r.URL.Path)
+		}
+		if r.URL.Query().Get("query") != "Recall project preference" || r.URL.Query().Get("limit") != "5" {
+			t.Fatalf("query = %s", r.URL.RawQuery)
+		}
+		if r.Header.Get("Authorization") != "Bearer nowledge-secret" || r.Header.Get("x-nmem-api-key") != "nowledge-secret" {
+			t.Fatalf("missing nowledge auth headers")
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"memories": []map[string]any{{"id": "pref", "title": "Preference", "content": "Use Nowledge memory before answering.", "score": 0.88, "relevance_reason": "query"}}})
+	}))
+	defer server.Close()
+	if _, err := svc.SaveMemoryProviderConfig(context.Background(), ident, productdata.MemoryProviderConfig{Enabled: true, Provider: productdata.MemoryProviderNowledge, Nowledge: productdata.NowledgeMemoryConfig{BaseURL: server.URL, APIKey: "nowledge-secret", RequestTimeoutMS: 30000}}); err != nil {
+		t.Fatal(err)
+	}
+	prepared := &productdata.RunContext{Run: run, Thread: thread}
+	enriched := NewGateway(svc, nil, nil).withExternalMemorySnapshot(context.Background(), prepared, []ProviderMessage{{Role: "user", Content: "Recall project preference"}})
+	prompt := runSystemPrompt(enriched)
+	if !strings.Contains(prompt, "<memory>\n- Preference: Use Nowledge memory before answering.\n</memory>") {
+		t.Fatalf("prompt missing nowledge memory: %s", prompt)
+	}
+	if strings.Contains(prompt, "nowledge-secret") {
+		t.Fatalf("prompt leaked nowledge secret: %s", prompt)
+	}
+	events, err := svc.ListRunEvents(context.Background(), ident, run.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, event := range events {
+		if event.Type == productdata.EventMemoryExternalSnapshotLoaded {
+			found = true
+			if event.Metadata["provider"] != string(productdata.MemoryProviderNowledge) || fmt.Sprint(event.Metadata["entry_count"]) != "1" {
+				t.Fatalf("nowledge external snapshot metadata = %+v", event.Metadata)
+			}
+			if _, ok := event.Metadata["query"]; ok {
+				t.Fatalf("nowledge external snapshot leaked unsafe metadata = %+v", event.Metadata)
+			}
+			if _, ok := event.Metadata["content"]; ok {
+				t.Fatalf("nowledge external snapshot leaked unsafe metadata = %+v", event.Metadata)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("nowledge external snapshot event not recorded: %+v", events)
+	}
+}
+
+func TestGatewayRecordsExternalMemorySnapshotFailureForRecentErrors(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, productdata.CreateThreadInput{Title: "External memory failure", Mode: productdata.ThreadModeWork})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, productdata.StartRunInput{Source: productdata.RunSourceModelGateway, ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "sk-secret upstream trace", http.StatusBadGateway)
+	}))
+	defer server.Close()
+	if _, err := svc.SaveMemoryProviderConfig(context.Background(), ident, productdata.MemoryProviderConfig{Enabled: true, Provider: productdata.MemoryProviderNowledge, Nowledge: productdata.NowledgeMemoryConfig{BaseURL: server.URL, APIKey: "nowledge-secret", RequestTimeoutMS: 30000}}); err != nil {
+		t.Fatal(err)
+	}
+	prepared := &productdata.RunContext{Run: run, Thread: thread}
+	enriched := NewGateway(svc, nil, nil).withExternalMemorySnapshot(context.Background(), prepared, []ProviderMessage{{Role: "user", Content: "Recall failure path"}})
+	if enriched != prepared {
+		t.Fatalf("failure should keep original prepared context")
+	}
+	errors, err := svc.ListMemoryProviderErrors(context.Background(), ident, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(errors) != 1 || errors[0].Code != productdata.EventMemoryExternalSnapshotFailed || errors[0].Provider != productdata.MemoryProviderNowledge || errors[0].RunID != run.ID {
+		t.Fatalf("recent provider errors = %+v", errors)
+	}
+	encoded, _ := json.Marshal(errors)
+	if strings.Contains(string(encoded), "nowledge-secret") || strings.Contains(string(encoded), "sk-secret") || strings.Contains(string(encoded), "Recall failure path") {
+		t.Fatalf("recent provider error leaked unsafe data: %s", string(encoded))
 	}
 }
 
@@ -979,6 +1249,15 @@ type capturingProvider struct {
 	config  ProviderConfig
 	request ProviderRequest
 	events  []ProviderEvent
+}
+
+func providerHasTool(tools []ProviderToolDefinition, name string) bool {
+	for _, tool := range tools {
+		if tool.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *capturingProvider) Config() ProviderConfig { return p.config }

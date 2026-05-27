@@ -1,4 +1,4 @@
-import type { InstalledSkill, LocalProviderDetection, MCPServerConfigInput, MCPServerStatus, MemoryAuditItem, MemoryEntry, MemoryFilters, Message, Persona, ProviderCapability, Run, Thread, ToolCall, ToolCatalogItem, WebSearchConfig, WorkerQueueDiagnostics, WorkspaceRootConfig } from './domain'
+import type { InstalledSkill, LocalProviderDetection, MCPServerConfigInput, MCPServerStatus, MemoryAuditItem, MemoryEntry, MemoryErrorEvent, MemoryFilters, MemoryImpressionSnapshot, MemoryOverviewSnapshot, MemoryProviderStatus, MemoryProviderUpdate, MemoryWriteProposal, Message, Persona, ProviderCapability, Run, Thread, ToolCall, ToolCatalogItem, WebSearchConfig, WorkerQueueDiagnostics, WorkspaceRootConfig } from './domain'
 import { realApiClient } from './realApiClient'
 import type { ExecutionAdapter } from './runtime/executionAdapter'
 import { mockExecutionAdapter } from './runtime/mockExecutionAdapter'
@@ -32,10 +32,25 @@ export type ApiClient = {
   approveToolCall?(threadId: string, runId: string, toolCallId: string): Promise<ToolCall>
   denyToolCall?(threadId: string, runId: string, toolCallId: string): Promise<ToolCall>
   listMemoryEntries?(filters?: MemoryFilters): Promise<MemoryEntry[]>
+  createMemoryEntry?(input: { title: string; content: string; scopeType?: 'user' | 'thread'; scopeId?: string }): Promise<MemoryEntry>
   searchMemory?(query: string, filters?: MemoryFilters): Promise<MemoryEntry[]>
   getMemoryEntry?(entryId: string, filters?: MemoryFilters): Promise<MemoryEntry>
   deleteMemoryEntry?(entryId: string, filters?: MemoryFilters): Promise<void>
   listMemoryAudit?(filters?: MemoryFilters): Promise<MemoryAuditItem[]>
+  listMemoryWriteProposals?(filters?: MemoryFilters): Promise<MemoryWriteProposal[]>
+  updateMemoryWriteProposal?(proposalId: string, input: { title: string; summary: string }): Promise<MemoryWriteProposal>
+  approveMemoryWriteProposal?(proposalId: string): Promise<MemoryWriteProposal>
+  denyMemoryWriteProposal?(proposalId: string): Promise<MemoryWriteProposal>
+  getMemoryProviderStatus?(): Promise<MemoryProviderStatus>
+  listMemoryErrors?(): Promise<MemoryErrorEvent[]>
+  detectNowledgeMemoryProvider?(): Promise<{ detected: boolean; baseUrl?: string; message: string }>
+  detectOpenVikingMemoryProvider?(): Promise<{ detected: boolean; baseUrl?: string; message: string }>
+  updateMemoryProvider?(input: MemoryProviderUpdate): Promise<MemoryProviderStatus>
+  getMemoryOverviewSnapshot?(): Promise<MemoryOverviewSnapshot>
+  rebuildMemoryOverviewSnapshot?(): Promise<MemoryOverviewSnapshot>
+  getMemoryImpressionSnapshot?(): Promise<MemoryImpressionSnapshot>
+  rebuildMemoryImpressionSnapshot?(): Promise<MemoryImpressionSnapshot>
+  getMemoryContent?(uri: string, layer?: 'overview' | 'read'): Promise<string>
   startRun?(threadId: string, input?: { messageId?: string; source?: Run['source']; providerId?: string; model?: string; personaId?: string }): Promise<Run>
   subscribeRunEvents?(runId: string, afterSequence: number, onEvent: (event: Run['events'][number]) => void, onError: () => void, onClosed?: () => void): () => void
   createThread?(title: string, mode: Thread['mode']): Promise<Thread>

@@ -156,6 +156,32 @@ describe('runtime state orchestration helpers', () => {
     expect(applyRunStreamEventToRun(stoppedRun, staleEvent)).toBe(stoppedRun)
   })
 
+  test('accepts late assistant final content after run completed terminal event', () => {
+    const completedRun: Run = {
+      ...run,
+      status: 'completed',
+      events: [{ id: 'evt-run-completed', runId: run.id, threadId: run.threadId, type: 'run.completed', label: 'Run', detail: 'done', time: 'Now', status: 'completed' }],
+      assistantDraft: { content: 'collapsed draft', status: 'completed', lastEventId: 'evt-run-completed' },
+    }
+    const finalEvent = {
+      id: 'evt-final-message',
+      runId: run.id,
+      threadId: run.threadId,
+      type: 'message.model_output_completed',
+      label: 'message',
+      detail: 'Model output completed',
+      content: 'formatted final',
+      time: 'Later',
+      status: 'completed',
+    } as const
+
+    const next = applyRunStreamEventToRun(completedRun, finalEvent)
+
+    expect(next.assistantDraft).toMatchObject({ content: 'formatted final', status: 'completed', lastEventId: 'evt-final-message' })
+    expect(next.events.map((event) => event.id)).toEqual(['evt-run-completed', 'evt-final-message'])
+    expect(shouldApplyIncomingRunEvent(completedRun, finalEvent)).toBe(true)
+  })
+
   test('replays stopping and stopped worker events', () => {
     const runningRun: Run = { ...run, status: 'running', events: [] }
     const events: Run['events'] = [

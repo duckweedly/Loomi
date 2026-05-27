@@ -126,6 +126,202 @@ func TestPrepareRunContextIncludesSafeMemorySnapshot(t *testing.T) {
 	}
 }
 
+func TestPrepareRunContextIncludesNotebookSnapshot(t *testing.T) {
+	svc := NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, CreateThreadInput{Title: "Notebook", Mode: ThreadModeWork})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _, err := svc.CreateMessage(context.Background(), ident, thread.ID, CreateMessageInput{Content: "Use notebook context"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry, err := svc.CreateMemoryEntry(context.Background(), ident, CreateMemoryEntryInput{ScopeType: MemoryScopeThread, ScopeID: thread.ID, Title: "Notebook fact", Content: "Structured notebook facts are injected separately.", SourceThreadID: thread.ID, SourceEventID: "notebook"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, StartRunInput{Source: RunSourceModelGateway, MessageID: message.ID, ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, _, ok, err := svc.ClaimBackgroundJob(context.Background(), ident, ClaimBackgroundJobInput{WorkerID: "worker_notebook", LeaseSeconds: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("claim ok = false")
+	}
+
+	ctxData, err := svc.PrepareRunContext(context.Background(), ident, job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ctxData.Run.ID != run.ID || len(ctxData.NotebookSnapshot.Entries) != 1 || ctxData.NotebookSnapshot.Entries[0].ID != entry.ID {
+		t.Fatalf("notebook snapshot = %+v", ctxData.NotebookSnapshot)
+	}
+	summary := ctxData.SafeSummary()
+	if summary["notebook_entry_count"] != 1 || summary["notebook_status"] != "loaded" {
+		t.Fatalf("summary = %+v", summary)
+	}
+}
+
+func TestMemoryOverviewAndImpressionSnapshotsAreSafe(t *testing.T) {
+	svc := NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	if _, err := svc.CreateMemoryEntry(context.Background(), ident, CreateMemoryEntryInput{ScopeType: MemoryScopeUser, Title: "Preference", Content: "Prefers compact memory UI with safe summaries"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.CreateMemoryEntry(context.Background(), ident, CreateMemoryEntryInput{ScopeType: MemoryScopeUser, Title: "Notebook", Content: "Notebook content stays outside semantic snapshot.", SourceEventID: "notebook"}); err != nil {
+		t.Fatal(err)
+	}
+
+	overview, err := svc.RebuildMemoryOverviewSnapshot(context.Background(), ident)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !overview.Rebuilt || len(overview.Hits) != 1 || !strings.Contains(overview.MemoryBlock, "Preference") || strings.Contains(overview.MemoryBlock, "Notebook") {
+		t.Fatalf("overview = %+v", overview)
+	}
+	impression, err := svc.RebuildMemoryImpressionSnapshot(context.Background(), ident)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !impression.Rebuilt || !strings.Contains(impression.Impression, "Prefers compact memory UI") || strings.Contains(impression.Impression, "Notebook") {
+		t.Fatalf("impression = %+v", impression)
+	}
+	combined := overview.MemoryBlock + impression.Impression
+	if strings.Contains(combined, "sk-secret") || strings.Contains(combined, "raw tool output") || strings.Contains(combined, `"content"`) {
+		t.Fatalf("unsafe snapshot content leaked: %s", combined)
+	}
+}
+
+func TestMemoryProviderStatusDefaultsFallbackAndRedaction(t *testing.T) {
+	svc := NewMemoryService()
+	ident := identity.LocalDevIdentity()
+
+	status, err := svc.GetMemoryProviderStatus(context.Background(), ident)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !status.Enabled || status.Provider != MemoryProviderLocal || status.State != MemoryProviderStateAvailable || !status.Configured {
+		t.Fatalf("default status = %+v", status)
+	}
+
+	semantic, err := svc.SaveMemoryProviderConfig(context.Background(), ident, MemoryProviderConfig{Enabled: true, Provider: MemoryProviderSemantic, CommitAfterRun: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if semantic.Provider != MemoryProviderSemantic || !semantic.CommitAfterRun {
+		t.Fatalf("semantic config = %+v", semantic)
+	}
+	status, err = svc.GetMemoryProviderStatus(context.Background(), ident)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.State != MemoryProviderStateUnconfigured || status.Diagnostic.Code != "semantic_unconfigured" {
+		t.Fatalf("unconfigured status = %+v", status)
+	}
+
+	_, err = svc.SaveMemoryProviderConfig(context.Background(), ident, MemoryProviderConfig{
+		Enabled:        true,
+		Provider:       MemoryProviderOpenViking,
+		CommitAfterRun: true,
+		OpenViking: OpenVikingMemoryConfig{
+			BaseURL:            "http://127.0.0.1:8282",
+			RootAPIKey:         "ov-root-secret",
+			EmbeddingModel:     "text-embedding-3-large",
+			EmbeddingAPIKey:    "ov-embedding-secret",
+			EmbeddingDimension: 3072,
+			VLMModel:           "gpt-5.5",
+			VLMAPIKey:          "ov-vlm-secret",
+			RerankModel:        "bge-reranker",
+			RerankAPIKey:       "ov-rerank-secret",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, err = svc.GetMemoryProviderStatus(context.Background(), ident)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded := fmt.Sprint(status)
+	if status.Provider != MemoryProviderOpenViking || status.State != MemoryProviderStateHealthy || !status.OpenViking.RootAPIKeySet || strings.Contains(encoded, "ov-root-secret") || strings.Contains(encoded, "ov-embedding-secret") {
+		t.Fatalf("openviking status = %+v", status)
+	}
+
+	_, err = svc.SaveMemoryProviderConfig(context.Background(), ident, MemoryProviderConfig{
+		Enabled:  true,
+		Provider: MemoryProviderNowledge,
+		Nowledge: NowledgeMemoryConfig{BaseURL: "http://127.0.0.1:7727", APIKey: "nowledge-secret", RequestTimeoutMS: 30000},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, err = svc.GetMemoryProviderStatus(context.Background(), ident)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded = fmt.Sprint(status)
+	if status.Provider != MemoryProviderNowledge || status.State != MemoryProviderStateHealthy || !status.Nowledge.APIKeySet || strings.Contains(encoded, "nowledge-secret") {
+		t.Fatalf("nowledge status = %+v", status)
+	}
+
+	_, err = svc.SaveMemoryProviderConfig(context.Background(), ident, MemoryProviderConfig{Enabled: true, Provider: "arkloop-private", SemanticEndpoint: "https://memory.example.test?api_key=sk-secret", Diagnostic: "Authorization: Bearer sk-secret provider trace"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, err = svc.GetMemoryProviderStatus(context.Background(), ident)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded = fmt.Sprint(status)
+	if status.Provider != MemoryProviderLocal || status.State != MemoryProviderStateDegraded || strings.Contains(encoded, "sk-secret") || strings.Contains(encoded, "Authorization") || strings.Contains(encoded, "provider trace") {
+		t.Fatalf("fallback/redaction status = %+v", status)
+	}
+}
+
+func TestPrepareRunContextIncludesMemoryProviderReadiness(t *testing.T) {
+	svc := NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	if _, err := svc.SaveMemoryProviderConfig(context.Background(), ident, MemoryProviderConfig{Enabled: false, Provider: MemoryProviderSemantic, SemanticEndpoint: "https://memory.example.test?token=sk-secret"}); err != nil {
+		t.Fatal(err)
+	}
+	thread, err := svc.CreateThread(context.Background(), ident, CreateThreadInput{Title: "Memory provider", Mode: ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _, err := svc.CreateMessage(context.Background(), ident, thread.ID, CreateMessageInput{Content: "Run without memory"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = svc.StartRun(context.Background(), ident, thread.ID, StartRunInput{Source: RunSourceModelGateway, MessageID: message.ID, ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, _, ok, err := svc.ClaimBackgroundJob(context.Background(), ident, ClaimBackgroundJobInput{WorkerID: "worker_memory_provider", LeaseSeconds: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("claim ok = false")
+	}
+
+	ctxData, err := svc.PrepareRunContext(context.Background(), ident, job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ctxData.MemoryReadiness.Provider != MemoryProviderSemantic || ctxData.MemoryReadiness.State != MemoryProviderStateDisabled {
+		t.Fatalf("memory readiness = %+v", ctxData.MemoryReadiness)
+	}
+	summary := ctxData.SafeSummary()
+	encoded := fmt.Sprint(summary)
+	if summary["memory_provider"] != string(MemoryProviderSemantic) || summary["memory_provider_state"] != string(MemoryProviderStateDisabled) || strings.Contains(encoded, "sk-secret") {
+		t.Fatalf("summary = %+v", summary)
+	}
+}
+
 func TestMemoryAuditPersistsAfterTerminalRun(t *testing.T) {
 	svc := NewMemoryService()
 	ident := identity.LocalDevIdentity()
@@ -290,6 +486,78 @@ func TestMemoryWriteApprovalDeleteAndIdempotency(t *testing.T) {
 	}
 	if len(afterDelete.Items) != 0 {
 		t.Fatalf("deleted memory appeared in search: %+v", afterDelete.Items)
+	}
+}
+
+func TestListMemoryWriteProposalsReturnsSafePendingItems(t *testing.T) {
+	svc := NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, CreateThreadInput{Title: "Proposal review", Mode: ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, StartRunInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	proposal, err := svc.ProposeMemoryWrite(context.Background(), ident, ProposeMemoryWriteInput{ScopeType: MemoryScopeThread, ScopeID: thread.ID, Title: "Review me", Content: "Keep this safe proposal pending", SourceThreadID: thread.ID, SourceRunID: run.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ProposeMemoryWrite(context.Background(), ident, ProposeMemoryWriteInput{ScopeType: MemoryScopeUser, Title: "Other", Content: "Keep this out of thread filter"}); err != nil {
+		t.Fatal(err)
+	}
+
+	output, err := svc.ListMemoryWriteProposals(context.Background(), ident, MemoryWriteProposalListInput{Status: MemoryWritePending, ScopeType: MemoryScopeThread, ScopeID: thread.ID, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(output.Items) != 1 || output.Items[0].ID != proposal.ID {
+		t.Fatalf("proposals = %+v", output.Items)
+	}
+	if output.Items[0].Content != "" || output.Items[0].IdempotencyKey != "" {
+		t.Fatalf("unsafe proposal fields leaked: %+v", output.Items[0])
+	}
+	if _, err := svc.ApproveMemoryWrite(context.Background(), ident, proposal.ID, MemoryWriteDecisionInput{Reason: "approved"}); err != nil {
+		t.Fatal(err)
+	}
+	afterApproval, err := svc.ListMemoryWriteProposals(context.Background(), ident, MemoryWriteProposalListInput{Status: MemoryWritePending, ScopeType: MemoryScopeThread, ScopeID: thread.ID, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(afterApproval.Items) != 0 {
+		t.Fatalf("approved proposal remained pending: %+v", afterApproval.Items)
+	}
+}
+
+func TestUpdateMemoryWriteProposalEditsPendingSafeProjection(t *testing.T) {
+	svc := NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	proposal, err := svc.ProposeMemoryWrite(context.Background(), ident, ProposeMemoryWriteInput{ScopeType: MemoryScopeUser, Title: "Original", Content: "Original memory summary"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	updated, err := svc.UpdateMemoryWriteProposal(context.Background(), ident, proposal.ID, MemoryWriteProposalUpdateInput{Title: "Edited", Summary: "Edited memory summary"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Title != "Edited" || updated.Summary != "Edited memory summary" || updated.Content != "" || updated.IdempotencyKey != "" {
+		t.Fatalf("updated proposal = %+v", updated)
+	}
+
+	decision, err := svc.ApproveMemoryWrite(context.Background(), ident, proposal.ID, MemoryWriteDecisionInput{Reason: "approved"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Entry.Title != "Edited" || decision.Entry.Summary != "Edited memory summary" || decision.Entry.Content != "" {
+		t.Fatalf("entry = %+v", decision.Entry)
+	}
+	if _, err := svc.UpdateMemoryWriteProposal(context.Background(), ident, proposal.ID, MemoryWriteProposalUpdateInput{Title: "Too late", Summary: "Already approved"}); err == nil || ErrorCode(err) != CodeInvalidRequest {
+		t.Fatalf("approved update err = %v", err)
+	}
+	if _, err := svc.UpdateMemoryWriteProposal(context.Background(), ident, "missing", MemoryWriteProposalUpdateInput{Title: "Missing", Summary: "Missing"}); err == nil || ErrorCode(err) != CodeMemoryNotFound {
+		t.Fatalf("missing update err = %v", err)
 	}
 }
 

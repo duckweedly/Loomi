@@ -61,9 +61,9 @@ var defaultWorkspaceReadTracker = &WorkspaceReadTracker{}
 
 func WorkspaceToolDefinitions() []ToolDefinition {
 	return []ToolDefinition{
-		{Name: productdata.ToolNameWorkspaceGlob, ApprovalPolicy: ToolApprovalAlwaysRequired, SafetyClass: ToolSafetyNoSideEffectInternal, Source: ToolSourceInternal, ExecutionState: ToolExecutionAllowlisted},
-		{Name: productdata.ToolNameWorkspaceGrep, ApprovalPolicy: ToolApprovalAlwaysRequired, SafetyClass: ToolSafetyNoSideEffectInternal, Source: ToolSourceInternal, ExecutionState: ToolExecutionAllowlisted},
-		{Name: productdata.ToolNameWorkspaceRead, ApprovalPolicy: ToolApprovalAlwaysRequired, SafetyClass: ToolSafetyNoSideEffectInternal, Source: ToolSourceInternal, ExecutionState: ToolExecutionAllowlisted},
+		{Name: productdata.ToolNameWorkspaceGlob, ApprovalPolicy: ToolApprovalNotRequired, SafetyClass: ToolSafetyNoSideEffectInternal, Source: ToolSourceInternal, ExecutionState: ToolExecutionAllowlisted},
+		{Name: productdata.ToolNameWorkspaceGrep, ApprovalPolicy: ToolApprovalNotRequired, SafetyClass: ToolSafetyNoSideEffectInternal, Source: ToolSourceInternal, ExecutionState: ToolExecutionAllowlisted},
+		{Name: productdata.ToolNameWorkspaceRead, ApprovalPolicy: ToolApprovalNotRequired, SafetyClass: ToolSafetyNoSideEffectInternal, Source: ToolSourceInternal, ExecutionState: ToolExecutionAllowlisted},
 		{Name: productdata.ToolNameWorkspaceWriteFile, ApprovalPolicy: ToolApprovalAlwaysRequired, SafetyClass: ToolSafetyWorkspaceMutation, Source: ToolSourceInternal, ExecutionState: ToolExecutionAllowlisted},
 		{Name: productdata.ToolNameWorkspaceEdit, ApprovalPolicy: ToolApprovalAlwaysRequired, SafetyClass: ToolSafetyWorkspaceMutation, Source: ToolSourceInternal, ExecutionState: ToolExecutionAllowlisted},
 		{Name: productdata.ToolNameWorkspacePatchPreview, ApprovalPolicy: ToolApprovalAlwaysRequired, SafetyClass: ToolSafetyNoSideEffectInternal, Source: ToolSourceInternal, ExecutionState: ToolExecutionAllowlisted},
@@ -852,7 +852,15 @@ func (s workspaceScope) resolveWorkspacePath(relArg string) (string, string, err
 	candidate := filepath.Join(s.root, filepath.FromSlash(rel))
 	real, err := filepath.EvalSymlinks(candidate)
 	if err != nil {
-		return "", "", errors.New("workspace path is unavailable")
+		aliasedRel, aliased := s.rootDisplayNameRelativePath(rel)
+		if !aliased {
+			return "", "", errors.New("workspace path is unavailable")
+		}
+		candidate = filepath.Join(s.root, filepath.FromSlash(aliasedRel))
+		real, err = filepath.EvalSymlinks(candidate)
+		if err != nil {
+			return "", "", errors.New("workspace path is unavailable")
+		}
 	}
 	if !s.contains(real) {
 		return "", "", errors.New("workspace path is outside the allowed scope")
@@ -865,6 +873,25 @@ func (s workspaceScope) resolveWorkspacePath(relArg string) (string, string, err
 		return "", "", errors.New("workspace path is sensitive")
 	}
 	return real, resolvedRel, nil
+}
+
+func (s workspaceScope) rootDisplayNameRelativePath(rel string) (string, bool) {
+	rootName := filepath.Base(s.root)
+	if strings.TrimSpace(rootName) == "" || rootName == "." || rootName == string(filepath.Separator) {
+		return "", false
+	}
+	rel = filepath.ToSlash(filepath.Clean(rel))
+	if rel == "." {
+		return "", false
+	}
+	parts := strings.Split(rel, "/")
+	if len(parts) == 0 || !strings.EqualFold(parts[0], rootName) {
+		return "", false
+	}
+	if len(parts) == 1 {
+		return ".", true
+	}
+	return strings.Join(parts[1:], "/"), true
 }
 
 func (s workspaceScope) relative(path string) (string, error) {

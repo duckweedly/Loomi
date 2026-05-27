@@ -1,6 +1,6 @@
-import { ChevronDown, Eye, Filter, Trash2, X } from 'lucide-react'
+import { Check, ChevronDown, Eye, Filter, Pencil, Trash2, X } from 'lucide-react'
 import { useState } from 'react'
-import type { MemoryAuditItem, MemoryEntry, MemoryFilters } from '../domain'
+import type { MemoryAuditItem, MemoryEntry, MemoryFilters, MemoryWriteProposal } from '../domain'
 import type { Locale } from '../i18n'
 
 type Props = {
@@ -13,6 +13,9 @@ type Props = {
   auditItems?: MemoryAuditItem[]
   auditLoading?: boolean
   auditError?: string | null
+  writeProposals?: MemoryWriteProposal[]
+  proposalsLoading?: boolean
+  proposalsError?: string | null
   detailEntry?: MemoryEntry | null
   detailLoading?: boolean
   detailError?: string | null
@@ -23,7 +26,11 @@ type Props = {
   onCloseDetail?: () => void
   onRequestDelete: (entry: MemoryEntry) => void
   onCancelDelete?: () => void
+  onCreateMemory?: (input: { title: string; content: string; scopeType?: 'user' | 'thread'; scopeId?: string }) => void
   onConfirmDelete?: (entry: MemoryEntry) => void
+  onApproveProposal?: (proposal: MemoryWriteProposal) => void
+  onUpdateProposal?: (proposal: MemoryWriteProposal, input: { title: string; summary: string }) => void
+  onDenyProposal?: (proposal: MemoryWriteProposal) => void
 }
 
 const auditEventTypes: MemoryAuditItem['eventType'][] = [
@@ -70,8 +77,8 @@ function statusLabel(status: MemoryEntry['status'], locale: Locale) {
 function copyFor(locale: Locale) {
   return locale === 'zh'
     ? {
-        title: '已保存记忆',
-        subtitle: '只展示经过批准的本地记忆，原始对话和工具输出不会出现在这里。',
+        title: '记忆控制台',
+        subtitle: '审批 AI 提出的记忆、检索已保存内容，并确认运行时只读取安全摘要。',
         search: '搜索记忆',
         filters: '筛选',
         hideFilters: '收起筛选',
@@ -111,10 +118,21 @@ function copyFor(locale: Locale) {
         systemSnapshot: '系统快照',
         systemSnapshotLoaded: '运行时读取了记忆快照',
         hiddenSystemEvents: '系统快照事件已折叠',
+        pendingTitle: '待审批提案',
+        pendingEmpty: '暂无待审批记忆',
+        pendingError: '待审批记忆读取失败',
+        addTitle: '新增记忆',
+        addTitlePlaceholder: '标题',
+        addContentPlaceholder: '输入希望 AI 记住的内容...',
+        addButton: '添加',
+        edit: '编辑',
+        saveEdit: '保存修改',
+        approve: '保存',
+        deny: '拒绝',
       }
     : {
-        title: 'Saved Memory',
-        subtitle: 'Only approved local memories are shown. Raw chat and tool output stay out of this view.',
+        title: 'Memory Console',
+        subtitle: 'Review AI-proposed memories, search saved content, and confirm runs only read safe summaries.',
         search: 'Search memory',
         filters: 'Filters',
         hideFilters: 'Hide filters',
@@ -154,6 +172,17 @@ function copyFor(locale: Locale) {
         systemSnapshot: 'System snapshot',
         systemSnapshotLoaded: 'Runtime loaded a memory snapshot',
         hiddenSystemEvents: 'System snapshot events are folded',
+        pendingTitle: 'Review Queue',
+        pendingEmpty: 'No pending memories',
+        pendingError: 'Pending memory could not be loaded',
+        addTitle: 'Add memory',
+        addTitlePlaceholder: 'Title',
+        addContentPlaceholder: 'Enter something useful for AI to remember...',
+        addButton: 'Add',
+        edit: 'Edit',
+        saveEdit: 'Save changes',
+        approve: 'Save',
+        deny: 'Decline',
       }
 }
 
@@ -199,6 +228,9 @@ export function MemoryPanel({
   auditItems = [],
   auditLoading = false,
   auditError = null,
+  writeProposals = [],
+  proposalsLoading = false,
+  proposalsError = null,
   detailEntry = null,
   detailLoading = false,
   detailError = null,
@@ -209,14 +241,41 @@ export function MemoryPanel({
   onCloseDetail,
   onRequestDelete,
   onCancelDelete,
+  onCreateMemory,
   onConfirmDelete,
+  onApproveProposal,
+  onUpdateProposal,
+  onDenyProposal,
 }: Props) {
   const copy = copyFor(locale)
   const [filtersOpen, setFiltersOpen] = useState(isActiveFilter(filters))
+  const [editingProposalID, setEditingProposalID] = useState<string | null>(null)
+  const [proposalDrafts, setProposalDrafts] = useState<Record<string, { title: string; summary: string }>>({})
+  const [manualTitle, setManualTitle] = useState('')
+  const [manualContent, setManualContent] = useState('')
   const updateFilters = (next: MemoryFilters) => onFiltersChange(next)
   const clearFilters = () => onFiltersChange({ limit: 20 })
   const visibleAuditItems = auditItems.filter((item) => auditEventTypes.includes(item.eventType))
   const latestSnapshot = auditItems.find((item) => item.eventType === 'memory_snapshot_loaded')
+  const startProposalEdit = (proposal: MemoryWriteProposal) => {
+    setEditingProposalID(proposal.id)
+    setProposalDrafts((current) => ({ ...current, [proposal.id]: { title: proposal.title, summary: proposal.summary } }))
+  }
+  const updateProposalDraft = (proposal: MemoryWriteProposal, patch: Partial<{ title: string; summary: string }>) => {
+    setProposalDrafts((current) => ({ ...current, [proposal.id]: { title: current[proposal.id]?.title ?? proposal.title, summary: current[proposal.id]?.summary ?? proposal.summary, ...patch } }))
+  }
+  const saveProposalDraft = (proposal: MemoryWriteProposal) => {
+    const draft = proposalDrafts[proposal.id] ?? { title: proposal.title, summary: proposal.summary }
+    onUpdateProposal?.(proposal, draft)
+    setEditingProposalID(null)
+  }
+  const submitManualMemory = () => {
+    const content = manualContent.trim()
+    if (!content || !onCreateMemory) return
+    onCreateMemory({ title: manualTitle.trim() || copy.addTitle, content, scopeType: 'user' })
+    setManualTitle('')
+    setManualContent('')
+  }
 
   return (
     <section className="memory-panel" aria-label="Memory">
@@ -282,6 +341,80 @@ export function MemoryPanel({
         {isActiveFilter(filters) && <button className="memory-clear-filters" type="button" onClick={clearFilters}>{copy.clearFilters}</button>}
       </div>}
       {!filtersOpen && isActiveFilter(filters) && <p className="memory-filter-note">{copy.activeFilters}</p>}
+
+      <section className="memory-manual-add" aria-label={copy.addTitle}>
+        <div className="memory-history-head">
+          <h3>{copy.addTitle}</h3>
+        </div>
+        <div className="memory-manual-add-form">
+          <input value={manualTitle} placeholder={copy.addTitlePlaceholder} onChange={(event) => setManualTitle(event.target.value)} />
+          <textarea value={manualContent} placeholder={copy.addContentPlaceholder} onChange={(event) => setManualContent(event.target.value)} />
+          <button type="button" disabled={!manualContent.trim() || !onCreateMemory} onClick={submitManualMemory}>{copy.addButton}</button>
+        </div>
+      </section>
+
+      <section className="memory-proposal-review" aria-label="Pending memory">
+        <div className="memory-history-head">
+          <h3>{copy.pendingTitle}</h3>
+          {proposalsLoading && <span>{copy.loading}</span>}
+        </div>
+        {proposalsError ? (
+          <div className="memory-empty-card"><strong>{copy.pendingError}</strong><p>{proposalsError}</p></div>
+        ) : writeProposals.length === 0 ? (
+          <p className="memory-empty">{copy.pendingEmpty}</p>
+        ) : (
+          <div className="memory-entry-list">
+            {writeProposals.map((proposal) => (
+              <article className="memory-entry pending" key={proposal.id}>
+                {editingProposalID === proposal.id ? (
+                  <div className="memory-proposal-editor">
+                    <label>
+                      <span>{copy.pendingTitle}</span>
+                      <input value={proposalDrafts[proposal.id]?.title ?? proposal.title} onChange={(event) => updateProposalDraft(proposal, { title: event.target.value })} />
+                    </label>
+                    <label>
+                      <span>{copy.subtitle}</span>
+                      <textarea value={proposalDrafts[proposal.id]?.summary ?? proposal.summary} onChange={(event) => updateProposalDraft(proposal, { summary: event.target.value })} />
+                    </label>
+                    <small>{proposal.scopeType} · {metadataValue(proposal.scopeId)} · {redactionLabel(proposal.redactionApplied || proposal.safetyState === 'redacted', locale)} · {formatDate(proposal.createdAt)}</small>
+                  </div>
+                ) : (
+                  <div>
+                    <div className="memory-entry-head">
+                      <strong>{proposal.title}</strong>
+                      <span>{proposal.status}</span>
+                    </div>
+                    <p>{proposal.summary}</p>
+                    <small>{proposal.scopeType} · {metadataValue(proposal.scopeId)} · {redactionLabel(proposal.redactionApplied || proposal.safetyState === 'redacted', locale)} · {formatDate(proposal.createdAt)}</small>
+                  </div>
+                )}
+                <div className="memory-entry-actions">
+                  {editingProposalID === proposal.id ? (
+                    <>
+                      <button type="button" aria-label={`${copy.saveEdit} ${proposal.title}`} onClick={() => saveProposalDraft(proposal)}>
+                        <Check size={15} />
+                      </button>
+                      <button type="button" aria-label={`${copy.cancel} ${proposal.title}`} onClick={() => setEditingProposalID(null)}>
+                        <X size={15} />
+                      </button>
+                    </>
+                  ) : (
+                    <button type="button" aria-label={`${copy.edit} ${proposal.title}`} onClick={() => startProposalEdit(proposal)}>
+                      <Pencil size={15} />
+                    </button>
+                  )}
+                  <button type="button" aria-label={`${copy.approve} ${proposal.title}`} onClick={() => onApproveProposal?.(proposal)}>
+                    <Check size={15} />
+                  </button>
+                  <button type="button" aria-label={`${copy.deny} ${proposal.title}`} onClick={() => onDenyProposal?.(proposal)}>
+                    <X size={15} />
+                  </button>
+                </div>
+              </article>
+            ))}
+          </div>
+        )}
+      </section>
 
       {error && <p className="memory-error" role="alert">{error}</p>}
       <div className="memory-entry-list">

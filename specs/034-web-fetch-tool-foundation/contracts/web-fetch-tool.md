@@ -10,7 +10,7 @@
   "source": "builtin",
   "group": "web",
   "risk_level": "medium",
-  "approval_policy": "always_required",
+  "approval_policy": "read_only",
   "execution_state": "executable",
   "safe_metadata": {
     "scope": "web",
@@ -20,7 +20,7 @@
 }
 ```
 
-Chat mode catalog resolution must omit `web.fetch`. Work mode may include it when persona allowlist permits it.
+Chat and Work catalog resolution may include `web.fetch` when persona allowlist permits it.
 
 ## Tool Arguments
 
@@ -62,7 +62,7 @@ Safe result envelope:
 
 The runtime rejects before network execution when:
 
-- run context is Chat mode or tool is not enabled
+- tool is not enabled in the run context
 - scheme is not HTTP(S)
 - URL is relative, malformed, or credentialed
 - host is local/private/link-local/multicast/unspecified

@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
+	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
@@ -29,6 +32,14 @@ type webSearchConfigScanner interface {
 	Scan(dest ...any) error
 }
 
+type workspaceRootConfigScanner interface {
+	Scan(dest ...any) error
+}
+
+type memoryProviderConfigScanner interface {
+	Scan(dest ...any) error
+}
+
 type mcpServerConfigScanner interface {
 	Scan(dest ...any) error
 }
@@ -42,6 +53,52 @@ func scanModelProviderConfig(row modelProviderConfigScanner) (ModelProviderConfi
 func scanWebSearchConfig(row webSearchConfigScanner) (WebSearchConfig, error) {
 	var config WebSearchConfig
 	err := row.Scan(&config.UserID, &config.TavilyAPIKey, &config.BraveAPIKey)
+	return config, err
+}
+
+func scanWorkspaceRootConfig(row workspaceRootConfigScanner) (WorkspaceRootConfig, error) {
+	var config WorkspaceRootConfig
+	err := row.Scan(&config.UserID, &config.Path)
+	return config, err
+}
+
+func scanMemoryProviderConfig(row memoryProviderConfigScanner) (MemoryProviderConfig, error) {
+	var config MemoryProviderConfig
+	err := row.Scan(
+		&config.UserID,
+		&config.Enabled,
+		&config.Provider,
+		&config.CommitAfterRun,
+		&config.SemanticEndpoint,
+		&config.OpenViking.BaseURL,
+		&config.OpenViking.RootAPIKey,
+		&config.OpenViking.EmbeddingSelector,
+		&config.OpenViking.EmbeddingProvider,
+		&config.OpenViking.EmbeddingModel,
+		&config.OpenViking.EmbeddingAPIKey,
+		&config.OpenViking.EmbeddingAPIBase,
+		&config.OpenViking.EmbeddingDimension,
+		&config.OpenViking.VLMSelector,
+		&config.OpenViking.VLMProvider,
+		&config.OpenViking.VLMModel,
+		&config.OpenViking.VLMAPIKey,
+		&config.OpenViking.VLMAPIBase,
+		&config.OpenViking.RerankSelector,
+		&config.OpenViking.RerankProvider,
+		&config.OpenViking.RerankModel,
+		&config.OpenViking.RerankAPIKey,
+		&config.OpenViking.RerankAPIBase,
+		&config.Nowledge.BaseURL,
+		&config.Nowledge.APIKey,
+		&config.Nowledge.RequestTimeoutMS,
+		&config.Diagnostic,
+		&config.UpdatedAt,
+	)
+	config.OpenViking.RootAPIKeySet = config.OpenViking.RootAPIKey != ""
+	config.OpenViking.EmbeddingAPIKeySet = config.OpenViking.EmbeddingAPIKey != ""
+	config.OpenViking.VLMAPIKeySet = config.OpenViking.VLMAPIKey != ""
+	config.OpenViking.RerankAPIKeySet = config.OpenViking.RerankAPIKey != ""
+	config.Nowledge.APIKeySet = config.Nowledge.APIKey != ""
 	return config, err
 }
 
@@ -122,6 +179,136 @@ func (r *PostgresRepository) GetWebSearchConfig(ctx context.Context, ident ident
 		return WebSearchConfig{UserID: user.ID}, nil
 	}
 	return config, err
+}
+
+func (r *PostgresRepository) SaveWorkspaceRootConfig(ctx context.Context, ident identity.LocalIdentity, input WorkspaceRootConfig) (WorkspaceRootConfig, error) {
+	user, err := r.ensureUser(ctx, ident)
+	if err != nil {
+		return WorkspaceRootConfig{}, err
+	}
+	next := normalizeWorkspaceRootConfig(input)
+	if next.Path == "" {
+		return WorkspaceRootConfig{}, NewError(CodeInvalidRequest, "Workspace folder is required.")
+	}
+	row := r.Pool.QueryRow(ctx, `insert into workspace_root_configs (user_id, root_path) values ($1, $2) on conflict (user_id) do update set root_path=excluded.root_path, updated_at=now() returning user_id, root_path`, user.ID, next.Path)
+	return scanWorkspaceRootConfig(row)
+}
+
+func (r *PostgresRepository) GetWorkspaceRootConfig(ctx context.Context, ident identity.LocalIdentity) (WorkspaceRootConfig, error) {
+	user, err := r.ensureUser(ctx, ident)
+	if err != nil {
+		return WorkspaceRootConfig{}, err
+	}
+	config, err := scanWorkspaceRootConfig(r.Pool.QueryRow(ctx, `select user_id, root_path from workspace_root_configs where user_id=$1`, user.ID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return WorkspaceRootConfig{UserID: user.ID}, nil
+	}
+	return config, err
+}
+
+func (r *PostgresRepository) SaveMemoryProviderConfig(ctx context.Context, ident identity.LocalIdentity, input MemoryProviderConfig) (MemoryProviderConfig, error) {
+	user, err := r.ensureUser(ctx, ident)
+	if err != nil {
+		return MemoryProviderConfig{}, err
+	}
+	next := normalizeMemoryProviderConfig(input, time.Now())
+	row := r.Pool.QueryRow(ctx, `insert into memory_provider_configs (user_id, enabled, provider, commit_after_run, semantic_endpoint, openviking_base_url, openviking_root_api_key, openviking_embedding_selector, openviking_embedding_provider, openviking_embedding_model, openviking_embedding_api_key, openviking_embedding_api_base, openviking_embedding_dimension, openviking_vlm_selector, openviking_vlm_provider, openviking_vlm_model, openviking_vlm_api_key, openviking_vlm_api_base, openviking_rerank_selector, openviking_rerank_provider, openviking_rerank_model, openviking_rerank_api_key, openviking_rerank_api_base, nowledge_base_url, nowledge_api_key, nowledge_request_timeout_ms, diagnostic) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27) on conflict (user_id) do update set enabled=excluded.enabled, provider=excluded.provider, commit_after_run=excluded.commit_after_run, semantic_endpoint=excluded.semantic_endpoint, openviking_base_url=excluded.openviking_base_url, openviking_root_api_key=case when excluded.openviking_root_api_key<>'' then excluded.openviking_root_api_key else memory_provider_configs.openviking_root_api_key end, openviking_embedding_selector=excluded.openviking_embedding_selector, openviking_embedding_provider=excluded.openviking_embedding_provider, openviking_embedding_model=excluded.openviking_embedding_model, openviking_embedding_api_key=case when excluded.openviking_embedding_api_key<>'' then excluded.openviking_embedding_api_key else memory_provider_configs.openviking_embedding_api_key end, openviking_embedding_api_base=excluded.openviking_embedding_api_base, openviking_embedding_dimension=excluded.openviking_embedding_dimension, openviking_vlm_selector=excluded.openviking_vlm_selector, openviking_vlm_provider=excluded.openviking_vlm_provider, openviking_vlm_model=excluded.openviking_vlm_model, openviking_vlm_api_key=case when excluded.openviking_vlm_api_key<>'' then excluded.openviking_vlm_api_key else memory_provider_configs.openviking_vlm_api_key end, openviking_vlm_api_base=excluded.openviking_vlm_api_base, openviking_rerank_selector=excluded.openviking_rerank_selector, openviking_rerank_provider=excluded.openviking_rerank_provider, openviking_rerank_model=excluded.openviking_rerank_model, openviking_rerank_api_key=case when excluded.openviking_rerank_api_key<>'' then excluded.openviking_rerank_api_key else memory_provider_configs.openviking_rerank_api_key end, openviking_rerank_api_base=excluded.openviking_rerank_api_base, nowledge_base_url=excluded.nowledge_base_url, nowledge_api_key=case when excluded.nowledge_api_key<>'' then excluded.nowledge_api_key else memory_provider_configs.nowledge_api_key end, nowledge_request_timeout_ms=excluded.nowledge_request_timeout_ms, diagnostic=excluded.diagnostic, updated_at=now() returning user_id, enabled, provider, commit_after_run, coalesce(semantic_endpoint,''), coalesce(openviking_base_url,''), coalesce(openviking_root_api_key,''), coalesce(openviking_embedding_selector,''), coalesce(openviking_embedding_provider,''), coalesce(openviking_embedding_model,''), coalesce(openviking_embedding_api_key,''), coalesce(openviking_embedding_api_base,''), coalesce(openviking_embedding_dimension,0), coalesce(openviking_vlm_selector,''), coalesce(openviking_vlm_provider,''), coalesce(openviking_vlm_model,''), coalesce(openviking_vlm_api_key,''), coalesce(openviking_vlm_api_base,''), coalesce(openviking_rerank_selector,''), coalesce(openviking_rerank_provider,''), coalesce(openviking_rerank_model,''), coalesce(openviking_rerank_api_key,''), coalesce(openviking_rerank_api_base,''), coalesce(nowledge_base_url,''), coalesce(nowledge_api_key,''), coalesce(nowledge_request_timeout_ms,0), diagnostic, updated_at`, user.ID, next.Enabled, next.Provider, next.CommitAfterRun, next.SemanticEndpoint, next.OpenViking.BaseURL, next.OpenViking.RootAPIKey, next.OpenViking.EmbeddingSelector, next.OpenViking.EmbeddingProvider, next.OpenViking.EmbeddingModel, next.OpenViking.EmbeddingAPIKey, next.OpenViking.EmbeddingAPIBase, next.OpenViking.EmbeddingDimension, next.OpenViking.VLMSelector, next.OpenViking.VLMProvider, next.OpenViking.VLMModel, next.OpenViking.VLMAPIKey, next.OpenViking.VLMAPIBase, next.OpenViking.RerankSelector, next.OpenViking.RerankProvider, next.OpenViking.RerankModel, next.OpenViking.RerankAPIKey, next.OpenViking.RerankAPIBase, next.Nowledge.BaseURL, next.Nowledge.APIKey, next.Nowledge.RequestTimeoutMS, next.Diagnostic)
+	return scanMemoryProviderConfig(row)
+}
+
+func (r *PostgresRepository) GetMemoryProviderStatus(ctx context.Context, ident identity.LocalIdentity) (MemoryProviderStatus, error) {
+	config, err := r.GetMemoryProviderConfig(ctx, ident)
+	if err != nil {
+		return MemoryProviderStatus{}, err
+	}
+	return memoryProviderStatus(config, time.Now()), nil
+}
+
+func (r *PostgresRepository) GetMemoryProviderConfig(ctx context.Context, ident identity.LocalIdentity) (MemoryProviderConfig, error) {
+	user, err := r.ensureUser(ctx, ident)
+	if err != nil {
+		return MemoryProviderConfig{}, err
+	}
+	config, err := scanMemoryProviderConfig(r.Pool.QueryRow(ctx, `select user_id, enabled, provider, commit_after_run, coalesce(semantic_endpoint,''), coalesce(openviking_base_url,''), coalesce(openviking_root_api_key,''), coalesce(openviking_embedding_selector,''), coalesce(openviking_embedding_provider,''), coalesce(openviking_embedding_model,''), coalesce(openviking_embedding_api_key,''), coalesce(openviking_embedding_api_base,''), coalesce(openviking_embedding_dimension,0), coalesce(openviking_vlm_selector,''), coalesce(openviking_vlm_provider,''), coalesce(openviking_vlm_model,''), coalesce(openviking_vlm_api_key,''), coalesce(openviking_vlm_api_base,''), coalesce(openviking_rerank_selector,''), coalesce(openviking_rerank_provider,''), coalesce(openviking_rerank_model,''), coalesce(openviking_rerank_api_key,''), coalesce(openviking_rerank_api_base,''), coalesce(nowledge_base_url,''), coalesce(nowledge_api_key,''), coalesce(nowledge_request_timeout_ms,0), coalesce(diagnostic,''), updated_at from memory_provider_configs where user_id=$1`, user.ID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		config = defaultMemoryProviderConfig(user.ID, time.Now())
+		err = nil
+	}
+	if err != nil {
+		return MemoryProviderConfig{}, err
+	}
+	return config, nil
+}
+
+func (r *PostgresRepository) ListMemoryProviderErrors(ctx context.Context, ident identity.LocalIdentity, limit int) ([]MemoryProviderErrorEvent, error) {
+	user, err := r.ensureUser(ctx, ident)
+	if err != nil {
+		return nil, err
+	}
+	items := []MemoryProviderErrorEvent{}
+	config, err := r.GetMemoryProviderConfig(ctx, ident)
+	if err != nil {
+		return nil, err
+	}
+	status := memoryProviderStatus(config, time.Now())
+	if status.Diagnostic.Code != "" && status.Diagnostic.Code != "ok" {
+		checkedAt := time.Now()
+		if status.CheckedAt != nil {
+			checkedAt = *status.CheckedAt
+		}
+		items = append(items, MemoryProviderErrorEvent{Code: status.Diagnostic.Code, Message: status.Diagnostic.Message, Provider: status.Provider, State: status.State, CheckedAt: checkedAt})
+	}
+	rows, err := r.Pool.Query(ctx, `select id, run_id, thread_id, user_id, sequence, category, type, summary, content, metadata, created_at from run_events where user_id=$1 and type in ($2,$3) order by created_at desc, id desc limit $4`, user.ID, EventMemoryExternalSnapshotFailed, "memory_provider_commit_failed", limitMemoryProviderErrorQueryLimit(limit))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		event, err := scanRunEvent(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, memoryProviderErrorFromRunEvent(event))
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	sort.SliceStable(items, func(i, j int) bool {
+		return items[i].CheckedAt.After(items[j].CheckedAt)
+	})
+	return limitMemoryProviderErrors(items, limit), nil
+}
+
+func (r *PostgresRepository) GetMemoryOverviewSnapshot(ctx context.Context, ident identity.LocalIdentity) (MemoryOverviewSnapshot, error) {
+	return r.memoryOverviewSnapshot(ctx, ident, false)
+}
+
+func (r *PostgresRepository) RebuildMemoryOverviewSnapshot(ctx context.Context, ident identity.LocalIdentity) (MemoryOverviewSnapshot, error) {
+	return r.memoryOverviewSnapshot(ctx, ident, true)
+}
+
+func (r *PostgresRepository) GetMemoryImpressionSnapshot(ctx context.Context, ident identity.LocalIdentity) (MemoryImpressionSnapshot, error) {
+	return r.memoryImpressionSnapshot(ctx, ident, false)
+}
+
+func (r *PostgresRepository) RebuildMemoryImpressionSnapshot(ctx context.Context, ident identity.LocalIdentity) (MemoryImpressionSnapshot, error) {
+	return r.memoryImpressionSnapshot(ctx, ident, true)
+}
+
+func (r *PostgresRepository) memoryOverviewSnapshot(ctx context.Context, ident identity.LocalIdentity, rebuilt bool) (MemoryOverviewSnapshot, error) {
+	output, err := r.SearchMemory(ctx, ident, MemorySearchInput{Limit: 7, Purpose: "snapshot"})
+	if err != nil {
+		return MemoryOverviewSnapshot{}, err
+	}
+	return buildMemoryOverviewSnapshot(semanticMemorySnapshotItems(output.Items), time.Now(), rebuilt), nil
+}
+
+func (r *PostgresRepository) memoryImpressionSnapshot(ctx context.Context, ident identity.LocalIdentity, rebuilt bool) (MemoryImpressionSnapshot, error) {
+	output, err := r.SearchMemory(ctx, ident, MemorySearchInput{Limit: 7, Purpose: "impression"})
+	if err != nil {
+		return MemoryImpressionSnapshot{}, err
+	}
+	return buildMemoryImpressionSnapshot(semanticMemorySnapshotItems(output.Items), time.Now(), rebuilt), nil
 }
 
 func (r *PostgresRepository) SaveMCPServerConfig(ctx context.Context, ident identity.LocalIdentity, input MCPServerConfigRecord) (MCPServerConfigRecord, error) {
@@ -617,6 +804,16 @@ func (r *PostgresRepository) PrepareRunContext(ctx context.Context, ident identi
 		status = "empty"
 	}
 	context.MemorySnapshot = MemorySnapshot{RunID: run.ID, ThreadID: thread.ID, Entries: memories.Items, Limit: 5, TotalCandidates: len(memories.Items), LoadStatus: status, RedactionApplied: true}
+	notebook, err := r.SearchMemory(ctx, ident, MemorySearchInput{ScopeType: MemoryScopeThread, ScopeID: thread.ID, SourceType: "notebook", Limit: 5, Purpose: "run_context_notebook"})
+	if err != nil {
+		context.NotebookSnapshot = MemorySnapshot{RunID: run.ID, ThreadID: thread.ID, Limit: 5, LoadStatus: "unavailable"}
+	} else {
+		notebookStatus := "loaded"
+		if len(notebook.Items) == 0 {
+			notebookStatus = "empty"
+		}
+		context.NotebookSnapshot = MemorySnapshot{RunID: run.ID, ThreadID: thread.ID, Entries: notebook.Items, Limit: 5, TotalCandidates: len(notebook.Items), LoadStatus: notebookStatus, RedactionApplied: true}
+	}
 	_, _ = r.AppendRunEvent(ctx, ident, run.ID, AppendRunEventInput{Category: RunEventCategoryProgress, Type: EventMemorySnapshotLoaded, Summary: "Memory snapshot loaded", Metadata: memorySnapshotEventMetadata(context.MemorySnapshot)})
 	return context, nil
 }
@@ -887,8 +1084,10 @@ func (r *PostgresRepository) SearchMemory(ctx context.Context, ident identity.Lo
 		sql += ` and source_run_id is not null`
 	case "thread":
 		sql += ` and source_thread_id is not null`
+	case "notebook":
+		sql += ` and source_event_id='notebook'`
 	case "manual":
-		sql += ` and source_run_id is null and source_thread_id is null`
+		sql += ` and source_run_id is null and source_thread_id is null and coalesce(source_event_id,'') <> 'notebook'`
 	default:
 		return MemorySearchOutput{}, NewError(CodeInvalidRequest, "Memory source type is invalid.")
 	}
@@ -1035,6 +1234,73 @@ func (r *PostgresRepository) ProposeMemoryWrite(ctx context.Context, ident ident
 	return proposal, nil
 }
 
+func (r *PostgresRepository) ListMemoryWriteProposals(ctx context.Context, ident identity.LocalIdentity, input MemoryWriteProposalListInput) (MemoryWriteProposalListOutput, error) {
+	user, err := r.ensureUser(ctx, ident)
+	if err != nil {
+		return MemoryWriteProposalListOutput{}, err
+	}
+	limit := memoryLimit(input.Limit)
+	status := input.Status
+	if status == "" {
+		status = MemoryWritePending
+	}
+	conditions := []string{"user_id=$1", "status=$2"}
+	args := []any{user.ID, status}
+	if input.ScopeType != "" {
+		args = append(args, input.ScopeType)
+		conditions = append(conditions, "scope_type=$"+strconv.Itoa(len(args)))
+	}
+	if strings.TrimSpace(input.ScopeID) != "" {
+		args = append(args, strings.TrimSpace(input.ScopeID))
+		conditions = append(conditions, "scope_id=$"+strconv.Itoa(len(args)))
+	}
+	if strings.TrimSpace(input.SourceRunID) != "" {
+		args = append(args, strings.TrimSpace(input.SourceRunID))
+		conditions = append(conditions, "source_run_id=$"+strconv.Itoa(len(args)))
+	}
+	args = append(args, limit)
+	query := `select id, user_id, scope_type, scope_id, title, summary, '' as content, status, safety_state, coalesce(source_thread_id,''), coalesce(source_run_id,''), coalesce(source_event_id,''), '' as idempotency_key, coalesce(created_entry_id,''), created_at, decided_at, '' as decided_by_user_id, coalesce(decision_reason,'') from memory_write_proposals where ` + strings.Join(conditions, " and ") + ` order by created_at desc limit $` + strconv.Itoa(len(args))
+	rows, err := r.Pool.Query(ctx, query, args...)
+	if err != nil {
+		return MemoryWriteProposalListOutput{}, err
+	}
+	defer rows.Close()
+	items := []MemoryWriteProposal{}
+	for rows.Next() {
+		proposal, err := scanMemoryProposal(rows)
+		if err != nil {
+			return MemoryWriteProposalListOutput{}, err
+		}
+		items = append(items, proposal)
+	}
+	if err := rows.Err(); err != nil {
+		return MemoryWriteProposalListOutput{}, err
+	}
+	return MemoryWriteProposalListOutput{Items: items}, nil
+}
+
+func (r *PostgresRepository) UpdateMemoryWriteProposal(ctx context.Context, ident identity.LocalIdentity, proposalID string, input MemoryWriteProposalUpdateInput) (MemoryWriteProposal, error) {
+	user, err := r.ensureUser(ctx, ident)
+	if err != nil {
+		return MemoryWriteProposal{}, err
+	}
+	title, summary, content, safety, err := normalizeMemoryContent(input.Title, input.Summary)
+	if err != nil {
+		return MemoryWriteProposal{}, err
+	}
+	if safety == MemorySafetyBlocked {
+		return MemoryWriteProposal{}, NewError(CodeInvalidRequest, "Memory proposal edit contains sensitive content.")
+	}
+	proposal, err := scanMemoryProposal(r.Pool.QueryRow(ctx, `update memory_write_proposals set title=$3, summary=$4, content=$5, safety_state=$6 where id=$1 and user_id=$2 and status='pending' and safety_state <> 'blocked' returning id, user_id, scope_type, scope_id, title, summary, '' as content, status, safety_state, coalesce(source_thread_id,''), coalesce(source_run_id,''), coalesce(source_event_id,''), '' as idempotency_key, coalesce(created_entry_id,''), created_at, decided_at, '' as decided_by_user_id, coalesce(decision_reason,'')`, strings.TrimSpace(proposalID), user.ID, title, summary, content, safety))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return MemoryWriteProposal{}, NewError(CodeMemoryNotFound, "Memory proposal not found.")
+	}
+	if err != nil {
+		return MemoryWriteProposal{}, err
+	}
+	return proposal, nil
+}
+
 func (r *PostgresRepository) ApproveMemoryWrite(ctx context.Context, ident identity.LocalIdentity, proposalID string, input MemoryWriteDecisionInput) (MemoryWriteDecision, error) {
 	user, err := r.ensureUser(ctx, ident)
 	if err != nil {
@@ -1150,7 +1416,7 @@ func (r *PostgresRepository) AppendRunEvent(ctx context.Context, ident identity.
 	if err != nil {
 		return RunEvent{}, err
 	}
-	if IsRunTerminal(run.Status) {
+	if IsRunTerminal(run.Status) && !isTerminalRunEventAppendAllowed(input.Type) {
 		return RunEvent{}, NewError(CodeInvalidRequest, "Terminal run cannot accept new events.")
 	}
 	var nextSequence int
@@ -1266,11 +1532,6 @@ func (r *PostgresRepository) RecordToolCallRequest(ctx context.Context, ident id
 		return ToolCall{}, nil, err
 	}
 	if autoApproved {
-		jobID := NewBackgroundJobID()
-		jobMetadata := RedactEventMetadata(map[string]any{"source": string(run.Source), "job_id": jobID, "tool_call_id": call.ToolCallID, "resume_reason": "tool_call_auto_approved"})
-		if _, err := tx.Exec(ctx, `insert into background_jobs (id, run_id, thread_id, user_id, kind, status, priority, max_attempts, scheduled_at, metadata) values ($1, $2, $3, $4, $5, 'queued', 50, 3, now(), $6)`, jobID, run.ID, run.ThreadID, user.ID, BackgroundJobKindRunExecution, mustJSON(jobMetadata)); err != nil {
-			return ToolCall{}, nil, err
-		}
 		approved, err := insertRunEvent(ctx, tx, run, RunEventCategoryProgress, EventToolCallApproved, "Tool call auto-approved", nil, metadata)
 		if err != nil {
 			return ToolCall{}, nil, err

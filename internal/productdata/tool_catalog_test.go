@@ -53,7 +53,7 @@ func TestToolCatalogIncludesWorkspaceReadOnlyTools(t *testing.T) {
 	}
 	for _, name := range []string{ToolNameWorkspaceGlob, ToolNameWorkspaceGrep, ToolNameWorkspaceRead} {
 		tool := catalogToolByName(tools, name)
-		if tool.Source != ToolCatalogSourceBuiltin || tool.Group != ToolCatalogGroupWorkspace || tool.RiskLevel != ToolRiskLow || tool.ApprovalPolicy != ToolApprovalAlwaysRequired {
+		if tool.Source != ToolCatalogSourceBuiltin || tool.Group != ToolCatalogGroupWorkspace || tool.RiskLevel != ToolRiskLow || tool.ApprovalPolicy != ToolApprovalReadOnly {
 			t.Fatalf("%s metadata = %+v", name, tool)
 		}
 		if !tool.Enabled || tool.ExecutionState != ToolExecutionStateExecutable || tool.SafeMetadata["scope"] != "workspace" || tool.SafeMetadata["read_only"] != true {
@@ -147,7 +147,7 @@ func TestToolCatalogIncludesWebFetchTool(t *testing.T) {
 		t.Fatal(err)
 	}
 	tool := catalogToolByName(tools, ToolNameWebFetch)
-	if tool.Source != ToolCatalogSourceBuiltin || tool.Group != ToolCatalogGroupWeb || tool.RiskLevel != ToolRiskMedium || tool.ApprovalPolicy != ToolApprovalAlwaysRequired {
+	if tool.Source != ToolCatalogSourceBuiltin || tool.Group != ToolCatalogGroupWeb || tool.RiskLevel != ToolRiskMedium || tool.ApprovalPolicy != ToolApprovalReadOnly {
 		t.Fatalf("web fetch metadata = %+v", tool)
 	}
 	if !tool.Enabled || tool.ExecutionState != ToolExecutionStateExecutable || tool.SafeMetadata["scope"] != "web" || tool.SafeMetadata["read_only"] != true || tool.SafeMetadata["network_access"] != "public_http_only" {
@@ -214,8 +214,8 @@ func TestWebSearchIsAvailableInChatRunContext(t *testing.T) {
 	if catalogResolutionByName(ctxData.EnabledTools, ToolNameWebSearch).Name == "" {
 		t.Fatalf("chat run missing web.search: %+v", ctxData.EnabledTools)
 	}
-	if catalogResolutionByName(ctxData.EnabledTools, ToolNameWebFetch).Name != "" {
-		t.Fatalf("chat run should not enable web.fetch: %+v", ctxData.EnabledTools)
+	if catalogResolutionByName(ctxData.EnabledTools, ToolNameWebFetch).Name == "" {
+		t.Fatalf("chat run missing web.fetch: %+v", ctxData.EnabledTools)
 	}
 }
 
@@ -287,6 +287,144 @@ func TestToolCatalogIncludesAgentRuntimeTools(t *testing.T) {
 		}
 		if strings.Contains(fmt.Sprint(tool), "/Users/") {
 			t.Fatalf("agent catalog leaked host path: %+v", tool)
+		}
+	}
+}
+
+func TestToolCatalogIncludesMemoryRuntimeTools(t *testing.T) {
+	svc := NewMemoryService()
+	tools, err := svc.ListToolCatalog(context.Background(), identity.LocalDevIdentity())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{ToolNameMemorySearch, ToolNameMemoryList, ToolNameMemoryRead, ToolNameMemoryWrite, ToolNameMemoryEdit, ToolNameMemoryForget, ToolNameMemoryContext, ToolNameMemoryTimeline, ToolNameMemoryConnections, ToolNameMemoryThreadSearch, ToolNameMemoryThreadFetch, ToolNameMemoryStatus, ToolNameNotebookRead, ToolNameNotebookWrite, ToolNameNotebookEdit, ToolNameNotebookForget} {
+		tool := catalogToolByName(tools, name)
+		if tool.Source != ToolCatalogSourceBuiltin || tool.Group != ToolCatalogGroupMemory || tool.RiskLevel != ToolRiskMedium || tool.ApprovalPolicy != ToolApprovalAlwaysRequired {
+			t.Fatalf("%s metadata = %+v", name, tool)
+		}
+		if !tool.Enabled || tool.ExecutionState != ToolExecutionStateExecutable || tool.SafeMetadata["scope"] != "memory" || tool.SafeMetadata["approval_gated"] != true {
+			t.Fatalf("%s safe metadata = %+v", name, tool)
+		}
+		if name == ToolNameMemorySearch || name == ToolNameMemoryList || name == ToolNameMemoryRead || name == ToolNameMemoryContext || name == ToolNameMemoryTimeline || name == ToolNameMemoryConnections || name == ToolNameMemoryThreadSearch || name == ToolNameMemoryThreadFetch || name == ToolNameMemoryStatus || name == ToolNameNotebookRead {
+			if tool.SafeMetadata["read_only"] != true || tool.SafeMetadata["returns_raw_content"] != false {
+				t.Fatalf("%s should be safe read-only memory tool: %+v", name, tool)
+			}
+		} else if tool.SafeMetadata["read_only"] != false {
+			t.Fatalf("%s should be memory mutation tool: %+v", name, tool)
+		}
+		if strings.Contains(fmt.Sprint(tool), "/Users/") || strings.Contains(fmt.Sprint(tool), "sk-") {
+			t.Fatalf("memory catalog leaked sensitive data: %+v", tool)
+		}
+	}
+}
+
+func TestToolCatalogHidesNowledgeUnsupportedMemoryEdit(t *testing.T) {
+	svc := NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	if _, err := svc.SaveMemoryProviderConfig(context.Background(), ident, MemoryProviderConfig{Enabled: true, Provider: MemoryProviderNowledge, Nowledge: NowledgeMemoryConfig{BaseURL: "http://127.0.0.1:14242"}}); err != nil {
+		t.Fatal(err)
+	}
+	tools, err := svc.ListToolCatalog(context.Background(), ident)
+	if err != nil {
+		t.Fatal(err)
+	}
+	edit := catalogToolByName(tools, ToolNameMemoryEdit)
+	if edit.Enabled || edit.ExecutionState != ToolExecutionStateDisabled || edit.ApprovalPolicy != ToolApprovalDisabled {
+		t.Fatalf("nowledge memory.edit should be disabled: %+v", edit)
+	}
+	if edit.SafeMetadata["active_provider"] != string(MemoryProviderNowledge) || edit.SafeMetadata["disabled_reason"] != "not_supported_by_nowledge" {
+		t.Fatalf("nowledge disabled metadata = %+v", edit.SafeMetadata)
+	}
+	search := catalogToolByName(tools, ToolNameMemorySearch)
+	if !search.Enabled || search.ExecutionState != ToolExecutionStateExecutable || search.ApprovalPolicy != ToolApprovalAlwaysRequired {
+		t.Fatalf("nowledge memory.search should remain executable: %+v", search)
+	}
+}
+
+func TestNowledgeRunContextFiltersUnsupportedMemoryEdit(t *testing.T) {
+	svc := NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	if _, err := svc.SaveMemoryProviderConfig(context.Background(), ident, MemoryProviderConfig{Enabled: true, Provider: MemoryProviderNowledge, Nowledge: NowledgeMemoryConfig{BaseURL: "http://127.0.0.1:14242"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.SyncBuiltInPersonas(context.Background(), ident, []BuiltInPersonaConfig{{
+		Slug:             "memory",
+		Name:             "Memory",
+		Description:      "Memory persona",
+		SystemPrompt:     "Use memory tools.",
+		ModelRoute:       PersonaModelRoute{ProviderID: "custom", Model: "model"},
+		AllowedToolNames: []string{ToolNameMemorySearch, ToolNameMemoryEdit},
+		ReasoningMode:    "balanced",
+		BudgetSummary:    "test",
+		Version:          "1",
+		IsDefault:        true,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	thread, err := svc.CreateThread(context.Background(), ident, CreateThreadInput{Title: "Nowledge tools", Mode: ThreadModeWork})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.StartRun(context.Background(), ident, thread.ID, StartRunInput{}); err != nil {
+		t.Fatal(err)
+	}
+	job, _, ok, err := svc.ClaimBackgroundJob(context.Background(), ident, ClaimBackgroundJobInput{WorkerID: "worker_nowledge_tools", LeaseSeconds: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("claim ok = false")
+	}
+	ctxData, err := svc.PrepareRunContext(context.Background(), ident, job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if catalogResolutionByName(ctxData.EnabledTools, ToolNameMemoryEdit).Name != "" {
+		t.Fatalf("memory.edit should be filtered for nowledge: %+v", ctxData.EnabledTools)
+	}
+	if catalogResolutionByName(ctxData.EnabledTools, ToolNameMemorySearch).Name == "" {
+		t.Fatalf("memory.search should remain enabled for nowledge: %+v", ctxData.EnabledTools)
+	}
+}
+
+func TestMemoryToolsAreAvailableInWorkRunContext(t *testing.T) {
+	svc := NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	if _, err := svc.SyncBuiltInPersonas(context.Background(), ident, []BuiltInPersonaConfig{{
+		Slug:             "memory",
+		Name:             "Memory",
+		Description:      "Memory persona",
+		SystemPrompt:     "Use memory tools.",
+		ModelRoute:       PersonaModelRoute{ProviderID: "custom", Model: "model"},
+		AllowedToolNames: []string{ToolNameCurrentTime, ToolNameMemorySearch, ToolNameMemoryList, ToolNameMemoryRead, ToolNameMemoryWrite, ToolNameMemoryEdit, ToolNameMemoryForget, ToolNameMemoryContext, ToolNameMemoryTimeline, ToolNameMemoryConnections, ToolNameMemoryThreadSearch, ToolNameMemoryThreadFetch, ToolNameMemoryStatus, ToolNameNotebookRead, ToolNameNotebookWrite, ToolNameNotebookEdit, ToolNameNotebookForget},
+		ReasoningMode:    "balanced",
+		BudgetSummary:    "test",
+		Version:          "1",
+		IsDefault:        true,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	thread, err := svc.CreateThread(context.Background(), ident, CreateThreadInput{Title: "Memory tools", Mode: ThreadModeWork})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.StartRun(context.Background(), ident, thread.ID, StartRunInput{}); err != nil {
+		t.Fatal(err)
+	}
+	job, _, ok, err := svc.ClaimBackgroundJob(context.Background(), ident, ClaimBackgroundJobInput{WorkerID: "worker_memory_tools", LeaseSeconds: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("claim ok = false")
+	}
+	ctxData, err := svc.PrepareRunContext(context.Background(), ident, job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{ToolNameMemorySearch, ToolNameMemoryList, ToolNameMemoryRead, ToolNameMemoryWrite, ToolNameMemoryEdit, ToolNameMemoryForget, ToolNameMemoryContext, ToolNameMemoryTimeline, ToolNameMemoryConnections, ToolNameMemoryThreadSearch, ToolNameMemoryThreadFetch, ToolNameMemoryStatus, ToolNameNotebookRead, ToolNameNotebookWrite, ToolNameNotebookEdit, ToolNameNotebookForget} {
+		if catalogResolutionByName(ctxData.EnabledTools, name).Name == "" {
+			t.Fatalf("work run missing %s: %+v", name, ctxData.EnabledTools)
 		}
 	}
 }

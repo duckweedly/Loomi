@@ -7,13 +7,13 @@
 - `source`: `builtin`
 - `group`: `workspace`
 - `risk_level`: `low`
-- `approval_policy`: `always_required`
+- `approval_policy`: `read_only`
 - `execution_state`: `executable`
 - `safe_metadata`: argument names, read-only flag, and scope label only
 
 ## Workspace Scope
 
-- `root`: resolved process-local root from `LOOMI_WORKSPACE_ROOT` or the current repository root
+- `root`: resolved process-local root from persisted local user config, `LOOMI_WORKSPACE_ROOT`, or local desktop/dev Home fallback
 - `display_scope`: safe non-absolute label for UI/catalog metadata
 - `relative_path`: normalized slash path under root
 - `deny_reason`: stable code for traversal, outside root, symlink escape, sensitive path, directory-as-file, invalid text, or unsupported arguments
@@ -67,7 +67,6 @@ Existing events remain source of truth:
 
 ```text
 tool_call_requested
-tool_call_approval_required
 tool_call_approved
 tool_call_executing
 tool_call_succeeded

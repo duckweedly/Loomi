@@ -170,48 +170,92 @@ func (s *Server) handleWebSearchConfig(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleWorkspaceRoot(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		writeJSON(w, http.StatusOK, workspaceRootResponse{Config: currentWorkspaceRootConfig(), RequestID: diagnostics.NewRequestID()})
+		writeJSON(w, http.StatusOK, workspaceRootResponse{Config: s.currentWorkspaceRootConfig(r.Context()), RequestID: diagnostics.NewRequestID()})
 	case http.MethodPost:
 		var req workspaceRootRequest
 		if err := decodeJSONRequest(r, &req); err != nil {
 			writeAPIError(w, productdata.NewError(productdata.CodeInvalidRequest, "Invalid JSON request."))
 			return
 		}
-		root := strings.TrimSpace(req.Path)
-		if root == "" || !filepath.IsAbs(root) {
-			writeAPIError(w, productdata.NewError(productdata.CodeInvalidRequest, "Workspace folder must be an absolute path."))
-			return
-		}
-		real, err := filepath.EvalSymlinks(root)
+		real, err := resolveWorkspaceRootPath(req.Path)
 		if err != nil {
-			writeAPIError(w, productdata.NewError(productdata.CodeInvalidRequest, "Workspace folder is unavailable."))
+			writeAPIError(w, err)
 			return
 		}
-		info, err := os.Stat(real)
-		if err != nil || !info.IsDir() {
-			writeAPIError(w, productdata.NewError(productdata.CodeInvalidRequest, "Workspace folder is unavailable."))
-			return
+		if store, ok := s.product.(productdata.WorkspaceRootConfigStore); ok {
+			if _, err := store.SaveWorkspaceRootConfig(r.Context(), identity.LocalDevIdentity(), productdata.WorkspaceRootConfig{Path: real}); err != nil {
+				writeAPIError(w, err)
+				return
+			}
 		}
 		if err := os.Setenv("LOOMI_WORKSPACE_ROOT", real); err != nil {
 			writeAPIError(w, productdata.NewError(productdata.CodeInternalError, "Workspace folder could not be saved."))
 			return
 		}
-		writeJSON(w, http.StatusOK, workspaceRootResponse{Config: currentWorkspaceRootConfig(), RequestID: diagnostics.NewRequestID()})
+		writeJSON(w, http.StatusOK, workspaceRootResponse{Config: workspaceRootConfigFromPath(real, true), RequestID: diagnostics.NewRequestID()})
 	default:
 		writeMethodNotAllowed(w, "GET, POST")
 	}
 }
 
-func currentWorkspaceRootConfig() workspaceRootConfig {
-	root := strings.TrimSpace(os.Getenv("LOOMI_WORKSPACE_ROOT"))
+func (s *Server) currentWorkspaceRootConfig(ctx context.Context) workspaceRootConfig {
+	root := ""
+	if store, ok := s.product.(productdata.WorkspaceRootConfigStore); ok {
+		if saved, err := store.GetWorkspaceRootConfig(ctx, identity.LocalDevIdentity()); err == nil {
+			root = strings.TrimSpace(saved.Path)
+		}
+	}
+	if root == "" {
+		root = strings.TrimSpace(os.Getenv("LOOMI_WORKSPACE_ROOT"))
+	}
 	if root == "" {
 		return workspaceRootConfig{Configured: false, DisplayName: "Home"}
 	}
+	if real, err := resolveWorkspaceRootPath(root); err == nil {
+		_ = os.Setenv("LOOMI_WORKSPACE_ROOT", real)
+		return workspaceRootConfigFromPath(real, true)
+	}
+	return workspaceRootConfigFromPath(root, false)
+}
+
+func (s *Server) applySavedWorkspaceRoot(ctx context.Context) {
+	store, ok := s.product.(productdata.WorkspaceRootConfigStore)
+	if !ok {
+		return
+	}
+	saved, err := store.GetWorkspaceRootConfig(ctx, identity.LocalDevIdentity())
+	if err != nil || strings.TrimSpace(saved.Path) == "" {
+		return
+	}
+	real, err := resolveWorkspaceRootPath(saved.Path)
+	if err != nil {
+		return
+	}
+	_ = os.Setenv("LOOMI_WORKSPACE_ROOT", real)
+}
+
+func resolveWorkspaceRootPath(path string) (string, error) {
+	root := strings.TrimSpace(path)
+	if root == "" || !filepath.IsAbs(root) {
+		return "", productdata.NewError(productdata.CodeInvalidRequest, "Workspace folder must be an absolute path.")
+	}
+	real, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return "", productdata.NewError(productdata.CodeInvalidRequest, "Workspace folder is unavailable.")
+	}
+	info, err := os.Stat(real)
+	if err != nil || !info.IsDir() {
+		return "", productdata.NewError(productdata.CodeInvalidRequest, "Workspace folder is unavailable.")
+	}
+	return real, nil
+}
+
+func workspaceRootConfigFromPath(root string, configured bool) workspaceRootConfig {
 	name := filepath.Base(root)
 	if name == "." || name == string(filepath.Separator) || name == "" {
 		name = "Selected folder"
 	}
-	return workspaceRootConfig{Configured: true, DisplayName: name}
+	return workspaceRootConfig{Configured: configured, DisplayName: name}
 }
 
 func (s *Server) webSearchConfig() webSearchConfig {

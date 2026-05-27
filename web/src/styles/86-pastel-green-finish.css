@@ -1,0 +1,309 @@
+/* Pastel green finish: cute through softness, not bulky depth. */
+.app-shell {
+  --loomi-bg: #f7fcfa;
+  --loomi-sidebar: #edf8f3;
+  --loomi-surface: #fcfffe;
+  --loomi-surface-soft: #f3faf7;
+  --loomi-panel: rgba(252, 255, 254, 0.94);
+  --loomi-line: rgba(44, 82, 60, 0.1);
+  --loomi-line-strong: rgba(44, 82, 60, 0.18);
+  --loomi-green: #47c978;
+  --loomi-green-soft: rgba(71, 201, 120, 0.13);
+  --loomi-green-hover: rgba(71, 201, 120, 0.18);
+  --loomi-blue-soft: rgba(147, 208, 238, 0.16);
+  --loomi-text: #102c20;
+  --loomi-muted: #6b8192;
+  --accent: var(--loomi-green);
+  --accent-2: #70ceb8;
+  --accent-contrast: #0f2c1e;
+  --bg-root: var(--loomi-bg);
+  --main-surface: var(--loomi-surface);
+  --material-sidebar: rgba(237, 248, 243, 0.97);
+  --material-composer: rgba(252, 255, 254, 0.96);
+  --border-subtle: var(--loomi-line);
+  --border-strong: var(--loomi-line-strong);
+  --text-primary: var(--loomi-text);
+  --text-secondary: rgba(16, 44, 32, 0.68);
+  --text-muted: rgba(107, 129, 146, 0.74);
+  --composer-placeholder: rgba(107, 129, 146, 0.72);
+}
+
+.app-shell[data-theme='dark'] {
+  --loomi-bg: #202426;
+  --loomi-sidebar: #222729;
+  --loomi-surface: #252a2c;
+  --loomi-surface-soft: #2a3032;
+  --loomi-panel: rgba(37, 42, 44, 0.96);
+  --loomi-line: rgba(239, 250, 242, 0.08);
+  --loomi-line-strong: rgba(239, 250, 242, 0.14);
+  --loomi-green: #8dd98e;
+  --loomi-green-soft: rgba(141, 217, 142, 0.11);
+  --loomi-green-hover: rgba(141, 217, 142, 0.16);
+  --loomi-blue-soft: rgba(128, 198, 178, 0.08);
+  --loomi-text: #f4f7f2;
+  --loomi-muted: rgba(215, 226, 219, 0.58);
+  --accent: var(--loomi-green);
+  --accent-2: #88cdb7;
+  --accent-contrast: #102414;
+  --bg-root: var(--loomi-bg);
+  --main-surface: var(--loomi-surface);
+  --material-sidebar: rgba(34, 39, 41, 0.98);
+  --material-composer: rgba(42, 48, 50, 0.97);
+  --border-subtle: var(--loomi-line);
+  --border-strong: var(--loomi-line-strong);
+  --text-primary: var(--loomi-text);
+  --text-secondary: rgba(244, 247, 242, 0.7);
+  --text-muted: var(--loomi-muted);
+  --composer-placeholder: rgba(215, 226, 219, 0.5);
+}
+
+.app-shell,
+.workspace-grid,
+.sidebar-shell {
+  background: var(--material-sidebar) !important;
+}
+
+.main-region,
+.right-tool-drawer,
+.main-titlebar,
+.chat-shell,
+.message-list,
+.settings-shell,
+.settings-sidebar,
+.settings-content {
+  background: var(--main-surface) !important;
+}
+
+.main-region {
+  border-radius: 18px 22px 22px 18px !important;
+  box-shadow: 0 10px 28px rgba(56, 102, 76, 0.045) !important;
+}
+
+.app-shell[data-theme='dark'] .main-region {
+  box-shadow: none !important;
+}
+
+.workspace-grid:not(.right-tools-open) .main-region {
+  border-radius: 18px 22px 22px 18px !important;
+}
+
+.workspace-grid.right-tools-open .main-region {
+  border-radius: 18px 0 0 18px !important;
+}
+
+.right-tool-drawer {
+  border-left: 1px solid var(--border-subtle) !important;
+  border-radius: 0 22px 22px 0 !important;
+  box-shadow: none !important;
+}
+
+.sidebar-divider,
+.chat-shell::after,
+.sidebar-footer {
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.sidebar-mode-row,
+.settings-segmented-control,
+.provider-filter-tabs,
+.mode-tabs {
+  border: 1px solid var(--border-subtle) !important;
+  border-radius: 18px !important;
+  background: color-mix(in srgb, var(--loomi-panel) 68%, transparent) !important;
+  box-shadow: none !important;
+}
+
+.sidebar-mode-row button,
+.settings-segmented-control button,
+.provider-filter-tabs button,
+.mode-tabs button {
+  min-height: 34px !important;
+  border: 0 !important;
+  border-radius: 14px !important;
+  color: color-mix(in srgb, var(--text-secondary) 88%, var(--text-primary)) !important;
+  box-shadow: none !important;
+  transform: none !important;
+}
+
+.sidebar-mode-row button.selected,
+.settings-segmented-control button.selected,
+.provider-filter-tabs button.selected,
+.mode-tabs button.selected {
+  background: var(--loomi-green-soft) !important;
+  color: var(--text-primary) !important;
+  box-shadow: none !important;
+}
+
+.thread-create-button,
+.sidebar-settings-button,
+.titlebar-button,
+.thread-row > .thread-action,
+.message-actions button,
+.composer-icon-action,
+.composer-action,
+.composer-model-select,
+.provider-card-test,
+.provider-secondary-action,
+.provider-cancel-button,
+.provider-test-button,
+.provider-save-button,
+.tool-actions button,
+.tools-catalog-badges button,
+.settings-icon-button {
+  border: 1px solid var(--border-subtle) !important;
+  background: color-mix(in srgb, var(--loomi-panel) 62%, transparent) !important;
+  box-shadow: none !important;
+  filter: none !important;
+}
+
+.thread-create-button:hover,
+.sidebar-settings-button:hover,
+.titlebar-button:hover,
+.thread-row > .thread-action:hover,
+.message-actions button:hover,
+.composer-icon-action:hover,
+.composer-action:hover,
+.provider-card-test:hover,
+.provider-secondary-action:hover,
+.provider-cancel-button:hover,
+.provider-test-button:hover,
+.tool-actions button:hover,
+.settings-icon-button:hover {
+  background: var(--loomi-green-hover) !important;
+  transform: translateY(-1px) !important;
+}
+
+.thread-card {
+  border: 1px solid transparent !important;
+  border-radius: 14px !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.thread-card:hover {
+  border-color: var(--border-subtle) !important;
+  background: color-mix(in srgb, var(--loomi-panel) 48%, transparent) !important;
+  transform: none !important;
+}
+
+.thread-card.selected {
+  border-color: color-mix(in srgb, var(--accent) 28%, var(--border-subtle)) !important;
+  background: var(--loomi-green-soft) !important;
+  box-shadow: none !important;
+}
+
+.thread-card.selected::before {
+  background: var(--accent) !important;
+  opacity: 0.78 !important;
+}
+
+.run-dot,
+.message-avatar,
+.provider-status-line > span {
+  box-shadow: none !important;
+}
+
+.message-row.assistant .message-avatar {
+  background:
+    radial-gradient(circle at 34% 28%, rgba(255, 255, 255, 0.82), transparent 31%),
+    linear-gradient(145deg, color-mix(in srgb, var(--accent) 20%, white), color-mix(in srgb, var(--accent-2) 20%, white)) !important;
+}
+
+.app-shell[data-theme='dark'] .message-row.assistant .message-avatar {
+  background:
+    radial-gradient(circle at 34% 28%, rgba(255, 255, 255, 0.22), transparent 31%),
+    linear-gradient(145deg, rgba(141, 217, 142, 0.28), rgba(136, 205, 183, 0.2)) !important;
+}
+
+.composer {
+  min-height: 98px !important;
+  border: 1px solid var(--border-subtle) !important;
+  border-radius: 18px !important;
+  background: var(--material-composer) !important;
+  box-shadow: 0 10px 28px rgba(56, 102, 76, 0.05) !important;
+}
+
+.app-shell[data-theme='dark'] .composer {
+  box-shadow: none !important;
+}
+
+.composer:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 32%, var(--border-subtle)) !important;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 9%, transparent) !important;
+  transform: none !important;
+}
+
+.app-shell[data-theme='dark'] .composer:focus-within {
+  box-shadow: none !important;
+}
+
+.composer .ant-btn,
+.provider-add-button,
+.provider-save-modal-button,
+.tool-actions button.primary {
+  border: 0 !important;
+  background: var(--accent) !important;
+  color: var(--accent-contrast) !important;
+  box-shadow: none !important;
+}
+
+.settings-card,
+.provider-management-card,
+.provider-console-card,
+.provider-console-empty,
+.tool-card,
+.work-plan-view,
+.memory-provider-panel,
+.memory-entry button,
+.memory-stat,
+.memory-detail-panel,
+.memory-delete-confirmation,
+.memory-audit-item,
+.message-row.assistant-draft .message-bubble,
+.message-markdown pre,
+.message-table-wrap,
+.tool-grid div,
+.tool-stack {
+  border: 1px solid var(--border-subtle) !important;
+  border-radius: 16px !important;
+  background: color-mix(in srgb, var(--loomi-surface-soft) 76%, transparent) !important;
+  box-shadow: none !important;
+}
+
+.provider-modal,
+.thread-menu,
+.right-panel-menu,
+.provider-kind-menu {
+  border: 1px solid var(--border-subtle) !important;
+  border-radius: 16px !important;
+  background: var(--main-surface) !important;
+  box-shadow: 0 16px 36px rgba(28, 50, 38, 0.11) !important;
+}
+
+.app-shell[data-theme='dark'] .provider-modal,
+.app-shell[data-theme='dark'] .thread-menu,
+.app-shell[data-theme='dark'] .right-panel-menu,
+.app-shell[data-theme='dark'] .provider-kind-menu {
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.18) !important;
+}
+
+.app-shell[data-theme='dark'] .settings-card,
+.app-shell[data-theme='dark'] .provider-management-card,
+.app-shell[data-theme='dark'] .provider-console-card,
+.app-shell[data-theme='dark'] .provider-console-empty,
+.app-shell[data-theme='dark'] .tool-card,
+.app-shell[data-theme='dark'] .work-plan-view,
+.app-shell[data-theme='dark'] .memory-provider-panel,
+.app-shell[data-theme='dark'] .memory-entry button,
+.app-shell[data-theme='dark'] .memory-stat,
+.app-shell[data-theme='dark'] .memory-detail-panel,
+.app-shell[data-theme='dark'] .memory-delete-confirmation,
+.app-shell[data-theme='dark'] .memory-audit-item,
+.app-shell[data-theme='dark'] .message-row.assistant-draft .message-bubble,
+.app-shell[data-theme='dark'] .message-markdown pre,
+.app-shell[data-theme='dark'] .message-table-wrap,
+.app-shell[data-theme='dark'] .tool-grid div,
+.app-shell[data-theme='dark'] .tool-stack {
+  box-shadow: none !important;
+}

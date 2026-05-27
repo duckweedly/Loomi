@@ -41,6 +41,15 @@ UI-02 closes the demo-looking gaps in the existing UI-01 shell:
 - Chat and right-side panels avoid nested card frames inside those outer panels; internal progress, preview, and composer regions render as content surfaces instead of stacked card shells.
 - The chat shell removes the extra full-panel inset frame: sidebar, main content, and right drawer now occupy the outer shell directly without their own large-card border, radius, margin, or shadow.
 - App identity assets now use the supplied gecko icon family across Dock, favicon/web manifest, Electron window icons, and titlebar mark; the Dock master is inset on a 1024 canvas so it matches neighboring macOS app icon scale instead of rendering oversized.
+- The first brand refinement pass softens the shell into a gecko/leaf-led desktop workspace: less hard green outlining, unified titlebar/main/right-panel surfaces, gentler thread selection, branded message avatars, raised composer focus, and settings-to-mode switching that returns to the workspace instead of leaving stale settings content visible.
+- Dark mode now uses restrained inset highlights instead of raised rectangular drop shadows for the sidebar footer, settings button, segmented controls, composer, main surface, right drawer, and dense cards.
+- The visual system now targets a pastel compact green direction: cute through color and soft rounded states, but with 1px borders, minimal shadows, muted selected states, and calmer dark-mode surfaces.
+- Secondary icon affordances such as titlebar toggles and thread row menus render as icon-only controls without persistent circular wrappers.
+- The sidebar footer returns to a single compact Settings icon entry, removing the experimental day/night toggle treatment from the sidebar.
+- Chat Markdown rendering now keeps fenced code blocks separate from inline code and tones down inline code styling so long prose does not turn into green chip blocks.
+- Live run state now still accepts a late final assistant-content event after `run.completed`, so completed messages hydrate in the current view instead of only becoming well-rendered after the next thread refresh.
+- Assistant drafts no longer render partial streaming Markdown as final prose; active runs show a restrained progress line and only render structured Markdown after final content is available.
+- Work mode no longer injects the expanded WorkPlanView card into the main chat transcript; raw plan/progress projection stays out of the conversation surface until it has a compact, user-facing design.
 
 ## Non-goals
 
@@ -81,6 +90,14 @@ Browser smoke must verify:
 - Chat and right-side panels do not introduce card-inside-card frames for progress, preview, or inner content groups.
 - Main chat content and right drawer fill the app shell without a visible nested full-panel frame on the left, top, or right edges.
 - Dock, favicon, web manifest, Electron window, and titlebar icons show the gecko identity with Dock visual padding intact.
+- Switching Chat/Work from Settings exits Settings and shows the corresponding workspace content.
+- Dark mode interactions do not leave blocky rectangular shadows under the sidebar settings entry or common floating controls.
+- Controls, cards, thread rows, composer, and menus avoid bulky toy-like depth while keeping a green Loomi identity.
+- Titlebar toggles and thread row menus do not show persistent outer button shells; only hover/focus feedback is visible.
+- The sidebar footer only shows a compact Settings icon button, without a separate theme switch or animated sky treatment.
+- Long assistant prose with fenced `text` blocks remains readable, without `text` language markers or multiline content becoming inline code chips.
+- A run that receives `run.completed` before the final assistant message still updates the visible completed bubble without waiting for the next user send or thread reload.
+- Streaming assistant output does not expose malformed partial Markdown, blockquotes, code fences, or tables in the transcript while the model is still generating.
 - Progress rail shows current-run recent activity without exposing raw ids/event names as primary text, and right-panel menu labels follow the active locale.
 - Console error count is 0.
 - Screenshot path is recorded.

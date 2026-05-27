@@ -63,6 +63,34 @@ func TestWorkspaceReadToolsDefaultToUserHomeWhenRootUnset(t *testing.T) {
 	}
 }
 
+func TestWorkspaceReadToolsTreatSelectedRootNameAsRootAlias(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "Downloads")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "receipt.txt"), []byte("downloaded file\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	executor := WorkspaceToolExecutor{Root: root}
+
+	glob, err := executor.Execute(context.Background(), ToolInvocation{ToolName: productdata.ToolNameWorkspaceGlob, ArgumentsSummary: map[string]any{"pattern": "*.txt", "path": "downloads", "limit": 10}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if glob["match_count"] != 1 || !strings.Contains(fmt.Sprintf("%+v", glob), "receipt.txt") {
+		t.Fatalf("glob = %+v", glob)
+	}
+
+	read, err := executor.Execute(context.Background(), ToolInvocation{ToolName: productdata.ToolNameWorkspaceRead, ArgumentsSummary: map[string]any{"path": "Downloads/receipt.txt"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if read["path"] != "receipt.txt" || read["content"] != "downloaded file\n" {
+		t.Fatalf("read = %+v", read)
+	}
+}
+
 func TestWorkspaceReadToolsRejectTraversalSensitiveAndSymlinkEscape(t *testing.T) {
 	root := createWorkspaceFixture(t)
 	outside := t.TempDir()

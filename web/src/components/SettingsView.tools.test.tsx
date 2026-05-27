@@ -92,7 +92,7 @@ describe('SettingsView tools catalog', () => {
     expect(tool?.source).toBe('builtin')
     expect(tool?.group).toBe('web')
     expect(tool?.riskLevel).toBe('medium')
-    expect(tool?.approvalPolicy).toBe('always_required')
+    expect(tool?.approvalPolicy).toBe('read_only')
     expect(tool?.executionState).toBe('executable')
     expect(tool?.safeMetadata?.scope).toBe('web')
     expect(tool?.safeMetadata?.read_only).toBe(true)
@@ -109,7 +109,7 @@ describe('SettingsView tools catalog', () => {
     expect(tool?.source).toBe('builtin')
     expect(tool?.group).toBe('web')
     expect(tool?.riskLevel).toBe('medium')
-    expect(tool?.approvalPolicy).toBe('always_required')
+    expect(tool?.approvalPolicy).toBe('read_only')
     expect(tool?.executionState).toBe('executable')
     expect(tool?.safeMetadata?.scope).toBe('web')
     expect(tool?.safeMetadata?.read_only).toBe(true)
@@ -175,6 +175,24 @@ describe('SettingsView tools catalog', () => {
     }
   })
 
+  test('mock catalog includes memory tools as approval-gated safe summaries', async () => {
+    const api = await import('../mockApiClient')
+    const tools = await api.mockApiClient.listToolCatalog()
+    const memoryTools = tools.filter((tool) => tool.group === 'memory')
+
+    expect(memoryTools.map((tool) => tool.name).sort()).toEqual(['memory.connections', 'memory.context', 'memory.edit', 'memory.forget', 'memory.list', 'memory.read', 'memory.search', 'memory.status', 'memory.thread_fetch', 'memory.thread_search', 'memory.timeline', 'memory.write'])
+    for (const tool of memoryTools) {
+      expect(tool.source).toBe('builtin')
+      expect(tool.riskLevel).toBe('medium')
+      expect(tool.approvalPolicy).toBe('always_required')
+      expect(tool.executionState).toBe('executable')
+      expect(tool.safeMetadata?.scope).toBe('memory')
+      expect(tool.safeMetadata?.approval_gated).toBe(true)
+      expect(tool.safeMetadata?.returns_raw_content).toBe(false)
+      expect(`${tool.displayName} ${tool.description} ${JSON.stringify(tool.safeMetadata)}`).not.toContain('/Users/')
+      expect(`${tool.displayName} ${tool.description} ${JSON.stringify(tool.safeMetadata)}`).not.toContain('sk-')
+    }
+  })
 
   test('renders a read-only safe tool catalog surface', async () => {
     const source = await Bun.file(new URL('./SettingsView.tsx', import.meta.url)).text()
@@ -189,6 +207,7 @@ describe('SettingsView tools catalog', () => {
     expect(source).toContain('non-executable')
     expect(source).toContain('coordination-only')
     expect(source).toContain('no autonomous execution')
+    expect(source).toContain('approval-gated')
     expect(source).toContain('public HTTP only')
     expect(source).toContain('write-capable')
     expect(source).toContain('exec-capable')
@@ -224,7 +243,7 @@ describe('SettingsView tools catalog', () => {
       source: 'builtin',
       group: 'workspace',
       riskLevel: 'low',
-      approvalPolicy: 'always_required',
+      approvalPolicy: 'read_only',
       enabled: true,
       executionState: 'executable',
       safeMetadata: { read_only: true, scope: 'workspace', root: '/Users/xuean/Repos/personal-projects/Loomi' },
@@ -235,7 +254,7 @@ describe('SettingsView tools catalog', () => {
       source: 'builtin',
       group: 'workspace',
       riskLevel: 'low',
-      approvalPolicy: 'always_required',
+      approvalPolicy: 'read_only',
       enabled: true,
       executionState: 'executable',
       safeMetadata: { read_only: true, scope: 'workspace', example: '/Users/xuean/private/example.ts' },

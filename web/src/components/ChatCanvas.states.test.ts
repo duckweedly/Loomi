@@ -202,6 +202,85 @@ describe('ChatCanvas state copy', () => {
     expect(html).toContain('<code>code</code>')
   })
 
+  test('holds streaming draft markdown until the assistant final content completes', () => {
+    const html = renderToStaticMarkup(createElement(ChatCanvas, {
+      sidebarCollapsed: false,
+      thread: { id: 'thread-a', title: 'Thread A', project: 'Loomi', mode: 'chat', updatedAt: 'Now', lifecycleStatus: 'active', runStatus: 'running' },
+      messages: [{ id: 'msg-user', threadId: 'thread-a', role: 'user', content: 'Harness Agent', createdAt: 'Now' }],
+      run: {
+        id: 'run-a',
+        threadId: 'thread-a',
+        status: 'running',
+        model: 'Local simulated',
+        context: 'local_simulated',
+        events: [],
+        assistantDraft: { content: '>HarnessAgentsareautonomousAIworkers\n\n1. 先用一张图理解```text\n|broken|', status: 'streaming' },
+      },
+      loading: false,
+      error: null,
+      dataSourceMode: 'real_api',
+      streamState: 'live',
+      providerCapabilities: [{ id: 'custom', family: 'openai_compatible' as const, model: 'gpt-5.5', status: 'available' as const }],
+      onSendMessage: () => {},
+      onStopRun: () => {},
+      locale: 'zh',
+    }))
+
+    expect(html).toContain('模型正在生成回复')
+    expect(html).not.toContain('HarnessAgentsareautonomousAIworkers')
+    expect(html).not.toContain('|broken|')
+    expect(html).not.toContain('<blockquote>')
+  })
+
+  test('does not turn multiline fenced content into inline code chips', () => {
+    const html = renderToStaticMarkup(createElement(ChatCanvas, {
+      sidebarCollapsed: false,
+      thread: { id: 'thread-a', title: 'Thread A', project: 'Loomi', mode: 'chat', updatedAt: 'Now', lifecycleStatus: 'active', runStatus: 'completed' },
+      messages: [{ id: 'msg-a', threadId: 'thread-a', role: 'assistant', content: 'Before `inline`\n```text\nGrafanaAgent\n```\nAfter `ok`', createdAt: 'Now' }],
+      run: null,
+      loading: false,
+      error: null,
+      dataSourceMode: 'real_api',
+      streamState: 'closed',
+      providerCapabilities: [{ id: 'custom', family: 'openai_compatible' as const, model: 'gpt-5.5', status: 'available' as const }],
+      onSendMessage: () => {},
+      onStopRun: () => {},
+      locale: 'en',
+    }))
+
+    expect(html).toContain('<p>Before <code>inline</code></p>')
+    expect(html).toContain('<pre><code class="language-text">GrafanaAgent</code></pre>')
+    expect(html).toContain('<p>After <code>ok</code></p>')
+    expect(html).not.toContain('<code>text')
+  })
+
+  test('repairs collapsed markdown headings without touching fenced code', () => {
+    const html = renderToStaticMarkup(createElement(ChatCanvas, {
+      sidebarCollapsed: false,
+      thread: { id: 'thread-a', title: 'Thread A', project: 'Loomi', mode: 'chat', updatedAt: 'Now', lifecycleStatus: 'active', runStatus: 'completed' },
+      messages: [{
+        id: 'msg-collapsed',
+        threadId: 'thread-a',
+        role: 'assistant',
+        content: '先说结论。---##1.Hessian是什么？正文---###情况一：碗形\n```text\n---##not-heading\n```',
+        createdAt: 'Now',
+      }],
+      run: null,
+      loading: false,
+      error: null,
+      dataSourceMode: 'real_api',
+      streamState: 'closed',
+      providerCapabilities: [{ id: 'custom', family: 'openai_compatible' as const, model: 'gpt-5.5', status: 'available' as const }],
+      onSendMessage: () => {},
+      onStopRun: () => {},
+      locale: 'zh',
+    }))
+
+    expect(html).toContain('<h2>1. Hessian是什么？正文</h2>')
+    expect(html).toContain('<h3>情况一：碗形</h3>')
+    expect(html).toContain('---##not-heading')
+  })
+
   test('renders markdown tables in assistant messages', () => {
     const html = renderToStaticMarkup(createElement(ChatCanvas, {
       sidebarCollapsed: false,
@@ -227,7 +306,7 @@ describe('ChatCanvas state copy', () => {
     expect(html).toContain('<table>')
     expect(html).toContain('<th>序号</th>')
     expect(html).toContain('<td>Reuters AI News</td>')
-    expect(html).toContain('<td>https://example.com</td>')
+    expect(html).toContain('<td><a href="https://example.com"')
     expect(html).not.toContain('| 序号 | 新闻 | 链接 |')
   })
 

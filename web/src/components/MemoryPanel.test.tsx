@@ -25,7 +25,7 @@ describe('MemoryPanel', () => {
       />,
     )
 
-    expect(html).toContain('已保存记忆')
+    expect(html).toContain('记忆控制台')
     expect(html).toContain('Prefers safe snapshots')
     expect(html).toContain('Delete Preference')
   })
@@ -177,6 +177,44 @@ describe('MemoryPanel', () => {
     expect(html).not.toContain('/Users/xuean')
     expect(html).not.toContain('provider trace')
     expect(html).not.toContain('stdout')
+  })
+
+  test('renders pending proposals with approval controls and no raw content', () => {
+    const html = renderToStaticMarkup(
+      <MemoryPanel
+        query=""
+        locale="zh"
+        entries={[]}
+        writeProposals={[{
+          id: 'memprop_1',
+          title: 'Run outcome',
+          summary: 'Assistant outcome summary',
+          scopeType: 'thread',
+          scopeId: 'thread_1',
+          status: 'pending',
+          safetyState: 'safe',
+          sourceThreadId: 'thread_1',
+          sourceRunId: 'run_1',
+          createdAt: '2026-05-26T12:00:00Z',
+          redactionApplied: false,
+        }]}
+        onQueryChange={() => {}}
+        onFiltersChange={() => {}}
+        onOpenDetail={() => {}}
+        onRequestDelete={() => {}}
+        onApproveProposal={() => {}}
+        onDenyProposal={() => {}}
+      />,
+    )
+
+    expect(html).toContain('待审批提案')
+    expect(html).toContain('Run outcome')
+    expect(html).toContain('Assistant outcome summary')
+    expect(html).toContain('编辑 Run outcome')
+    expect(html).toContain('保存 Run outcome')
+    expect(html).toContain('拒绝 Run outcome')
+    expect(html).not.toContain('memprop_1')
+    expect(html).not.toContain('content')
   })
 
   test('does not fabricate audit history when backend is unavailable', () => {

@@ -13,7 +13,7 @@ import (
 	productruntime "github.com/sheridiany/loomi/internal/runtime"
 )
 
-func TestM26WebFetchApproveExecuteFinalSmoke(t *testing.T) {
+func TestM26WebFetchAutoExecuteFinalSmoke(t *testing.T) {
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_, _ = w.Write([]byte("<html><title>M26 Fixture</title><body>Approved web fetch body.</body></html>"))
@@ -27,7 +27,7 @@ func TestM26WebFetchApproveExecuteFinalSmoke(t *testing.T) {
 		Slug:             "default",
 		Name:             "Default",
 		Description:      "Default",
-		SystemPrompt:     "Use approved web fetch only.",
+		SystemPrompt:     "Use public web fetch only.",
 		ModelRoute:       productdata.PersonaModelRoute{ProviderID: "custom", Model: "model"},
 		AllowedToolNames: []string{productdata.ToolNameWebFetch},
 		ReasoningMode:    "balanced",
@@ -54,27 +54,14 @@ func TestM26WebFetchApproveExecuteFinalSmoke(t *testing.T) {
 	runID := decodeStringField(t, runRes.Body.Bytes(), "run", "id")
 
 	if ok, err := worker.ProcessOne(context.Background()); err != nil || !ok {
-		t.Fatalf("first ProcessOne ok=%v err=%v", ok, err)
+		t.Fatalf("ProcessOne ok=%v err=%v", ok, err)
 	}
 	call, err := svc.GetToolCall(context.Background(), ident, threadID, runID, toolCallID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if call.ToolName != productdata.ToolNameWebFetch || call.ApprovalStatus != productdata.ToolCallApprovalRequired || call.ExecutionStatus != productdata.ToolCallExecutionBlocked {
-		t.Fatalf("pre-approval call = %+v", call)
-	}
-
-	approvalRes := requestJSON(t, srv, http.MethodPost, "/v1/threads/"+threadID+"/runs/"+runID+"/tool-calls/"+toolCallID+"/approve", "")
-	assertStatus(t, approvalRes.Code, http.StatusOK, approvalRes.Body.String())
-	if ok, err := worker.ProcessOne(context.Background()); err != nil || !ok {
-		t.Fatalf("second ProcessOne ok=%v err=%v", ok, err)
-	}
-	finalCall, err := svc.GetToolCall(context.Background(), ident, threadID, runID, toolCallID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if finalCall.ExecutionStatus != productdata.ToolCallExecutionSucceeded || finalCall.ResultSummary["operation"] != "fetch" || finalCall.ResultSummary["scope"] != "web" || finalCall.ResultSummary["title"] != "M26 Fixture" {
-		t.Fatalf("final call = %+v", finalCall)
+	if call.ToolName != productdata.ToolNameWebFetch || call.ApprovalStatus != productdata.ToolCallApprovalApproved || call.ExecutionStatus != productdata.ToolCallExecutionSucceeded || call.ResultSummary["operation"] != "fetch" || call.ResultSummary["scope"] != "web" || call.ResultSummary["title"] != "M26 Fixture" {
+		t.Fatalf("call = %+v", call)
 	}
 	run, err := svc.GetRun(context.Background(), ident, runID)
 	if err != nil {
@@ -84,10 +71,13 @@ func TestM26WebFetchApproveExecuteFinalSmoke(t *testing.T) {
 		t.Fatalf("run=%+v provider calls=%d", run, provider.calls)
 	}
 	eventsBody := fetchM21Events(t, srv, runID)
-	for _, expected := range []string{productdata.EventToolCallApprovalRequired, productdata.EventToolCallExecuting, productdata.EventToolCallSucceeded, `"tool_name":"web.fetch"`, `"scope":"web"`, `"status_code":200`} {
+	for _, expected := range []string{productdata.EventToolCallApproved, productdata.EventToolCallExecuting, productdata.EventToolCallSucceeded, `"tool_name":"web.fetch"`, `"scope":"web"`, `"status_code":200`} {
 		if !strings.Contains(eventsBody, expected) {
 			t.Fatalf("events missing %s: %s", expected, eventsBody)
 		}
+	}
+	if strings.Contains(eventsBody, productdata.EventToolCallApprovalRequired) {
+		t.Fatalf("web.fetch should not require manual approval: %s", eventsBody)
 	}
 	assertBodyExcludes(t, eventsBody, "m26 web fetch events", "Set-Cookie", "Authorization", "sk-secret", "/Users/")
 }

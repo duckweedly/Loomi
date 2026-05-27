@@ -69,13 +69,32 @@ export default function App() {
     memoryAuditItems,
     memoryAuditLoading,
     memoryAuditError,
+    memoryWriteProposals,
+    memoryProposalsLoading,
+    memoryProposalsError,
+    memoryProviderStatus,
+    memoryErrors,
+    memoryProviderSaveResult,
+    memoryOverviewSnapshot,
+    memoryImpressionSnapshot,
+    memorySnapshotLoading,
     pendingDeleteMemoryEntry,
+    approveMemoryWriteProposal,
+    updateMemoryWriteProposal,
+    denyMemoryWriteProposal,
     checkProvider,
     detectLocalProviders,
     enableLocalProvider,
     disableLocalProvider,
     saveProvider,
     saveWebSearchKeys,
+    refreshMemoryProviderStatus,
+    updateMemoryProvider,
+    detectNowledgeMemoryProvider,
+    detectOpenVikingMemoryProvider,
+    rebuildMemoryOverviewSnapshot,
+    rebuildMemoryImpressionSnapshot,
+    getMemoryContent,
     chooseWorkspaceFolder,
     saveMCPServer,
     deleteMCPServer,
@@ -86,6 +105,7 @@ export default function App() {
     closeMemoryDetail,
     requestDeleteMemoryEntry,
     cancelDeleteMemoryEntry,
+    createMemoryEntry,
     deleteMemoryEntry,
   } = useWorkspaceState(shell.defaultWorkspaceMode)
 
@@ -129,13 +149,14 @@ export default function App() {
   }
 
   const selectMode = useCallback((mode: 'chat' | 'work') => {
+    shell.closeSettings()
     const threadId = threads.find((thread) => thread.mode === mode)?.id
     if (threadId) {
       selectThread(threadId)
       return
     }
     void createThread(mode)
-  }, [createThread, selectThread, threads])
+  }, [createThread, selectThread, shell, threads])
 
   return (
     <ConfigProvider motion={motion}>
@@ -244,6 +265,15 @@ export default function App() {
                   memoryAuditItems={memoryAuditItems}
                   memoryAuditLoading={memoryAuditLoading}
                   memoryAuditError={memoryAuditError}
+                  memoryWriteProposals={memoryWriteProposals}
+                  memoryProposalsLoading={memoryProposalsLoading}
+                  memoryProposalsError={memoryProposalsError}
+                  memoryProviderStatus={memoryProviderStatus}
+                  memoryErrors={memoryErrors}
+                  memoryProviderSaveResult={memoryProviderSaveResult}
+                  memoryOverviewSnapshot={memoryOverviewSnapshot}
+                  memoryImpressionSnapshot={memoryImpressionSnapshot}
+                  memorySnapshotLoading={memorySnapshotLoading}
                   pendingDeleteMemoryEntry={pendingDeleteMemoryEntry}
                   providerCheckResults={providerCheckResults}
                   providerSaveResult={providerSaveResult}
@@ -260,6 +290,13 @@ export default function App() {
                     shell.setProviderDraftSettings({ ...settings, apiKey: '', apiKeySet: true })
                   }}
                   onSaveWebSearchKeys={(input) => void saveWebSearchKeys(input)}
+                  onRefreshMemoryProviderStatus={() => void refreshMemoryProviderStatus()}
+                  onUpdateMemoryProvider={(input) => void updateMemoryProvider(input)}
+                  onDetectNowledgeMemoryProvider={detectNowledgeMemoryProvider}
+                  onDetectOpenVikingMemoryProvider={detectOpenVikingMemoryProvider}
+                  onRebuildMemoryOverviewSnapshot={() => void rebuildMemoryOverviewSnapshot()}
+                  onRebuildMemoryImpressionSnapshot={() => void rebuildMemoryImpressionSnapshot()}
+                  onGetMemoryContent={getMemoryContent}
                   onSaveMCPServer={(input) => void saveMCPServer(input)}
                   onDeleteMCPServer={(slug) => void deleteMCPServer(slug)}
                   onDiscoverMCPServer={(slug) => void discoverMCPServer(slug)}
@@ -273,7 +310,11 @@ export default function App() {
                   onCloseMemoryDetail={closeMemoryDetail}
                   onRequestDeleteMemoryEntry={requestDeleteMemoryEntry}
                   onCancelDeleteMemoryEntry={cancelDeleteMemoryEntry}
+                  onCreateMemoryEntry={(input) => void createMemoryEntry(input)}
                   onConfirmDeleteMemoryEntry={(entry) => void deleteMemoryEntry(entry)}
+                  onApproveMemoryProposal={(proposal) => void approveMemoryWriteProposal(proposal)}
+                  onUpdateMemoryProposal={(proposal, input) => void updateMemoryWriteProposal(proposal, input)}
+                  onDenyMemoryProposal={(proposal) => void denyMemoryWriteProposal(proposal)}
                   onBack={shell.closeSettings}
                 />
               ) : (
@@ -290,6 +331,8 @@ export default function App() {
                   backendUnavailableAttempted={backendUnavailableAttempted}
                   capabilitySignals={capabilitySignals}
                   providerCapabilities={providerCapabilities}
+                  workspaceRootConfig={workspaceRootConfig}
+                  workspaceRootSaveResult={workspaceRootSaveResult}
                   personas={personas}
                   selectedPersonaId={selectedPersonaId}
                   onSelectPersona={setSelectedPersonaId}
