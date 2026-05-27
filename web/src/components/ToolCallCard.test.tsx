@@ -183,6 +183,52 @@ describe('ToolCallCard M7 approval-required state', () => {
     expect(applyHtml).not.toContain('patch_123')
   })
 
+  test('renders directory browser tools with safe summaries and no absolute paths', () => {
+    const listHtml = renderToStaticMarkup(createElement(ToolCallCard, {
+      toolCall: {
+        id: 'tool_list',
+        toolCallId: 'tc_list',
+        name: 'workspace.list_directory',
+        status: 'succeeded',
+        approvalStatus: 'approved',
+        executionStatus: 'succeeded',
+        summary: 'Tool call succeeded',
+        input: '',
+        output: '',
+        argumentsSummary: { path: '/Users/xuean/Downloads', max_entries: 200, depth: 2 },
+        resultSummary: { operation: 'list_directory', path: '.', returned_entries: 12, total_entries_seen: 12, directories_count: 3, files_count: 9, truncated: false },
+        errorCode: null,
+        errorMessage: null,
+      },
+    }))
+    const summaryHtml = renderToStaticMarkup(createElement(ToolCallCard, {
+      toolCall: {
+        id: 'tool_tree',
+        toolCallId: 'tc_tree',
+        name: 'workspace.tree_summary',
+        status: 'succeeded',
+        approvalStatus: 'approved',
+        executionStatus: 'succeeded',
+        summary: 'Tool call succeeded',
+        input: '',
+        output: '',
+        argumentsSummary: { path: '.', max_entries: 200, depth: 3 },
+        resultSummary: { operation: 'tree_summary', by_kind: { code: 2, document: 4 }, by_extension: { '.go': 2 }, largest_files: [{ path: 'src/secret-token.txt', size: 100 }], recent_files: [{ path: '/Users/xuean/Downloads/report.pdf' }] },
+        errorCode: null,
+        errorMessage: null,
+      },
+    }))
+
+    expect(listHtml).toContain('Read directory')
+    expect(listHtml).toContain('returned_entries: 12')
+    expect(listHtml).toContain('directories_count: 3')
+    expect(listHtml).not.toContain('/Users/')
+    expect(summaryHtml).toContain('Summarize directory')
+    expect(summaryHtml).toContain('by_kind')
+    expect(summaryHtml).not.toContain('secret-token')
+    expect(summaryHtml).not.toContain('/Users/')
+  })
+
   test('renders sandbox process lifecycle cards with bounded safe summaries', () => {
     const html = renderToStaticMarkup(createElement(ToolCallCard, {
       toolCall: {
@@ -208,6 +254,35 @@ describe('ToolCallCard M7 approval-required state', () => {
     expect(html).not.toContain('sandbox.terminate_process')
     expect(html).not.toContain('/Users/')
     expect(html).not.toContain('TOKEN=secret')
+  })
+
+  test('renders sandbox process resume metadata without unsafe paths or raw output', () => {
+    const html = renderToStaticMarkup(createElement(ToolCallCard, {
+      toolCall: {
+        id: 'tool_process_resume',
+        toolCallId: 'tc_process_resume',
+        name: 'sandbox.continue_process',
+        status: 'succeeded',
+        approvalStatus: 'approved',
+        executionStatus: 'succeeded',
+        summary: 'Tool call succeeded',
+        input: '',
+        output: '',
+        argumentsSummary: { process_id: 'sp_resume', cursor: 0 },
+        resultSummary: { operation: 'continue_process', process_id: 'sp_resume', argv_summary: ['cat'], cwd_alias: '.', status: 'exited', terminal_summary: 'exited exit_code=0', next_cursor: 2048, stdout: 'token=secret /Users/xuean/Loomi/project', started_at: '2026-05-27T09:00:00Z', updated_at: '2026-05-27T09:00:01Z', ended_at: '2026-05-27T09:00:01Z' },
+        errorCode: null,
+        errorMessage: null,
+      },
+    }))
+
+    expect(html).toContain('Continue sandbox process')
+    expect(html).toContain('argv_summary: cat')
+    expect(html).toContain('cwd_alias: .')
+    expect(html).toContain('status: exited')
+    expect(html).toContain('next_cursor: 2048')
+    expect(html).toContain('terminal_summary: exited exit_code=0')
+    expect(html).not.toContain('/Users/')
+    expect(html).not.toContain('token=secret')
   })
 
   test('hides unknown raw tool names behind a generic label', () => {

@@ -56,7 +56,6 @@ func NewServerWithRuntime(cfg config.Config, checker db.Checker, product product
 func NewServerWithRuntimes(cfg config.Config, checker db.Checker, product productdata.Service, broadcaster *productruntime.Broadcaster, runner RuntimeRunner, gatewayRunner GatewayRunner) *Server {
 	providers := append(productruntime.ProviderConfigsFromConfig(cfg), savedProviderConfigs(product)...)
 	s := &Server{cfg: cfg, checker: checker, product: product, broadcaster: broadcaster, runner: runner, gatewayRunner: gatewayRunner, providers: providers, skillDiscoveryInput: productruntime.DefaultSkillDiscoveryInput(), localProviderEnablements: map[string]productruntime.LocalProviderCapability{}, mux: http.NewServeMux()}
-	s.applySavedWorkspaceRoot(context.Background())
 	s.mux.HandleFunc("GET /healthz", s.handleHealthz)
 	s.mux.HandleFunc("GET /readyz", s.handleReadyz)
 	s.mux.HandleFunc("GET /v1/me", s.handleCurrentIdentity)

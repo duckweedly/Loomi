@@ -421,6 +421,8 @@ const (
 	ToolNameWorkspaceGlob                                = "workspace.glob"
 	ToolNameWorkspaceGrep                                = "workspace.grep"
 	ToolNameWorkspaceRead                                = "workspace.read"
+	ToolNameWorkspaceListDirectory                       = "workspace.list_directory"
+	ToolNameWorkspaceTreeSummary                         = "workspace.tree_summary"
 	ToolNameWorkspaceWriteFile                           = "workspace.write_file"
 	ToolNameWorkspaceEdit                                = "workspace.edit"
 	ToolNameWorkspacePatchPreview                        = "workspace.patch_preview"
@@ -740,6 +742,7 @@ type RunContext struct {
 	Thread                 Thread
 	Messages               []Message
 	Job                    BackgroundJob
+	WorkspaceRoot          WorkspaceRootConfig
 	ProviderRoute          ProviderRoute
 	EnabledTools           []ToolResolution
 	MCPAvailability        MCPToolAvailabilitySummary
@@ -972,6 +975,7 @@ func (c RunContext) SafeSummary() map[string]any {
 	summary := map[string]any{
 		"message_count":               len(c.Messages),
 		"has_job_metadata":            len(c.Job.Metadata) > 0,
+		"workspace_root_configured":   strings.TrimSpace(c.WorkspaceRoot.Path) != "",
 		"enabled_tool_count":          len(c.EnabledTools),
 		"has_continuation_projection": c.ContinuationProjection.Available,
 	}
@@ -1433,7 +1437,7 @@ func ValidateToolCallRequestInput(input RecordToolCallRequestInput) (RecordToolC
 
 func IsWorkspaceToolName(name string) bool {
 	switch strings.TrimSpace(name) {
-	case ToolNameWorkspaceGlob, ToolNameWorkspaceGrep, ToolNameWorkspaceRead, ToolNameWorkspaceWriteFile, ToolNameWorkspaceEdit, ToolNameWorkspacePatchPreview, ToolNameWorkspacePatchApply:
+	case ToolNameWorkspaceGlob, ToolNameWorkspaceGrep, ToolNameWorkspaceRead, ToolNameWorkspaceListDirectory, ToolNameWorkspaceTreeSummary, ToolNameWorkspaceWriteFile, ToolNameWorkspaceEdit, ToolNameWorkspacePatchPreview, ToolNameWorkspacePatchApply:
 		return true
 	default:
 		return false
@@ -1442,7 +1446,7 @@ func IsWorkspaceToolName(name string) bool {
 
 func IsWorkspaceReadOnlyToolName(name string) bool {
 	switch strings.TrimSpace(name) {
-	case ToolNameWorkspaceGlob, ToolNameWorkspaceGrep, ToolNameWorkspaceRead:
+	case ToolNameWorkspaceGlob, ToolNameWorkspaceGrep, ToolNameWorkspaceRead, ToolNameWorkspaceListDirectory, ToolNameWorkspaceTreeSummary:
 		return true
 	default:
 		return false
@@ -1532,7 +1536,7 @@ func IsTodoToolName(name string) bool {
 
 func validateDiscoveryToolCallArguments(input RecordToolCallRequestInput) (RecordToolCallRequestInput, error) {
 	allowed := map[string]map[string]struct{}{
-		ToolNameLoadTools: {"queries": {}, "names": {}, "limit": {}},
+		ToolNameLoadTools: {"query": {}, "queries": {}, "names": {}, "limit": {}},
 		ToolNameLoadSkill: {"name": {}, "limit": {}},
 	}
 	for key := range input.ArgumentsSummary {
@@ -1542,6 +1546,16 @@ func validateDiscoveryToolCallArguments(input RecordToolCallRequestInput) (Recor
 	}
 	switch input.ToolName {
 	case ToolNameLoadTools:
+		if value, ok := input.ArgumentsSummary["query"]; ok {
+			query, ok := value.(string)
+			if !ok || len(strings.TrimSpace(query)) > 240 {
+				return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Tool lookup query is invalid.")
+			}
+			if strings.TrimSpace(query) != "" {
+				input.ArgumentsSummary["queries"] = []any{strings.TrimSpace(query)}
+			}
+			delete(input.ArgumentsSummary, "query")
+		}
 		if value, ok := input.ArgumentsSummary["queries"]; ok {
 			normalized, valid := safeOptionalStringListArgument(value, 5)
 			if !valid {
@@ -1573,13 +1587,15 @@ func validateDiscoveryToolCallArguments(input RecordToolCallRequestInput) (Recor
 
 func validateWorkspaceToolCallArguments(input RecordToolCallRequestInput) (RecordToolCallRequestInput, error) {
 	allowed := map[string]map[string]struct{}{
-		ToolNameWorkspaceGlob:         {"pattern": {}, "path": {}, "limit": {}},
-		ToolNameWorkspaceGrep:         {"query": {}, "pattern": {}, "path": {}, "include": {}, "case_sensitive": {}, "limit": {}},
-		ToolNameWorkspaceRead:         {"path": {}, "offset": {}, "limit": {}, "max_bytes": {}},
-		ToolNameWorkspaceWriteFile:    {"path": {}, "content": {}, "max_bytes": {}},
-		ToolNameWorkspaceEdit:         {"path": {}, "old_text": {}, "new_text": {}, "max_bytes": {}},
-		ToolNameWorkspacePatchPreview: {"path": {}, "old_text": {}, "new_text": {}, "max_bytes": {}},
-		ToolNameWorkspacePatchApply:   {"path": {}, "old_text": {}, "new_text": {}, "max_bytes": {}},
+		ToolNameWorkspaceGlob:          {"pattern": {}, "path": {}, "limit": {}},
+		ToolNameWorkspaceGrep:          {"query": {}, "pattern": {}, "path": {}, "include": {}, "case_sensitive": {}, "limit": {}},
+		ToolNameWorkspaceRead:          {"path": {}, "offset": {}, "limit": {}, "max_bytes": {}},
+		ToolNameWorkspaceListDirectory: {"path": {}, "max_entries": {}, "depth": {}, "include_hidden": {}, "sort": {}},
+		ToolNameWorkspaceTreeSummary:   {"path": {}, "max_entries": {}, "depth": {}, "include_hidden": {}, "sort": {}},
+		ToolNameWorkspaceWriteFile:     {"path": {}, "content": {}, "max_bytes": {}},
+		ToolNameWorkspaceEdit:          {"path": {}, "old_text": {}, "new_text": {}, "max_bytes": {}},
+		ToolNameWorkspacePatchPreview:  {"path": {}, "old_text": {}, "new_text": {}, "max_bytes": {}},
+		ToolNameWorkspacePatchApply:    {"path": {}, "old_text": {}, "new_text": {}, "max_bytes": {}},
 	}
 	for key := range input.ArgumentsSummary {
 		if _, ok := allowed[input.ToolName][key]; !ok {
@@ -1602,6 +1618,10 @@ func validateWorkspaceToolCallArguments(input RecordToolCallRequestInput) (Recor
 	case ToolNameWorkspaceRead:
 		if strings.TrimSpace(workspaceArgumentString(input.ArgumentsSummary, "path")) == "" {
 			return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Workspace read path is required.")
+		}
+	case ToolNameWorkspaceListDirectory, ToolNameWorkspaceTreeSummary:
+		if sortValue := strings.TrimSpace(workspaceArgumentString(input.ArgumentsSummary, "sort")); sortValue != "" && sortValue != "name" && sortValue != "modified" && sortValue != "size" {
+			return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Workspace directory sort is invalid.")
 		}
 	case ToolNameWorkspaceWriteFile:
 		if strings.TrimSpace(workspaceArgumentString(input.ArgumentsSummary, "path")) == "" {
@@ -2656,7 +2676,7 @@ func RedactEventMetadata(metadata map[string]any) map[string]any {
 
 func isSensitiveMetadataKey(key string) bool {
 	lower := strings.ToLower(key)
-	for _, marker := range []string{"api_key", "authorization", "password", "secret", "token", "credential"} {
+	for _, marker := range []string{"api_key", "authorization", "password", "secret", "token", "credential", "workspace_root_path"} {
 		if strings.Contains(lower, marker) {
 			return true
 		}

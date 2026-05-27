@@ -127,6 +127,24 @@ MCP approval is offered only when a prior discovery event lists the namespaced c
 
 If `result_for_model_redacted` is present, continuation uses that field. Otherwise it uses the safe `result_summary`. Raw executor output is never eligible for provider continuation.
 
+Before provider serialization, oversized string fields inside that redacted result are compacted. The compacted string keeps early context, path/status/error-like lines, tail context, and a `[tool output compacted]` marker; small results are unchanged.
+
+M92 preserves readable benign summaries during compaction. Lines containing credentials, tokens, secret markers, private host paths, or env-file references are redacted, but terminal labels such as `stdout` do not cause the whole result to collapse to `[redacted]`.
+
+## Failure metadata
+
+Terminal failures must carry a user-actionable summary in the error event and the final `run_failed` event:
+
+| Code | Meaning |
+| --- | --- |
+| `provider_error`, `provider_timeout`, `provider_misconfigured`, `provider_rate_limited` | Upstream provider request failed or is not ready. |
+| `tool_validation_failed` | Provider requested a tool with invalid arguments. The message includes the validation reason, such as a missing path. |
+| `permission_not_authorized` | Tool or command is not authorized for the current run, mode, or approval boundary. |
+| `workspace_unbound` | No usable workspace folder is bound for a workspace tool run. |
+| `bounded_limit_reached` | A process/tool hit timeout or bounded output limits. |
+
+Clients should display `error_message` or the event summary before falling back to a generic failed state. The generic "run failed" label is only a heading; it is not enough diagnostic content.
+
 ## Tool result continuation
 
 After an approved tool succeeds, runtime can build one continuation request from:

@@ -51,7 +51,7 @@ func TestToolCatalogIncludesWorkspaceReadOnlyTools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{ToolNameWorkspaceGlob, ToolNameWorkspaceGrep, ToolNameWorkspaceRead} {
+	for _, name := range []string{ToolNameWorkspaceGlob, ToolNameWorkspaceGrep, ToolNameWorkspaceRead, ToolNameWorkspaceListDirectory, ToolNameWorkspaceTreeSummary} {
 		tool := catalogToolByName(tools, name)
 		if tool.Source != ToolCatalogSourceBuiltin || tool.Group != ToolCatalogGroupWorkspace || tool.RiskLevel != ToolRiskLow || tool.ApprovalPolicy != ToolApprovalReadOnly {
 			t.Fatalf("%s metadata = %+v", name, tool)

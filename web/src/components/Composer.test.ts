@@ -102,7 +102,7 @@ describe('Composer interactions', () => {
       threadSelected: true,
       run: null,
       messages: [],
-      workspaceFolderStatus: 'Default Home',
+      workspaceFolderStatus: 'No folder selected',
       onSubmit: () => {},
       onChooseWorkspaceFolder: () => {},
     }))
@@ -111,21 +111,19 @@ describe('Composer interactions', () => {
       run: null,
       messages: [],
       dataSourceMode: 'mock',
-      workspaceFolderStatus: 'Default Home',
+      workspaceFolderStatus: 'No folder selected',
       onSubmit: () => {},
       onChooseWorkspaceFolder: () => {},
     }))
 
     expect(chatHtml).toContain('placeholder="Message Loomi"')
-    expect(chatHtml).not.toContain('No folder selected')
     expect(chatHtml).not.toContain('Work tools limited')
     expect(chatHtml).toContain('选择目录')
-    expect(chatHtml).toContain('Default Home')
+    expect(chatHtml).toContain('No folder selected')
     expect(workHtml).toContain('placeholder="Message Loomi"')
-    expect(workHtml).not.toContain('No folder selected')
     expect(workHtml).not.toContain('Work tools limited')
     expect(workHtml).not.toContain('Mock demo mode')
     expect(workHtml).toContain('选择目录')
-    expect(workHtml).toContain('Default Home')
+    expect(workHtml).toContain('No folder selected')
   })
 })

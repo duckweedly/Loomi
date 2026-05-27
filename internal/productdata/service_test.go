@@ -99,7 +99,7 @@ func TestThreadValidation(t *testing.T) {
 func TestWorkToolResolutionsFollowLatestUserIntent(t *testing.T) {
 	all := toolResolutionsForNamesAndEvents(BuiltInPersonas()[0].AllowedToolNames, nil)
 	listFiles := workToolResolutionsForLatestIntent(all, []Message{{Role: MessageRoleUser, Content: "列一下当前工作目录里的文件，简单分类。"}})
-	if !hasToolResolution(listFiles, ToolNameWorkspaceGlob) || !hasToolResolution(listFiles, ToolNameWorkspaceRead) {
+	if !hasToolResolution(listFiles, ToolNameWorkspaceListDirectory) || !hasToolResolution(listFiles, ToolNameWorkspaceTreeSummary) || !hasToolResolution(listFiles, ToolNameWorkspaceRead) {
 		t.Fatalf("file listing tools missing: %+v", listFiles)
 	}
 	for _, disallowed := range []string{ToolNameSandboxExecCommand, ToolNameAgentSpawn, ToolNameArtifactCreateText, ToolNameBrowserOpen} {
@@ -118,6 +118,97 @@ func TestWorkToolResolutionsFollowLatestUserIntent(t *testing.T) {
 	runTests := workToolResolutionsForLatestIntent(all, []Message{{Role: MessageRoleUser, Content: "帮我运行 go test ./..."}})
 	if !hasToolResolution(runTests, ToolNameSandboxExecCommand) {
 		t.Fatalf("command intent did not expose sandbox exec: %+v", runTests)
+	}
+}
+
+func TestPrepareRunContextUsesRunScopedWorkspaceRootSnapshot(t *testing.T) {
+	svc := NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	firstRoot := t.TempDir()
+	secondRoot := t.TempDir()
+	if _, err := svc.SaveWorkspaceRootConfig(context.Background(), ident, WorkspaceRootConfig{Path: firstRoot}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.SyncBuiltInPersonas(context.Background(), ident, BuiltInPersonas()); err != nil {
+		t.Fatal(err)
+	}
+	thread, err := svc.CreateThread(context.Background(), ident, CreateThreadInput{Title: "Workspace root", Mode: ThreadModeWork})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _, err := svc.CreateMessage(context.Background(), ident, thread.ID, CreateMessageInput{Content: "列一下目录"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.StartRun(context.Background(), ident, thread.ID, StartRunInput{Source: RunSourceModelGateway, MessageID: message.ID, ProviderID: "custom", Model: "model"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.SaveWorkspaceRootConfig(context.Background(), ident, WorkspaceRootConfig{Path: secondRoot}); err != nil {
+		t.Fatal(err)
+	}
+	job, _, ok, err := svc.ClaimBackgroundJob(context.Background(), ident, ClaimBackgroundJobInput{WorkerID: "worker_workspace_root", LeaseSeconds: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("claim ok = false")
+	}
+	ctxData, err := svc.PrepareRunContext(context.Background(), ident, job)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if ctxData.WorkspaceRoot.Path != firstRoot {
+		t.Fatalf("workspace root snapshot = %q, want %q", ctxData.WorkspaceRoot.Path, firstRoot)
+	}
+}
+
+func TestApprovedToolResumePreservesRunScopedWorkspaceRootSnapshot(t *testing.T) {
+	svc := NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	firstRoot := t.TempDir()
+	secondRoot := t.TempDir()
+	if _, err := svc.SaveWorkspaceRootConfig(context.Background(), ident, WorkspaceRootConfig{Path: firstRoot}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.SyncBuiltInPersonas(context.Background(), ident, BuiltInPersonas()); err != nil {
+		t.Fatal(err)
+	}
+	thread, err := svc.CreateThread(context.Background(), ident, CreateThreadInput{Title: "Workspace approval", Mode: ThreadModeWork})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _, err := svc.CreateMessage(context.Background(), ident, thread.ID, CreateMessageInput{Content: "改文件"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, StartRunInput{Source: RunSourceModelGateway, MessageID: message.ID, ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.RecordToolCallRequest(context.Background(), ident, run.ID, RecordToolCallRequestInput{ToolCallID: "tc_write", ToolName: ToolNameWorkspaceWriteFile, ArgumentsSummary: map[string]any{"path": "notes.txt", "content": "hello\n"}, ArgumentsHash: "hash_write", ApprovalStatus: ToolCallApprovalRequired, ExecutionStatus: ToolCallExecutionBlocked}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.SaveWorkspaceRootConfig(context.Background(), ident, WorkspaceRootConfig{Path: secondRoot}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.ApproveToolCall(context.Background(), ident, thread.ID, run.ID, "tc_write"); err != nil {
+		t.Fatal(err)
+	}
+	job, _, ok, err := svc.ClaimBackgroundJob(context.Background(), ident, ClaimBackgroundJobInput{WorkerID: "worker_workspace_resume_root", LeaseSeconds: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("claim ok = false")
+	}
+	ctxData, err := svc.PrepareRunContext(context.Background(), ident, job)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if ctxData.WorkspaceRoot.Path != firstRoot {
+		t.Fatalf("resume workspace root snapshot = %q, want %q", ctxData.WorkspaceRoot.Path, firstRoot)
 	}
 }
 
@@ -244,9 +335,12 @@ func TestMessageValidationAndThreadNotFound(t *testing.T) {
 }
 
 func TestRedactEventMetadataRedactsSensitiveKeys(t *testing.T) {
-	metadata := RedactEventMetadata(map[string]any{"api_key": "sk-live-123", "nested": map[string]any{"password": "abc123"}, "timezone": "UTC"})
+	metadata := RedactEventMetadata(map[string]any{"api_key": "sk-live-123", "nested": map[string]any{"password": "abc123"}, "timezone": "UTC", "workspace_root_path": "/var/tmp/project"})
 	if metadata["api_key"] != "[redacted]" {
 		t.Fatalf("api_key was not redacted: %+v", metadata)
+	}
+	if metadata["workspace_root_path"] != "[redacted]" {
+		t.Fatalf("workspace root was not redacted: %+v", metadata)
 	}
 	nested := metadata["nested"].(map[string]any)
 	if nested["password"] != "[redacted]" {
@@ -468,7 +562,7 @@ func TestWorkModeScopedToolsOnlyEnabledForWorkModeRunContext(t *testing.T) {
 		Description:      "Default persona",
 		SystemPrompt:     "prompt",
 		ModelRoute:       PersonaModelRoute{ProviderID: "custom", Model: "model"},
-		AllowedToolNames: []string{ToolNameCurrentTime, ToolNameWorkspaceGlob, ToolNameWorkspaceGrep, ToolNameWorkspaceRead, ToolNameWorkspaceWriteFile, ToolNameWorkspaceEdit, ToolNameWorkspacePatchPreview, ToolNameWorkspacePatchApply, ToolNameSandboxExecCommand, ToolNameSandboxStartProcess, ToolNameSandboxContinueProcess, ToolNameSandboxTerminateProcess, ToolNameLSPDiagnostics, ToolNameLSPSymbols, ToolNameLSPReferences, ToolNameLSPDefinition, ToolNameLSPHover, ToolNameWebFetch, ToolNameBrowserOpen, ToolNameBrowserSnapshot, ToolNameBrowserClickLink, ToolNameBrowserScreenshot, ToolNameBrowserType, ToolNameBrowserPress, ToolNameArtifactCreateText, ToolNameArtifactRead, ToolNameArtifactList, ToolNameAgentSpawn, ToolNameAgentList, ToolNameAgentComplete, ToolNameTodoWrite},
+		AllowedToolNames: []string{ToolNameCurrentTime, ToolNameWorkspaceGlob, ToolNameWorkspaceGrep, ToolNameWorkspaceRead, ToolNameWorkspaceListDirectory, ToolNameWorkspaceTreeSummary, ToolNameWorkspaceWriteFile, ToolNameWorkspaceEdit, ToolNameWorkspacePatchPreview, ToolNameWorkspacePatchApply, ToolNameSandboxExecCommand, ToolNameSandboxStartProcess, ToolNameSandboxContinueProcess, ToolNameSandboxTerminateProcess, ToolNameLSPDiagnostics, ToolNameLSPSymbols, ToolNameLSPReferences, ToolNameLSPDefinition, ToolNameLSPHover, ToolNameWebFetch, ToolNameBrowserOpen, ToolNameBrowserSnapshot, ToolNameBrowserClickLink, ToolNameBrowserScreenshot, ToolNameBrowserType, ToolNameBrowserPress, ToolNameArtifactCreateText, ToolNameArtifactRead, ToolNameArtifactList, ToolNameAgentSpawn, ToolNameAgentList, ToolNameAgentComplete, ToolNameTodoWrite},
 		ReasoningMode:    "balanced",
 		BudgetSummary:    "budget",
 		Version:          "1",

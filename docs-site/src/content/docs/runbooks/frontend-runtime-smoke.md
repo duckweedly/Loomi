@@ -25,21 +25,24 @@ bun run --cwd docs-site build
 
 1. 不设置 `VITE_LOOMI_API_BASE_URL`。
 2. 启动 web renderer。
-3. 进入 Chat mode。
-4. 选择或创建一个 Chat thread。
+3. 进入默认会话视图；侧边栏不显示 Chat/Work 双模式切换。
+4. 选择或创建一个会话。
 5. 输入一条消息并提交。
 6. 验证用户消息立即出现在 Chat Canvas。
-7. 验证 pending assistant bubble 出现在 Chat Canvas 中，并随着 `assistant.drafting` 或 `model.delta` 片段增长。
-8. 验证 Run Timeline 按组显示事件：
+7. 验证 pending assistant bubble 出现在 Chat Canvas 中；assistant 内容为空时只显示短的 run-scoped thinking hint，例如“组织回复”或“梳理线索”，不会显示“模型正在生成回复”这类长句。
+8. 验证 Run Rail 在 draft 仍为空时也显示同类 thinking line，并随着 elapsed seconds 轻量更新；文案使用 text shimmer，不出现点状 loading。
+9. 验证 pending draft 是内联透明状态，不出现卡片套卡片；如果已有 streaming markdown fragments，Chat Canvas 等最终内容完成后再渲染，避免半截 Markdown 标题露出 `#`。
+10. 验证 Run Timeline 按组显示事件：
    - Run lifecycle: `run.created`, terminal run events
    - Model stream: `assistant.drafting`, `model.delta`, `model.final`, `model.usage`
    - Worker/job: `job.queued`, `worker.claimed`, `job.retrying` when using richer mock scripts
    - Error: provider/model/stream/backend failures
-9. 验证 token usage/provider metadata 只出现在 timeline/debug detail，不进入 assistant message text。
-10. 验证 Agent 状态徽章进入 speaking/thinking，并最终进入 done。
-11. 验证 Chat Canvas 只出现一条最终 assistant 回复，不重复显示 final draft 和 persisted assistant message。
-12. 验证 Regenerate 可见，触发后旧 assistant 回复仍保留，并出现一个关联旧消息的新 pending attempt。
-13. 验证 Continue 只在有选中 thread、输入非空且无 active run 时可用；active run 期间 Send/Continue/Retry/Regenerate 都被阻止。
+11. 验证 token usage/provider metadata 只出现在 timeline/debug detail，不进入 assistant message text。
+12. 验证 safe thought summary 只显示折叠式一行摘要；raw/hidden thinking 不出现在页面、event detail 或 message text。
+13. 验证 Agent 状态徽章进入 speaking/thinking，并最终进入 done。
+14. 验证 Chat Canvas 只出现一条最终 assistant 回复，不重复显示 final draft 和 persisted assistant message。
+15. 验证 Regenerate 可见，触发后旧 assistant 回复仍保留，并出现一个关联旧消息的新 pending attempt。
+16. 验证 Continue 只在有选中 thread、输入非空且无 active run 时可用；active run 期间 Send/Continue/Retry/Regenerate 都被阻止。
 
 ## Mock failure smoke
 
@@ -65,18 +68,59 @@ Mock API 的 send path 会先返回 running run，再通过 deterministic subscr
 ## Thread/message state smoke
 
 1. 加载无选中 thread 状态，验证 Chat Canvas 不显示旧 messages。
-2. 选择空 Chat thread，验证 empty state 与 loading state 不同。
+2. 选择空会话，验证 empty state 与 loading state 不同。
 3. 模拟 thread/message loading，验证 ThreadSidebar 和 Chat Canvas 显示 loading affordance。
 4. 模拟加载失败，验证 error 与 Retry 可见，并且 selected thread context 不被清空。
 5. 选择带 persisted assistant message 和 run events 的 thread，验证 Chat Canvas 与 Run Timeline 对 latest run outcome 一致。
 
 ## Stale event smoke
 
-1. 在 Chat thread A 启动 run。
-2. run 尚未完成前切换到 Chat thread B。
-3. 验证 thread A 的后续 event 不会改变 thread B 的 Chat Canvas、Timeline 或 Agent 状态徽章。
+1. 在会话 A 启动 run。
+2. run 尚未完成前切换到会话 B。
+3. 验证会话 A 的后续 event 不会改变会话 B 的 Chat Canvas、Timeline 或 Agent 状态徽章。
 
 Mock scripts 通过 deterministic subscription path 分步推进；浏览器里也可以用 M4 real API SSE 验证更完整的可见切换过程。单元测试覆盖 stale event guard 和 out-of-order delta protection。
+
+## M92 real task smoke
+
+用真实后端和 Work mode 依次跑这些提示，每个 run 都要有工具事件、最终 assistant message，且 final 内容不是 `[redacted]`：
+
+1. `帮我看当前目录有什么，分类梳理`
+2. `读取 README，告诉我这个项目是什么`
+3. `搜索 package.json 或 go.mod 并总结技术栈`
+4. `对一个测试 fixture 做 patch_preview，不自动 apply`
+5. `访问一个公开网页并总结 title/excerpt`
+
+验收点：
+
+- 目录类任务先出现 workspace listing/glob 类工具事件。
+- README/技术栈任务出现 grep/read 工具事件。
+- 修改类任务先 read，再 patch preview；没有用户批准前不 apply。
+- web 任务出现 `web.fetch` 成功事件。
+- 失败时 RunRail/Chat 能显示 provider、validation、permission、workspace、timeout/bounded limit 中的具体原因。
+- run terminal 后，迟到的 model/tool event 不改变已经完成的消息或下一轮状态。
+- persisted assistant message 的 Markdown 在当前轮就正常渲染，不依赖下一轮刷新。
+
+## M91 directory classification smoke
+
+真实目录分类任务：
+
+```text
+请看一下当前选择目录都有哪些东西，按源码/文档/配置/构建产物/临时文件分类列出。
+```
+
+期望工具链：
+
+1. `workspace.list_directory` 或 `workspace.tree_summary`
+2. 必要时 `workspace.read` 少量代表性文件
+3. final answer 用自然语言列出分类
+
+验收点：
+
+- 不能只跑 `workspace.grep`。
+- RunRail 显示“Read directory / Summarize directory”安全摘要。
+- ToolCallCard 不展示 host absolute path、secret-looking filename、raw JSON dump 或未渲染协议文本。
+- `node_modules`、`dist`、`build`、`.next`、`.vite`、`.venv`、`.cache`、`.git`、`target`、`vendor` 等生成/缓存目录被跳过或计入 skipped count。
 
 ## Real API M4 smoke
 

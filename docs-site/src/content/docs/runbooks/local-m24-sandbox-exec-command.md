@@ -65,6 +65,27 @@ Expected evidence:
 5. Cross-run process access stays rejected.
 6. Absolute host paths, workspace roots, and secret-looking content are redacted in process output previews.
 
+## M93 In-Process Restore Checks
+
+M93 validates the local registry rebuild layer that will later sit behind a sandbox service. It is still host `exec.Cmd`, not Docker or Firecracker, and it does not prove API process restart recovery.
+
+```bash
+go test ./internal/runtime ./internal/httpapi -run 'Test.*Sandbox|Test.*Process|Test.*Resume|Test.*TTL|Test.*Cursor' -count=1
+bun test --cwd web ./src/components/RunRail.runtime.test.ts ./src/components/ToolCallCard.test.tsx
+```
+
+Expected evidence:
+
+1. A terminal process remains readable after rebuilding `SandboxProcessStore` from the in-process process repository.
+2. Terminal process records reject `stdin_text` and `close_stdin`; `continue_process` never creates a replacement process.
+3. A restored `running` process with no live command is marked `failed` with a safe terminal summary.
+4. Max lifetime and idle-timeout cleanup mark registry-owned processes `expired` without scanning or killing unrelated host processes.
+5. Cross-run `continue_process` and `terminate_process` are rejected before any process action.
+6. Terminal runs reject `start_process` and reject continue mutations while still allowing read-only handle inspection.
+7. Long-output cursors remain absolute and stable, while retained stdout/stderr previews stay bounded and redacted.
+8. HTTP smoke covers `start_process -> continue_process(close stdin) -> registry rebuild -> continue_process(read terminal summary)` through approval/resume cycles, but does not claim productdata/Postgres durability.
+9. ToolCallCard shows safe process metadata (`process_id`, `argv_summary`, `cwd_alias`, `status`, `next_cursor`, `terminal_summary`) and redacts raw paths/secrets/output.
+
 ## Full Validation Target
 
 ```bash

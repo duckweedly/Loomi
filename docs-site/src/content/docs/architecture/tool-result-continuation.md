@@ -57,6 +57,14 @@ run_completed
 
 History-first SSE remains unchanged. The second model phase is just another ordered set of persisted run events.
 
+## Large result compaction
+
+Provider continuation uses the redacted result payload as its source, then compacts oversized string fields before serializing the provider `tool_result` message. Compaction is deterministic and signal-preserving: it keeps early context, path/status/error-like lines, tail context, and a `[tool output compacted]` marker. Small results are not modified.
+
+M92 tightens the compaction boundary so ordinary summaries remain readable even when the source text contains terminal labels such as `stdout` or `tool output`. Sensitive lines are still replaced with `[redacted]`, but benign `summary`, `status`, `path`, and excerpt lines stay available to continuation. This prevents the model from seeing only `[redacted]` after a successful tool chain and then producing an empty or unreadable final answer.
+
+This compaction affects only provider input. Persisted run events remain the audit source of truth and continue to store safe summaries only.
+
 ## Loop limit
 
 Continuation is bounded to six accepted tool calls per run. If the provider asks for a seventh continuation tool, Loomi records `tool_loop_limit_reached` and fails the run without recording or executing the extra call.
@@ -75,6 +83,19 @@ Frontend replay treats a successful tool event as a pause point for an existing 
 
 ## Safety boundary
 
-Only redacted result metadata is eligible for provider continuation. Tool result context must not include raw provider payloads, raw executor internals, credentials, file contents, shell output, arbitrary network responses, or hidden local state.
+Only redacted result metadata is eligible for provider continuation. Tool result context must not include raw provider payloads, raw executor internals, credentials, unredacted file contents, arbitrary network responses, or hidden local state. Oversized redacted text is compacted before it reaches the provider so the next assistant answer stays focused on the actionable signal.
 
 Approved `runtime.get_current_time` worker execution now calls continuation immediately after `tool_call_succeeded`. Denied and `tool_call_failed` runs are terminal and never re-enter the model. If the continuation provider fails, Loomi records one redacted failed terminal state and does not persist a final assistant message.
+
+M92 also makes terminal state a hard write boundary for the agent loop. Once a run is `completed`, `failed`, `stopped`, or `cancelled`, late model/tool events must be rejected by product data or ignored by the frontend replay adapter. A retry can resume only from a durable succeeded tool result that has no later continuation, later tool request, or final event.
+
+## Tool choice guidance
+
+The provider prompt now includes an explicit Work-mode strategy:
+
+- Directory questions start with a broad workspace listing from the selected root.
+- Content questions use grep/read after the relative path is known.
+- Modification questions read first, then preview a patch, then apply only after approval.
+- Shell/process tools are reserved for explicit shell requests or validation such as build, test, and lint.
+
+`tool.load_tools` remains a query-only catalog lookup. The provider schema advertises `query`/`queries` and does not expose `names`; omitting the query lists a bounded safe catalog instead of failing validation.

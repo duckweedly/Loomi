@@ -24,7 +24,11 @@ const (
 	defaultWorkspaceReadBytes  = 32 * 1024
 	maxWorkspaceReadBytes      = 128 * 1024
 	defaultWorkspaceListLimit  = 100
+	defaultWorkspaceDirEntries = 200
 	maxWorkspaceListLimit      = 500
+	maxWorkspaceTreeDepth      = 3
+	maxWorkspaceLargestFiles   = 10
+	maxWorkspaceRecentFiles    = 10
 	maxWorkspaceGrepFiles      = 500
 	maxWorkspaceLineBytes      = 1024 * 1024
 	defaultWorkspaceWriteBytes = 32 * 1024
@@ -65,6 +69,8 @@ func WorkspaceToolDefinitions() []ToolDefinition {
 		{Name: productdata.ToolNameWorkspaceGlob, ApprovalPolicy: ToolApprovalNotRequired, SafetyClass: ToolSafetyNoSideEffectInternal, Source: ToolSourceInternal, ExecutionState: ToolExecutionAllowlisted},
 		{Name: productdata.ToolNameWorkspaceGrep, ApprovalPolicy: ToolApprovalNotRequired, SafetyClass: ToolSafetyNoSideEffectInternal, Source: ToolSourceInternal, ExecutionState: ToolExecutionAllowlisted},
 		{Name: productdata.ToolNameWorkspaceRead, ApprovalPolicy: ToolApprovalNotRequired, SafetyClass: ToolSafetyNoSideEffectInternal, Source: ToolSourceInternal, ExecutionState: ToolExecutionAllowlisted},
+		{Name: productdata.ToolNameWorkspaceListDirectory, ApprovalPolicy: ToolApprovalNotRequired, SafetyClass: ToolSafetyNoSideEffectInternal, Source: ToolSourceInternal, ExecutionState: ToolExecutionAllowlisted},
+		{Name: productdata.ToolNameWorkspaceTreeSummary, ApprovalPolicy: ToolApprovalNotRequired, SafetyClass: ToolSafetyNoSideEffectInternal, Source: ToolSourceInternal, ExecutionState: ToolExecutionAllowlisted},
 		{Name: productdata.ToolNameWorkspaceWriteFile, ApprovalPolicy: ToolApprovalAlwaysRequired, SafetyClass: ToolSafetyWorkspaceMutation, Source: ToolSourceInternal, ExecutionState: ToolExecutionAllowlisted},
 		{Name: productdata.ToolNameWorkspaceEdit, ApprovalPolicy: ToolApprovalAlwaysRequired, SafetyClass: ToolSafetyWorkspaceMutation, Source: ToolSourceInternal, ExecutionState: ToolExecutionAllowlisted},
 		{Name: productdata.ToolNameWorkspacePatchPreview, ApprovalPolicy: ToolApprovalAlwaysRequired, SafetyClass: ToolSafetyNoSideEffectInternal, Source: ToolSourceInternal, ExecutionState: ToolExecutionAllowlisted},
@@ -73,7 +79,11 @@ func WorkspaceToolDefinitions() []ToolDefinition {
 }
 
 func (e WorkspaceToolExecutor) Execute(ctx context.Context, invocation ToolInvocation) (map[string]any, error) {
-	scope, err := newWorkspaceScope(e.Root)
+	root := e.Root
+	if root == "" {
+		root = invocation.WorkspaceRoot
+	}
+	scope, err := newWorkspaceScope(root)
 	if err != nil {
 		return nil, err
 	}
@@ -85,6 +95,10 @@ func (e WorkspaceToolExecutor) Execute(ctx context.Context, invocation ToolInvoc
 		return scope.grep(ctx, invocation.ArgumentsSummary)
 	case productdata.ToolNameWorkspaceRead:
 		return scope.read(invocation.RunID, invocation.ArgumentsSummary)
+	case productdata.ToolNameWorkspaceListDirectory:
+		return scope.listDirectory(ctx, invocation.ArgumentsSummary)
+	case productdata.ToolNameWorkspaceTreeSummary:
+		return scope.treeSummary(ctx, invocation.ArgumentsSummary)
 	case productdata.ToolNameWorkspaceWriteFile:
 		return scope.writeFile(invocation.ArgumentsSummary)
 	case productdata.ToolNameWorkspaceEdit:
@@ -108,14 +122,7 @@ func (e WorkspaceToolExecutor) tracker() *WorkspaceReadTracker {
 func newWorkspaceScope(root string) (workspaceScope, error) {
 	root = strings.TrimSpace(root)
 	if root == "" {
-		root = strings.TrimSpace(os.Getenv("LOOMI_WORKSPACE_ROOT"))
-	}
-	if root == "" {
-		guessed, err := defaultWorkspaceRoot()
-		if err != nil {
-			return workspaceScope{}, err
-		}
-		root = guessed
+		return workspaceScope{}, errors.New("workspace root is not authorized")
 	}
 	if !filepath.IsAbs(root) {
 		abs, err := filepath.Abs(root)
@@ -133,27 +140,6 @@ func newWorkspaceScope(root string) (workspaceScope, error) {
 		return workspaceScope{}, errors.New("workspace root is unavailable")
 	}
 	return workspaceScope{root: filepath.Clean(real)}, nil
-}
-
-func defaultWorkspaceRoot() (string, error) {
-	home, err := os.UserHomeDir()
-	if err == nil && strings.TrimSpace(home) != "" {
-		return home, nil
-	}
-	wd, err := os.Getwd()
-	if err != nil {
-		return "", err
-	}
-	for {
-		if _, err := os.Stat(filepath.Join(wd, "go.mod")); err == nil {
-			return wd, nil
-		}
-		parent := filepath.Dir(wd)
-		if parent == wd {
-			return "", errors.New("workspace root is unavailable")
-		}
-		wd = parent
-	}
 }
 
 func (s workspaceScope) glob(ctx context.Context, args map[string]any) (map[string]any, error) {
@@ -424,6 +410,213 @@ func (s workspaceScope) readDirectory(rel string, path string, args map[string]a
 		entries = append(entries, map[string]any{"path": entryRel, "kind": kind})
 	}
 	return map[string]any{"tool": productdata.ToolNameWorkspaceRead, "scope": "workspace", "path": rel, "kind": "directory", "content": "", "summary": "path is a directory; use workspace.glob to list files recursively or workspace.read on a file path", "entries": entries, "entry_count": len(entries), "limit": limit, "truncated": truncated, "utf8_valid": true}, nil
+}
+
+type workspaceDirectoryEntry struct {
+	Path    string
+	Kind    string
+	Size    int64
+	ModTime time.Time
+	Depth   int
+}
+
+type workspaceDirectoryScan struct {
+	Path             string
+	Entries          []workspaceDirectoryEntry
+	TotalSeen        int
+	Truncated        bool
+	SkippedDirs      int
+	DirectoriesCount int
+	FilesCount       int
+	Depth            int
+	MaxEntries       int
+}
+
+func (s workspaceScope) listDirectory(ctx context.Context, args map[string]any) (map[string]any, error) {
+	scan, err := s.scanDirectory(ctx, args)
+	if err != nil {
+		return nil, err
+	}
+	entries := make([]map[string]any, 0, len(scan.Entries))
+	for _, entry := range scan.Entries {
+		item := map[string]any{"path": safeWorkspaceDisplayPath(entry.Path), "kind": entry.Kind, "depth": entry.Depth}
+		if entry.Kind == "file" || entry.Kind == "symlink" {
+			item["size"] = entry.Size
+			item["modified"] = entry.ModTime.UTC().Format(time.RFC3339)
+		}
+		entries = append(entries, item)
+	}
+	return map[string]any{
+		"tool":                  productdata.ToolNameWorkspaceListDirectory,
+		"scope":                 "workspace",
+		"operation":             "list_directory",
+		"path":                  scan.Path,
+		"max_entries":           scan.MaxEntries,
+		"depth":                 scan.Depth,
+		"entries":               entries,
+		"total_entries_seen":    scan.TotalSeen,
+		"returned_entries":      len(entries),
+		"truncated":             scan.Truncated,
+		"directories_count":     scan.DirectoriesCount,
+		"files_count":           scan.FilesCount,
+		"skipped_dir_count":     scan.SkippedDirs,
+		"redaction_applied":     workspaceEntriesRedacted(scan.Entries),
+		"host_paths_excluded":   true,
+		"generated_dirs_skip":   true,
+		"secret_names_redacted": true,
+	}, nil
+}
+
+func (s workspaceScope) treeSummary(ctx context.Context, args map[string]any) (map[string]any, error) {
+	scan, err := s.scanDirectory(ctx, args)
+	if err != nil {
+		return nil, err
+	}
+	byExtension := map[string]int{}
+	byKind := map[string]int{"image": 0, "video": 0, "audio": 0, "document": 0, "archive": 0, "code": 0, "app": 0, "other": 0}
+	files := make([]workspaceDirectoryEntry, 0)
+	for _, entry := range scan.Entries {
+		if entry.Kind == "directory" {
+			if strings.HasSuffix(strings.ToLower(entry.Path), ".app") {
+				byKind["app"]++
+			}
+			continue
+		}
+		files = append(files, entry)
+		ext := strings.ToLower(filepath.Ext(entry.Path))
+		if ext == "" {
+			ext = "[none]"
+		}
+		byExtension[ext]++
+		byKind[workspaceEntryKind(entry.Path)]++
+	}
+	largest := append([]workspaceDirectoryEntry(nil), files...)
+	sort.SliceStable(largest, func(i, j int) bool {
+		if largest[i].Size == largest[j].Size {
+			return largest[i].Path < largest[j].Path
+		}
+		return largest[i].Size > largest[j].Size
+	})
+	recent := append([]workspaceDirectoryEntry(nil), files...)
+	sort.SliceStable(recent, func(i, j int) bool {
+		if recent[i].ModTime.Equal(recent[j].ModTime) {
+			return recent[i].Path < recent[j].Path
+		}
+		return recent[i].ModTime.After(recent[j].ModTime)
+	})
+	return map[string]any{
+		"tool":                  productdata.ToolNameWorkspaceTreeSummary,
+		"scope":                 "workspace",
+		"operation":             "tree_summary",
+		"path":                  scan.Path,
+		"max_entries":           scan.MaxEntries,
+		"depth":                 scan.Depth,
+		"total_entries_seen":    scan.TotalSeen,
+		"returned_entries":      len(scan.Entries),
+		"truncated":             scan.Truncated,
+		"directories_count":     scan.DirectoriesCount,
+		"files_count":           scan.FilesCount,
+		"skipped_dir_count":     scan.SkippedDirs,
+		"by_extension":          byExtension,
+		"by_kind":               byKind,
+		"largest_files":         boundedWorkspaceFileSummaries(largest, maxWorkspaceLargestFiles),
+		"recent_files":          boundedWorkspaceFileSummaries(recent, maxWorkspaceRecentFiles),
+		"redaction_applied":     workspaceEntriesRedacted(scan.Entries),
+		"host_paths_excluded":   true,
+		"generated_dirs_skip":   true,
+		"secret_names_redacted": true,
+	}, nil
+}
+
+func (s workspaceScope) scanDirectory(ctx context.Context, args map[string]any) (workspaceDirectoryScan, error) {
+	start, rel, err := s.resolveDir(stringArg(args, "path", "."))
+	if err != nil {
+		return workspaceDirectoryScan{}, err
+	}
+	maxEntries := boundedInt(args, "max_entries", defaultWorkspaceDirEntries, maxWorkspaceListLimit)
+	depth := boundedInt(args, "depth", 1, maxWorkspaceTreeDepth)
+	includeHidden := boolArg(args, "include_hidden", false)
+	sortMode := strings.TrimSpace(stringArg(args, "sort", "name"))
+	if sortMode == "" {
+		sortMode = "name"
+	}
+	if sortMode != "name" && sortMode != "modified" && sortMode != "size" {
+		return workspaceDirectoryScan{}, errors.New("workspace directory sort is invalid")
+	}
+	scan := workspaceDirectoryScan{Path: rel, Depth: depth, MaxEntries: maxEntries}
+	err = filepath.WalkDir(start, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return nil
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		currentRel, err := s.relative(path)
+		if err != nil {
+			return nil
+		}
+		if currentRel == "." {
+			return nil
+		}
+		entryDepth := workspaceRelativeDepth(rel, currentRel)
+		if entryDepth < 1 {
+			return nil
+		}
+		if entryDepth > depth {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if isSensitiveWorkspacePath(currentRel) {
+			if entry.IsDir() {
+				scan.SkippedDirs++
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if entry.IsDir() && isGeneratedWorkspaceDir(currentRel) {
+			scan.SkippedDirs++
+			return filepath.SkipDir
+		}
+		if !includeHidden && workspacePathHasHiddenPart(currentRel) {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			if _, _, err := s.resolveWorkspacePath(currentRel); err != nil {
+				return nil
+			}
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return nil
+		}
+		scan.TotalSeen++
+		if len(scan.Entries) >= maxEntries {
+			scan.Truncated = true
+			return filepath.SkipAll
+		}
+		kind := "file"
+		if entry.IsDir() {
+			kind = "directory"
+			scan.DirectoriesCount++
+		} else if entry.Type()&os.ModeSymlink != 0 {
+			kind = "symlink"
+			scan.FilesCount++
+		} else {
+			scan.FilesCount++
+		}
+		scan.Entries = append(scan.Entries, workspaceDirectoryEntry{Path: currentRel, Kind: kind, Size: info.Size(), ModTime: info.ModTime(), Depth: entryDepth})
+		return nil
+	})
+	if err != nil && err != filepath.SkipAll {
+		return workspaceDirectoryScan{}, err
+	}
+	sortWorkspaceDirectoryEntries(scan.Entries, sortMode)
+	return scan, nil
 }
 
 func (s workspaceScope) writeFile(args map[string]any) (map[string]any, error) {
@@ -1047,6 +1240,119 @@ func isGeneratedWorkspaceDir(rel string) bool {
 	default:
 		return false
 	}
+}
+
+func workspacePathHasHiddenPart(rel string) bool {
+	for _, part := range strings.Split(filepath.ToSlash(rel), "/") {
+		if strings.HasPrefix(part, ".") && part != "." && part != ".." {
+			return true
+		}
+	}
+	return false
+}
+
+func workspaceRelativeDepth(base string, rel string) int {
+	base = filepath.ToSlash(filepath.Clean(base))
+	rel = filepath.ToSlash(filepath.Clean(rel))
+	if base == "." {
+		return len(strings.Split(rel, "/"))
+	}
+	if rel == base {
+		return 0
+	}
+	prefix := strings.TrimSuffix(base, "/") + "/"
+	if !strings.HasPrefix(rel, prefix) {
+		return 0
+	}
+	return len(strings.Split(strings.TrimPrefix(rel, prefix), "/"))
+}
+
+func sortWorkspaceDirectoryEntries(entries []workspaceDirectoryEntry, sortMode string) {
+	sort.SliceStable(entries, func(i, j int) bool {
+		left := entries[i]
+		right := entries[j]
+		switch sortMode {
+		case "modified":
+			if !left.ModTime.Equal(right.ModTime) {
+				return left.ModTime.After(right.ModTime)
+			}
+		case "size":
+			if left.Size != right.Size {
+				return left.Size > right.Size
+			}
+		}
+		return left.Path < right.Path
+	})
+}
+
+func workspaceEntryKind(path string) string {
+	lower := strings.ToLower(path)
+	ext := strings.ToLower(filepath.Ext(lower))
+	if strings.Contains(lower, ".app/") || strings.HasSuffix(lower, ".app") {
+		return "app"
+	}
+	switch ext {
+	case ".png", ".jpg", ".jpeg", ".gif", ".webp", ".heic", ".svg", ".tiff", ".bmp":
+		return "image"
+	case ".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v":
+		return "video"
+	case ".mp3", ".wav", ".flac", ".aac", ".m4a", ".ogg":
+		return "audio"
+	case ".md", ".mdx", ".txt", ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".csv", ".rtf":
+		return "document"
+	case ".zip", ".tar", ".gz", ".tgz", ".rar", ".7z", ".dmg":
+		return "archive"
+	case ".go", ".js", ".jsx", ".ts", ".tsx", ".py", ".rs", ".java", ".c", ".cc", ".cpp", ".h", ".hpp", ".css", ".scss", ".html", ".json", ".yaml", ".yml", ".toml", ".sql", ".sh", ".rb", ".php", ".swift", ".kt":
+		return "code"
+	default:
+		return "other"
+	}
+}
+
+func boundedWorkspaceFileSummaries(entries []workspaceDirectoryEntry, limit int) []map[string]any {
+	if len(entries) > limit {
+		entries = entries[:limit]
+	}
+	result := make([]map[string]any, 0, len(entries))
+	for _, entry := range entries {
+		result = append(result, map[string]any{
+			"path":     safeWorkspaceDisplayPath(entry.Path),
+			"kind":     workspaceEntryKind(entry.Path),
+			"size":     entry.Size,
+			"modified": entry.ModTime.UTC().Format(time.RFC3339),
+		})
+	}
+	return result
+}
+
+func workspaceEntriesRedacted(entries []workspaceDirectoryEntry) bool {
+	for _, entry := range entries {
+		if safeWorkspaceDisplayPath(entry.Path) != entry.Path {
+			return true
+		}
+	}
+	return false
+}
+
+func safeWorkspaceDisplayPath(rel string) string {
+	parts := strings.Split(filepath.ToSlash(rel), "/")
+	for i, part := range parts {
+		if workspaceNameLooksSecret(part) {
+			parts[i] = "[redacted]"
+		}
+	}
+	return strings.Join(parts, "/")
+}
+
+func workspaceNameLooksSecret(name string) bool {
+	lower := strings.ToLower(name)
+	return strings.Contains(lower, "secret") ||
+		strings.Contains(lower, "token") ||
+		strings.Contains(lower, "password") ||
+		strings.Contains(lower, "credential") ||
+		strings.Contains(lower, "apikey") ||
+		strings.Contains(lower, "api_key") ||
+		strings.Contains(lower, "private-key")
 }
 
 func grepFile(path string, rel string, re *regexp.Regexp, remaining int) ([]map[string]any, error) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -243,6 +244,24 @@ func (s *MemoryService) GetWorkspaceRootConfig(_ context.Context, ident identity
 	config := s.workspaceRoots[user.ID]
 	config.UserID = user.ID
 	return config, nil
+}
+
+func (s *MemoryService) workspaceRootPathForUserLocked(userID string) string {
+	if config := s.workspaceRoots[userID]; strings.TrimSpace(config.Path) != "" {
+		return strings.TrimSpace(config.Path)
+	}
+	return strings.TrimSpace(os.Getenv("LOOMI_WORKSPACE_ROOT"))
+}
+
+func (s *MemoryService) workspaceRootPathForRunLocked(userID string, runID string) string {
+	for _, job := range s.backgroundJobs {
+		if job.UserID == userID && job.RunID == runID {
+			if root := metadataStringValue(job.Metadata, "workspace_root_path"); root != "" {
+				return root
+			}
+		}
+	}
+	return ""
 }
 
 func (s *MemoryService) SaveMemoryProviderConfig(_ context.Context, ident identity.LocalIdentity, input MemoryProviderConfig) (MemoryProviderConfig, error) {
@@ -740,6 +759,9 @@ func (s *MemoryService) StartRun(_ context.Context, ident identity.LocalIdentity
 	s.runs[run.ID] = run
 	jobID := NewBackgroundJobID()
 	metadata := map[string]any{"source": string(source), "job_id": jobID}
+	if root := s.workspaceRootPathForUserLocked(user.ID); root != "" {
+		metadata["workspace_root_path"] = root
+	}
 	if source == RunSourceLocalSimulated {
 		metadata["script_name"] = NormalizeScriptName(input.ScriptName)
 	} else {
@@ -753,10 +775,10 @@ func (s *MemoryService) StartRun(_ context.Context, ident identity.LocalIdentity
 		metadata["persona_name"] = snapshot.Name
 		metadata["persona_resolved_from"] = string(snapshot.ResolvedFrom)
 	}
-	metadata = RedactEventMetadata(metadata)
+	eventMetadata := RedactEventMetadata(metadata)
 	job := BackgroundJob{ID: jobID, RunID: run.ID, ThreadID: threadID, UserID: user.ID, Kind: BackgroundJobKindRunExecution, Status: BackgroundJobStatusQueued, Priority: 100, MaxAttempts: 3, ScheduledAt: now, Metadata: metadata, CreatedAt: now, UpdatedAt: now}
 	s.backgroundJobs[job.ID] = job
-	s.runEvents[run.ID] = append(s.runEvents[run.ID], RunEvent{ID: NewRunEventID(), RunID: run.ID, ThreadID: threadID, UserID: user.ID, Sequence: 1, Category: RunEventCategoryLifecycle, Type: "run_created", Summary: "Run created", Metadata: metadata, CreatedAt: now})
+	s.runEvents[run.ID] = append(s.runEvents[run.ID], RunEvent{ID: NewRunEventID(), RunID: run.ID, ThreadID: threadID, UserID: user.ID, Sequence: 1, Category: RunEventCategoryLifecycle, Type: "run_created", Summary: "Run created", Metadata: eventMetadata, CreatedAt: now})
 	s.runEvents[run.ID] = append(s.runEvents[run.ID], RunEvent{ID: NewRunEventID(), RunID: run.ID, ThreadID: threadID, UserID: user.ID, Sequence: 2, Category: RunEventCategoryLifecycle, Type: EventRunQueued, Summary: "Run queued", Metadata: RedactEventMetadata(map[string]any{"job_id": job.ID}), CreatedAt: now})
 	thread.UpdatedAt = now
 	s.threads[threadID] = thread
@@ -1336,10 +1358,11 @@ func buildRunContext(run Run, thread Thread, messages []Message, job BackgroundJ
 		}
 	}
 	context := RunContext{
-		Run:      run,
-		Thread:   thread,
-		Messages: append([]Message(nil), messages...),
-		Job:      job,
+		Run:           run,
+		Thread:        thread,
+		Messages:      append([]Message(nil), messages...),
+		Job:           job,
+		WorkspaceRoot: WorkspaceRootConfig{UserID: run.UserID, Path: metadataStringValue(metadata, "workspace_root_path")},
 		ProviderRoute: ProviderRoute{
 			ProviderID: providerID,
 			Model:      model,
@@ -2430,15 +2453,25 @@ func (s *MemoryService) ApproveToolCall(_ context.Context, ident identity.LocalI
 	run.Status = RunStatusQueued
 	run.UpdatedAt = now
 	s.runs[run.ID] = run
+	workspaceRoot := ""
 	for id, job := range s.backgroundJobs {
 		if job.RunID == run.ID && job.UserID == user.ID && !IsBackgroundJobTerminal(job.Status) {
+			if workspaceRoot == "" {
+				workspaceRoot = metadataStringValue(job.Metadata, "workspace_root_path")
+			}
 			job.Status = BackgroundJobStatusCancelled
 			job.UpdatedAt = now
 			s.backgroundJobs[id] = job
 		}
 	}
+	if workspaceRoot == "" {
+		workspaceRoot = s.workspaceRootPathForRunLocked(user.ID, run.ID)
+	}
 	jobID := NewBackgroundJobID()
-	metadata := RedactEventMetadata(map[string]any{"source": string(run.Source), "job_id": jobID, "tool_call_id": call.ToolCallID, "resume_reason": "tool_call_approved"})
+	metadata := map[string]any{"source": string(run.Source), "job_id": jobID, "tool_call_id": call.ToolCallID, "resume_reason": "tool_call_approved"}
+	if workspaceRoot != "" {
+		metadata["workspace_root_path"] = workspaceRoot
+	}
 	s.backgroundJobs[jobID] = BackgroundJob{ID: jobID, RunID: run.ID, ThreadID: run.ThreadID, UserID: user.ID, Kind: BackgroundJobKindRunExecution, Status: BackgroundJobStatusQueued, Priority: 50, MaxAttempts: 3, ScheduledAt: now, Metadata: metadata, CreatedAt: now, UpdatedAt: now}
 	event := s.appendRunEventLocked(run, RunEventCategoryProgress, EventToolCallApproved, "Tool call approved", nil, toolCallEventMetadataForRun(s.runEvents[run.ID], call), now)
 	return call, []RunEvent{event}, nil

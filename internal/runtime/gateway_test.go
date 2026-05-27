@@ -111,11 +111,51 @@ func TestRunSystemPromptGuidesWorkModeToWorkspaceTools(t *testing.T) {
 	if strings.Contains(chat, "File and folder tasks are tool-first") {
 		t.Fatalf("chat prompt contains work-only policy: %s", chat)
 	}
+	for _, expected := range []string{"Answer first", "No preface", "Do not repeat the user's request", "For code changes, report what changed and what was verified"} {
+		if !strings.Contains(chat, expected) {
+			t.Fatalf("chat prompt missing concise output rule %q: %s", expected, chat)
+		}
+	}
 	work := runSystemPrompt(&productdata.RunContext{Thread: productdata.Thread{Mode: productdata.ThreadModeWork}})
-	for _, expected := range []string{"workspace_glob", "workspace_grep", "workspace_read", "Do not tell the user to run shell commands", "use \".\" for it and do not repeat the root folder name"} {
+	for _, expected := range []string{
+		"Directory questions: use workspace_tree_summary or workspace_list_directory first",
+		"Use workspace_glob only for file-name pattern matching or a narrow follow-up",
+		"Content questions: use workspace_grep or workspace_read after you have a relative path",
+		"Modification questions: use workspace_read first, then workspace_patch_preview, then workspace_patch_apply only after approval",
+		"Use sandbox commands only when the user explicitly asks for a shell/process action or when verifying",
+		"workspace_glob",
+		"workspace_grep",
+		"workspace_read",
+		"Do not tell the user to run shell commands",
+		"use \".\" for it and do not repeat the root folder name",
+	} {
 		if !strings.Contains(work, expected) {
 			t.Fatalf("work prompt missing %q: %s", expected, work)
 		}
+	}
+}
+
+func TestLoadToolsProviderSchemaIsQueryOnlyAndOptional(t *testing.T) {
+	tool, ok := builtinProviderToolDefinition(productdata.ToolNameLoadTools)
+	if !ok {
+		t.Fatal("load_tools provider definition missing")
+	}
+	if !strings.Contains(tool.Description, "query-only") {
+		t.Fatalf("load_tools description should tell the model it is query-only: %+v", tool)
+	}
+	properties, ok := tool.Parameters["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("properties = %+v", tool.Parameters)
+	}
+	if _, ok := properties["names"]; ok {
+		t.Fatalf("load_tools provider schema should not expose names: %+v", properties)
+	}
+	required, ok := tool.Parameters["required"].([]string)
+	if !ok {
+		t.Fatalf("required = %+v", tool.Parameters["required"])
+	}
+	if len(required) != 0 {
+		t.Fatalf("load_tools should accept empty query args, required=%+v", required)
 	}
 }
 
@@ -559,6 +599,45 @@ func TestGatewayBuildsContinuationContextFromToolResultEvents(t *testing.T) {
 	}
 	if messages[2].Content == "" || messages[2].Content == "sk-secret" {
 		t.Fatalf("tool result content = %q", messages[2].Content)
+	}
+}
+
+func TestGatewayCompactsLargeContinuationToolResult(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, productdata.CreateThreadInput{Title: "Gateway", Mode: productdata.ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _, err := svc.CreateMessage(context.Background(), ident, thread.ID, productdata.CreateMessageInput{Content: "Inspect workspace"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, productdata.StartRunInput{Source: productdata.RunSourceModelGateway, MessageID: message.ID, ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.AppendRunEvent(context.Background(), ident, run.ID, productdata.AppendRunEventInput{Category: productdata.RunEventCategoryProgress, Type: productdata.EventToolCallRequested, Summary: "Tool call requested", Metadata: map[string]any{"tool_call_id": "tc_1", "tool_name": productdata.ToolNameWorkspaceRead, "arguments_summary": map[string]any{"path": "web/src/App.tsx"}}}); err != nil {
+		t.Fatal(err)
+	}
+	largeOutput := strings.Repeat("repeated progress line\n", 300) + "path: web/src/App.tsx\nstatus: 503\nerror: provider unavailable\n"
+	if _, err := svc.AppendRunEvent(context.Background(), ident, run.ID, productdata.AppendRunEventInput{Category: productdata.RunEventCategoryProgress, Type: productdata.EventToolCallSucceeded, Summary: "Tool call succeeded", Metadata: map[string]any{"tool_call_id": "tc_1", "tool_name": productdata.ToolNameWorkspaceRead, "result_summary": map[string]any{"output": largeOutput}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	messages, err := NewGateway(svc, nil, nil).loadContinuationMessages(context.Background(), thread.ID, message.ID, run.ID, "tc_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	content := messages[2].Content
+	if len(content) > maxProviderToolResultContentBytes {
+		t.Fatalf("content length = %d", len(content))
+	}
+	for _, want := range []string{"web/src/App.tsx", "503", "provider unavailable", "tool output compacted"} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("content missing %q: %s", want, content)
+		}
 	}
 }
 
@@ -1014,7 +1093,7 @@ func TestGatewayLoadToolsProviderSchemaIsQueriesOnly(t *testing.T) {
 		t.Fatalf("load_tools provider schema should expose queries: %+v", properties)
 	}
 	required, ok := tool.Parameters["required"].([]string)
-	if !ok || len(required) != 1 || required[0] != "queries" {
+	if !ok || len(required) != 0 {
 		t.Fatalf("load_tools required = %+v", tool.Parameters["required"])
 	}
 }
@@ -1034,7 +1113,7 @@ func TestGatewayExposesCodeAgentToolsToProvider(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	enabled := []string{productdata.ToolNameLoadTools, productdata.ToolNameLoadSkill, productdata.ToolNameWorkspaceRead, productdata.ToolNameWorkspaceEdit, productdata.ToolNameWorkspacePatchPreview, productdata.ToolNameWorkspacePatchApply, productdata.ToolNameSandboxExecCommand, productdata.ToolNameSandboxStartProcess, productdata.ToolNameSandboxContinueProcess, productdata.ToolNameSandboxTerminateProcess, productdata.ToolNameLSPSymbols, productdata.ToolNameLSPDefinition, productdata.ToolNameLSPHover, productdata.ToolNameWebSearch, productdata.ToolNameBrowserOpen, productdata.ToolNameBrowserScreenshot, productdata.ToolNameBrowserType, productdata.ToolNameBrowserPress, productdata.ToolNameMemorySearch, productdata.ToolNameMemoryList, productdata.ToolNameMemoryRead, productdata.ToolNameMemoryWrite, productdata.ToolNameMemoryEdit, productdata.ToolNameMemoryForget, productdata.ToolNameMemoryContext, productdata.ToolNameMemoryTimeline, productdata.ToolNameMemoryConnections, productdata.ToolNameMemoryThreadSearch, productdata.ToolNameMemoryThreadFetch, productdata.ToolNameMemoryStatus, productdata.ToolNameNotebookRead, productdata.ToolNameNotebookWrite, productdata.ToolNameNotebookEdit, productdata.ToolNameNotebookForget, productdata.ToolNameTodoWrite}
+	enabled := []string{productdata.ToolNameLoadTools, productdata.ToolNameLoadSkill, productdata.ToolNameWorkspaceListDirectory, productdata.ToolNameWorkspaceTreeSummary, productdata.ToolNameWorkspaceRead, productdata.ToolNameWorkspaceEdit, productdata.ToolNameWorkspacePatchPreview, productdata.ToolNameWorkspacePatchApply, productdata.ToolNameSandboxExecCommand, productdata.ToolNameSandboxStartProcess, productdata.ToolNameSandboxContinueProcess, productdata.ToolNameSandboxTerminateProcess, productdata.ToolNameLSPSymbols, productdata.ToolNameLSPDefinition, productdata.ToolNameLSPHover, productdata.ToolNameWebSearch, productdata.ToolNameBrowserOpen, productdata.ToolNameBrowserScreenshot, productdata.ToolNameBrowserType, productdata.ToolNameBrowserPress, productdata.ToolNameMemorySearch, productdata.ToolNameMemoryList, productdata.ToolNameMemoryRead, productdata.ToolNameMemoryWrite, productdata.ToolNameMemoryEdit, productdata.ToolNameMemoryForget, productdata.ToolNameMemoryContext, productdata.ToolNameMemoryTimeline, productdata.ToolNameMemoryConnections, productdata.ToolNameMemoryThreadSearch, productdata.ToolNameMemoryThreadFetch, productdata.ToolNameMemoryStatus, productdata.ToolNameNotebookRead, productdata.ToolNameNotebookWrite, productdata.ToolNameNotebookEdit, productdata.ToolNameNotebookForget, productdata.ToolNameTodoWrite}
 	if _, err := svc.AppendRunEvent(context.Background(), ident, run.ID, productdata.AppendRunEventInput{Category: productdata.RunEventCategoryProgress, Type: productdata.EventPipelineStepCompleted, Summary: "Pipeline step completed", Metadata: map[string]any{"step": string(productdata.PipelineStepResolveTools), "enabled_tools": enabled}}); err != nil {
 		t.Fatal(err)
 	}
@@ -1047,11 +1126,15 @@ func TestGatewayExposesCodeAgentToolsToProvider(t *testing.T) {
 			t.Fatalf("tool missing provider schema: %+v", tool)
 		}
 	}
-	want := []string{"tool_load_tools", "skill_load_skill", "workspace_read", "workspace_edit", "workspace_patch_preview", "workspace_patch_apply", "sandbox_exec_command", "sandbox_start_process", "sandbox_continue_process", "sandbox_terminate_process", "lsp_symbols", "lsp_definition", "lsp_hover", "web_search", "browser_open", "browser_screenshot", "browser_type", "browser_press", "memory_search", "memory_list", "memory_read", "memory_write", "memory_edit", "memory_forget", "memory_context", "memory_timeline", "memory_connections", "memory_thread_search", "memory_thread_fetch", "memory_status", "notebook_read", "notebook_write", "notebook_edit", "notebook_forget", "todo_write"}
+	want := []string{"tool_load_tools", "skill_load_skill", "workspace_list_directory", "workspace_tree_summary", "workspace_read", "workspace_edit", "workspace_patch_preview", "workspace_patch_apply", "sandbox_exec_command", "sandbox_start_process", "sandbox_continue_process", "sandbox_terminate_process", "lsp_symbols", "lsp_definition", "lsp_hover", "web_search", "browser_open", "browser_screenshot", "browser_type", "browser_press", "memory_search", "memory_list", "memory_read", "memory_write", "memory_edit", "memory_forget", "memory_context", "memory_timeline", "memory_connections", "memory_thread_search", "memory_thread_fetch", "memory_status", "notebook_read", "notebook_write", "notebook_edit", "notebook_forget", "todo_write"}
 	if strings.Join(names, ",") != strings.Join(want, ",") {
 		t.Fatalf("provider tools = %+v", names)
 	}
-	if internalProviderToolName("tool_load_tools") != productdata.ToolNameLoadTools || providerToolName(productdata.ToolNameLoadSkill) != "skill_load_skill" || internalProviderToolName("workspace_edit") != productdata.ToolNameWorkspaceEdit || internalProviderToolName("workspace_patch_preview") != productdata.ToolNameWorkspacePatchPreview || providerToolName(productdata.ToolNameWorkspacePatchApply) != "workspace_patch_apply" || providerToolName(productdata.ToolNameSandboxExecCommand) != "sandbox_exec_command" || internalProviderToolName("sandbox_start_process") != productdata.ToolNameSandboxStartProcess || internalProviderToolName("browser_type") != productdata.ToolNameBrowserType || providerToolName(productdata.ToolNameLSPDefinition) != "lsp_definition" || internalProviderToolName("memory_search") != productdata.ToolNameMemorySearch || internalProviderToolName("memory_thread_fetch") != productdata.ToolNameMemoryThreadFetch || providerToolName(productdata.ToolNameMemoryStatus) != "memory_status" || internalProviderToolName("notebook_write") != productdata.ToolNameNotebookWrite || providerToolName(productdata.ToolNameNotebookForget) != "notebook_forget" || internalProviderToolName("todo_write") != productdata.ToolNameTodoWrite {
+	listTool, ok := builtinProviderToolDefinition(productdata.ToolNameWorkspaceListDirectory)
+	if !ok || !strings.Contains(listTool.Description, "Use this before grep for folder listing") {
+		t.Fatalf("list directory provider schema = %+v", listTool)
+	}
+	if internalProviderToolName("tool_load_tools") != productdata.ToolNameLoadTools || providerToolName(productdata.ToolNameLoadSkill) != "skill_load_skill" || internalProviderToolName("workspace_list_directory") != productdata.ToolNameWorkspaceListDirectory || providerToolName(productdata.ToolNameWorkspaceTreeSummary) != "workspace_tree_summary" || internalProviderToolName("workspace_edit") != productdata.ToolNameWorkspaceEdit || internalProviderToolName("workspace_patch_preview") != productdata.ToolNameWorkspacePatchPreview || providerToolName(productdata.ToolNameWorkspacePatchApply) != "workspace_patch_apply" || providerToolName(productdata.ToolNameSandboxExecCommand) != "sandbox_exec_command" || internalProviderToolName("sandbox_start_process") != productdata.ToolNameSandboxStartProcess || internalProviderToolName("browser_type") != productdata.ToolNameBrowserType || providerToolName(productdata.ToolNameLSPDefinition) != "lsp_definition" || internalProviderToolName("memory_search") != productdata.ToolNameMemorySearch || internalProviderToolName("memory_thread_fetch") != productdata.ToolNameMemoryThreadFetch || providerToolName(productdata.ToolNameMemoryStatus) != "memory_status" || internalProviderToolName("notebook_write") != productdata.ToolNameNotebookWrite || providerToolName(productdata.ToolNameNotebookForget) != "notebook_forget" || internalProviderToolName("todo_write") != productdata.ToolNameTodoWrite {
 		t.Fatalf("provider tool name mapping failed")
 	}
 }

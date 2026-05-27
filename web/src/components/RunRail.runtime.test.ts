@@ -164,6 +164,30 @@ describe('RunRail tool continuation runtime states', () => {
     expect(html).not.toContain('needle')
   })
 
+  test('shows directory listing and summary lifecycle without raw paths', () => {
+    const html = renderToStaticMarkup(createElement(RunRail, {
+      run: {
+        id: 'run-a',
+        threadId: 'thread-a',
+        status: 'completed',
+        model: 'Model gateway',
+        context: 'model_gateway',
+        events: [
+          { id: 'evt-list', sequence: 1, type: 'tool.call.succeeded', label: 'tool', detail: 'Tool call succeeded', time: 'Now', status: 'running', group: 'tool-call', metadata: { tool_group: 'workspace', tool_name: 'workspace.list_directory', result_summary: { operation: 'list_directory', path: '/Users/xuean/Downloads', returned_entries: 8, directories_count: 2, files_count: 6 }, loop_index: 1, loop_max: 6 } },
+          { id: 'evt-summary', sequence: 2, type: 'tool.call.succeeded', label: 'tool', detail: 'Tool call succeeded', time: 'Now', status: 'completed', group: 'tool-call', metadata: { tool_group: 'workspace', tool_name: 'workspace.tree_summary', result_summary: { operation: 'tree_summary', by_kind: { document: 3, code: 2 }, largest_files: [{ path: 'secret-token.txt', size: 100 }] }, loop_index: 2, loop_max: 6 } },
+        ],
+      },
+      open: true,
+    }))
+
+    expect(html).toContain('Read directory completed')
+    expect(html).toContain('Summarize directory completed')
+    expect(html).toContain('returned_entries: 8')
+    expect(html).toContain('by_kind')
+    expect(html).not.toContain('/Downloads')
+    expect(html).not.toContain('secret-token')
+  })
+
   test('shows todo write lifecycle as work plan update without unsafe text', () => {
     const html = renderToStaticMarkup(createElement(RunRail, {
       run: {

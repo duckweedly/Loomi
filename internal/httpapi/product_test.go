@@ -120,27 +120,26 @@ func TestWorkspaceRootEndpointPersistsSelectedFolder(t *testing.T) {
 	svc := productdata.NewMemoryService()
 	srv := NewServerWithProduct(config.Config{AppEnv: "local"}, fakeChecker{}, svc)
 
+	initial := requestJSON(t, srv, http.MethodGet, "/v1/workspace/root", "")
+	if initial.Code != http.StatusOK || !strings.Contains(initial.Body.String(), `"configured":false`) || !strings.Contains(initial.Body.String(), "No folder selected") {
+		t.Fatalf("initial status=%d body=%s", initial.Code, initial.Body.String())
+	}
+
 	save := requestJSON(t, srv, http.MethodPost, "/v1/workspace/root", `{"path":"`+root+`"}`)
 	if save.Code != http.StatusOK || !strings.Contains(save.Body.String(), `"configured":true`) || !strings.Contains(save.Body.String(), filepath.Base(root)) {
 		t.Fatalf("save status=%d body=%s", save.Code, save.Body.String())
 	}
-	if got := os.Getenv("LOOMI_WORKSPACE_ROOT"); got == "" {
-		t.Fatal("workspace root was not applied to runtime process")
+	if got := os.Getenv("LOOMI_WORKSPACE_ROOT"); got != "" {
+		t.Fatalf("workspace root leaked into process env: %q", got)
 	}
 
-	if err := os.Unsetenv("LOOMI_WORKSPACE_ROOT"); err != nil {
-		t.Fatal(err)
-	}
 	nextServer := NewServerWithProduct(config.Config{AppEnv: "local"}, fakeChecker{}, svc)
-	if got := os.Getenv("LOOMI_WORKSPACE_ROOT"); got == "" {
-		t.Fatal("persisted workspace root was not restored when the server started")
+	if got := os.Getenv("LOOMI_WORKSPACE_ROOT"); got != "" {
+		t.Fatalf("persisted workspace root leaked into process env: %q", got)
 	}
 	load := requestJSON(t, nextServer, http.MethodGet, "/v1/workspace/root", "")
 	if load.Code != http.StatusOK || !strings.Contains(load.Body.String(), `"configured":true`) || !strings.Contains(load.Body.String(), filepath.Base(root)) {
 		t.Fatalf("load status=%d body=%s", load.Code, load.Body.String())
-	}
-	if got := os.Getenv("LOOMI_WORKSPACE_ROOT"); got == "" {
-		t.Fatal("persisted workspace root was not restored into runtime process")
 	}
 }
 
@@ -323,6 +322,28 @@ func TestUnsupportedThreadMethodReturnsMethodNotAllowed(t *testing.T) {
 	}
 	if !strings.Contains(res.Body.String(), "method_not_allowed") {
 		t.Fatalf("body = %s", res.Body.String())
+	}
+}
+
+func TestThreadListReturnsEmptyArrayAfterAllThreadsArchived(t *testing.T) {
+	srv := NewServerWithProduct(config.Config{AppEnv: "local"}, fakeChecker{}, productdata.NewMemoryService())
+	create := requestJSON(t, srv, http.MethodPost, "/v1/threads", `{"title":"Thread","mode":"chat"}`)
+	threadID := decodeThreadID(t, create.Body.Bytes())
+
+	archive := requestJSON(t, srv, http.MethodPost, "/v1/threads/"+threadID+"/archive", "")
+	if archive.Code != http.StatusOK {
+		t.Fatalf("archive status=%d body=%s", archive.Code, archive.Body.String())
+	}
+
+	list := requestJSON(t, srv, http.MethodGet, "/v1/threads", "")
+	if list.Code != http.StatusOK {
+		t.Fatalf("list status=%d body=%s", list.Code, list.Body.String())
+	}
+	if !strings.Contains(list.Body.String(), `"threads":[]`) {
+		t.Fatalf("expected empty array body=%s", list.Body.String())
+	}
+	if strings.Contains(list.Body.String(), `"threads":null`) {
+		t.Fatalf("threads serialized as null body=%s", list.Body.String())
 	}
 }
 

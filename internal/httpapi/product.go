@@ -27,6 +27,13 @@ type threadListResponse struct {
 	RequestID string               `json:"request_id"`
 }
 
+func nonNilThreads(threads []productdata.Thread) []productdata.Thread {
+	if threads == nil {
+		return []productdata.Thread{}
+	}
+	return threads
+}
+
 type personaListResponse struct {
 	Personas  []productdata.Persona `json:"personas"`
 	RequestID string                `json:"request_id"`
@@ -130,7 +137,7 @@ func (s *Server) handleThreads(w http.ResponseWriter, r *http.Request) {
 			writeAPIError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, threadListResponse{Threads: threads, RequestID: diagnostics.NewRequestID()})
+		writeJSON(w, http.StatusOK, threadListResponse{Threads: nonNilThreads(threads), RequestID: diagnostics.NewRequestID()})
 	case http.MethodPost:
 		var req createThreadRequest
 		if err := decodeJSONRequest(r, &req); err != nil {

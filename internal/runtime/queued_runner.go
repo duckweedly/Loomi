@@ -12,6 +12,7 @@ type QueuedRunRouter struct {
 	Local            *LocalRunner
 	Gateway          *Gateway
 	MCPExecutor      MCPToolExecutor
+	SandboxStore     *SandboxProcessStore
 	WebExecutor      WebToolExecutor
 	BrowserExecutor  BrowserToolExecutor
 	ArtifactService  productdata.ArtifactService
@@ -167,10 +168,16 @@ func (r QueuedRunRouter) runApprovedTool(ctx context.Context, run productdata.Ru
 		enabledTools = prepared.EnabledTools
 	}
 	catalog := toolCatalogForExecution(enabledTools)
-	broker := ToolBroker{Executor: DefaultToolExecutor{MCPExecutor: r.MCPExecutor, WorkspaceExecutor: WorkspaceToolExecutor{}, SandboxExecutor: SandboxToolExecutor{}, LSPExecutor: LSPToolExecutor{}, WebExecutor: r.WebExecutor, BrowserExecutor: r.BrowserExecutor, ArtifactExecutor: ArtifactToolExecutor{Artifacts: r.artifactService()}, AgentExecutor: AgentToolExecutor{Tasks: r.agentTaskService()}, MemoryExecutor: MemoryToolExecutor{Service: r.memoryService(), Ident: identity.LocalDevIdentity()}}}
-	result, err := broker.Execute(ctx, ToolInvocationFromCall(call, catalog, enabledTools))
+	broker := ToolBroker{Executor: DefaultToolExecutor{MCPExecutor: r.MCPExecutor, WorkspaceExecutor: WorkspaceToolExecutor{}, SandboxExecutor: SandboxToolExecutor{Store: r.SandboxStore}, LSPExecutor: LSPToolExecutor{}, WebExecutor: r.WebExecutor, BrowserExecutor: r.BrowserExecutor, ArtifactExecutor: ArtifactToolExecutor{Artifacts: r.artifactService()}, AgentExecutor: AgentToolExecutor{Tasks: r.agentTaskService()}, MemoryExecutor: MemoryToolExecutor{Service: r.memoryService(), Ident: identity.LocalDevIdentity()}}}
+	invocation := ToolInvocationFromCall(call, catalog, enabledTools)
+	invocation.RunStatus = run.Status
+	if prepared != nil {
+		invocation.WorkspaceRoot = prepared.WorkspaceRoot.Path
+	}
+	result, err := broker.Execute(ctx, invocation)
 	if err != nil {
-		_, _, _ = r.Gateway.Service.FailToolCallExecution(ctx, identity.LocalDevIdentity(), run.ThreadID, run.ID, toolCallID, "tool_execution_failed", err.Error())
+		code, message := toolExecutionFailure(err)
+		_, _, _ = r.Gateway.Service.FailToolCallExecution(ctx, identity.LocalDevIdentity(), run.ThreadID, run.ID, toolCallID, code, message)
 		return nil
 	}
 	if _, _, err = r.Gateway.Service.CompleteToolCallSuccess(ctx, identity.LocalDevIdentity(), run.ThreadID, run.ID, toolCallID, result.ResultSummary); err != nil {
@@ -198,6 +205,28 @@ func (r QueuedRunRouter) runApprovedTool(ctx context.Context, run productdata.Ru
 		}
 	}
 	return r.gatewayResult(ctx, run.ID)
+}
+
+func toolExecutionFailure(err error) (string, string) {
+	if err == nil {
+		return "tool_execution_failed", "Tool execution failed."
+	}
+	message := strings.TrimSpace(err.Error())
+	lower := strings.ToLower(message)
+	switch {
+	case strings.Contains(lower, "workspace root is not authorized"):
+		return "permission_not_authorized", "Permission was not granted for this workspace tool. Re-select or approve the workspace, then retry."
+	case strings.Contains(lower, "workspace root is unavailable"):
+		return "workspace_unbound", "No usable workspace folder is bound for this run. Select a workspace folder, then retry."
+	case strings.Contains(lower, "not allowed"):
+		return "permission_not_authorized", "Permission was not granted for this tool or command. Approve an allowed tool action, then retry."
+	case strings.Contains(lower, "timeout") || strings.Contains(lower, "deadline exceeded"):
+		return "bounded_limit_reached", "The tool hit its timeout or bounded output limit. Try a narrower command or smaller input."
+	case message != "":
+		return "tool_execution_failed", "Tool execution failed: " + message
+	default:
+		return "tool_execution_failed", "Tool execution failed."
+	}
 }
 
 func (r QueuedRunRouter) shouldResumeContinuationAfterSucceededTool(ctx context.Context, runID string, toolCallID string) bool {

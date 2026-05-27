@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -238,6 +239,40 @@ func (r *PostgresRepository) GetMemoryProviderConfig(ctx context.Context, ident 
 		return MemoryProviderConfig{}, err
 	}
 	return config, nil
+}
+
+func (r *PostgresRepository) workspaceRootPathForUserTx(ctx context.Context, tx pgx.Tx, userID string) (string, error) {
+	var root string
+	err := tx.QueryRow(ctx, `select root_path from workspace_root_configs where user_id=$1`, userID).Scan(&root)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return strings.TrimSpace(os.Getenv("LOOMI_WORKSPACE_ROOT")), nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(root), nil
+}
+
+func (r *PostgresRepository) workspaceRootPathForRunTx(ctx context.Context, tx pgx.Tx, userID string, runID string) (string, error) {
+	rows, err := tx.Query(ctx, `select metadata from background_jobs where user_id=$1 and run_id=$2 order by created_at asc, id asc`, userID, runID)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var raw []byte
+		if err := rows.Scan(&raw); err != nil {
+			return "", err
+		}
+		metadata := map[string]any{}
+		if len(raw) > 0 {
+			_ = json.Unmarshal(raw, &metadata)
+		}
+		if root := metadataStringValue(metadata, "workspace_root_path"); root != "" {
+			return root, nil
+		}
+	}
+	return "", rows.Err()
 }
 
 func (r *PostgresRepository) ListMemoryProviderErrors(ctx context.Context, ident identity.LocalIdentity, limit int) ([]MemoryProviderErrorEvent, error) {
@@ -681,6 +716,13 @@ func (r *PostgresRepository) StartRun(ctx context.Context, ident identity.LocalI
 	run.PersonaID = snapshot.ID
 	jobID := NewBackgroundJobID()
 	metadata := map[string]any{"source": string(source), "job_id": jobID}
+	workspaceRoot, err := r.workspaceRootPathForUserTx(ctx, tx, user.ID)
+	if err != nil {
+		return Run{}, err
+	}
+	if workspaceRoot != "" {
+		metadata["workspace_root_path"] = workspaceRoot
+	}
 	if source == RunSourceLocalSimulated {
 		metadata["script_name"] = NormalizeScriptName(input.ScriptName)
 	} else {
@@ -704,7 +746,7 @@ func (r *PostgresRepository) StartRun(ctx context.Context, ident identity.LocalI
 	if _, err := scanRunEvent(tx.QueryRow(ctx, `insert into run_events (id, run_id, thread_id, user_id, sequence, category, type, summary, metadata) values ($1, $2, $3, $4, 2, 'lifecycle', 'run_queued', 'Run queued', $5) returning id, run_id, thread_id, user_id, sequence, category, type, summary, content, metadata, created_at`, NewRunEventID(), run.ID, threadID, user.ID, mustJSON(RedactEventMetadata(map[string]any{"job_id": jobID})))); err != nil {
 		return Run{}, err
 	}
-	if _, err := tx.Exec(ctx, `insert into background_jobs (id, run_id, thread_id, user_id, kind, status, max_attempts, metadata) values ($1, $2, $3, $4, 'run_execution', 'queued', 3, $5)`, jobID, run.ID, threadID, user.ID, mustJSON(RedactEventMetadata(metadata))); err != nil {
+	if _, err := tx.Exec(ctx, `insert into background_jobs (id, run_id, thread_id, user_id, kind, status, max_attempts, metadata) values ($1, $2, $3, $4, 'run_execution', 'queued', 3, $5)`, jobID, run.ID, threadID, user.ID, mustJSON(metadata)); err != nil {
 		return Run{}, err
 	}
 	if _, err := tx.Exec(ctx, `update threads set updated_at=now() where id=$1 and user_id=$2`, threadID, user.ID); err != nil {
@@ -1576,11 +1618,18 @@ func (r *PostgresRepository) ApproveToolCall(ctx context.Context, ident identity
 	if _, err := tx.Exec(ctx, `update runs set status='queued', updated_at=now() where id=$1 and user_id=$2`, run.ID, user.ID); err != nil {
 		return ToolCall{}, nil, err
 	}
+	workspaceRoot, err := r.workspaceRootPathForRunTx(ctx, tx, user.ID, run.ID)
+	if err != nil {
+		return ToolCall{}, nil, err
+	}
 	if _, err := tx.Exec(ctx, `update background_jobs set status='cancelled', updated_at=now() where run_id=$1 and user_id=$2 and status in ('queued', 'leased', 'retrying')`, run.ID, user.ID); err != nil {
 		return ToolCall{}, nil, err
 	}
 	jobID := NewBackgroundJobID()
-	metadata := RedactEventMetadata(map[string]any{"source": string(run.Source), "job_id": jobID, "tool_call_id": call.ToolCallID, "resume_reason": "tool_call_approved"})
+	metadata := map[string]any{"source": string(run.Source), "job_id": jobID, "tool_call_id": call.ToolCallID, "resume_reason": "tool_call_approved"}
+	if workspaceRoot != "" {
+		metadata["workspace_root_path"] = workspaceRoot
+	}
 	if _, err := tx.Exec(ctx, `insert into background_jobs (id, run_id, thread_id, user_id, kind, status, priority, max_attempts, scheduled_at, metadata) values ($1, $2, $3, $4, $5, 'queued', 50, 3, now(), $6)`, jobID, run.ID, run.ThreadID, user.ID, BackgroundJobKindRunExecution, mustJSON(metadata)); err != nil {
 		return ToolCall{}, nil, err
 	}

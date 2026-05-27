@@ -124,6 +124,8 @@ Unsupported request fields, shell-form commands, model-supplied env, write/netwo
 
 The process handle is available only to the originating run. Unknown handles and cross-run handles fail before any process operation.
 
+Read-only continue is allowed after a registry rebuild when the stored process is terminal. Continue requests that include `stdin_text` or `close_stdin` are mutations and are rejected for terminal process records or terminal runs. `sandbox.start_process` is also rejected for terminal runs.
+
 ## Result Summary
 
 ```json
@@ -156,9 +158,11 @@ Process tool results use `bounded_process` scope:
   "operation": "continue_process",
   "process_id": "sp_0123456789abcdef",
   "argv": ["go", "test", "./..."],
+  "argv_summary": ["go", "test", "./..."],
   "cwd": ".",
+  "cwd_alias": ".",
   "status": "running",
-  "exit_code": -1,
+  "exit_code": null,
   "timed_out": false,
   "stdout": "ok github.com/sheridiany/loomi/internal/runtime\n",
   "stderr": "",
@@ -169,16 +173,47 @@ Process tool results use `bounded_process` scope:
   "next_cursor": 48,
   "stdin_open": false,
   "input_seq": 2,
+  "terminal_summary": "",
+  "started_at": "2026-05-27T09:00:00Z",
+  "updated_at": "2026-05-27T09:00:01Z",
+  "ended_at": "",
   "redaction_applied": false
 }
 ```
 
-`status` is one of `running`, `exited`, or `terminated`. `next_cursor` is the next absolute stdout cursor to pass back into `sandbox.continue_process` for incremental reads. Timed-out processes are reported with `timed_out: true` after the process exits due to the bounded context.
+`status` is one of `running`, `exited`, `terminated`, `failed`, or `expired`. `next_cursor` is the next absolute stdout cursor to pass back into `sandbox.continue_process` for incremental reads. Timed-out or TTL-expired processes report terminal status and a `terminal_summary`.
 
 `sandbox.terminate_process` also returns `terminal_summary`, for example `terminated exit_code=-1`, so RunRail and ToolCallCard can show a compact lifecycle outcome without exposing raw process details. A later `sandbox.continue_process` on an exited or terminated process is read-only: it skips stdin writes/close actions and returns the stored terminal status, cursor, byte counts, and summary.
+
+## Process Record
+
+The runtime keeps the minimum in-process handle record needed for `SandboxProcessStore` rebuild and audit within the current API process:
+
+```json
+{
+  "run_id": "run_123",
+  "process_id": "sp_0123456789abcdef",
+  "argv_summary": ["cat"],
+  "cwd_alias": ".",
+  "status": "exited",
+  "cursor": 2,
+  "started_at": "2026-05-27T09:00:00Z",
+  "updated_at": "2026-05-27T09:00:01Z",
+  "ended_at": "2026-05-27T09:00:01Z",
+  "exit_code": 0,
+  "stdout_tail": "a\n",
+  "stderr_tail": ""
+}
+```
+
+After rebuilding `SandboxProcessStore` from the configured repository inside the same API process or test harness, terminal records can still be read. A restored `running` record that has no live local command is marked `failed` with `terminal_summary: "failed process missing after registry restore"`. Records older than the configured max lifetime or idle timeout are marked `expired`. Loomi never starts a new process from `continue_process` and never kills host processes that are not represented by a run-owned registry record.
+
+The default repository is `MemorySandboxProcessRepository`. Until a productdata/Postgres repository is wired into the real queued-run router path, these process records do not survive an API process restart.
 
 ## Event Safety
 
 Tool-call request events expose only safe command previews. Normal API/UI events must not include host absolute workspace roots, credentials, raw environment values, provider raw payloads, or unbounded output.
 
-M81 keeps the same output scrubber before returning one-shot and process results: invalid UTF-8 is dropped, the configured workspace root is replaced with `.`, host absolute paths and secret-looking content are redacted, and `redaction_applied` is set when the preview changes. The bounded byte counts and cursor values still reflect captured stdout/stderr bytes, not the redacted preview length.
+M93 keeps the same output scrubber before returning one-shot and process results: invalid UTF-8 is dropped, the configured workspace root is replaced with `.`, host absolute paths and secret-looking content are redacted, and `redaction_applied` is set when the preview changes. The bounded byte counts and cursor values still reflect captured stdout/stderr bytes, not the redacted preview length.
+
+ToolCallCard allows safe process metadata such as `argv_summary`, `cwd_alias`, `status`, `next_cursor`, timestamps, and `terminal_summary`, but treats raw `stdout`, `stderr`, paths, cwd, and secret-looking values as redacted preview fields.

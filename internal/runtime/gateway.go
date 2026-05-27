@@ -21,6 +21,8 @@ type Gateway struct {
 	Providers   []Provider
 }
 
+const maxProviderToolResultContentBytes = 4096
+
 type GatewayRunInput struct {
 	ThreadID   string
 	MessageID  string
@@ -182,7 +184,8 @@ func (g *Gateway) streamProviderResponse(ctx context.Context, run productdata.Ru
 			}
 			_, err := g.recordToolCallRequest(ctx, run, event)
 			if err != nil {
-				g.failWithMetadata(ctx, run.ID, "tool_call_rejected", "Tool request could not be accepted.", map[string]any{"tool_name": event.ToolName, "arguments_summary": toolArgumentsSummary(event.Metadata), "error_code": string(productdata.ErrorCode(err)), "error_message": productdata.RedactEventText(err.Error())})
+				code, message := toolRequestFailure(err)
+				g.failWithMetadata(ctx, run.ID, code, message, map[string]any{"tool_name": event.ToolName, "arguments_summary": toolArgumentsSummary(event.Metadata), "error_code": string(productdata.ErrorCode(err)), "error_message": productdata.RedactEventText(err.Error())})
 				return
 			}
 			return
@@ -207,6 +210,24 @@ func (g *Gateway) streamProviderResponse(ctx context.Context, run productdata.Ru
 		}
 	}
 	g.fail(ctx, run.ID, "empty_response", "Model returned an empty response.")
+}
+
+func toolRequestFailure(err error) (string, string) {
+	if err == nil {
+		return "tool_validation_failed", "Tool request failed validation."
+	}
+	message := strings.TrimSpace(err.Error())
+	lower := strings.ToLower(message)
+	switch {
+	case strings.Contains(lower, "not allowed") || strings.Contains(lower, "chat mode") || strings.Contains(lower, "work mode"):
+		return "tool_call_rejected", "Permission was not granted for this tool in the current run. Switch to the right mode or enable the tool, then retry."
+	case strings.Contains(lower, "workspace root") || strings.Contains(lower, "workspace folder"):
+		return "tool_call_rejected", "Workspace access is not available for this run. Select a workspace folder, then retry."
+	case message != "":
+		return "tool_call_rejected", "Tool request failed validation: " + message
+	default:
+		return "tool_call_rejected", "Tool request failed validation."
+	}
 }
 
 func (g *Gateway) selectProvider(providerID string) (Provider, error) {
@@ -280,7 +301,7 @@ func (g *Gateway) loadContinuationMessages(ctx context.Context, threadID string,
 		return nil, err
 	}
 	for _, item := range results {
-		resultContent, err := json.Marshal(item.Result)
+		resultContent, err := json.Marshal(compactToolResultPayload(item.Result, maxProviderToolResultContentBytes))
 		if err != nil {
 			return nil, err
 		}
@@ -470,7 +491,7 @@ func omitProviderTool(tools []ProviderToolDefinition, name string) []ProviderToo
 func builtinProviderToolDefinition(name string) (ProviderToolDefinition, bool) {
 	switch name {
 	case productdata.ToolNameLoadTools:
-		return providerTool(name, "Return safe descriptions for currently enabled Loomi tools by catalog keyword.", map[string]any{"queries": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "minItems": 1, "maxItems": 5}, "limit": integerSchema(1, 30)}, []string{"queries"}), true
+		return providerTool(name, "query-only catalog lookup. Return safe descriptions for currently enabled Loomi tools by catalog keyword; omit query to list a bounded safe catalog.", map[string]any{"query": stringSchema("Optional catalog search phrase."), "queries": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "maxItems": 5}, "limit": integerSchema(1, 30)}, []string{}), true
 	case productdata.ToolNameLoadSkill:
 		return providerTool(name, "Return a safe installed skill summary by name without loading the instruction body.", map[string]any{"name": stringSchema("Installed skill name or keyword."), "limit": integerSchema(1, 20)}, []string{"name"}), true
 	case productdata.ToolNameWorkspaceGlob:
@@ -479,6 +500,10 @@ func builtinProviderToolDefinition(name string) (ProviderToolDefinition, bool) {
 		return providerTool(name, "Search text files under the selected workspace root. Use path \".\" for the selected folder; do not repeat the root folder name.", map[string]any{"query": stringSchema("Search query."), "path": stringSchema("Optional relative directory from the selected workspace root. Use . for the root."), "include": stringSchema("Optional file glob."), "case_sensitive": map[string]any{"type": "boolean"}, "limit": integerSchema(1, 500)}, []string{"query"}), true
 	case productdata.ToolNameWorkspaceRead:
 		return providerTool(name, "Read a bounded UTF-8 slice from one file under the selected workspace root. Paths are relative to that root.", map[string]any{"path": stringSchema("Relative file path from the selected workspace root; do not repeat the root folder name."), "offset": integerSchema(0, 1000000), "limit": integerSchema(1, 1000000), "max_bytes": integerSchema(1, 131072)}, []string{"path"}), true
+	case productdata.ToolNameWorkspaceListDirectory:
+		return providerTool(name, "Read a bounded directory listing under the selected workspace root. Use this before grep for folder listing, inventory, or classification questions. Paths are relative; use path \".\" for the selected folder.", map[string]any{"path": stringSchema("Relative directory from the selected workspace root. Use . for the selected folder."), "max_entries": integerSchema(1, 500), "depth": integerSchema(1, 3), "include_hidden": map[string]any{"type": "boolean"}, "sort": map[string]any{"type": "string", "enum": []string{"name", "modified", "size"}}}, []string{}), true
+	case productdata.ToolNameWorkspaceTreeSummary:
+		return providerTool(name, "Return a bounded classified summary of a directory tree. Prefer this over grep when the user asks what a folder contains or how files are grouped by kind.", map[string]any{"path": stringSchema("Relative directory from the selected workspace root. Use . for the selected folder."), "max_entries": integerSchema(1, 500), "depth": integerSchema(1, 3), "include_hidden": map[string]any{"type": "boolean"}, "sort": map[string]any{"type": "string", "enum": []string{"name", "modified", "size"}}}, []string{}), true
 	case productdata.ToolNameWorkspaceWriteFile:
 		return providerTool(name, "Create a new bounded UTF-8 text file under the workspace root.", map[string]any{"path": stringSchema("Relative file path."), "content": stringSchema("File content."), "max_bytes": integerSchema(1, 131072)}, []string{"path", "content"}), true
 	case productdata.ToolNameWorkspaceEdit:
@@ -807,9 +832,10 @@ func runSystemPrompt(prepared *productdata.RunContext) string {
 	if prepared != nil && strings.TrimSpace(prepared.Persona.SystemPrompt) != "" {
 		base = strings.TrimSpace(prepared.Persona.SystemPrompt)
 	}
-	policy := "\n\nTool policy:\n- Use tools only when they are needed. Do not use tools for greetings, small talk, or stable general knowledge.\n- Use web_search for current events, latest information, news, prices, or external facts that may have changed.\n- Use web_fetch when the user gives a public URL or when search results need one source opened for analysis.\n- Do not call workspace, sandbox, LSP, browser, artifact, todo, or agent tools in Chat mode. Use those only when the current tool list truly exposes them for a Work run.\n- If a useful tool is not available, answer with the limitation and the next best safe option. Do not fabricate tool calls or tool results.\n- Final user-facing output must be natural language, not JSON or a tool protocol transcript."
+	policy := "\n\nOutput style:\n- Answer first, then give only the context needed to act.\n- No preface such as \"Sure\", \"Certainly\", or \"Here is\".\n- Do not repeat the user's request back to them.\n- For code changes, report what changed and what was verified; do not narrate every step.\n\nTool policy:\n- Use tools only when they are needed. Do not use tools for greetings, small talk, or stable general knowledge.\n- Use web_search for current events, latest information, news, prices, or external facts that may have changed.\n- Use web_fetch when the user gives a public URL or when search results need one source opened for analysis.\n- Do not call workspace, sandbox, LSP, browser, artifact, todo, or agent tools in Chat mode. Use those only when the current tool list truly exposes them for a Work run.\n- If a useful tool is not available, answer with the limitation and the next best safe option. Do not fabricate tool calls or tool results.\n- Final user-facing output must be natural language, not JSON or a tool protocol transcript."
 	if prepared != nil && prepared.Thread.Mode == productdata.ThreadModeWork {
-		policy += "\n\nWork mode policy:\n- This is a Work run. File and folder tasks are tool-first: inspect/list/search/classify/summarize files with workspace_glob, workspace_grep, and workspace_read before answering.\n- For folder listing or classification, start with one broad workspace_glob request using path \".\" and a sufficient limit, then summarize the visible results; do not repeat the same listing unless the user asks for a narrower folder or the result was explicitly truncated.\n- For content search, start with workspace_grep. Read specific files with workspace_read only after you have a relative path.\n- Do not tell the user to run shell commands, paste directory listings, export files, or grant oral permission when workspace tools are available. Request the tool and continue from the result.\n- Do not use sandbox commands for file reads, globbing, grep, cat/head/tail/ls-style listing, or simple classification. Use sandbox commands only for build/test/lint or commands that truly need a process.\n- Workspace tool paths are always relative to the selected workspace root. The selected folder is already the root; use \".\" for it and do not repeat the root folder name such as Downloads, Desktop, or Documents in tool paths.\n- If a requested path is outside the selected root, ask the user to choose that folder in the UI.\n- Final output should summarize the work clearly and omit raw tool protocol details."
+		policy += "\n\nWork mode policy:\n- This is a Work run. File and folder tasks are tool-first: inspect/list/search/classify/summarize files with workspace_list_directory, workspace_tree_summary, workspace_grep, and workspace_read before answering.\n- For folder listing, inventory, or classification, start with workspace_tree_summary or workspace_list_directory using path \".\" and a bounded max_entries/depth. Do not start with grep for directory inventory.\n- Use workspace_grep only for content search. Read specific files with workspace_read only after you have a relative path.\n- Do not tell the user to run shell commands, paste directory listings, export files, or grant oral permission when workspace tools are available. Request the tool and continue from the result.\n- Do not use sandbox commands for file reads, globbing, grep, cat/head/tail/ls-style listing, or simple classification. Use sandbox commands only for build/test/lint or commands that truly need a process.\n- Workspace tool paths are always relative to the selected workspace root. The selected folder is already the root; use \".\" for it and do not repeat the root folder name such as Downloads, Desktop, or Documents in tool paths.\n- If a requested path is outside the selected root, ask the user to choose that folder in the UI.\n- Final output should summarize the work clearly and omit raw tool protocol details."
+		policy += "\n\nTool selection strategy:\n- Directory questions: use workspace_tree_summary or workspace_list_directory first with path \".\" and bounded max_entries/depth before summarizing categories.\n- Use workspace_glob only for file-name pattern matching or a narrow follow-up after directory inventory.\n- Content questions: use workspace_grep or workspace_read after you have a relative path; use grep to find candidates, then read the specific file.\n- Modification questions: use workspace_read first, then workspace_patch_preview, then workspace_patch_apply only after approval.\n- Use sandbox commands only when the user explicitly asks for a shell/process action or when verifying a change with build/test/lint."
 	}
 	return base + memoryPromptContext(prepared) + policy
 }
