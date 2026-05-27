@@ -12,7 +12,7 @@ UI-02 closes the demo-looking gaps in the existing UI-01 shell:
 - WorkPlanView behaves like a user task panel and does not invent plan steps without plan metadata.
 - RunRail and ToolCallCard show human-first tool labels and keep raw runtime ids/event names out of the primary UI.
 - RunRail and ToolCallCard share a safe preview formatter that redacts paths, `.env`, Authorization/cookie/token-like values, stdout/stderr, and raw body fields before rendering.
-- Tool call history follows the ArkLoop-style pattern: compact action rows by default, completed batches grouped behind one expandable summary, and detailed request/result fields only shown after expansion.
+- Tool call history uses compact action rows by default, completed batches grouped behind one expandable summary, and detailed request/result fields only shown after expansion.
 - Approval-blocked runs show a waiting-for-confirmation notice, Approve/Deny tool actions, and Stop.
 - Sidebar removes the duplicate search field and bottom new/search action cluster while keeping thread rows and actions visible.
 - The titlebar compose button creates a new thread for the current Chat/Work mode only when the sidebar is collapsed.

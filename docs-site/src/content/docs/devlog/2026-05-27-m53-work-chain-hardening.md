@@ -1,12 +1,12 @@
 ---
-title: 2026-05-27 M53 ArkLoop Work Chain Hardening
+title: 2026-05-27 M53 Work Chain Hardening
 ---
 
 Status: candidate hardening slice.
 
 Changes:
 
-- Compared the local ArkLoop source under `tmp/Arkloop` and aligned Loomi's Work-mode prompt with ArkLoop's tool-first file workflow: folder/file tasks should use workspace tools before asking the user to run commands or paste listings.
+- Compared a local reference implementation and aligned Loomi's Work-mode prompt with a tool-first file workflow: folder/file tasks should use workspace tools before asking the user to run commands or paste listings.
 - Persisted the desktop-selected workspace root for the local user and restored it into the API process after restart. API responses still expose only `configured` and `display_name`.
 - Changed `workspace.glob`, `workspace.grep`, and `workspace.read` to bounded read-only auto-approved tools once the workspace root is selected. Mutating workspace tools remain approval-gated.
 - Fixed worker continuation so an auto-approved read-only tool emitted after a prior tool result is executed in the same run chain instead of getting stuck as `approved/not_started`.

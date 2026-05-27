@@ -368,7 +368,7 @@ specs/029-workspace-read-tools/
 
 - `spec.md`：定义 `workspace.glob`、`workspace.grep`、`workspace.read` 的 bounded read-only scope、边界保护、UI/timeline 可见性和非目标。
 - `plan.md`：确定复用 M18 ToolCatalog/ToolBroker/RunContext/worker approval path，并使用 Go stdlib 文件扫描。
-- `research.md`：记录单 workspace root、deny-before-read、bounded results 和 Arkloop mechanism-only reference 决策。
+- `research.md`：记录单 workspace root、deny-before-read、bounded results 和 mechanism-only reference 决策。
 - `data-model.md`：定义 Workspace Tool Definition、Workspace Scope、Tool Arguments、Tool Result 和 Tool Call Event。
 - `contracts/`：定义 catalog、read-only auto-approval、failure contract。
 - `quickstart.md`：记录 backend smoke、UI smoke 和 required validation。

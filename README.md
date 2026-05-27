@@ -1,47 +1,58 @@
 # Loomi
 
-Loomi is an agent platform learning project. It follows the core capability progression of Arkloop at the mechanism level, while keeping its own brand, UI, naming, copy, and implementation structure.
+Loomi is a local-first agent workspace for Chat, Work, tools, memory, and project context. It is built around a visible run timeline: model messages, tool calls, approvals, worker steps, memory snapshots, artifacts, and failures are recorded so the user can see what happened and recover cleanly.
 
-## Goals
+## What It Does
 
-- Build a runnable agent platform in small, verifiable milestones.
-- Start with clear project boundaries before adding runtime complexity.
-- Make each milestone visible and testable, from a desktop-style web shell to API, runs, events, workers, tools, memory, and desktop runtime.
-- Learn from public behavior and commit themes without copying private structure, branding, assets, prompts, or non-public interfaces.
+- Chat with configured or local providers through the real run, event, and worker pipeline.
+- Run Work-mode tasks with permissioned tools for workspace files, web search, web fetch, browser sessions, artifacts, memory, and coordination records.
+- Keep tool calls observable: safe read-only actions can run automatically where allowed, while writes, commands, browser actions, and other risky operations remain approval-gated.
+- Store provider configuration, tool state, selected workspace roots, memory, artifacts, and run history in the backend instead of relying on mock UI state.
+- Provide a desktop-feeling interface for conversations, work runs, provider setup, web search keys, memory, tools, and runtime diagnostics.
 
-## Current Milestone: M0
+## Current Status
 
-M0 establishes the project boundary and repository shape.
+Loomi now includes a Go API and worker backend, PostgreSQL-backed product data, a React/Electron desktop shell, model gateway integration, streaming run events, provider configuration, approval-gated tool execution, workspace tools, web search/fetch, browser automation foundations, artifact metadata, memory tools, and Work-mode projections.
 
-Planned boundaries:
+It is still under active development. The current focus is making the real desktop experience reliable: provider setup, directory access, tool selection, readable tool summaries, run recovery, memory behavior, and simple end-to-end testing.
 
-- `cmd/` — executable entry points.
-- `internal/` — private application packages.
-- `services/` — independently runnable service boundaries.
-- `web/` — desktop-style web UI shell and frontend code.
+## Run Locally
 
-M0 intentionally does not implement the API, worker, database, desktop runtime, plugin system, or external channels yet.
+Start the API:
 
-## Roadmap
+```bash
+DATABASE_URL="postgres://loomi:loomi@127.0.0.1:55433/loomi_m2?sslmode=disable" \
+APP_ENV=local \
+HTTP_ADDR=127.0.0.1:18080 \
+go run ./cmd/loomi-api
+```
 
-High-level milestone sequence:
+Start the desktop shell:
 
-1. M0 Project boundaries and conventions.
-2. M1 Desktop-style web UI shell with mock data.
-3. M2 API and database foundation.
-4. M3 Authentication, threads, and messages.
-5. M4 Runs, events, and SSE.
-6. M5 Real web chat timeline.
-7. M6+ Model gateway, tools, workers, pipeline, persona, MCP, memory, artifacts, sandbox, admin console, desktop runtime, work mode, channels, plugins, and release tooling.
+```bash
+VITE_LOOMI_API_BASE_URL=http://127.0.0.1:18080 bun run --cwd web desktop:dev
+```
 
-## Development Principles
+## Repository Layout
 
-- Mechanism parity, original expression.
-- Core path first, experience second, complex runtime later.
-- Every milestone should run, be testable, and be explainable.
-- Prefer Go services and a web UI shell before introducing desktop runtime complexity.
-- Do not copy Arkloop branding, logo, visual details, copy, private naming, private prompts, or non-public APIs.
+- `cmd/` - API, CLI, seed, and executable entry points.
+- `internal/` - backend product data, runtime, HTTP API, worker, providers, tools, memory, and diagnostics.
+- `web/` - React/Electron desktop shell and frontend runtime.
+- `migrations/` - database schema migrations.
+- `specs/` - Spec Kit feature specs, plans, and tasks.
+- `docs-site/` - Starlight documentation for architecture, APIs, runbooks, roadmap, and devlogs.
+- `docs/` - older planning notes and reference material.
 
-## Repository Status
+## Development
 
-This repository is currently initialized for M0 only. Source code and runnable services will be added in later milestones.
+```bash
+go test ./...
+bun test --cwd web
+bun run --cwd web build
+bun run --cwd docs-site build
+git diff --check
+```
+
+## Safety Model
+
+Loomi treats tools and local context as permissioned capabilities. File access is scoped to a selected workspace root, sensitive paths are denied, secrets are redacted from events and UI, and risky actions are approval-gated and visible in the run timeline.

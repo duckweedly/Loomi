@@ -21,7 +21,7 @@ M47 expands `/v1/memory/provider` to carry the safe Nowledge and OpenViking conf
 
 M48 expands the agent-facing memory tool set. New tools are still backed by local productdata and safe summaries; they do not execute external OpenViking/Nowledge adapters.
 
-M49 adds Arkloop-style snapshot and impression endpoints backed by local approved memories. These endpoints return bounded safe summaries and hit metadata only; they do not expose raw memory content or execute external provider adapters.
+M49 adds snapshot and impression endpoints backed by local approved memories. These endpoints return bounded safe summaries and hit metadata only; they do not expose raw memory content or execute external provider adapters.
 
 M50 adds a safe content view endpoint for `memory://` snapshot hits. It returns title and safe summary only, not raw stored memory content.
 

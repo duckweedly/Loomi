@@ -129,7 +129,7 @@ describe('ToolCallCard M7 approval-required state', () => {
         approvalStatus: 'approved',
         executionStatus: 'succeeded',
         summary: 'Legacy fixture tool',
-        input: 'Arkloop web workspace files',
+        input: 'Reference workspace files',
         output: 'Work mode timeline',
         argumentsSummary: null,
         resultSummary: null,
