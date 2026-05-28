@@ -140,8 +140,37 @@ func discoveryToolMatches(entry productdata.ToolCatalogEntry, names []string, qu
 		if query != "" && strings.Contains(text, query) {
 			return true
 		}
+		for _, token := range discoveryQueryTokens(query) {
+			if strings.Contains(text, token) {
+				return true
+			}
+		}
 	}
 	return false
+}
+
+func discoveryQueryTokens(query string) []string {
+	parts := strings.FieldsFunc(strings.ToLower(query), func(r rune) bool {
+		return !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '_' || r == '.')
+	})
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if len(part) < 3 || discoveryQueryStopWord(part) {
+			continue
+		}
+		out = append(out, part)
+	}
+	return out
+}
+
+func discoveryQueryStopWord(token string) bool {
+	switch token {
+	case "and", "the", "for", "with", "from", "into", "under", "root", "tool", "tools":
+		return true
+	default:
+		return false
+	}
 }
 
 func skillMatches(skill InstalledSkill, query string) bool {

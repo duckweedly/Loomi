@@ -671,6 +671,10 @@ func internalProviderToolName(name string) string {
 		return productdata.ToolNameWorkspaceGrep
 	case "workspace_read":
 		return productdata.ToolNameWorkspaceRead
+	case "workspace_list_directory":
+		return productdata.ToolNameWorkspaceListDirectory
+	case "workspace_tree_summary":
+		return productdata.ToolNameWorkspaceTreeSummary
 	case "workspace_write_file":
 		return productdata.ToolNameWorkspaceWriteFile
 	case "workspace_edit":
@@ -1034,6 +1038,10 @@ func providerToolName(name string) string {
 		return "workspace_grep"
 	case productdata.ToolNameWorkspaceRead:
 		return "workspace_read"
+	case productdata.ToolNameWorkspaceListDirectory:
+		return "workspace_list_directory"
+	case productdata.ToolNameWorkspaceTreeSummary:
+		return "workspace_tree_summary"
 	case productdata.ToolNameWorkspaceWriteFile:
 		return "workspace_write_file"
 	case productdata.ToolNameWorkspaceEdit:

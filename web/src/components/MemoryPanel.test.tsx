@@ -1,8 +1,21 @@
 import { describe, expect, test } from 'bun:test'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryPanel } from './MemoryPanel'
 
 describe('MemoryPanel', () => {
+  test('uses animal-island-ui controls for memory filters', () => {
+    const source = readFileSync(resolve(import.meta.dir, 'MemoryPanel.tsx'), 'utf8')
+
+    expect(source).toContain("import { Select, Switch } from 'animal-island-ui'")
+    expect(source).toContain('<Select options={scopeTypeOptions}')
+    expect(source).toContain('<Select options={sourceTypeOptions}')
+    expect(source).toContain('<Switch checked={Boolean(filters.includeTombstoned)}')
+    expect(source).not.toContain('<select')
+    expect(source).not.toContain('type="checkbox" checked={Boolean(filters.includeTombstoned)}')
+  })
+
   test('renders safe summaries and delete controls', () => {
     const html = renderToStaticMarkup(
       <MemoryPanel

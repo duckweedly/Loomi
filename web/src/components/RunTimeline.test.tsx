@@ -7,10 +7,8 @@ describe('RunTimeline M7 tool grouping', () => {
   test('keeps approval-required tool events separate from model stream rows', () => {
     const html = renderToStaticMarkup(createElement(RunTimeline, {
       runDetailsOpen: true,
-      rightPanelMenuOpen: false,
       rightToolsOpen: false,
-      selectedPanelId: 'activity',
-      onSelectPanel: () => {},
+      selectedPanelId: 'preview',
       run: {
         id: 'run-a',
         threadId: 'thread-a',
@@ -25,7 +23,8 @@ describe('RunTimeline M7 tool grouping', () => {
       },
     }))
 
-    expect(html).toContain('Tool call waiting for approval')
+    expect(html).toContain('Preview')
+    expect(html).not.toContain('Tool call waiting for approval')
     expect(html).not.toContain('Model stream')
     expect(html).not.toContain('draft')
   })

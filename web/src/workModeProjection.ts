@@ -190,7 +190,7 @@ export function safeWorkMetadataPreview(value: unknown): string {
 }
 
 export function deriveWorkPlanProjection(thread: Thread | null, messages: Message[], run: Run | null): WorkPlanProjection | null {
-  if (!thread || thread.mode !== 'work') return null
+  if (!thread) return null
 
   const metadata = metadataFromEvents(run)
   const steps = deriveSteps(metadata)

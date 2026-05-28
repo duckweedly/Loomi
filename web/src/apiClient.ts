@@ -1,4 +1,4 @@
-import type { InstalledSkill, LocalProviderDetection, MCPServerConfigInput, MCPServerStatus, MemoryAuditItem, MemoryEntry, MemoryErrorEvent, MemoryFilters, MemoryImpressionSnapshot, MemoryOverviewSnapshot, MemoryProviderStatus, MemoryProviderUpdate, MemoryWriteProposal, Message, Persona, ProviderCapability, Run, Thread, ToolCall, ToolCatalogItem, WebSearchConfig, WorkerQueueDiagnostics, WorkspaceRootConfig } from './domain'
+import type { ApiReadiness, InstalledSkill, LocalProviderDetection, MCPServerConfigInput, MCPServerStatus, MemoryAuditItem, MemoryEntry, MemoryErrorEvent, MemoryFilters, MemoryImpressionSnapshot, MemoryOverviewSnapshot, MemoryProviderStatus, MemoryProviderUpdate, MemoryWriteProposal, Message, Persona, ProviderCapability, Run, Thread, ToolCall, ToolCatalogItem, WebSearchConfig, WorkerQueueDiagnostics, WorkspaceRootConfig } from './domain'
 import { realApiClient } from './realApiClient'
 import type { ExecutionAdapter } from './runtime/executionAdapter'
 import { mockExecutionAdapter } from './runtime/mockExecutionAdapter'
@@ -13,6 +13,7 @@ export type ApiClient = {
   listPersonas?(): Promise<Persona[]>
   listSkills?(): Promise<InstalledSkill[]>
   listModelProviders?(): Promise<ProviderCapability[]>
+  getReadiness?(): Promise<ApiReadiness>
   listToolCatalog?(): Promise<ToolCatalogItem[]>
   getWebSearchConfig?(): Promise<WebSearchConfig>
   saveWebSearchKeys?(input: { tavilyApiKey?: string; braveApiKey?: string }): Promise<WebSearchConfig>

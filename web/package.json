@@ -16,6 +16,7 @@
     "@lobehub/fluent-emoji": "latest",
     "@lobehub/icons": "latest",
     "@lobehub/ui": "latest",
+    "animal-island-ui": "^0.9.4",
     "antd": "latest",
     "lucide-react": "latest",
     "motion": "latest",

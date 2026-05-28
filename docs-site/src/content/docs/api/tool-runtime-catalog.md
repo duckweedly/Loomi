@@ -48,7 +48,7 @@ The discovery slice adds:
   "approval_policy": "read_only",
   "execution_state": "executable",
   "safe_metadata": {
-    "arguments": ["queries", "names", "limit"],
+    "arguments": ["queries", "limit"],
     "read_only": true,
     "scope": "runtime_catalog",
     "dynamic_schema_loader": false
@@ -60,7 +60,7 @@ The discovery slice adds:
 
 ## Discovery Tool Results
 
-`tool.load_tools` accepts optional `queries`, `names`, and `limit`, then returns safe descriptions for currently enabled tools only:
+`tool.load_tools` provider calls use `queries` plus optional `limit`, then return safe descriptions for currently enabled tools only. Queries are matched against catalog keywords, so short phrases such as `"workspace list files"` can match the relevant workspace tools. Older stored events that include `names` are still accepted for compatibility, but the provider-facing schema no longer advertises `names`.
 
 ```json
 {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -105,6 +106,12 @@ type MCPServerConfigStore interface {
 	DeleteMCPServerConfig(context.Context, identity.LocalIdentity, string) error
 }
 
+type SandboxProcessRepository interface {
+	SaveSandboxProcess(context.Context, SandboxProcessRecord) error
+	ListSandboxProcesses(context.Context) ([]SandboxProcessRecord, error)
+	DeleteSandboxProcessesUpdatedBefore(context.Context, time.Time) (int, error)
+}
+
 type SeedService interface {
 	Service
 	UpsertSeedThread(context.Context, identity.LocalIdentity, SeedThreadInput) (Thread, error)
@@ -140,6 +147,7 @@ type MemoryService struct {
 	workspaceRoots     map[string]WorkspaceRootConfig
 	memoryProviders    map[string]MemoryProviderConfig
 	mcpServerConfigs   map[string]MCPServerConfigRecord
+	sandboxProcesses   map[string]SandboxProcessRecord
 }
 
 func NewMemoryService() *MemoryService {
@@ -167,7 +175,46 @@ func NewMemoryService() *MemoryService {
 		workspaceRoots:     map[string]WorkspaceRootConfig{},
 		memoryProviders:    map[string]MemoryProviderConfig{},
 		mcpServerConfigs:   map[string]MCPServerConfigRecord{},
+		sandboxProcesses:   map[string]SandboxProcessRecord{},
 	}
+}
+
+func (s *MemoryService) SaveSandboxProcess(_ context.Context, input SandboxProcessRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.sandboxProcesses == nil {
+		s.sandboxProcesses = map[string]SandboxProcessRecord{}
+	}
+	record := normalizeSandboxProcessRecord(input)
+	if record.RunID == "" || record.ProcessID == "" {
+		return NewError(CodeInvalidRequest, "Sandbox process record is incomplete.")
+	}
+	s.sandboxProcesses[record.ProcessID] = record
+	return nil
+}
+
+func (s *MemoryService) ListSandboxProcesses(_ context.Context) ([]SandboxProcessRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	records := make([]SandboxProcessRecord, 0, len(s.sandboxProcesses))
+	for _, record := range s.sandboxProcesses {
+		records = append(records, cloneSandboxProcessRecord(record))
+	}
+	sort.Slice(records, func(i, j int) bool { return records[i].UpdatedAt.Before(records[j].UpdatedAt) })
+	return records, nil
+}
+
+func (s *MemoryService) DeleteSandboxProcessesUpdatedBefore(_ context.Context, before time.Time) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	deleted := 0
+	for processID, record := range s.sandboxProcesses {
+		if record.UpdatedAt.Before(before) {
+			delete(s.sandboxProcesses, processID)
+			deleted++
+		}
+	}
+	return deleted, nil
 }
 
 func (s *MemoryService) SaveModelProviderConfig(_ context.Context, ident identity.LocalIdentity, input ModelProviderConfig) (ModelProviderConfig, error) {
@@ -243,6 +290,31 @@ func (s *MemoryService) GetWorkspaceRootConfig(_ context.Context, ident identity
 	config := s.workspaceRoots[user.ID]
 	config.UserID = user.ID
 	return config, nil
+}
+
+func (s *MemoryService) workspaceRootPathForUserLocked(userID string) string {
+	if config := s.workspaceRoots[userID]; strings.TrimSpace(config.Path) != "" {
+		return strings.TrimSpace(config.Path)
+	}
+	return strings.TrimSpace(os.Getenv("LOOMI_WORKSPACE_ROOT"))
+}
+
+func (s *MemoryService) workspaceRootPathForRunLocked(userID string, runID string) string {
+	for _, job := range s.backgroundJobs {
+		if job.UserID == userID && job.RunID == runID {
+			if root := metadataStringValue(job.Metadata, "workspace_root_path"); root != "" {
+				return root
+			}
+		}
+	}
+	return ""
+}
+
+func workspaceRootLabel(path string, metadata map[string]any) string {
+	if label := metadataStringValue(metadata, "workspace_label"); label != "" {
+		return label
+	}
+	return WorkspaceDisplayNameFromPath(path)
 }
 
 func (s *MemoryService) SaveMemoryProviderConfig(_ context.Context, ident identity.LocalIdentity, input MemoryProviderConfig) (MemoryProviderConfig, error) {
@@ -740,6 +812,10 @@ func (s *MemoryService) StartRun(_ context.Context, ident identity.LocalIdentity
 	s.runs[run.ID] = run
 	jobID := NewBackgroundJobID()
 	metadata := map[string]any{"source": string(source), "job_id": jobID}
+	if root := s.workspaceRootPathForUserLocked(user.ID); root != "" {
+		metadata["workspace_root_path"] = root
+		metadata["workspace_label"] = WorkspaceDisplayNameFromPath(root)
+	}
 	if source == RunSourceLocalSimulated {
 		metadata["script_name"] = NormalizeScriptName(input.ScriptName)
 	} else {
@@ -753,10 +829,10 @@ func (s *MemoryService) StartRun(_ context.Context, ident identity.LocalIdentity
 		metadata["persona_name"] = snapshot.Name
 		metadata["persona_resolved_from"] = string(snapshot.ResolvedFrom)
 	}
-	metadata = RedactEventMetadata(metadata)
+	eventMetadata := RedactEventMetadata(metadata)
 	job := BackgroundJob{ID: jobID, RunID: run.ID, ThreadID: threadID, UserID: user.ID, Kind: BackgroundJobKindRunExecution, Status: BackgroundJobStatusQueued, Priority: 100, MaxAttempts: 3, ScheduledAt: now, Metadata: metadata, CreatedAt: now, UpdatedAt: now}
 	s.backgroundJobs[job.ID] = job
-	s.runEvents[run.ID] = append(s.runEvents[run.ID], RunEvent{ID: NewRunEventID(), RunID: run.ID, ThreadID: threadID, UserID: user.ID, Sequence: 1, Category: RunEventCategoryLifecycle, Type: "run_created", Summary: "Run created", Metadata: metadata, CreatedAt: now})
+	s.runEvents[run.ID] = append(s.runEvents[run.ID], RunEvent{ID: NewRunEventID(), RunID: run.ID, ThreadID: threadID, UserID: user.ID, Sequence: 1, Category: RunEventCategoryLifecycle, Type: "run_created", Summary: "Run created", Metadata: eventMetadata, CreatedAt: now})
 	s.runEvents[run.ID] = append(s.runEvents[run.ID], RunEvent{ID: NewRunEventID(), RunID: run.ID, ThreadID: threadID, UserID: user.ID, Sequence: 2, Category: RunEventCategoryLifecycle, Type: EventRunQueued, Summary: "Run queued", Metadata: RedactEventMetadata(map[string]any{"job_id": job.ID}), CreatedAt: now})
 	thread.UpdatedAt = now
 	s.threads[threadID] = thread
@@ -1271,17 +1347,19 @@ func (s *MemoryService) SyncBuiltInPersonas(_ context.Context, ident identity.Lo
 		key := persona.ID + ":" + persona.ActiveVersion
 		if _, exists := s.personaVersions[key]; !exists {
 			result.CreatedVersions++
-			s.personaVersions[key] = PersonaVersion{
-				PersonaID:        persona.ID,
-				Version:          persona.ActiveVersion,
-				SystemPrompt:     strings.TrimSpace(config.SystemPrompt),
-				ModelRoute:       config.ModelRoute,
-				AllowedToolNames: append([]string(nil), config.AllowedToolNames...),
-				ReasoningMode:    strings.TrimSpace(config.ReasoningMode),
-				BudgetSummary:    strings.TrimSpace(config.BudgetSummary),
-				CreatedAt:        now,
-			}
 		}
+		version := s.personaVersions[key]
+		version.PersonaID = persona.ID
+		version.Version = persona.ActiveVersion
+		version.SystemPrompt = strings.TrimSpace(config.SystemPrompt)
+		version.ModelRoute = config.ModelRoute
+		version.AllowedToolNames = append([]string(nil), config.AllowedToolNames...)
+		version.ReasoningMode = strings.TrimSpace(config.ReasoningMode)
+		version.BudgetSummary = strings.TrimSpace(config.BudgetSummary)
+		if version.CreatedAt.IsZero() {
+			version.CreatedAt = now
+		}
+		s.personaVersions[key] = version
 		result.ActivatedVersions++
 	}
 	if result.DefaultPersonaSlug == "" {
@@ -1336,10 +1414,11 @@ func buildRunContext(run Run, thread Thread, messages []Message, job BackgroundJ
 		}
 	}
 	context := RunContext{
-		Run:      run,
-		Thread:   thread,
-		Messages: append([]Message(nil), messages...),
-		Job:      job,
+		Run:           run,
+		Thread:        thread,
+		Messages:      append([]Message(nil), messages...),
+		Job:           job,
+		WorkspaceRoot: WorkspaceRootConfig{UserID: run.UserID, Path: metadataStringValue(metadata, "workspace_root_path"), DisplayName: workspaceRootLabel(metadataStringValue(metadata, "workspace_root_path"), metadata)},
 		ProviderRoute: ProviderRoute{
 			ProviderID: providerID,
 			Model:      model,
@@ -2430,15 +2509,26 @@ func (s *MemoryService) ApproveToolCall(_ context.Context, ident identity.LocalI
 	run.Status = RunStatusQueued
 	run.UpdatedAt = now
 	s.runs[run.ID] = run
+	workspaceRoot := ""
 	for id, job := range s.backgroundJobs {
 		if job.RunID == run.ID && job.UserID == user.ID && !IsBackgroundJobTerminal(job.Status) {
+			if workspaceRoot == "" {
+				workspaceRoot = metadataStringValue(job.Metadata, "workspace_root_path")
+			}
 			job.Status = BackgroundJobStatusCancelled
 			job.UpdatedAt = now
 			s.backgroundJobs[id] = job
 		}
 	}
+	if workspaceRoot == "" {
+		workspaceRoot = s.workspaceRootPathForRunLocked(user.ID, run.ID)
+	}
 	jobID := NewBackgroundJobID()
-	metadata := RedactEventMetadata(map[string]any{"source": string(run.Source), "job_id": jobID, "tool_call_id": call.ToolCallID, "resume_reason": "tool_call_approved"})
+	metadata := map[string]any{"source": string(run.Source), "job_id": jobID, "tool_call_id": call.ToolCallID, "resume_reason": "tool_call_approved"}
+	if workspaceRoot != "" {
+		metadata["workspace_root_path"] = workspaceRoot
+		metadata["workspace_label"] = WorkspaceDisplayNameFromPath(workspaceRoot)
+	}
 	s.backgroundJobs[jobID] = BackgroundJob{ID: jobID, RunID: run.ID, ThreadID: run.ThreadID, UserID: user.ID, Kind: BackgroundJobKindRunExecution, Status: BackgroundJobStatusQueued, Priority: 50, MaxAttempts: 3, ScheduledAt: now, Metadata: metadata, CreatedAt: now, UpdatedAt: now}
 	event := s.appendRunEventLocked(run, RunEventCategoryProgress, EventToolCallApproved, "Tool call approved", nil, toolCallEventMetadataForRun(s.runEvents[run.ID], call), now)
 	return call, []RunEvent{event}, nil
@@ -3031,7 +3121,9 @@ func (s *MemoryService) WorkerQueueDiagnostics(_ context.Context, ident identity
 }
 
 func (s *MemoryService) appendRunEventLocked(run Run, category RunEventCategory, eventType string, summary string, content *string, metadata map[string]any, createdAt time.Time) RunEvent {
-	event := RunEvent{ID: NewRunEventID(), RunID: run.ID, ThreadID: run.ThreadID, UserID: run.UserID, Sequence: len(s.runEvents[run.ID]) + 1, Category: category, Type: eventType, Summary: RedactEventText(summary), Content: content, Metadata: RedactEventMetadata(metadata), CreatedAt: createdAt}
+	summary = RedactEventText(summary)
+	metadata = AnnotateRunStepMetadata(eventType, summary, metadata)
+	event := RunEvent{ID: NewRunEventID(), RunID: run.ID, ThreadID: run.ThreadID, UserID: run.UserID, Sequence: len(s.runEvents[run.ID]) + 1, Category: category, Type: eventType, Summary: summary, Content: content, Metadata: RedactEventMetadata(metadata), CreatedAt: createdAt}
 	s.runEvents[run.ID] = append(s.runEvents[run.ID], event)
 	return event
 }

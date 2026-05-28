@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/sheridiany/loomi/internal/identity"
 )
@@ -44,6 +46,10 @@ type mcpServerConfigScanner interface {
 	Scan(dest ...any) error
 }
 
+type sandboxProcessScanner interface {
+	Scan(dest ...any) error
+}
+
 func scanModelProviderConfig(row modelProviderConfigScanner) (ModelProviderConfig, error) {
 	var provider ModelProviderConfig
 	err := row.Scan(&provider.ID, &provider.UserID, &provider.Family, &provider.BaseURL, &provider.APIKey, &provider.Model, &provider.Enabled)
@@ -59,6 +65,7 @@ func scanWebSearchConfig(row webSearchConfigScanner) (WebSearchConfig, error) {
 func scanWorkspaceRootConfig(row workspaceRootConfigScanner) (WorkspaceRootConfig, error) {
 	var config WorkspaceRootConfig
 	err := row.Scan(&config.UserID, &config.Path)
+	config.DisplayName = WorkspaceDisplayNameFromPath(config.Path)
 	return config, err
 }
 
@@ -118,6 +125,51 @@ func scanMCPServerConfig(row mcpServerConfigScanner) (MCPServerConfigRecord, err
 		record.Env = map[string]string{}
 	}
 	return record, nil
+}
+
+func scanSandboxProcess(row sandboxProcessScanner) (SandboxProcessRecord, error) {
+	var record SandboxProcessRecord
+	var argvRaw []byte
+	var endedAt pgtype.Timestamptz
+	var exitCode pgtype.Int4
+	if err := row.Scan(
+		&record.RunID,
+		&record.ProcessID,
+		&argvRaw,
+		&record.CwdAlias,
+		&record.Status,
+		&record.Cursor,
+		&record.StdoutTail,
+		&record.StdoutCursor,
+		&record.StderrTail,
+		&record.StderrCursor,
+		&record.StdoutBytes,
+		&record.StderrBytes,
+		&record.StdinOpen,
+		&record.InputSeq,
+		&record.TimedOut,
+		&record.StartedAt,
+		&record.UpdatedAt,
+		&endedAt,
+		&exitCode,
+		&record.TerminalSummary,
+		&record.OutputLimit,
+	); err != nil {
+		return SandboxProcessRecord{}, err
+	}
+	_ = json.Unmarshal(argvRaw, &record.ArgvSummary)
+	if record.ArgvSummary == nil {
+		record.ArgvSummary = []string{}
+	}
+	if endedAt.Valid {
+		value := endedAt.Time
+		record.EndedAt = &value
+	}
+	if exitCode.Valid {
+		value := int(exitCode.Int32)
+		record.ExitCode = &value
+	}
+	return normalizeSandboxProcessRecord(record), nil
 }
 
 func (r *PostgresRepository) CurrentIdentity(ctx context.Context, ident identity.LocalIdentity) (User, error) {
@@ -238,6 +290,40 @@ func (r *PostgresRepository) GetMemoryProviderConfig(ctx context.Context, ident 
 		return MemoryProviderConfig{}, err
 	}
 	return config, nil
+}
+
+func (r *PostgresRepository) workspaceRootPathForUserTx(ctx context.Context, tx pgx.Tx, userID string) (string, error) {
+	var root string
+	err := tx.QueryRow(ctx, `select root_path from workspace_root_configs where user_id=$1`, userID).Scan(&root)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return strings.TrimSpace(os.Getenv("LOOMI_WORKSPACE_ROOT")), nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(root), nil
+}
+
+func (r *PostgresRepository) workspaceRootPathForRunTx(ctx context.Context, tx pgx.Tx, userID string, runID string) (string, error) {
+	rows, err := tx.Query(ctx, `select metadata from background_jobs where user_id=$1 and run_id=$2 order by created_at asc, id asc`, userID, runID)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var raw []byte
+		if err := rows.Scan(&raw); err != nil {
+			return "", err
+		}
+		metadata := map[string]any{}
+		if len(raw) > 0 {
+			_ = json.Unmarshal(raw, &metadata)
+		}
+		if root := metadataStringValue(metadata, "workspace_root_path"); root != "" {
+			return root, nil
+		}
+	}
+	return "", rows.Err()
 }
 
 func (r *PostgresRepository) ListMemoryProviderErrors(ctx context.Context, ident identity.LocalIdentity, limit int) ([]MemoryProviderErrorEvent, error) {
@@ -361,6 +447,88 @@ func (r *PostgresRepository) DeleteMCPServerConfig(ctx context.Context, ident id
 	}
 	_, err = r.Pool.Exec(ctx, `delete from mcp_server_configs where user_id=$1 and slug=$2`, user.ID, strings.TrimSpace(slug))
 	return err
+}
+
+func (r *PostgresRepository) SaveSandboxProcess(ctx context.Context, input SandboxProcessRecord) error {
+	record := normalizeSandboxProcessRecord(input)
+	if record.RunID == "" || record.ProcessID == "" {
+		return NewError(CodeInvalidRequest, "Sandbox process record is incomplete.")
+	}
+	argvRaw, err := json.Marshal(record.ArgvSummary)
+	if err != nil {
+		return err
+	}
+	_, err = r.Pool.Exec(ctx, `insert into sandbox_process_records (
+		run_id, process_id, argv_summary, cwd_alias, status, cursor, stdout_tail, stdout_cursor,
+		stderr_tail, stderr_cursor, stdout_bytes, stderr_bytes, stdin_open, input_seq, timed_out,
+		started_at, updated_at, ended_at, exit_code, terminal_summary, output_limit
+	) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
+	on conflict (process_id) do update set
+		run_id=excluded.run_id,
+		argv_summary=excluded.argv_summary,
+		cwd_alias=excluded.cwd_alias,
+		status=excluded.status,
+		cursor=excluded.cursor,
+		stdout_tail=excluded.stdout_tail,
+		stdout_cursor=excluded.stdout_cursor,
+		stderr_tail=excluded.stderr_tail,
+		stderr_cursor=excluded.stderr_cursor,
+		stdout_bytes=excluded.stdout_bytes,
+		stderr_bytes=excluded.stderr_bytes,
+		stdin_open=excluded.stdin_open,
+		input_seq=excluded.input_seq,
+		timed_out=excluded.timed_out,
+		started_at=excluded.started_at,
+		updated_at=excluded.updated_at,
+		ended_at=excluded.ended_at,
+		exit_code=excluded.exit_code,
+		terminal_summary=excluded.terminal_summary,
+		output_limit=excluded.output_limit`,
+		record.RunID,
+		record.ProcessID,
+		argvRaw,
+		record.CwdAlias,
+		record.Status,
+		record.Cursor,
+		record.StdoutTail,
+		record.StdoutCursor,
+		record.StderrTail,
+		record.StderrCursor,
+		record.StdoutBytes,
+		record.StderrBytes,
+		record.StdinOpen,
+		record.InputSeq,
+		record.TimedOut,
+		record.StartedAt,
+		record.UpdatedAt,
+		record.EndedAt,
+		record.ExitCode,
+		record.TerminalSummary,
+		record.OutputLimit,
+	)
+	return err
+}
+
+func (r *PostgresRepository) ListSandboxProcesses(ctx context.Context) ([]SandboxProcessRecord, error) {
+	rows, err := r.Pool.Query(ctx, `select run_id, process_id, argv_summary, cwd_alias, status, cursor, stdout_tail, stdout_cursor, stderr_tail, stderr_cursor, stdout_bytes, stderr_bytes, stdin_open, input_seq, timed_out, started_at, updated_at, ended_at, exit_code, terminal_summary, output_limit from sandbox_process_records order by updated_at asc, process_id asc`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	records := []SandboxProcessRecord{}
+	for rows.Next() {
+		record, err := scanSandboxProcess(rows)
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, record)
+	}
+	return records, rows.Err()
+}
+
+func (r *PostgresRepository) DeleteSandboxProcessesUpdatedBefore(ctx context.Context, before time.Time) (int, error) {
+	tag, err := r.Pool.Exec(ctx, `delete from sandbox_process_records where updated_at < $1`, before)
+	return int(tag.RowsAffected()), err
 }
 
 func (r *PostgresRepository) CreateThread(ctx context.Context, ident identity.LocalIdentity, input CreateThreadInput) (Thread, error) {
@@ -681,6 +849,14 @@ func (r *PostgresRepository) StartRun(ctx context.Context, ident identity.LocalI
 	run.PersonaID = snapshot.ID
 	jobID := NewBackgroundJobID()
 	metadata := map[string]any{"source": string(source), "job_id": jobID}
+	workspaceRoot, err := r.workspaceRootPathForUserTx(ctx, tx, user.ID)
+	if err != nil {
+		return Run{}, err
+	}
+	if workspaceRoot != "" {
+		metadata["workspace_root_path"] = workspaceRoot
+		metadata["workspace_label"] = WorkspaceDisplayNameFromPath(workspaceRoot)
+	}
 	if source == RunSourceLocalSimulated {
 		metadata["script_name"] = NormalizeScriptName(input.ScriptName)
 	} else {
@@ -704,7 +880,7 @@ func (r *PostgresRepository) StartRun(ctx context.Context, ident identity.LocalI
 	if _, err := scanRunEvent(tx.QueryRow(ctx, `insert into run_events (id, run_id, thread_id, user_id, sequence, category, type, summary, metadata) values ($1, $2, $3, $4, 2, 'lifecycle', 'run_queued', 'Run queued', $5) returning id, run_id, thread_id, user_id, sequence, category, type, summary, content, metadata, created_at`, NewRunEventID(), run.ID, threadID, user.ID, mustJSON(RedactEventMetadata(map[string]any{"job_id": jobID})))); err != nil {
 		return Run{}, err
 	}
-	if _, err := tx.Exec(ctx, `insert into background_jobs (id, run_id, thread_id, user_id, kind, status, max_attempts, metadata) values ($1, $2, $3, $4, 'run_execution', 'queued', 3, $5)`, jobID, run.ID, threadID, user.ID, mustJSON(RedactEventMetadata(metadata))); err != nil {
+	if _, err := tx.Exec(ctx, `insert into background_jobs (id, run_id, thread_id, user_id, kind, status, max_attempts, metadata) values ($1, $2, $3, $4, 'run_execution', 'queued', 3, $5)`, jobID, run.ID, threadID, user.ID, mustJSON(metadata)); err != nil {
 		return Run{}, err
 	}
 	if _, err := tx.Exec(ctx, `update threads set updated_at=now() where id=$1 and user_id=$2`, threadID, user.ID); err != nil {
@@ -1576,11 +1752,19 @@ func (r *PostgresRepository) ApproveToolCall(ctx context.Context, ident identity
 	if _, err := tx.Exec(ctx, `update runs set status='queued', updated_at=now() where id=$1 and user_id=$2`, run.ID, user.ID); err != nil {
 		return ToolCall{}, nil, err
 	}
+	workspaceRoot, err := r.workspaceRootPathForRunTx(ctx, tx, user.ID, run.ID)
+	if err != nil {
+		return ToolCall{}, nil, err
+	}
 	if _, err := tx.Exec(ctx, `update background_jobs set status='cancelled', updated_at=now() where run_id=$1 and user_id=$2 and status in ('queued', 'leased', 'retrying')`, run.ID, user.ID); err != nil {
 		return ToolCall{}, nil, err
 	}
 	jobID := NewBackgroundJobID()
-	metadata := RedactEventMetadata(map[string]any{"source": string(run.Source), "job_id": jobID, "tool_call_id": call.ToolCallID, "resume_reason": "tool_call_approved"})
+	metadata := map[string]any{"source": string(run.Source), "job_id": jobID, "tool_call_id": call.ToolCallID, "resume_reason": "tool_call_approved"}
+	if workspaceRoot != "" {
+		metadata["workspace_root_path"] = workspaceRoot
+		metadata["workspace_label"] = WorkspaceDisplayNameFromPath(workspaceRoot)
+	}
 	if _, err := tx.Exec(ctx, `insert into background_jobs (id, run_id, thread_id, user_id, kind, status, priority, max_attempts, scheduled_at, metadata) values ($1, $2, $3, $4, $5, 'queued', 50, 3, now(), $6)`, jobID, run.ID, run.ThreadID, user.ID, BackgroundJobKindRunExecution, mustJSON(metadata)); err != nil {
 		return ToolCall{}, nil, err
 	}
@@ -1997,6 +2181,8 @@ func insertRunEvent(ctx context.Context, tx pgx.Tx, run Run, category RunEventCa
 	if err := tx.QueryRow(ctx, `select coalesce(max(sequence), 0) + 1 from run_events where run_id=$1`, run.ID).Scan(&nextSequence); err != nil {
 		return RunEvent{}, err
 	}
+	summary = RedactEventText(summary)
+	metadata = AnnotateRunStepMetadata(eventType, summary, metadata)
 	return scanRunEvent(tx.QueryRow(ctx, `insert into run_events (id, run_id, thread_id, user_id, sequence, category, type, summary, content, metadata) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) returning id, run_id, thread_id, user_id, sequence, category, type, summary, content, metadata, created_at`, NewRunEventID(), run.ID, run.ThreadID, run.UserID, nextSequence, category, eventType, RedactEventText(summary), content, mustJSON(RedactEventMetadata(metadata))))
 }
 
@@ -2005,6 +2191,8 @@ func insertRunEventIgnoringTerminal(ctx context.Context, pool *pgxpool.Pool, run
 	if err := pool.QueryRow(ctx, `select coalesce(max(sequence), 0) + 1 from run_events where run_id=$1`, run.ID).Scan(&nextSequence); err != nil {
 		return RunEvent{}, err
 	}
+	summary = RedactEventText(summary)
+	metadata = AnnotateRunStepMetadata(eventType, summary, metadata)
 	return scanRunEvent(pool.QueryRow(ctx, `insert into run_events (id, run_id, thread_id, user_id, sequence, category, type, summary, content, metadata) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) returning id, run_id, thread_id, user_id, sequence, category, type, summary, content, metadata, created_at`, NewRunEventID(), run.ID, run.ThreadID, run.UserID, nextSequence, category, eventType, RedactEventText(summary), content, mustJSON(RedactEventMetadata(metadata))))
 }
 
@@ -2118,11 +2306,15 @@ func (r *PostgresRepository) SyncBuiltInPersonas(ctx context.Context, ident iden
 				return PersonaSyncResult{}, err
 			}
 		}
-		tag, err := tx.Exec(ctx, `insert into persona_versions (persona_id, version, system_prompt, model_route, allowed_tool_names, reasoning_mode, budget_summary) values ($1, $2, $3, $4, $5, $6, $7) on conflict (persona_id, version) do nothing`, personaID, strings.TrimSpace(config.Version), strings.TrimSpace(config.SystemPrompt), mustJSON(config.ModelRoute), config.AllowedToolNames, strings.TrimSpace(config.ReasoningMode), strings.TrimSpace(config.BudgetSummary))
+		var inserted bool
+		err = tx.QueryRow(ctx, `insert into persona_versions (persona_id, version, system_prompt, model_route, allowed_tool_names, reasoning_mode, budget_summary) values ($1, $2, $3, $4, $5, $6, $7) on conflict (persona_id, version) do update set system_prompt=excluded.system_prompt, model_route=excluded.model_route, allowed_tool_names=excluded.allowed_tool_names, reasoning_mode=excluded.reasoning_mode, budget_summary=excluded.budget_summary where persona_versions.system_prompt is distinct from excluded.system_prompt or persona_versions.model_route is distinct from excluded.model_route or persona_versions.allowed_tool_names is distinct from excluded.allowed_tool_names or persona_versions.reasoning_mode is distinct from excluded.reasoning_mode or persona_versions.budget_summary is distinct from excluded.budget_summary returning xmax = 0`, personaID, strings.TrimSpace(config.Version), strings.TrimSpace(config.SystemPrompt), mustJSON(config.ModelRoute), config.AllowedToolNames, strings.TrimSpace(config.ReasoningMode), strings.TrimSpace(config.BudgetSummary)).Scan(&inserted)
+		if errors.Is(err, pgx.ErrNoRows) {
+			err = nil
+		}
 		if err != nil {
 			return PersonaSyncResult{}, err
 		}
-		if tag.RowsAffected() > 0 {
+		if inserted {
 			result.CreatedVersions++
 		}
 		result.ActivatedVersions++

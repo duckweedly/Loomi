@@ -10,6 +10,8 @@ import (
 type ToolInvocation struct {
 	ThreadID            string
 	RunID               string
+	RunStatus           productdata.RunStatus
+	WorkspaceRoot       string
 	ToolCallID          string
 	ToolName            string
 	CandidateSchemaHash string
@@ -126,21 +128,33 @@ func (e DefaultToolExecutor) ExecuteTool(ctx context.Context, invocation ToolInv
 		return ToolResult{ToolName: invocation.ToolName, ToolCallID: invocation.ToolCallID, ResultSummary: RedactMCPSummary(result)}, nil
 	}
 	if productdata.IsWorkspaceToolName(invocation.ToolName) {
-		result, err := e.WorkspaceExecutor.Execute(ctx, invocation)
+		executor := e.WorkspaceExecutor
+		if executor.Root == "" {
+			executor.Root = invocation.WorkspaceRoot
+		}
+		result, err := executor.Execute(ctx, invocation)
 		if err != nil {
 			return ToolResult{}, err
 		}
 		return ToolResult{ToolName: invocation.ToolName, ToolCallID: invocation.ToolCallID, ResultSummary: result}, nil
 	}
 	if productdata.IsSandboxToolName(invocation.ToolName) {
-		result, err := e.SandboxExecutor.Execute(ctx, invocation)
+		executor := e.SandboxExecutor
+		if executor.Root == "" {
+			executor.Root = invocation.WorkspaceRoot
+		}
+		result, err := executor.Execute(ctx, invocation)
 		if err != nil {
 			return ToolResult{}, err
 		}
 		return ToolResult{ToolName: invocation.ToolName, ToolCallID: invocation.ToolCallID, ResultSummary: result}, nil
 	}
 	if productdata.IsLSPToolName(invocation.ToolName) {
-		result, err := e.LSPExecutor.Execute(ctx, invocation)
+		executor := e.LSPExecutor
+		if executor.Root == "" {
+			executor.Root = invocation.WorkspaceRoot
+		}
+		result, err := executor.Execute(ctx, invocation)
 		if err != nil {
 			return ToolResult{}, err
 		}

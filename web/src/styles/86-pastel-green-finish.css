@@ -103,8 +103,6 @@
   background: transparent !important;
   box-shadow: none !important;
 }
-
-.sidebar-mode-row,
 .settings-segmented-control,
 .provider-filter-tabs,
 .mode-tabs {
@@ -113,8 +111,6 @@
   background: color-mix(in srgb, var(--loomi-panel) 68%, transparent) !important;
   box-shadow: none !important;
 }
-
-.sidebar-mode-row button,
 .settings-segmented-control button,
 .provider-filter-tabs button,
 .mode-tabs button {
@@ -125,8 +121,6 @@
   box-shadow: none !important;
   transform: none !important;
 }
-
-.sidebar-mode-row button.selected,
 .settings-segmented-control button.selected,
 .provider-filter-tabs button.selected,
 .mode-tabs button.selected {
@@ -261,7 +255,6 @@
 .memory-delete-confirmation,
 .memory-audit-item,
 .message-row.assistant-draft .message-bubble,
-.message-markdown pre,
 .message-table-wrap,
 .tool-grid div,
 .tool-stack {
@@ -301,7 +294,6 @@
 .app-shell[data-theme='dark'] .memory-delete-confirmation,
 .app-shell[data-theme='dark'] .memory-audit-item,
 .app-shell[data-theme='dark'] .message-row.assistant-draft .message-bubble,
-.app-shell[data-theme='dark'] .message-markdown pre,
 .app-shell[data-theme='dark'] .message-table-wrap,
 .app-shell[data-theme='dark'] .tool-grid div,
 .app-shell[data-theme='dark'] .tool-stack {

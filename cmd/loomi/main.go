@@ -3,11 +3,13 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -157,6 +159,7 @@ flags:
 flags:
   --host <url>          Loomi API host
   --provider <id>       provider id to check
+  --desktop             include desktop workspace readiness
   --output text|json`)
 		return err
 	case "smoke":
@@ -169,9 +172,11 @@ flags:
   --persona <id>                persona id
   --mode <chat|work>            thread mode, default from config
   --thread <id>                 use an existing thread
+  --workspace <path>            select workspace root for this smoke
   --prompt <text>               prompt to send
   --auto-approve                approve tool calls for this smoke only
   --timeout <duration>          smoke timeout, for example 2m
+  --failure-log <path>          write blocked/failed evidence JSON
   --output text|json`)
 		return err
 	case "run":
@@ -278,8 +283,8 @@ commands:
 
 commands:
   show [--output text|json]
-  set <host|mode|provider|model|persona|script> <value>
-  unset <host|mode|provider|model|persona|script>`)
+  set <host|api_token|mode|provider|model|persona|script> <value>
+  unset <host|api_token|mode|provider|model|persona|script>`)
 		return err
 	default:
 		return fmt.Errorf("unknown help topic %s", args[0])
@@ -306,10 +311,12 @@ func cmdSmokeAgent(ctx context.Context, args []string, stdout io.Writer) error {
 	persona := fs.String("persona", cfg.Persona, "persona id")
 	mode := fs.String("mode", cfg.Mode, "thread mode")
 	threadID := fs.String("thread", "", "existing thread id")
+	workspace := fs.String("workspace", "", "workspace root path to select before the run")
 	prompt := fs.String("prompt", "Loomi harness smoke: read AGENTS.md, then reply with a one sentence completion marker.", "prompt")
 	autoApprove := fs.Bool("auto-approve", false, "approve tool calls for this smoke only")
 	timeout := fs.Duration("timeout", 2*time.Minute, "smoke timeout")
 	output := fs.String("output", "text", "text or json")
+	failureLog := fs.String("failure-log", "", "write blocked/failed smoke evidence JSON to this path")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -323,17 +330,24 @@ func cmdSmokeAgent(ctx context.Context, args []string, stdout io.Writer) error {
 		smokeCtx, cancel = context.WithTimeout(ctx, *timeout)
 	}
 	defer cancel()
-	result, err := cli.RunAgentSmoke(smokeCtx, cli.NewClient(*host), cfg, cli.SmokeAgentOptions{
+	result, err := cli.RunAgentSmoke(smokeCtx, newClient(cfg, *host), cfg, cli.SmokeAgentOptions{
 		ThreadID:    *threadID,
 		Prompt:      *prompt,
 		Mode:        *mode,
 		Provider:    *provider,
 		Model:       *model,
 		Persona:     *persona,
+		Workspace:   *workspace,
 		AutoApprove: *autoApprove,
 	})
 	if err != nil {
 		return err
+	}
+	if !result.OK && strings.TrimSpace(*failureLog) != "" {
+		result.FailureLogPath = strings.TrimSpace(*failureLog)
+		if err := writeSmokeFailureLog(result.FailureLogPath, result); err != nil {
+			return err
+		}
 	}
 	renderer := cli.Renderer{Out: stdout}
 	if *output == "json" {
@@ -347,6 +361,18 @@ func cmdSmokeAgent(ctx context.Context, args []string, stdout io.Writer) error {
 		return exitError{code: 1}
 	}
 	return nil
+}
+
+func writeSmokeFailureLog(path string, result cli.SmokeAgentResult) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(result, "", "  ")
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+	return os.WriteFile(path, data, 0o600)
 }
 
 func cmdVersion(args []string, stdout io.Writer) error {
@@ -377,6 +403,7 @@ func cmdDoctor(ctx context.Context, args []string, stdout io.Writer) error {
 	fs.SetOutput(io.Discard)
 	host := fs.String("host", cfg.Host, "Loomi API host")
 	provider := fs.String("provider", cfg.Provider, "provider id")
+	desktop := fs.Bool("desktop", false, "include desktop workspace readiness")
 	output := fs.String("output", "text", "text or json")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -386,7 +413,13 @@ func cmdDoctor(ctx context.Context, args []string, stdout io.Writer) error {
 	}
 	cfg.Host = *host
 	cfg.Provider = *provider
-	report := cli.RunDoctor(ctx, cli.NewClient(*host), cfg)
+	client := newClient(cfg, *host)
+	var report cli.DoctorReport
+	if *desktop {
+		report = cli.RunDesktopDoctor(ctx, client, cfg)
+	} else {
+		report = cli.RunDoctor(ctx, client, cfg)
+	}
 	renderer := cli.Renderer{Out: stdout}
 	if *output == "json" {
 		if err := renderer.PrintJSON(report); err != nil {
@@ -412,7 +445,7 @@ func cmdStatus(ctx context.Context, args []string, stdout io.Writer) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	client := cli.NewClient(*host)
+	client := newClient(cfg, *host)
 	if err := client.CheckReady(ctx); err != nil {
 		return err
 	}
@@ -450,7 +483,7 @@ func cmdConfigShow(args []string, stdout io.Writer) error {
 	if *output == "json" {
 		return renderer.PrintJSON(cfg)
 	}
-	_, err = fmt.Fprintf(stdout, "path\t%s\nfound\t%v\nhost\t%s\nmode\t%s\nprovider\t%s\nmodel\t%s\npersona\t%s\nscript\t%s\n", cfg.Path, cfg.Found, cfg.Host, cfg.Mode, cfg.Provider, cfg.Model, cfg.Persona, cfg.Script)
+	_, err = fmt.Fprintf(stdout, "path\t%s\nfound\t%v\nhost\t%s\napi_token_set\t%v\nmode\t%s\nprovider\t%s\nmodel\t%s\npersona\t%s\nscript\t%s\n", "[redacted]", cfg.Found, cfg.Host, strings.TrimSpace(cfg.APIToken) != "", cfg.Mode, cfg.Provider, cfg.Model, cfg.Persona, cfg.Script)
 	return err
 }
 
@@ -461,7 +494,7 @@ func cmdConfigSet(args []string, stdout io.Writer) error {
 		return err
 	}
 	if fs.NArg() != 2 {
-		return fmt.Errorf("usage: loomi config set <host|mode|provider|model|persona|script> <value>")
+		return fmt.Errorf("usage: loomi config set <host|api_token|mode|provider|model|persona|script> <value>")
 	}
 	cfg, err := cli.LoadConfigFileFromEnv()
 	if err != nil {
@@ -473,7 +506,7 @@ func cmdConfigSet(args []string, stdout io.Writer) error {
 	if err := cli.SaveConfigFile(cfg); err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(stdout, "set %s in %s\n", fs.Arg(0), cfg.Path)
+	_, err = fmt.Fprintf(stdout, "set %s in config\n", fs.Arg(0))
 	return err
 }
 
@@ -484,7 +517,7 @@ func cmdConfigUnset(args []string, stdout io.Writer) error {
 		return err
 	}
 	if fs.NArg() != 1 {
-		return fmt.Errorf("usage: loomi config unset <host|mode|provider|model|persona|script>")
+		return fmt.Errorf("usage: loomi config unset <host|api_token|mode|provider|model|persona|script>")
 	}
 	cfg, err := cli.LoadConfigFileFromEnv()
 	if err != nil {
@@ -496,7 +529,7 @@ func cmdConfigUnset(args []string, stdout io.Writer) error {
 	if err := cli.SaveConfigFile(cfg); err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(stdout, "unset %s in %s\n", fs.Arg(0), cfg.Path)
+	_, err = fmt.Fprintf(stdout, "unset %s in config\n", fs.Arg(0))
 	return err
 }
 
@@ -518,7 +551,7 @@ func cmdTools(ctx context.Context, args []string, stdout io.Writer) error {
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}
-	tools, err := cli.NewClient(*host).ListTools(ctx)
+	tools, err := newClient(cfg, *host).ListTools(ctx)
 	if err != nil {
 		return err
 	}
@@ -569,7 +602,7 @@ func cmdMCP(ctx context.Context, args []string, stdout io.Writer) error {
 	if *output != "text" && *output != "json" {
 		return fmt.Errorf("--output must be text or json")
 	}
-	servers, err := cli.NewClient(*host).ListMCPServers(ctx)
+	servers, err := newClient(cfg, *host).ListMCPServers(ctx)
 	if err != nil {
 		return err
 	}
@@ -598,7 +631,7 @@ func cmdLSP(ctx context.Context, args []string, stdout io.Writer) error {
 	if *output != "text" && *output != "json" {
 		return fmt.Errorf("--output must be text or json")
 	}
-	tools, err := cli.NewClient(*host).ListTools(ctx)
+	tools, err := newClient(cfg, *host).ListTools(ctx)
 	if err != nil {
 		return err
 	}
@@ -648,7 +681,7 @@ func cmdArtifactsList(ctx context.Context, args []string, stdout io.Writer) erro
 	if *output != "text" && *output != "json" {
 		return fmt.Errorf("--output must be text or json")
 	}
-	artifacts, err := cli.NewClient(*host).ListArtifacts(ctx, fs.Arg(0), *limit)
+	artifacts, err := newClient(cfg, *host).ListArtifacts(ctx, fs.Arg(0), *limit)
 	if err != nil {
 		return err
 	}
@@ -678,7 +711,7 @@ func cmdArtifactsRead(ctx context.Context, args []string, stdout io.Writer) erro
 	if *output != "text" && *output != "json" {
 		return fmt.Errorf("--output must be text or json")
 	}
-	artifact, err := cli.NewClient(*host).ReadArtifact(ctx, fs.Arg(0), fs.Arg(1), *maxBytes)
+	artifact, err := newClient(cfg, *host).ReadArtifact(ctx, fs.Arg(0), fs.Arg(1), *maxBytes)
 	if err != nil {
 		return err
 	}
@@ -723,7 +756,7 @@ func cmdMemoryList(ctx context.Context, args []string, stdout io.Writer) error {
 	if *output != "text" && *output != "json" {
 		return fmt.Errorf("--output must be text or json")
 	}
-	items, err := cli.NewClient(*host).ListMemory(ctx, filters())
+	items, err := newClient(cfg, *host).ListMemory(ctx, filters())
 	if err != nil {
 		return err
 	}
@@ -755,7 +788,7 @@ func cmdMemorySearch(ctx context.Context, args []string, stdout io.Writer) error
 	}
 	input := filters()
 	input.Query = strings.TrimSpace(strings.Join(fs.Args(), " "))
-	items, err := cli.NewClient(*host).SearchMemory(ctx, input)
+	items, err := newClient(cfg, *host).SearchMemory(ctx, input)
 	if err != nil {
 		return err
 	}
@@ -785,7 +818,7 @@ func cmdMemoryShow(ctx context.Context, args []string, stdout io.Writer) error {
 	if *output != "text" && *output != "json" {
 		return fmt.Errorf("--output must be text or json")
 	}
-	item, err := cli.NewClient(*host).GetMemory(ctx, fs.Arg(0), filters())
+	item, err := newClient(cfg, *host).GetMemory(ctx, fs.Arg(0), filters())
 	if err != nil {
 		return err
 	}
@@ -818,7 +851,7 @@ func cmdMemoryAudit(ctx context.Context, args []string, stdout io.Writer) error 
 	if input.SourceThreadID == "" {
 		input.SourceThreadID = strings.TrimSpace(*threadID)
 	}
-	items, err := cli.NewClient(*host).ListMemoryAudit(ctx, input, *eventType)
+	items, err := newClient(cfg, *host).ListMemoryAudit(ctx, input, *eventType)
 	if err != nil {
 		return err
 	}
@@ -862,7 +895,7 @@ func cmdAgentTasks(ctx context.Context, args []string, stdout io.Writer) error {
 	if *output != "text" && *output != "json" {
 		return fmt.Errorf("--output must be text or json")
 	}
-	tasks, err := cli.NewClient(*host).ListAgentTasks(ctx, fs.Arg(0), *limit)
+	tasks, err := newClient(cfg, *host).ListAgentTasks(ctx, fs.Arg(0), *limit)
 	if err != nil {
 		return err
 	}
@@ -908,7 +941,7 @@ func cmdBrowserEvents(ctx context.Context, args []string, stdout io.Writer) erro
 		return fmt.Errorf("--output must be text or json")
 	}
 	renderer := cli.Renderer{Out: stdout}
-	return cli.NewClient(*host).StreamEvents(ctx, fs.Arg(0), *after, func(event cli.RunEvent) {
+	return newClient(cfg, *host).StreamEvents(ctx, fs.Arg(0), *after, func(event cli.RunEvent) {
 		if !strings.HasPrefix(toolNameFromEvent(event), "browser.") {
 			return
 		}
@@ -931,7 +964,7 @@ func cmdToolGroup(ctx context.Context, group string, args []string, stdout io.Wr
 	if *output != "text" && *output != "json" {
 		return fmt.Errorf("--output must be text or json")
 	}
-	tools, err := cli.NewClient(*host).ListTools(ctx)
+	tools, err := newClient(cfg, *host).ListTools(ctx)
 	if err != nil {
 		return err
 	}
@@ -1067,7 +1100,7 @@ func cmdRun(ctx context.Context, args []string, stdin io.Reader, stdout io.Write
 			}
 		}
 	}
-	result, err := cli.Runner{Client: cli.NewClient(*host)}.Execute(ctx, cli.RunOptions{
+	result, err := cli.Runner{Client: newClient(cfg, *host)}.Execute(ctx, cli.RunOptions{
 		ThreadID:   *threadID,
 		Prompt:     prompt,
 		Mode:       *mode,
@@ -1114,7 +1147,7 @@ func cmdChat(ctx context.Context, args []string, stdin io.Reader, stdout io.Writ
 		defer cancel()
 	}
 	return (&cli.REPL{
-		Client:   cli.NewClient(*host),
+		Client:   newClient(cfg, *host),
 		In:       stdin,
 		Out:      stdout,
 		Err:      stderr,
@@ -1153,7 +1186,7 @@ func cmdSessionsList(ctx context.Context, args []string, stdout io.Writer) error
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	threads, err := cli.NewClient(*host).ListThreads(ctx)
+	threads, err := newClient(cfg, *host).ListThreads(ctx)
 	if err != nil {
 		return err
 	}
@@ -1201,7 +1234,7 @@ func cmdModels(ctx context.Context, args []string, stdout io.Writer) error {
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}
-	providers, err := cli.NewClient(*host).ListModelProviders(ctx)
+	providers, err := newClient(cfg, *host).ListModelProviders(ctx)
 	if err != nil {
 		return err
 	}
@@ -1227,7 +1260,7 @@ func cmdPersonas(ctx context.Context, args []string, stdout io.Writer) error {
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}
-	personas, err := cli.NewClient(*host).ListPersonas(ctx)
+	personas, err := newClient(cfg, *host).ListPersonas(ctx)
 	if err != nil {
 		return err
 	}
@@ -1242,9 +1275,13 @@ func cmdEvents(ctx context.Context, args []string, stdout io.Writer) error {
 	if len(args) == 0 || args[0] != "tail" {
 		return fmt.Errorf("usage: loomi events tail <run-id>")
 	}
+	cfg, err := cli.LoadConfigFromEnv()
+	if err != nil {
+		return err
+	}
 	fs := flag.NewFlagSet("events tail", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	host := fs.String("host", cli.DefaultBaseURL, "Loomi API host")
+	host := fs.String("host", cfg.Host, "Loomi API host")
 	after := fs.Int("after", 0, "after sequence")
 	output := fs.String("output", "text", "text or json")
 	toolsOnly := fs.Bool("tools-only", false, "show only tool call events")
@@ -1259,7 +1296,7 @@ func cmdEvents(ctx context.Context, args []string, stdout io.Writer) error {
 		return fmt.Errorf("--output must be text or json")
 	}
 	renderer := cli.Renderer{Out: stdout}
-	return cli.NewClient(*host).StreamEvents(ctx, fs.Arg(0), *after, func(event cli.RunEvent) {
+	return newClient(cfg, *host).StreamEvents(ctx, fs.Arg(0), *after, func(event cli.RunEvent) {
 		_ = printStreamedEvent(renderer, event, *output, *compact, *toolsOnly)
 	})
 }
@@ -1313,7 +1350,7 @@ func cmdRunsStatus(ctx context.Context, args []string, stdout io.Writer) error {
 	if *output != "text" && *output != "json" {
 		return fmt.Errorf("--output must be text or json")
 	}
-	run, err := cli.NewClient(*host).GetRun(ctx, fs.Arg(0))
+	run, err := newClient(cfg, *host).GetRun(ctx, fs.Arg(0))
 	if err != nil {
 		return err
 	}
@@ -1342,7 +1379,7 @@ func cmdRunsStop(ctx context.Context, args []string, stdout io.Writer) error {
 	if *output != "text" && *output != "json" {
 		return fmt.Errorf("--output must be text or json")
 	}
-	result, err := cli.NewClient(*host).StopRun(ctx, fs.Arg(0))
+	result, err := newClient(cfg, *host).StopRun(ctx, fs.Arg(0))
 	if err != nil {
 		return err
 	}
@@ -1391,7 +1428,7 @@ func cmdRunsStream(ctx context.Context, args []string, stdout io.Writer, replay 
 	if *output != "text" && *output != "json" {
 		return fmt.Errorf("--output must be text or json")
 	}
-	client := cli.NewClient(*host)
+	client := newClient(cfg, *host)
 	runID := fs.Arg(0)
 	renderer := cli.Renderer{Out: stdout}
 	resumeAfter := *after
@@ -1473,7 +1510,7 @@ func cmdApprovalsList(ctx context.Context, args []string, stdout io.Writer) erro
 	if fs.NArg() != 1 {
 		return fmt.Errorf("usage: loomi approvals list <run-id>")
 	}
-	events, err := cli.NewClient(*host).ListEvents(ctx, fs.Arg(0), 0)
+	events, err := newClient(cfg, *host).ListEvents(ctx, fs.Arg(0), 0)
 	if err != nil {
 		return err
 	}
@@ -1500,7 +1537,7 @@ func cmdApprovalsFollow(ctx context.Context, args []string, stdout io.Writer) er
 		return fmt.Errorf("--output must be text or json")
 	}
 	renderer := cli.Renderer{Out: stdout}
-	return cli.NewClient(*host).StreamEvents(ctx, fs.Arg(0), *after, func(event cli.RunEvent) {
+	return newClient(cfg, *host).StreamEvents(ctx, fs.Arg(0), *after, func(event cli.RunEvent) {
 		if *output == "json" {
 			if event.Type == "tool_call_approval_required" || strings.HasPrefix(event.Type, "tool_call_") {
 				_ = renderer.PrintJSONLine(event)
@@ -1531,7 +1568,7 @@ func cmdApprovalDecision(ctx context.Context, action string, args []string, stdo
 	if *output != "text" && *output != "json" {
 		return fmt.Errorf("--output must be text or json")
 	}
-	client := cli.NewClient(*host)
+	client := newClient(cfg, *host)
 	resumeAfter := *after
 	if *follow && resumeAfter < 0 {
 		events, err := client.ListEvents(ctx, fs.Arg(1), 0)
@@ -1568,6 +1605,11 @@ func maxEventSequence(events []cli.RunEvent) int {
 		}
 	}
 	return max
+}
+
+func newClient(cfg cli.Config, host string) *cli.Client {
+	cfg.Host = host
+	return cli.NewClientFromConfig(cfg)
 }
 
 func resolvePrompt(stdin io.Reader, args []string, promptFile string) (string, error) {

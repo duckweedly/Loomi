@@ -26,15 +26,11 @@
   background: rgba(148, 208, 137, 0.085) !important;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08) !important;
 }
-
-.app-shell[data-theme='dark'] .sidebar-mode-row,
 .app-shell[data-theme='dark'] .settings-segmented-control,
 .app-shell[data-theme='dark'] .provider-filter-tabs,
 .app-shell[data-theme='dark'] .mode-tabs {
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
 }
-
-.app-shell[data-theme='dark'] .sidebar-mode-row button.selected,
 .app-shell[data-theme='dark'] .settings-segmented-control button.selected,
 .app-shell[data-theme='dark'] .provider-filter-tabs button.selected,
 .app-shell[data-theme='dark'] .mode-tabs button.selected {
@@ -93,8 +89,6 @@
   --compact-dark-control-hover: rgba(255, 255, 255, 0.075);
   --compact-dark-selected: rgba(148, 208, 137, 0.13);
 }
-
-.app-shell[data-theme='dark'] .sidebar-mode-row,
 .app-shell[data-theme='dark'] .settings-segmented-control,
 .app-shell[data-theme='dark'] .provider-filter-tabs,
 .app-shell[data-theme='dark'] .mode-tabs {
@@ -103,16 +97,12 @@
   background: var(--compact-dark-control) !important;
   box-shadow: none !important;
 }
-
-.app-shell[data-theme='dark'] .sidebar-mode-row button,
 .app-shell[data-theme='dark'] .settings-segmented-control button,
 .app-shell[data-theme='dark'] .provider-filter-tabs button,
 .app-shell[data-theme='dark'] .mode-tabs button {
   box-shadow: none !important;
   transform: none !important;
 }
-
-.app-shell[data-theme='dark'] .sidebar-mode-row button.selected,
 .app-shell[data-theme='dark'] .settings-segmented-control button.selected,
 .app-shell[data-theme='dark'] .provider-filter-tabs button.selected,
 .app-shell[data-theme='dark'] .mode-tabs button.selected {
@@ -226,7 +216,6 @@
 .app-shell[data-theme='dark'] .memory-delete-confirmation,
 .app-shell[data-theme='dark'] .memory-audit-item,
 .app-shell[data-theme='dark'] .message-row.assistant-draft .message-bubble,
-.app-shell[data-theme='dark'] .message-markdown pre,
 .app-shell[data-theme='dark'] .message-table-wrap,
 .app-shell[data-theme='dark'] .tool-grid div,
 .app-shell[data-theme='dark'] .tool-stack {

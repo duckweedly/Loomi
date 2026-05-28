@@ -203,6 +203,91 @@ func TestM24SandboxProcessLoopSmoke(t *testing.T) {
 	assertBodyExcludes(t, eventsBody, "m24 sandbox process events", root, "/Users/", "TOKEN", "secret")
 }
 
+func TestM93SandboxProcessResumeSmoke(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("LOOMI_WORKSPACE_ROOT", root)
+	repo := productruntime.NewMemorySandboxProcessRepository()
+	store := productruntime.NewSandboxProcessStoreWithRepository(repo, productruntime.SandboxProcessStoreOptions{})
+
+	svc := productdata.NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	if _, err := svc.SyncBuiltInPersonas(context.Background(), ident, []productdata.BuiltInPersonaConfig{{
+		Slug:         "default",
+		Name:         "Default",
+		Description:  "Default",
+		SystemPrompt: "Use approved sandbox process tools only.",
+		ModelRoute:   productdata.PersonaModelRoute{ProviderID: "custom", Model: "model"},
+		AllowedToolNames: []string{
+			productdata.ToolNameSandboxStartProcess,
+			productdata.ToolNameSandboxContinueProcess,
+			productdata.ToolNameSandboxTerminateProcess,
+		},
+		ReasoningMode: "balanced",
+		BudgetSummary: "small",
+		Version:       "1",
+		IsDefault:     true,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	provider := &m93SandboxProcessResumeProvider{}
+	gateway := productruntime.NewGateway(svc, nil, []productruntime.Provider{provider})
+	router := &productruntime.QueuedRunRouter{Gateway: gateway, SandboxStore: store}
+	worker := productruntime.NewWorker(svc, nil, router)
+	worker.WorkerID = "worker_m93_sandbox_resume"
+	srv := NewServerWithRuntimes(config.Config{AppEnv: "local"}, fakeChecker{}, svc, nil, nil, gateway)
+
+	threadRes := requestJSON(t, srv, http.MethodPost, "/v1/threads", `{"title":"M93 sandbox resume smoke","mode":"work"}`)
+	assertStatus(t, threadRes.Code, http.StatusCreated, threadRes.Body.String())
+	threadID := decodeStringField(t, threadRes.Body.Bytes(), "thread", "id")
+	messageRes := requestJSON(t, srv, http.MethodPost, "/v1/threads/"+threadID+"/messages", `{"content":"Run sandbox process resume","client_message_id":"m93-process-user-message"}`)
+	assertStatus(t, messageRes.Code, http.StatusCreated, messageRes.Body.String())
+	messageID := decodeStringField(t, messageRes.Body.Bytes(), "message", "id")
+	runRes := requestJSON(t, srv, http.MethodPost, "/v1/threads/"+threadID+"/runs", `{"message_id":"`+messageID+`","source":"model_gateway","provider_id":"custom","model":"model"}`)
+	assertStatus(t, runRes.Code, http.StatusAccepted, runRes.Body.String())
+	runID := decodeStringField(t, runRes.Body.Bytes(), "run", "id")
+
+	for _, toolCallID := range []string{"tc_m93_start", "tc_m93_continue_close", "tc_m93_continue_after_resume"} {
+		if ok, err := worker.ProcessOne(context.Background()); err != nil || !ok {
+			t.Fatalf("%s ProcessOne ok=%v err=%v", toolCallID, ok, err)
+		}
+		call, err := svc.GetToolCall(context.Background(), ident, threadID, runID, toolCallID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if call.ApprovalStatus != productdata.ToolCallApprovalRequired || call.ExecutionStatus != productdata.ToolCallExecutionBlocked {
+			t.Fatalf("blocked call = %+v", call)
+		}
+		if toolCallID == "tc_m93_continue_after_resume" {
+			waitM93SandboxProcessRecordStatus(t, repo, productruntime.SandboxProcessStatusExited)
+		}
+		approvalRes := requestJSON(t, srv, http.MethodPost, "/v1/threads/"+threadID+"/runs/"+runID+"/tool-calls/"+toolCallID+"/approve", "")
+		assertStatus(t, approvalRes.Code, http.StatusOK, approvalRes.Body.String())
+		if toolCallID == "tc_m93_continue_after_resume" {
+			router.SandboxStore = productruntime.NewSandboxProcessStoreWithRepository(repo, productruntime.SandboxProcessStoreOptions{})
+		}
+	}
+	if ok, err := worker.ProcessOne(context.Background()); err != nil || !ok {
+		t.Fatalf("final ProcessOne ok=%v err=%v", ok, err)
+	}
+	finalContinue, err := svc.GetToolCall(context.Background(), ident, threadID, runID, "tc_m93_continue_after_resume")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if finalContinue.ExecutionStatus != productdata.ToolCallExecutionSucceeded || finalContinue.ResultSummary["status"] != "exited" || !strings.Contains(stringValue(finalContinue.ResultSummary, "stdout"), "a") {
+		t.Fatalf("final continue = %+v", finalContinue)
+	}
+	if _, exists := finalContinue.ResultSummary["stdin_text"]; exists {
+		t.Fatalf("final continue leaked mutation payload: %+v", finalContinue.ResultSummary)
+	}
+	eventsBody := fetchM21Events(t, srv, runID)
+	for _, expected := range []string{`"tool_name":"sandbox.start_process"`, `"tool_name":"sandbox.continue_process"`, `"status":"exited"`, `"terminal_summary":"exited exit_code=0"`} {
+		if !strings.Contains(eventsBody, expected) {
+			t.Fatalf("events missing %s: %s", expected, eventsBody)
+		}
+	}
+	assertBodyExcludes(t, eventsBody, "m93 sandbox resume events", root, "/Users/", "TOKEN", "secret")
+}
+
 type m24SandboxProcessLoopProvider struct {
 	calls int
 }
@@ -246,4 +331,53 @@ func lastM24ProcessID(request productruntime.ProviderRequest) string {
 		}
 	}
 	return ""
+}
+
+func waitM93SandboxProcessRecordStatus(t *testing.T, repo *productruntime.MemorySandboxProcessRepository, want productruntime.SandboxProcessStatus) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		records, err := repo.ListSandboxProcesses(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, record := range records {
+			if record.Status == want {
+				return
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	records, _ := repo.ListSandboxProcesses(context.Background())
+	t.Fatalf("sandbox process record never became %s: %+v", want, records)
+}
+
+type m93SandboxProcessResumeProvider struct {
+	calls int
+}
+
+func (p *m93SandboxProcessResumeProvider) Config() productruntime.ProviderConfig {
+	return productruntime.ProviderConfig{ID: "custom", Family: productruntime.ProviderFamilyOpenAICompatible, BaseURL: "https://example.test/v1", APIKey: "key", Model: "model", Enabled: true}
+}
+
+func (p *m93SandboxProcessResumeProvider) Stream(_ context.Context, request productruntime.ProviderRequest) (<-chan productruntime.ProviderEvent, error) {
+	p.calls++
+	processID := lastM24ProcessID(request)
+	events := []productruntime.ProviderEvent{}
+	switch p.calls {
+	case 1:
+		events = []productruntime.ProviderEvent{{Type: productruntime.ProviderEventToolCall, ToolName: productdata.ToolNameSandboxStartProcess, Metadata: map[string]any{"tool_call_id": "tc_m93_start", "arguments_summary": map[string]any{"argv": []any{"cat"}, "stdin": true, "timeout_ms": 100000, "max_output_bytes": 4096}}}}
+	case 2:
+		events = []productruntime.ProviderEvent{{Type: productruntime.ProviderEventToolCall, ToolName: productdata.ToolNameSandboxContinueProcess, Metadata: map[string]any{"tool_call_id": "tc_m93_continue_close", "arguments_summary": map[string]any{"process_id": processID, "stdin_text": "a\n", "input_seq": 1, "close_stdin": true}}}}
+	case 3:
+		events = []productruntime.ProviderEvent{{Type: productruntime.ProviderEventToolCall, ToolName: productdata.ToolNameSandboxContinueProcess, Metadata: map[string]any{"tool_call_id": "tc_m93_continue_after_resume", "arguments_summary": map[string]any{"process_id": processID, "cursor": 0}}}}
+	default:
+		events = []productruntime.ProviderEvent{{Type: productruntime.ProviderEventTextDelta, Text: "Sandbox process resumed."}, {Type: productruntime.ProviderEventCompleted, Text: "Sandbox process resumed."}}
+	}
+	ch := make(chan productruntime.ProviderEvent, len(events))
+	for _, event := range events {
+		ch <- event
+	}
+	close(ch)
+	return ch, nil
 }

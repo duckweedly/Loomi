@@ -50,6 +50,26 @@ function metadataString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value : undefined
 }
 
+function metadataNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+}
+
+function safeThinkingSummary(event: RuntimeEvent) {
+  const summary = metadataString(event.metadata?.thinking_summary)
+  if (!summary) return {}
+  const duration = metadataNumber(event.metadata?.thinking_duration_seconds)
+  return {
+    thinkingSummary: summary.length > 160 ? `${summary.slice(0, 157)}...` : summary,
+    thinkingDurationSeconds: duration === undefined ? undefined : Math.max(0, Math.min(3600, Math.round(duration))),
+  }
+}
+
+function withoutHiddenThinking(event: RuntimeEvent): RuntimeEvent {
+  if (!event.metadata?.raw_thinking && !event.metadata?.hidden_thinking) return event
+  const { raw_thinking: _rawThinking, hidden_thinking: _hiddenThinking, ...metadata } = event.metadata
+  return { ...event, metadata }
+}
+
 function metadataApprovalStatus(value: unknown): ToolCallApprovalStatus | undefined {
   return value === 'not_required' || value === 'required' || value === 'approved' || value === 'denied' || value === 'cancelled' ? value : undefined
 }
@@ -86,7 +106,9 @@ export function applyRealRunEvent(run: Run, event: RuntimeEvent): Run {
   if (isRuntimeTerminal(run.status)) return run
   if (run.events.some((existing) => existing.id === event.id)) return run
 
-  const events = [...run.events, event].sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0))
+  const safeEvent = withoutHiddenThinking(event)
+  const thinking = safeThinkingSummary(event)
+  const events = [...run.events, safeEvent].sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0))
   const completedAt = event.status === 'completed' || event.status === 'failed' || event.status === 'stopped' ? event.time : run.completedAt
   const toolMapping = toolEventMapping(event.type)
   if (toolMapping) {
@@ -97,7 +119,7 @@ export function applyRealRunEvent(run: Run, event: RuntimeEvent): Run {
         : event.type === 'tool.call.failed'
           ? { ...run.assistantDraft, content: run.assistantDraft?.content ?? '', status: 'failed' as const, lastEventId: event.id }
           : run.assistantDraft
-    return { ...run, status: event.status, events, completedAt, assistantDraft, toolCalls: applyToolEvent(run.toolCalls, event, toolMapping) }
+    return { ...run, ...thinking, status: event.status, events, completedAt, assistantDraft, toolCalls: applyToolEvent(run.toolCalls, event, toolMapping) }
   }
   if (event.type === 'model.delta' || event.type === 'message.model_output_delta') {
     const delta = event.assistantDelta ?? event.content ?? ''
@@ -105,6 +127,7 @@ export function applyRealRunEvent(run: Run, event: RuntimeEvent): Run {
     const baseContent = isContinuation && run.assistantDraft?.status === 'paused_for_tool' ? '' : run.assistantDraft?.content ?? ''
     return {
       ...run,
+      ...thinking,
       status: event.status,
       events,
       completedAt,
@@ -119,6 +142,7 @@ export function applyRealRunEvent(run: Run, event: RuntimeEvent): Run {
   if (event.type === 'assistant.message.completed' || event.type === 'message.model_output_completed' || event.type === 'model.final') {
     return {
       ...run,
+      ...thinking,
       status: event.status,
       events,
       completedAt,
@@ -131,11 +155,12 @@ export function applyRealRunEvent(run: Run, event: RuntimeEvent): Run {
     }
   }
   if (event.status === 'completed') {
-    return { ...run, status: 'completed', events, completedAt }
+    return { ...run, ...thinking, status: 'completed', events, completedAt }
   }
   if (event.status === 'failed' || event.status === 'stopped') {
     return {
       ...run,
+      ...thinking,
       status: event.status,
       events,
       completedAt,
@@ -150,6 +175,7 @@ export function applyRealRunEvent(run: Run, event: RuntimeEvent): Run {
   if (event.status === 'recovering' || event.status === 'queued' || event.status === 'stopping') {
     return {
       ...run,
+      ...thinking,
       status: event.status,
       events,
       assistantDraft: {
@@ -160,7 +186,7 @@ export function applyRealRunEvent(run: Run, event: RuntimeEvent): Run {
       },
     }
   }
-  return { ...run, status: event.status, events }
+  return { ...run, ...thinking, status: event.status, events }
 }
 
 export function mapRealRuntimeCapabilitySignal(error: unknown): RealRuntimeCapabilitySignal {

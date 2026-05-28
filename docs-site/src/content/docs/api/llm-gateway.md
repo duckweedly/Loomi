@@ -74,6 +74,8 @@ M5 provider output is converted into the existing run-event envelope:
 
 SSE continues to use `run_event` frames and `after_sequence` history replay from M4.
 
+Frontend clients treat live token deltas as an interim draft only. `model_output_completed` promotes the draft immediately, and the terminal refresh reconciles the run against the persisted assistant message whose `run_id` matches the run. If those two sources disagree, the persisted assistant message wins because it is the conversation history source of truth. This keeps Markdown rendering stable even when replayed events contain partial token fragments or redacted debug summaries.
+
 ## Redaction rules
 
 Run events and API responses must not include provider API keys, Authorization headers, raw provider request payloads, raw provider error bodies, or sensitive custom URL path/query fragments. Safe metadata can include provider id, provider family, selected model, and non-sensitive tool names.

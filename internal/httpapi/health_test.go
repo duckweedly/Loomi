@@ -65,6 +65,22 @@ func TestReadyzReady(t *testing.T) {
 	}
 }
 
+func TestReadyzIncludesLocalDevCORSHeaders(t *testing.T) {
+	srv := NewServer(config.Config{AppEnv: "local"}, fakeChecker{})
+	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	req.Header.Set("Origin", "http://127.0.0.1:5180")
+	res := httptest.NewRecorder()
+
+	srv.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d", res.Code)
+	}
+	if res.Header().Get("Access-Control-Allow-Origin") != "http://127.0.0.1:5180" {
+		t.Fatalf("allow origin = %q", res.Header().Get("Access-Control-Allow-Origin"))
+	}
+}
+
 func TestReadyzNotReady(t *testing.T) {
 	srv := NewServer(config.Config{AppEnv: "local", ReadinessTimeoutSeconds: 5}, fakeChecker{pingErr: errors.New("secret dial error")})
 	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)

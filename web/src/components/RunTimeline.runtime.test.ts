@@ -6,10 +6,12 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { RunTimeline } from './RunTimeline'
 
 describe('RunTimeline runtime linkage', () => {
-  test('feeds selected run events through RunRail', () => {
+  test('keeps the old RunRail out of RunTimeline', () => {
     const source = readFileSync(resolve(import.meta.dir, 'RunTimeline.tsx'), 'utf8')
 
-    expect(source).toContain('<RunRail run={selectedThreadRun}')
+    expect(source).not.toContain('<RunRail')
+    expect(source).toContain('<RightToolDrawer')
+    expect(source).not.toContain('<RightPanelMenu')
   })
 
   test('RunRail renders failed and stopped statuses without marking them done', () => {
@@ -39,10 +41,8 @@ describe('RunTimeline runtime linkage', () => {
   test('renders safe worker diagnostic metadata without secret-looking fields', () => {
     const html = renderToStaticMarkup(createElement(RunTimeline, {
       runDetailsOpen: true,
-      rightPanelMenuOpen: false,
       rightToolsOpen: false,
-      selectedPanelId: 'activity',
-      onSelectPanel: () => {},
+      selectedPanelId: 'preview',
       run: {
         id: 'run-a',
         threadId: 'thread-a',
@@ -55,8 +55,8 @@ describe('RunTimeline runtime linkage', () => {
       },
     }))
 
-    expect(html).toContain('Recent activity')
-    expect(html).toContain('No activity yet')
+    expect(html).toContain('Preview')
+    expect(html).toContain('No preview yet')
     expect(html).not.toContain('Job recovering')
     expect(html).not.toContain('stale_count: 1')
     expect(html).not.toContain('password')
@@ -66,11 +66,9 @@ describe('RunTimeline runtime linkage', () => {
   test('does not show a previous thread run in Background tasks after thread selection changes', () => {
     const html = renderToStaticMarkup(createElement(RunTimeline, {
       runDetailsOpen: false,
-      rightPanelMenuOpen: false,
       rightToolsOpen: true,
-      selectedPanelId: 'background-tasks',
+      selectedPanelId: 'preview',
       selectedThreadId: 'thread-b',
-      onSelectPanel: () => {},
       run: {
         id: 'run-a',
         threadId: 'thread-a',
@@ -83,7 +81,7 @@ describe('RunTimeline runtime linkage', () => {
       },
     }))
 
-    expect(html).toContain('No background task is running')
+    expect(html).toContain('No preview yet')
     expect(html).not.toContain('Current run job')
     expect(html).not.toContain('background-task-event')
   })
@@ -91,10 +89,8 @@ describe('RunTimeline runtime linkage', () => {
   test('renders mixed lifecycle model worker and error groups through RunTimeline', () => {
     const html = renderToStaticMarkup(createElement(RunTimeline, {
       runDetailsOpen: true,
-      rightPanelMenuOpen: false,
       rightToolsOpen: false,
-      selectedPanelId: 'activity',
-      onSelectPanel: () => {},
+      selectedPanelId: 'preview',
       run: {
         id: 'run-a',
         threadId: 'thread-a',
@@ -111,9 +107,9 @@ describe('RunTimeline runtime linkage', () => {
       },
     }))
 
-    expect(html).toContain('Recent activity')
-    expect(html).toContain('Run failed')
-    expect(html).toContain('stream failed')
+    expect(html).toContain('Preview')
+    expect(html).not.toContain('Run failed')
+    expect(html).not.toContain('stream failed')
     expect(html).not.toContain('Run created')
     expect(html).not.toContain('Model started')
     expect(html).not.toContain('retrying')
@@ -123,10 +119,8 @@ describe('RunTimeline runtime linkage', () => {
   test('renders M9 pipeline foundation stage trace safely', () => {
     const html = renderToStaticMarkup(createElement(RunTimeline, {
       runDetailsOpen: true,
-      rightPanelMenuOpen: false,
       rightToolsOpen: false,
-      selectedPanelId: 'background-tasks',
-      onSelectPanel: () => {},
+      selectedPanelId: 'preview',
       run: {
         id: 'run-a',
         threadId: 'thread-a',
@@ -142,7 +136,9 @@ describe('RunTimeline runtime linkage', () => {
       },
     }))
 
-    expect(html).toContain('No activity yet')
+    expect(html).toContain('No preview yet')
+    expect(html).not.toContain('Current run job')
+    expect(html).not.toContain('Pipeline stage completed')
     expect(html).not.toContain('api_key')
     expect(html).not.toContain('secret')
   })
@@ -150,10 +146,8 @@ describe('RunTimeline runtime linkage', () => {
   test('renders M11 MCP discovery labels without sensitive config data', () => {
     const html = renderToStaticMarkup(createElement(RunTimeline, {
       runDetailsOpen: true,
-      rightPanelMenuOpen: false,
       rightToolsOpen: true,
-      selectedPanelId: 'background-tasks',
-      onSelectPanel: () => {},
+      selectedPanelId: 'preview',
       run: {
         id: 'run-a',
         threadId: 'thread-a',
@@ -167,7 +161,7 @@ describe('RunTimeline runtime linkage', () => {
       },
     }))
 
-    expect(html).toContain('No activity yet')
+    expect(html).toContain('No preview yet')
     expect(html).not.toContain('MCP discovery succeeded')
     expect(html).not.toContain('mcp.lo...')
     expect(html).not.toContain('MCP execution disabled')
@@ -179,10 +173,8 @@ describe('RunTimeline runtime linkage', () => {
   test('renders two model phases around tool result continuation', () => {
     const html = renderToStaticMarkup(createElement(RunTimeline, {
       runDetailsOpen: true,
-      rightPanelMenuOpen: false,
       rightToolsOpen: false,
-      selectedPanelId: 'activity',
-      onSelectPanel: () => {},
+      selectedPanelId: 'preview',
       run: {
         id: 'run-a',
         threadId: 'thread-a',
@@ -198,8 +190,9 @@ describe('RunTimeline runtime linkage', () => {
       },
     }))
 
-    expect(html).toContain('Get current time completed')
-    expect(html).toContain('Run completed')
+    expect(html).toContain('Preview')
+    expect(html).not.toContain('Get current time completed')
+    expect(html).not.toContain('Run completed')
     expect(html).not.toContain('Initial model phase')
     expect(html).not.toContain('Continuation model phase')
   })

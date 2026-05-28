@@ -5,6 +5,45 @@ description: Loomi 使用 Spec Kit 管理需求、计划、任务和实现。
 
 Loomi 使用 Spec Kit 作为 AI 开发前的对齐层。它的作用不是简单生成代码，而是让每个非平凡功能都有可审查的需求、技术计划和任务拆分。
 
+## 当前候选完成：M89 Unified Conversation Entry
+
+M89 学习 Arkloop 的分层方向，但保留 Loomi 自己的产品表达：用户只看到一个会话入口，深层能力按目录、run metadata 和工具状态浮现。
+
+关键产物：
+
+- UI：Sidebar 不再显示 Chat/Work 双模式切换；线程列表合并显示，创建入口统一为“新会话”。
+- Composer：目录选择和目录状态不再只挂在 Work mode 上，用户可以从同一个输入框进入目录相关任务。
+- Projection：计划/todo/artifact 投影由安全 run metadata 决定，不再只由 legacy `Thread.mode = work` 决定。
+- Tests：更新 sidebar、composer、projection 和 shell style 断言，防止模式切换入口回流。
+
+状态：candidate。该轮只合并前端入口和投影条件；保留后端 `Thread.mode`、现有工具权限和 provider/run 链路，不新增工具、不改数据库、不引入多 agent。
+
+## 近期候选完成：M88 Chat Response Polish Followups
+
+M88 继续沿着 Arkloop 的可感知生成体验做最小 follow-up，但不复制 Arkloop 文案、架构或工具面。
+
+关键产物：
+
+- UI：Run Rail 在 assistant draft 为空时显示 run-level thinking line；文案使用 shimmer 和短暂渐进更新，避免点状 loading 和卡片套卡片。
+- Safety：完成后的 thought summary 只来自 allowlisted metadata；frontend event 会剥离 raw/hidden thinking 字段。
+- Runtime：provider continuation 前会压缩超大 redacted tool result 字符串，保留 path/status/error 等信号和 compaction marker，小结果不变。
+- Persona：默认 Loomi prompt 明确 result-first、brief final answer 和不暴露 hidden chain-of-thought。
+
+状态：candidate。该轮只做真实使用 polish；不新增工具，不改 provider 路由，不引入外部 runtime，不做 UI 内容截断。
+
+## 近期候选完成：M87 Chat Response Polish
+
+当前实现对齐 Arkloop 的方向，但保留 Loomi 自己的命名、文案、视觉和安全边界。
+
+关键产物：
+
+- UI：Chat Canvas 在 assistant 内容为空时显示 run-scoped short thinking hint；同一 `run_id` 在浏览器本地保持同一句，SSR 使用稳定 hash。
+- Markdown：streaming draft 不渲染半截 Markdown，最终 heading 渲染不显示可见 `#`。
+- Persona：Gateway prompt policy 增加精炼输出规则，约束最终回复先给结论、无开场白、不复述用户请求、代码改动只报变更和验证。
+- Docs：runbook/devlog/spec-kit 记录本轮 UX 行为和验证命令。
+
+状态：candidate。该轮只做真实使用体验 polish；不新增工具，不改 provider 路由，不做 UI 截断，不复制 Arkloop 文案。
+
 ## 当前候选完成：M79 Agent Harness Smoke
 
 当前实现沿用 M76 continuation reliability、M78 sandbox process foundation 和 M6 worker/job path，不新增 Docker、Redis 或外部服务。
@@ -127,6 +166,12 @@ Claude Code 项目内命令使用横线格式：
 `/speckit-implement` 按任务实现，并在必要时回到 spec 或 plan 修正前提。
 
 ## 当前候选：Memory Provider Error UI
+
+## 近期已完成：M82 Real Local Usability Closeout
+
+状态：M82 closeout。CLI 默认 API host 对齐本地 Loomi API 的 `127.0.0.1:18080`，避免误连本机其他 8080 服务导致 `401 missing bearer token`。CLI config/env 支持 `LOOMI_API_TOKEN` / `api_token` bearer token，但输出只显示 `api_token_set`。`loomi doctor --provider local_codex` 现在区分 detected-but-not-enabled blocked reason 和 enabled ready state。真实本机 smoke 已通过 `loomi smoke agent --auto-approve --prompt "Read AGENTS.md with workspace.read, then reply M82 smoke complete."`，产出 `thread_id=thr_1779861294575417000_71c96fe2b8eb`、`run_id=run_1779861294596954000_78e89c7fc75e`、`final_stage=run_completed`，并记录 `workspace.read AGENTS.md` request/approved/executing/succeeded 事件。
+
+本轮没有新增工具、Docker/Redis/Firecracker、多 agent 架构，也没有把 token 写入日志或文档。
 
 当前 Spec Kit 功能目录：
 
@@ -482,7 +527,7 @@ specs/029-workspace-read-tools/
 - `quickstart.md`：记录 backend smoke、UI smoke 和 required validation。
 - `tasks.md`：按 backend foundation、approved execution、安全边界、UI/docs/validation 拆分。
 
-状态：M21 candidate。Workspace tools 只在 Work mode RunContext 中启用，并按最新用户意图收窄 enabled tools；日常问候不暴露 workspace/sandbox/agent/artifact/browser/web 工具，文件/目录任务才暴露 workspace read 工具。Chat mode 不扩大 workspace access。工具 root 优先来自本地用户持久化的 workspace root，并同步到 `LOOMI_WORKSPACE_ROOT` 供当前进程执行；未设置时本地桌面/dev 默认用户 Home；桌面端可由用户显式选择目录后切换并持久化运行时 root。路径边界继续拒绝 traversal、absolute escape、symlink escape 和敏感路径。目录分类会先做一次 broad `workspace.glob` 后摘要，后续 continuation 不再重复暴露 `workspace.glob`，只保留 targeted grep/read。浏览器 smoke 需在本轮 closeout 单独记录。M21 不包含 shell、write/edit、sandbox、browser automation、web search/fetch、artifact create 或多工具循环。
+状态：M21 candidate。Workspace tools 只在 Work mode RunContext 中启用，并按最新用户意图收窄 enabled tools；日常问候不暴露 workspace/sandbox/agent/artifact/browser/web 工具，文件/目录任务才暴露 workspace read 工具。Chat mode 不扩大 workspace access。工具 root 在 run 创建时从本地用户持久化 workspace root 快照进 background job、RunContext 和 tool invocation；`/v1/workspace/root` 不再写进程级 `LOOMI_WORKSPACE_ROOT`，该 env 只作为本地测试 fallback 在 run 创建时读取。未设置目录时不再默认用户 Home，workspace 工具会在读取前失败，桌面端必须显式选择目录或测试环境显式设置 `LOOMI_WORKSPACE_ROOT`。路径边界继续拒绝 traversal、absolute escape、symlink escape 和敏感路径。目录分类优先使用 `workspace.tree_summary` 或 `workspace.list_directory`，`workspace.glob` 仅用于文件名匹配或窄范围补充，`workspace.grep` 仅用于内容搜索。浏览器 smoke 需在本轮 closeout 单独记录。M21 不包含 shell、write/edit、sandbox、browser automation、web search/fetch、artifact create 或多工具循环。
 
 ## 近期已完成：M20 Local Codex Execution Bridge
 

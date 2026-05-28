@@ -1,69 +1,58 @@
 import { describe, expect, test } from 'bun:test'
+import { readFileSync } from 'node:fs'
 import type { RightPanelItemId } from './rightPanelItems'
 import { createWorkspaceShellState } from './useWorkspaceShellState'
 
 describe('createWorkspaceShellState', () => {
-  test('opens run details while closing right-side tool surfaces', () => {
+  test('does not expose the old run details surface in shell state', () => {
     const shell = createWorkspaceShellState()
 
-    shell.openRightPanel('terminal')
-    shell.openArtifact()
-    shell.toggleRunDetails()
-
-    expect(shell.snapshot()).toMatchObject({
-      runDetailsOpen: true,
-      rightPanelMenuOpen: false,
-      rightPanelOpen: false,
-      selectedRightPanelId: 'preview' satisfies RightPanelItemId,
-    })
+    expect(shell.snapshot()).not.toHaveProperty('runDetailsOpen')
+    expect(shell).not.toHaveProperty('toggleRunDetails')
   })
 
   test('opens artifact previews in the narrow right panel', () => {
     const shell = createWorkspaceShellState()
 
-    shell.toggleRunDetails()
-    shell.openArtifact()
+    shell.openArtifact('art-a')
 
     expect(shell.snapshot()).toMatchObject({
-      runDetailsOpen: false,
+      previewArtifactId: 'art-a',
       rightPanelOpen: true,
       selectedRightPanelId: 'preview' satisfies RightPanelItemId,
     })
   })
 
-  test('selects a right panel while closing the menu and run details', () => {
+  test('keeps right panel selection scoped to preview', () => {
     const shell = createWorkspaceShellState()
 
-    shell.toggleRightPanelMenu()
-    shell.toggleRunDetails()
     shell.openArtifact()
-    shell.openRightPanel('files')
+    shell.openRightPanel('preview')
 
     expect(shell.snapshot()).toMatchObject({
-      runDetailsOpen: false,
       rightPanelMenuOpen: false,
       rightPanelOpen: true,
-      selectedRightPanelId: 'files' satisfies RightPanelItemId,
+      selectedRightPanelId: 'preview' satisfies RightPanelItemId,
     })
   })
 
-  test('toggles the right panel menu without opening the right drawer', () => {
+  test('toggles the preview drawer directly without opening a menu', () => {
     const shell = createWorkspaceShellState()
 
-    shell.toggleRightPanelMenu()
+    shell.togglePreviewPanel()
 
     expect(shell.snapshot()).toMatchObject({
-      runDetailsOpen: false,
-      rightPanelMenuOpen: true,
-      rightPanelOpen: false,
+      rightPanelMenuOpen: false,
+      rightPanelOpen: true,
+      selectedRightPanelId: 'preview' satisfies RightPanelItemId,
     })
   })
 
-  test('uses the titlebar right panel button to close an open detail panel', () => {
+  test('uses the titlebar preview button to close the preview drawer', () => {
     const shell = createWorkspaceShellState()
 
     shell.openRightPanel('preview')
-    shell.toggleRightPanelMenu()
+    shell.togglePreviewPanel()
 
     expect(shell.snapshot()).toMatchObject({
       rightPanelMenuOpen: false,
@@ -75,7 +64,7 @@ describe('createWorkspaceShellState', () => {
   test('opens and closes Settings without losing workspace context', () => {
     const shell = createWorkspaceShellState()
 
-    shell.openRightPanel('files')
+    shell.openRightPanel('preview')
     shell.openSettings()
     shell.setSettingsCategory('providers')
     shell.closeSettings()
@@ -84,21 +73,19 @@ describe('createWorkspaceShellState', () => {
       settingsOpen: false,
       settingsCategoryId: 'providers',
       rightPanelOpen: true,
-      selectedRightPanelId: 'files' satisfies RightPanelItemId,
+      selectedRightPanelId: 'preview' satisfies RightPanelItemId,
     })
   })
 
   test('opens Settings with General selected without mutating transient shell surfaces', () => {
     const shell = createWorkspaceShellState({ settingsCategoryId: 'tools' })
 
-    shell.toggleRunDetails()
     shell.openSettings()
 
     expect(shell.snapshot()).toMatchObject({
       settingsOpen: true,
       settingsCategoryId: 'general',
       rightPanelMenuOpen: false,
-      runDetailsOpen: true,
     })
   })
 
@@ -113,6 +100,15 @@ describe('createWorkspaceShellState', () => {
     expect(shell.snapshot().locale).toBe('en')
     expect(shell.snapshot().providerDraftSettings).toMatchObject({ model: 'gpt-5.5', apiKeySet: true })
     expect(createWorkspaceShellState().snapshot()).toMatchObject({ defaultWorkspaceMode: 'chat', locale: 'zh', providerDraftSettings: { baseUrl: '', model: '', apiKeySet: false } })
+  })
+
+  test('resolves the default theme from the system before a manual override exists', () => {
+    const source = readFileSync(new URL('./useWorkspaceShellState.ts', import.meta.url), 'utf8')
+
+    expect(source).toContain("window.matchMedia('(prefers-color-scheme: dark)')")
+    expect(source).toContain("const themeStorageKey = 'loomi.theme'")
+    expect(source).toContain('readStoredTheme() ?? resolveSystemTheme()')
+    expect(source).toContain('writeStoredTheme(next.theme)')
   })
 })
 

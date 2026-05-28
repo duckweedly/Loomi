@@ -89,13 +89,6 @@
   background: color-mix(in srgb, var(--accent) 10%, transparent);
 }
 
-.sidebar-mode-row {
-  border-color: color-mix(in srgb, var(--border-subtle) 72%, transparent);
-  background: color-mix(in srgb, var(--main-surface) 22%, transparent);
-  box-shadow: inset 0 1px 0 var(--glass-highlight), var(--brand-press-shadow);
-}
-
-.sidebar-mode-row button.selected,
 .mode-tabs button.selected,
 .settings-segmented-control button.selected,
 .provider-filter-tabs button.selected {
@@ -104,7 +97,6 @@
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.34), var(--brand-press-shadow);
 }
 
-.app-shell[data-theme='dark'] .sidebar-mode-row button.selected,
 .app-shell[data-theme='dark'] .mode-tabs button.selected,
 .app-shell[data-theme='dark'] .settings-segmented-control button.selected,
 .app-shell[data-theme='dark'] .provider-filter-tabs button.selected {

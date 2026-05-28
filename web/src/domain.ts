@@ -164,6 +164,17 @@ export type WorkspaceRootConfig = {
   displayName: string
 }
 
+export type ReadinessCheck = {
+  name: string
+  status: 'ok' | 'failed' | string
+  message?: string
+}
+
+export type ApiReadiness = {
+  status: 'ready' | 'not_ready' | string
+  checks: ReadinessCheck[]
+}
+
 export type MCPServerStatus = {
   serverSafeId: string
   serverSlug: string
@@ -459,6 +470,8 @@ export type Run = {
   scriptId?: RuntimeScriptId
   attemptOfMessageId?: string
   assistantDraft?: AssistantDraft
+  thinkingSummary?: string
+  thinkingDurationSeconds?: number
   createdAt?: string
   completedAt?: string
 }

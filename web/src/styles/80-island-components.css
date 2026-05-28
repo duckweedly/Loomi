@@ -122,7 +122,6 @@
 .tool-actions button,
 .composer-action,
 .sidebar-settings-button,
-.sidebar-mode-row button,
 .mode-tabs button,
 .thread-card {
   transition:
@@ -149,7 +148,6 @@
 .tool-actions button:active,
 .composer-action:active,
 .sidebar-settings-button:active,
-.sidebar-mode-row button:active,
 .mode-tabs button:active,
 .thread-card:active {
   transform: translateY(2px) scale(0.985);
@@ -188,8 +186,6 @@ textarea:focus-visible,
     0 16px 38px color-mix(in srgb, var(--glass-shadow) 42%, transparent),
     0 0 0 4px color-mix(in srgb, var(--accent) 8%, transparent);
 }
-
-.sidebar-mode-row,
 .settings-segmented-control,
 .provider-filter-tabs,
 .mode-tabs {
@@ -201,8 +197,6 @@ textarea:focus-visible,
     inset 0 1px 0 var(--glass-highlight),
     0 4px 0 var(--island-raised);
 }
-
-.sidebar-mode-row button,
 .mode-tabs button,
 .settings-segmented-control button,
 .provider-filter-tabs button {
@@ -210,8 +204,6 @@ textarea:focus-visible,
   color: var(--text-secondary);
   font-weight: 780;
 }
-
-.sidebar-mode-row button.selected,
 .mode-tabs button.selected,
 .settings-segmented-control button.selected,
 .provider-filter-tabs button.selected {
@@ -222,8 +214,6 @@ textarea:focus-visible,
     0 3px 0 var(--island-raised);
   transform: translateY(-1px);
 }
-
-.app-shell[data-theme='dark'] .sidebar-mode-row button.selected,
 .app-shell[data-theme='dark'] .mode-tabs button.selected,
 .app-shell[data-theme='dark'] .settings-segmented-control button.selected,
 .app-shell[data-theme='dark'] .provider-filter-tabs button.selected {
@@ -232,8 +222,6 @@ textarea:focus-visible,
     inset 0 1px 0 rgba(255, 255, 255, 0.14),
     0 3px 0 rgba(0, 0, 0, 0.32);
 }
-
-.app-shell[data-theme='dark'] .sidebar-mode-row,
 .app-shell[data-theme='dark'] .mode-tabs,
 .app-shell[data-theme='dark'] .settings-segmented-control,
 .app-shell[data-theme='dark'] .provider-filter-tabs {
@@ -696,7 +684,6 @@ textarea:focus-visible,
 }
 
 .message-row.assistant-draft .message-bubble,
-.message-markdown pre,
 .message-table-wrap,
 .tool-grid div,
 .tool-stack {
@@ -734,7 +721,6 @@ textarea:focus-visible,
   .tool-actions button:active,
   .composer-action:active,
   .sidebar-settings-button:active,
-  .sidebar-mode-row button:active,
   .mode-tabs button:active,
   .thread-card:active {
     transform: none !important;

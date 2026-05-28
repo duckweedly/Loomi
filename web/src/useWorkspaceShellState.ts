@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { Thread } from './domain'
 import type { Locale } from './i18n'
 import type { SettingsCategoryId } from './components/settingsCatalog'
@@ -15,9 +15,9 @@ type WorkspaceShellSnapshot = {
   defaultWorkspaceMode: Thread['mode']
   locale: Locale
   providerDraftSettings: ProviderDraftSettings
-  runDetailsOpen: boolean
   rightPanelMenuOpen: boolean
   rightPanelOpen: boolean
+  previewArtifactId?: string
   selectedRightPanelId: RightPanelItemId
   settingsCategoryId: SettingsCategoryId
   settingsOpen: boolean
@@ -26,18 +26,57 @@ type WorkspaceShellSnapshot = {
   theme: 'dark' | 'light'
 }
 
-const initialShellState: WorkspaceShellSnapshot = {
+type Theme = WorkspaceShellSnapshot['theme']
+
+const themeStorageKey = 'loomi.theme'
+
+function isTheme(value: string | null): value is Theme {
+  return value === 'dark' || value === 'light'
+}
+
+function readStoredTheme(): Theme | null {
+  if (typeof window === 'undefined') return null
+  try {
+    const storedTheme = window.localStorage.getItem(themeStorageKey)
+    return isTheme(storedTheme) ? storedTheme : null
+  } catch {
+    return null
+  }
+}
+
+function writeStoredTheme(theme: Theme) {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(themeStorageKey, theme)
+  } catch {
+    // localStorage may be unavailable in privacy-restricted desktop contexts.
+  }
+}
+
+export function resolveSystemTheme(): Theme {
+  if (typeof window === 'undefined' || !window.matchMedia) return 'light'
+  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+}
+
+function createInitialShellSnapshot(initialState: Partial<WorkspaceShellSnapshot> = {}): WorkspaceShellSnapshot {
+  return {
+    ...baseShellState,
+    theme: readStoredTheme() ?? resolveSystemTheme(),
+    ...initialState,
+  }
+}
+
+const baseShellState: WorkspaceShellSnapshot = {
   defaultWorkspaceMode: 'chat',
   locale: 'zh',
   providerDraftSettings: { baseUrl: '', model: '', apiKey: '', apiKeySet: false },
-  runDetailsOpen: false,
   rightPanelMenuOpen: false,
   rightPanelOpen: false,
   selectedRightPanelId: 'preview',
   settingsCategoryId: 'general',
   settingsOpen: false,
   sidebarCollapsed: false,
-  sidebarWidth: 252,
+  sidebarWidth: 340,
   theme: 'light',
 }
 
@@ -51,11 +90,9 @@ type WorkspaceShellAction =
   | { type: 'setSidebarWidth'; sidebarWidth: number }
   | { type: 'setSidebarCollapsed'; sidebarCollapsed: boolean }
   | { type: 'toggleTheme' }
-  | { type: 'toggleRunDetails' }
-  | { type: 'toggleRightPanelMenu' }
+  | { type: 'togglePreviewPanel' }
   | { type: 'openRightPanel'; selectedRightPanelId: RightPanelItemId }
-  | { type: 'closeRunDetails' }
-  | { type: 'openArtifact' }
+  | { type: 'openArtifact'; artifactId?: string }
 
 function reduceWorkspaceShellState(state: WorkspaceShellSnapshot, action: WorkspaceShellAction): WorkspaceShellSnapshot {
   switch (action.type) {
@@ -81,21 +118,12 @@ function reduceWorkspaceShellState(state: WorkspaceShellSnapshot, action: Worksp
       return { ...state, sidebarCollapsed: action.sidebarCollapsed }
     case 'toggleTheme':
       return { ...state, theme: state.theme === 'dark' ? 'light' : 'dark' }
-    case 'toggleRunDetails':
+    case 'togglePreviewPanel':
       return {
         ...state,
-        runDetailsOpen: !state.runDetailsOpen,
+        selectedRightPanelId: 'preview',
+        rightPanelOpen: !state.rightPanelOpen,
         rightPanelMenuOpen: false,
-        rightPanelOpen: false,
-      }
-    case 'toggleRightPanelMenu':
-      if (state.rightPanelOpen) {
-        return { ...state, rightPanelOpen: false, rightPanelMenuOpen: false }
-      }
-      return {
-        ...state,
-        rightPanelMenuOpen: !state.rightPanelMenuOpen,
-        runDetailsOpen: false,
       }
     case 'openRightPanel':
       return {
@@ -103,17 +131,14 @@ function reduceWorkspaceShellState(state: WorkspaceShellSnapshot, action: Worksp
         selectedRightPanelId: action.selectedRightPanelId,
         rightPanelOpen: true,
         rightPanelMenuOpen: false,
-        runDetailsOpen: false,
       }
-    case 'closeRunDetails':
-      return { ...state, runDetailsOpen: false }
     case 'openArtifact':
       return {
         ...state,
+        previewArtifactId: action.artifactId,
         selectedRightPanelId: 'preview',
         rightPanelOpen: true,
         rightPanelMenuOpen: false,
-        runDetailsOpen: false,
       }
   }
 }
@@ -130,16 +155,14 @@ function bindWorkspaceShellActions(getState: () => WorkspaceShellSnapshot, dispa
     setSidebarWidth: (sidebarWidth: number) => dispatch({ type: 'setSidebarWidth', sidebarWidth }),
     setSidebarCollapsed: (sidebarCollapsed: boolean) => dispatch({ type: 'setSidebarCollapsed', sidebarCollapsed }),
     toggleTheme: () => dispatch({ type: 'toggleTheme' }),
-    toggleRunDetails: () => dispatch({ type: 'toggleRunDetails' }),
-    toggleRightPanelMenu: () => dispatch({ type: 'toggleRightPanelMenu' }),
+    togglePreviewPanel: () => dispatch({ type: 'togglePreviewPanel' }),
     openRightPanel: (selectedRightPanelId: RightPanelItemId) => dispatch({ type: 'openRightPanel', selectedRightPanelId }),
-    closeRunDetails: () => dispatch({ type: 'closeRunDetails' }),
-    openArtifact: () => dispatch({ type: 'openArtifact' }),
+    openArtifact: (artifactId?: string) => dispatch({ type: 'openArtifact', artifactId }),
   }
 }
 
 export function createWorkspaceShellState(initialState: Partial<WorkspaceShellSnapshot> = {}) {
-  let state = { ...initialShellState, ...initialState }
+  let state = createInitialShellSnapshot(initialState)
 
   return bindWorkspaceShellActions(
     () => state,
@@ -150,11 +173,28 @@ export function createWorkspaceShellState(initialState: Partial<WorkspaceShellSn
 }
 
 export function useWorkspaceShellState() {
-  const [state, setState] = useState(initialShellState)
-  const actions = bindWorkspaceShellActions(
+  const [state, setState] = useState(() => createInitialShellSnapshot())
+  const actions = useMemo(() => bindWorkspaceShellActions(
     () => state,
-    (action) => setState((current) => reduceWorkspaceShellState(current, action)),
-  )
+    (action) => setState((current) => {
+      const next = reduceWorkspaceShellState(current, action)
+      if (action.type === 'toggleTheme') writeStoredTheme(next.theme)
+      return next
+    }),
+  ), [state])
+
+  useEffect(() => {
+    if (readStoredTheme()) return undefined
+    const mediaQuery = window.matchMedia?.('(prefers-color-scheme: dark)')
+    if (!mediaQuery) return undefined
+
+    const handleChange = (event: MediaQueryListEvent) => {
+      setState((current) => ({ ...current, theme: event.matches ? 'dark' : 'light' }))
+    }
+
+    mediaQuery.addEventListener('change', handleChange)
+    return () => mediaQuery.removeEventListener('change', handleChange)
+  }, [])
 
   return {
     ...state,

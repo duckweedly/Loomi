@@ -112,7 +112,7 @@ describe('ChatCanvas Work mode integration', () => {
     expect(html).not.toContain('Projected goal')
     expect(html).not.toContain('Projected step')
     expect(html).toContain('<textarea class="composer-input" disabled=""')
-    expect(html).toContain('Stop</button>')
+    expect(html).toContain('aria-label="Stop"')
   })
 
   test('does not mount Work Plan View before real plan evidence exists', () => {
@@ -223,7 +223,7 @@ describe('ChatCanvas Work mode integration', () => {
     expect(html).not.toContain('Work plan')
     expect(html).toContain('<textarea class="composer-input"')
     expect(html).not.toContain('<textarea class="composer-input" disabled=""')
-    expect(html).toContain('Folder: Downloads')
+    expect(html).toContain('Workspace · Downloads')
     expect(html).not.toContain('M16 Work mode is read-only for plan and progress')
   })
 
@@ -247,7 +247,7 @@ describe('ChatCanvas Work mode integration', () => {
     expect(html).toContain('<textarea class="composer-input" disabled=""')
   })
 
-  test('keeps Chat mode isolated from Work Plan View', () => {
+  test('keeps the unified conversation surface from rendering a separate Work Plan View', () => {
     const html = renderToStaticMarkup(createElement(ChatCanvas, {
       sidebarCollapsed: false,
       thread: chatThread,
@@ -262,7 +262,7 @@ describe('ChatCanvas Work mode integration', () => {
       locale: 'en',
     }))
 
-    expect(deriveWorkPlanProjection(chatThread, messages, run)).toBeNull()
+    expect(deriveWorkPlanProjection(chatThread, messages, run)?.goal).toBe('Projected goal')
     expect(html).not.toContain('Work plan')
     expect(html).not.toContain('Projected goal')
     expect(html).toContain('Build Work mode UI')

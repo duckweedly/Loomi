@@ -3,6 +3,7 @@ package productdata
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -708,6 +709,81 @@ func TestPostgresArtifactsAndAgentTasksUseThreadScope(t *testing.T) {
 	}
 }
 
+func TestPostgresSandboxProcessRecordsAreDurableAndScoped(t *testing.T) {
+	databaseURL := os.Getenv("LOOMI_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("LOOMI_TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	repo := NewPostgresRepository(pool)
+	var _ SandboxProcessRepository = repo
+	ident := postgresTestIdentity()
+	thread, err := repo.CreateThread(ctx, ident, CreateThreadInput{Title: "PG sandbox process", Mode: ThreadModeWork})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := repo.StartRun(ctx, ident, thread.ID, StartRunInput{ScriptName: "pg_sandbox_process"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	exitCode := 0
+	record := SandboxProcessRecord{
+		RunID:           run.ID,
+		ProcessID:       "sp_pg_sandbox",
+		ArgvSummary:     []string{"cat", "token=secret", "/Users/xuean/private"},
+		CwdAlias:        "/Users/xuean/Repos/personal-projects/Loomi",
+		Status:          SandboxProcessStatusExited,
+		Cursor:          12,
+		StartedAt:       now.Add(-time.Second),
+		UpdatedAt:       now,
+		EndedAt:         &now,
+		ExitCode:        &exitCode,
+		StdoutTail:      "tail token=secret /Users/xuean/private",
+		StdoutCursor:    12,
+		StderrTail:      "stderr token=secret",
+		StderrCursor:    18,
+		StdoutBytes:     34,
+		StderrBytes:     18,
+		TerminalSummary: "exited exit_code=0 token=secret /Users/xuean/private",
+		OutputLimit:     1024,
+	}
+	if err := repo.SaveSandboxProcess(ctx, record); err != nil {
+		t.Fatal(err)
+	}
+	records, err := repo.ListSandboxProcesses(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got SandboxProcessRecord
+	for _, candidate := range records {
+		if candidate.ProcessID == record.ProcessID {
+			got = candidate
+			break
+		}
+	}
+	if got.ProcessID == "" {
+		t.Fatalf("process record not found in %+v", records)
+	}
+	rendered := strings.Join(append(append([]string{}, got.ArgvSummary...), got.CwdAlias, got.StdoutTail, got.StderrTail, got.TerminalSummary), "\n")
+	if strings.Contains(rendered, "/Users/") || strings.Contains(rendered, "token=secret") {
+		t.Fatalf("record leaked unsafe data: %+v", got)
+	}
+	if got.RunID != record.RunID || got.Status != SandboxProcessStatusExited || got.Cursor != 12 || got.StdoutBytes != 34 || got.StderrBytes != 18 || got.ExitCode == nil || *got.ExitCode != 0 {
+		t.Fatalf("record = %+v", got)
+	}
+	if deleted, err := repo.DeleteSandboxProcessesUpdatedBefore(ctx, now.Add(time.Second)); err != nil || deleted < 1 {
+		t.Fatalf("deleted=%d err=%v", deleted, err)
+	}
+}
+
 func TestPostgresPreservesThreadPersonaOnMetadataUpdate(t *testing.T) {
 	databaseURL := os.Getenv("LOOMI_TEST_DATABASE_URL")
 	if databaseURL == "" {
@@ -808,6 +884,64 @@ func TestPostgresRejectsUnknownThreadPersona(t *testing.T) {
 	}
 	if _, err := repo.UpdateThread(ctx, ident, thread.ID, UpdateThreadInput{PersonaID: ptr(persona.ID)}); err == nil || ErrorCode(err) != CodeInvalidRequest {
 		t.Fatalf("inactive update err = %v", err)
+	}
+}
+
+func TestPostgresSyncBuiltInPersonasUpdatesExistingVersionDefinition(t *testing.T) {
+	databaseURL := os.Getenv("LOOMI_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("LOOMI_TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	repo := NewPostgresRepository(pool)
+	ident := postgresTestIdentity()
+	config := BuiltInPersonaConfig{
+		Slug:             "postgres-persona-update-" + NewThreadID(),
+		Name:             "Postgres Persona Update",
+		Description:      "Persona update fixture.",
+		SystemPrompt:     "prompt",
+		ModelRoute:       PersonaModelRoute{ProviderID: "custom", Model: "model"},
+		AllowedToolNames: []string{ToolNameCurrentTime},
+		ReasoningMode:    "balanced",
+		BudgetSummary:    "budget",
+		Version:          "2026-05-27.2",
+		IsDefault:        true,
+	}
+	if _, err := repo.SyncBuiltInPersonas(ctx, ident, []BuiltInPersonaConfig{config}); err != nil {
+		t.Fatal(err)
+	}
+	config.AllowedToolNames = []string{ToolNameCurrentTime, ToolNameWorkspaceTreeSummary, ToolNameWorkspaceListDirectory}
+	if _, err := repo.SyncBuiltInPersonas(ctx, ident, []BuiltInPersonaConfig{config}); err != nil {
+		t.Fatal(err)
+	}
+	thread, err := repo.CreateThread(ctx, ident, CreateThreadInput{Title: "Postgres work", Mode: ThreadModeWork})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _, err := repo.CreateMessage(ctx, ident, thread.ID, CreateMessageInput{Content: "分类当前目录"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.StartRun(ctx, ident, thread.ID, StartRunInput{Source: RunSourceModelGateway, MessageID: message.ID, ProviderID: "custom", Model: "model"}); err != nil {
+		t.Fatal(err)
+	}
+	job, _, ok, err := repo.ClaimBackgroundJob(ctx, ident, ClaimBackgroundJobInput{WorkerID: "worker_postgres_persona_update", LeaseSeconds: 5})
+	if err != nil || !ok {
+		t.Fatalf("claim ok=%v err=%v", ok, err)
+	}
+	context, err := repo.PrepareRunContext(ctx, ident, job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasToolResolution(context.EnabledTools, ToolNameWorkspaceTreeSummary) || !hasToolResolution(context.EnabledTools, ToolNameWorkspaceListDirectory) {
+		t.Fatalf("enabled tools = %+v", context.EnabledTools)
 	}
 }
 
