@@ -237,27 +237,14 @@ func (r QueuedRunRouter) shouldResumeContinuationAfterSucceededTool(ctx context.
 	if err != nil {
 		return false
 	}
-	succeededSequence := 0
-	for _, event := range events {
-		if event.Type == productdata.EventToolCallSucceeded && metadataString(event.Metadata, "tool_call_id") == toolCallID {
-			succeededSequence = event.Sequence
-		}
-	}
-	if succeededSequence == 0 {
+	state := productdata.RebuildRunStepState(events)
+	if state.NextAction != productdata.RunStepNextActionContinueModel {
 		return false
 	}
-	for _, event := range events {
-		if event.Sequence <= succeededSequence {
-			continue
-		}
-		if event.Category == productdata.RunEventCategoryFinal || event.Type == productdata.EventToolCallRequested {
-			return false
-		}
-		if event.Type == "model_request_started" && metadataString(event.Metadata, "model_phase") == "continuation" {
-			return false
-		}
+	if len(state.CompletedToolResults) == 0 {
+		return false
 	}
-	return true
+	return state.CompletedToolResults[len(state.CompletedToolResults)-1].ToolCallID == toolCallID
 }
 
 func (r QueuedRunRouter) artifactService() productdata.ArtifactService {

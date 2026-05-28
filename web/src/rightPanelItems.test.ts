@@ -2,15 +2,8 @@ import { describe, expect, test } from 'bun:test'
 import { rightPanelItems } from './rightPanelItems'
 
 describe('rightPanelItems', () => {
-  test('defines the Claude Code-style placeholder panels in menu order', () => {
-    expect(rightPanelItems.map((item) => item.id)).toEqual([
-      'preview',
-      'diff',
-      'terminal',
-      'files',
-      'background-tasks',
-      'plan',
-    ])
+  test('keeps the titlebar panel list scoped to preview only', () => {
+    expect(rightPanelItems.map((item) => item.id)).toEqual(['preview'])
   })
 
   test('keeps the run details panel separate from tool placeholders', () => {

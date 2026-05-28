@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +12,40 @@ import (
 
 	"github.com/sheridiany/loomi/internal/productdata"
 )
+
+type failingSandboxProcessRepository struct {
+	saveErr error
+	listErr error
+	saves   int
+	records map[string]SandboxProcessRecord
+}
+
+func (r *failingSandboxProcessRepository) SaveSandboxProcess(_ context.Context, record SandboxProcessRecord) error {
+	r.saves++
+	if r.saveErr != nil {
+		return r.saveErr
+	}
+	if r.records == nil {
+		r.records = map[string]SandboxProcessRecord{}
+	}
+	r.records[record.ProcessID] = record
+	return nil
+}
+
+func (r *failingSandboxProcessRepository) ListSandboxProcesses(context.Context) ([]SandboxProcessRecord, error) {
+	if r.listErr != nil {
+		return nil, r.listErr
+	}
+	records := make([]SandboxProcessRecord, 0, len(r.records))
+	for _, record := range r.records {
+		records = append(records, record)
+	}
+	return records, nil
+}
+
+func (r *failingSandboxProcessRepository) DeleteSandboxProcessesUpdatedBefore(context.Context, time.Time) (int, error) {
+	return 0, nil
+}
 
 func TestSandboxExecCommandRunsArgvWithinWorkspaceRoot(t *testing.T) {
 	root := t.TempDir()
@@ -457,12 +492,70 @@ func TestSandboxProcessRegistryRebuildKeepsTerminalProcessReadableButNotWritable
 	}
 }
 
+func TestSandboxProcessStartFailsWhenDurableSaveFails(t *testing.T) {
+	root := t.TempDir()
+	repo := &failingSandboxProcessRepository{saveErr: errors.New("database unavailable")}
+	executor := SandboxToolExecutor{Root: root, Store: NewSandboxProcessStoreWithRepository(repo, SandboxProcessStoreOptions{})}
+
+	result, err := executor.Execute(context.Background(), ToolInvocation{RunID: "run_save_start", ToolCallID: "tc_start", ToolName: productdata.ToolNameSandboxStartProcess, ArgumentsSummary: map[string]any{"argv": []any{"cat"}, "stdin": true, "timeout_ms": 100000}})
+
+	if err == nil || !strings.Contains(err.Error(), "durable state could not be saved") {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	if repo.saves == 0 {
+		t.Fatal("start did not attempt durable save")
+	}
+}
+
+func TestSandboxProcessContinueFailsWhenDurableSaveFails(t *testing.T) {
+	root := t.TempDir()
+	repo := &failingSandboxProcessRepository{}
+	store := NewSandboxProcessStoreWithRepository(repo, SandboxProcessStoreOptions{})
+	executor := SandboxToolExecutor{Root: root, Store: store}
+	start, err := executor.Execute(context.Background(), ToolInvocation{RunID: "run_save_continue", ToolCallID: "tc_start", ToolName: productdata.ToolNameSandboxStartProcess, ArgumentsSummary: map[string]any{"argv": []any{"cat"}, "stdin": true, "timeout_ms": 100000}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	processID := start["process_id"].(string)
+	repo.saveErr = errors.New("database unavailable")
+
+	result, err := executor.Execute(context.Background(), ToolInvocation{RunID: "run_save_continue", ToolCallID: "tc_continue", ToolName: productdata.ToolNameSandboxContinueProcess, ArgumentsSummary: map[string]any{"process_id": processID, "stdin_text": "hello\n", "input_seq": 1}})
+
+	if err == nil || !strings.Contains(err.Error(), "durable state could not be saved") {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	cleanupSandboxProcess(t, store, processID)
+}
+
+func TestSandboxProcessCompletionSaveFailureSurfacesOnContinue(t *testing.T) {
+	root := t.TempDir()
+	repo := &failingSandboxProcessRepository{}
+	store := NewSandboxProcessStoreWithRepository(repo, SandboxProcessStoreOptions{})
+	executor := SandboxToolExecutor{Root: root, Store: store}
+	start, err := executor.Execute(context.Background(), ToolInvocation{RunID: "run_save_completion", ToolCallID: "tc_start", ToolName: productdata.ToolNameSandboxStartProcess, ArgumentsSummary: map[string]any{"argv": []any{"cat"}, "stdin": true, "timeout_ms": 100000}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	processID := start["process_id"].(string)
+	repo.saveErr = errors.New("database unavailable")
+	closeSandboxProcessStdin(t, store, processID)
+	if !waitForSandboxProcessDone(store, processID, time.Second) {
+		t.Fatal("process did not exit")
+	}
+
+	result, err := executor.Execute(context.Background(), ToolInvocation{RunID: "run_save_completion", ToolCallID: "tc_poll", ToolName: productdata.ToolNameSandboxContinueProcess, ArgumentsSummary: map[string]any{"process_id": processID}})
+
+	if err == nil || !strings.Contains(err.Error(), "durable state could not be saved") {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+}
+
 func TestSandboxProcessRegistryRebuildMarksMissingRunningProcessFailed(t *testing.T) {
 	root := t.TempDir()
 	repo := NewMemorySandboxProcessRepository()
 	started := time.Now().Add(-time.Minute)
 	if err := repo.SaveSandboxProcess(context.Background(), SandboxProcessRecord{
-		RunID: "run_missing", ProcessID: "sp_missing", Argv: []string{"cat"}, CwdAlias: ".", Status: SandboxProcessStatusRunning, Cursor: 5, StartedAt: started, UpdatedAt: started, StdoutTail: "hello", StdoutCursor: 5,
+		RunID: "run_missing", ProcessID: "sp_missing", ArgvSummary: []string{"cat"}, CwdAlias: ".", Status: SandboxProcessStatusRunning, Cursor: 5, StartedAt: started, UpdatedAt: started, StdoutTail: "hello", StdoutCursor: 5,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -472,7 +565,7 @@ func TestSandboxProcessRegistryRebuildMarksMissingRunningProcessFailed(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result["status"] != "failed" || !strings.Contains(result["terminal_summary"].(string), "process missing after registry restore") {
+	if result["status"] != "lost" || !strings.Contains(result["terminal_summary"].(string), "process missing after registry restore") {
 		t.Fatalf("result = %+v", result)
 	}
 }
@@ -482,7 +575,7 @@ func TestSandboxProcessTTLCleanupExpiresOldRunningProcessWithoutKillingForeignPr
 	now := time.Now()
 	repo := NewMemorySandboxProcessRepository()
 	if err := repo.SaveSandboxProcess(context.Background(), SandboxProcessRecord{
-		RunID: "run_ttl", ProcessID: "sp_ttl", Argv: []string{"cat"}, CwdAlias: ".", Status: SandboxProcessStatusRunning, Cursor: 0, StartedAt: now.Add(-2 * time.Hour), UpdatedAt: now.Add(-2 * time.Hour),
+		RunID: "run_ttl", ProcessID: "sp_ttl", ArgvSummary: []string{"cat"}, CwdAlias: ".", Status: SandboxProcessStatusRunning, Cursor: 0, StartedAt: now.Add(-2 * time.Hour), UpdatedAt: now.Add(-2 * time.Hour),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -605,6 +698,67 @@ func waitForSandboxStatus(t *testing.T, executor SandboxToolExecutor, runID stri
 	}
 	t.Fatalf("status never became %q: %+v", want, result)
 	return nil
+}
+
+func waitForSandboxProcessDone(store *SandboxProcessStore, processID string, timeout time.Duration) bool {
+	if store == nil {
+		return false
+	}
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		store.mu.Lock()
+		process := store.processes[processID]
+		store.mu.Unlock()
+		if process == nil {
+			return false
+		}
+		select {
+		case <-process.done:
+			return true
+		default:
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	return false
+}
+
+func closeSandboxProcessStdin(t *testing.T, store *SandboxProcessStore, processID string) {
+	t.Helper()
+	store.mu.Lock()
+	process := store.processes[processID]
+	store.mu.Unlock()
+	if process == nil {
+		t.Fatalf("process %s not found", processID)
+	}
+	process.mu.Lock()
+	stdin := process.stdin
+	process.stdinOpen = false
+	process.mu.Unlock()
+	if stdin != nil {
+		if err := stdin.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func cleanupSandboxProcess(t *testing.T, store *SandboxProcessStore, processID string) {
+	t.Helper()
+	store.mu.Lock()
+	process := store.processes[processID]
+	store.mu.Unlock()
+	if process == nil {
+		return
+	}
+	process.mu.Lock()
+	cancel := process.cancel
+	command := process.command
+	process.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	if command != nil && command.Process != nil {
+		_ = killSandboxProcessGroup(command.Process, syscall.SIGTERM)
+	}
 }
 
 func stringSliceResult(t *testing.T, value any) []string {

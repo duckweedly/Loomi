@@ -23,7 +23,7 @@ Arkloop comparison:
 - Arkloop has a sandbox service, Docker/Firecracker backends, session templates, warm pools, restore TTL, output flush, guest agent protocol, and browser tier.
 - Loomi M93 now has the pre-service abstraction needed to support those later: in-process handle records, explicit lifecycle states, output tails, ownership, and cleanup semantics.
 - Loomi M93 still runs only local argv-form allowlisted host commands and does not provide container/microVM isolation.
-- Loomi M93 does not survive an API process restart yet; durable productdata/Postgres storage remains future work.
+- The follow-up durable-record patch stores terminal summaries in productdata/Postgres; API restart recovery remains summary-level, not OS process reattachment.
 
 Focused validation:
 

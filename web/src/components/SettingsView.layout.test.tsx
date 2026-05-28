@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 
 const source = Bun.file(new URL('./SettingsView.tsx', import.meta.url)).text()
-const themeSource = Bun.file(new URL('../styles/87-ac-site-theme.css', import.meta.url)).text()
+const themeSource = Bun.file(new URL('../styles/92-unified-workspace.css', import.meta.url)).text()
 
 describe('SettingsView layout contract', () => {
   test('renders the required desktop-style landmarks', async () => {
@@ -40,9 +40,11 @@ describe('SettingsView layout contract', () => {
     const css = await themeSource
 
     expect(css).toContain('position: static !important;')
-    expect(css).toContain('margin: 0 0 34px !important;')
-    expect(css).toContain('padding: 0 0 28px !important;')
+    expect(css).toContain('margin: 0 0 30px !important;')
+    expect(css).toContain('padding: 0 0 24px !important;')
     expect(css).toContain('backdrop-filter: none !important;')
+    expect(css).toContain('.settings-shell {\n  min-width: 0 !important;')
+    expect(css).toContain('.settings-content {\n  min-width: 0 !important;')
   })
 
   test('memory settings wires grounded filters detail and confirmed delete actions', async () => {

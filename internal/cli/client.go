@@ -35,7 +35,12 @@ type Thread struct {
 }
 
 type Message struct {
-	ID string `json:"id"`
+	ID       string         `json:"id"`
+	ThreadID string         `json:"thread_id"`
+	Role     string         `json:"role"`
+	Content  string         `json:"content"`
+	Metadata map[string]any `json:"metadata"`
+	RunID    string         `json:"run_id"`
 }
 
 type Run struct {
@@ -199,6 +204,22 @@ type LocalProviderCapability struct {
 	Message    string `json:"message"`
 }
 
+type WorkspaceRootConfig struct {
+	Configured  bool   `json:"configured"`
+	DisplayName string `json:"display_name"`
+}
+
+type Readiness struct {
+	Status string           `json:"status"`
+	Checks []ReadinessCheck `json:"checks"`
+}
+
+type ReadinessCheck struct {
+	Name   string `json:"name"`
+	Status string `json:"status"`
+	Reason string `json:"reason,omitempty"`
+}
+
 func NewClient(baseURL string) *Client {
 	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	if baseURL == "" {
@@ -232,19 +253,44 @@ func (c *Client) BaseURL() string {
 }
 
 func (c *Client) CheckReady(ctx context.Context) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/readyz", nil)
+	ready, err := c.GetReadiness(ctx)
 	if err != nil {
 		return err
+	}
+	if strings.TrimSpace(ready.Status) != "" && ready.Status != "ready" {
+		return fmt.Errorf("readyz status=%s", ready.Status)
+	}
+	return nil
+}
+
+func (c *Client) GetReadiness(ctx context.Context) (Readiness, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/readyz", nil)
+	if err != nil {
+		return Readiness{}, err
 	}
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return err
+		return Readiness{}, err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("readyz returned %d", resp.StatusCode)
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return Readiness{}, err
 	}
-	return nil
+	var ready Readiness
+	if len(bytes.TrimSpace(raw)) > 0 {
+		_ = json.Unmarshal(raw, &ready)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		if strings.TrimSpace(ready.Status) != "" || len(ready.Checks) > 0 {
+			return ready, nil
+		}
+		return Readiness{}, fmt.Errorf("readyz returned %d", resp.StatusCode)
+	}
+	if strings.TrimSpace(ready.Status) == "" {
+		ready.Status = "ready"
+	}
+	return ready, nil
 }
 
 func (c *Client) CreateThread(ctx context.Context, mode string, title string) (Thread, error) {
@@ -276,6 +322,36 @@ func (c *Client) AddMessage(ctx context.Context, threadID string, content string
 		return Message{}, err
 	}
 	return resp.Message, nil
+}
+
+func (c *Client) ListMessages(ctx context.Context, threadID string) ([]Message, error) {
+	var resp struct {
+		Messages []Message `json:"messages"`
+	}
+	if err := c.doJSON(ctx, http.MethodGet, "/v1/threads/"+url.PathEscape(threadID)+"/messages", nil, &resp); err != nil {
+		return nil, err
+	}
+	return resp.Messages, nil
+}
+
+func (c *Client) SaveWorkspaceRoot(ctx context.Context, path string) (WorkspaceRootConfig, error) {
+	var resp struct {
+		Config WorkspaceRootConfig `json:"config"`
+	}
+	if err := c.doJSON(ctx, http.MethodPost, "/v1/workspace/root", map[string]string{"path": strings.TrimSpace(path)}, &resp); err != nil {
+		return WorkspaceRootConfig{}, err
+	}
+	return resp.Config, nil
+}
+
+func (c *Client) GetWorkspaceRoot(ctx context.Context) (WorkspaceRootConfig, error) {
+	var resp struct {
+		Config WorkspaceRootConfig `json:"config"`
+	}
+	if err := c.doJSON(ctx, http.MethodGet, "/v1/workspace/root", nil, &resp); err != nil {
+		return WorkspaceRootConfig{}, err
+	}
+	return resp.Config, nil
 }
 
 func (c *Client) StartRun(ctx context.Context, threadID string, input StartRunInput) (Run, error) {
@@ -617,7 +693,7 @@ func (c *Client) doJSON(ctx context.Context, method string, path string, body an
 		return err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("%s %s returned %d: %s", method, path, resp.StatusCode, strings.TrimSpace(string(raw)))
+		return fmt.Errorf("%s %s returned %d%s", method, path, resp.StatusCode, safeErrorSuffix(raw))
 	}
 	if out == nil || len(bytes.TrimSpace(raw)) == 0 {
 		return nil
@@ -626,6 +702,43 @@ func (c *Client) doJSON(ctx context.Context, method string, path string, body an
 		return err
 	}
 	return nil
+}
+
+func safeErrorSuffix(raw []byte) string {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 {
+		return ""
+	}
+	var body any
+	if err := json.Unmarshal(raw, &body); err != nil {
+		return ""
+	}
+	code, message := safeErrorFields(body)
+	if strings.TrimSpace(code) != "" {
+		return " code=" + strings.TrimSpace(code)
+	}
+	if strings.Contains(strings.ToLower(message), "missing bearer token") {
+		return " missing bearer token"
+	}
+	return ""
+}
+
+func safeErrorFields(body any) (string, string) {
+	object, ok := body.(map[string]any)
+	if !ok {
+		return "", ""
+	}
+	if value, ok := object["error"].(string); ok {
+		return "", value
+	}
+	if nested, ok := object["error"].(map[string]any); ok {
+		code, _ := nested["code"].(string)
+		message, _ := nested["message"].(string)
+		return code, message
+	}
+	code, _ := object["code"].(string)
+	message, _ := object["message"].(string)
+	return code, message
 }
 
 func (c *Client) authorize(req *http.Request) {

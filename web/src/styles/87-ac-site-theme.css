@@ -578,7 +578,8 @@
 }
 
 .api-error,
-.provider-warning {
+.provider-warning,
+.runtime-final-warning {
   border-radius: 18px !important;
   box-shadow: none !important;
 }

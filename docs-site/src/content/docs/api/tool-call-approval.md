@@ -87,6 +87,18 @@ Tool events are persisted as run events with redacted metadata:
 
 Frontend API mapping converts these backend types to dotted runtime types such as `tool.call.approval_required` and keeps safe metadata available for replaying a stable `ToolCall` view model.
 
+Known run/model/tool lifecycle events now include a Loomi run step summary in the same redacted metadata:
+
+```json
+{
+  "run_step_kind": "approval",
+  "run_step_status": "required",
+  "run_step_summary": "Tool approval required"
+}
+```
+
+`run_step_kind` can be `model_request`, `tool_requested`, `approval`, `tool_execution`, `continuation`, or `terminal`. `run_step_status` is a safe state such as `pending`, `required`, `approved`, `denied`, `running`, `succeeded`, `failed`, `completed`, or `stopped`. These fields are projection hints for timeline/debug and resume logic; clients must still treat `run_events.sequence` as the ordering source and `tool_calls` as the current tool-call projection.
+
 For MCP calls, the same event names include safe source metadata:
 
 ```json
@@ -179,7 +191,11 @@ The second model stream reuses existing run events with `metadata.model_phase = 
 
 Only one non-terminal tool call may exist in a run. Workspace continuation is capped at three accepted tool calls; exceeding the cap records `tool_loop_limit_reached` and fails the run without recording the extra call. Continuation requests for non-workspace tools, tools outside the run's enabled tool snapshot, or Chat-mode-only tools still record `unsupported_tool_loop` and fail without execution. Repeating an already-requested `tool_call_id` during continuation records `duplicate_tool_call_id` and does not duplicate approval-required events.
 
+M95 adds a runtime guard before recording Work-mode workspace tool requests. Directory inventory/classification intent must start with `workspace.tree_summary` or `workspace.list_directory`; first-call `workspace.grep`, broad inventory `workspace.glob`, and repeated same-argument `workspace.read`, `workspace.list_directory`, or `workspace.grep` requests fail with `tool_planner_guardrail`. These rejected requests do not create `tool_calls` rows; the terminal `run_failed` event carries safe metadata including `guardrail`, `tool_name`, `arguments_summary`, and, when applicable, `recommended_tool`.
+
 M80 clarifies the durable resume contract without adding fields. If a worker retry sees an approved tool call that already reached `tool_call_succeeded`, it may resume the missing continuation only when the event suffix has no continuation start, later tool request, or final run event. Pending `tool_call_requested` events without a matching `tool_call_succeeded` are not serialized into provider continuation input.
+
+M97 keeps that contract but moves the retry decision onto `RebuildRunStepState`: pending tools remain separate from completed results, a later continuation step suppresses duplicate continuation, and terminal steps stop late model/tool writes.
 
 ## Diagnostics
 

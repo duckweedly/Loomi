@@ -30,14 +30,15 @@ const (
 	defaultSandboxIdleTimeout   = 15 * time.Minute
 )
 
-type SandboxProcessStatus string
+type SandboxProcessStatus = productdata.SandboxProcessStatus
 
 const (
-	SandboxProcessStatusRunning    SandboxProcessStatus = "running"
-	SandboxProcessStatusExited     SandboxProcessStatus = "exited"
-	SandboxProcessStatusTerminated SandboxProcessStatus = "terminated"
-	SandboxProcessStatusFailed     SandboxProcessStatus = "failed"
-	SandboxProcessStatusExpired    SandboxProcessStatus = "expired"
+	SandboxProcessStatusRunning    = productdata.SandboxProcessStatusRunning
+	SandboxProcessStatusExited     = productdata.SandboxProcessStatusExited
+	SandboxProcessStatusTerminated = productdata.SandboxProcessStatusTerminated
+	SandboxProcessStatusFailed     = productdata.SandboxProcessStatusFailed
+	SandboxProcessStatusExpired    = productdata.SandboxProcessStatusExpired
+	SandboxProcessStatusLost       = productdata.SandboxProcessStatusLost
 )
 
 type SandboxToolExecutor struct {
@@ -62,37 +63,9 @@ type boundedOutput struct {
 	start int
 }
 
-type SandboxProcessRecord struct {
-	RunID        string
-	ProcessID    string
-	Argv         []string
-	CwdAlias     string
-	Status       SandboxProcessStatus
-	Cursor       int
-	StartedAt    time.Time
-	UpdatedAt    time.Time
-	EndedAt      *time.Time
-	ExitCode     *int
-	StdoutTail   string
-	StdoutCursor int
-	StderrTail   string
-	StderrCursor int
-	StdinOpen    bool
-	InputSeq     int
-	TimedOut     bool
-	Summary      string
-	OutputLimit  int
-}
-
-type SandboxProcessRepository interface {
-	SaveSandboxProcess(context.Context, SandboxProcessRecord) error
-	ListSandboxProcesses(context.Context) ([]SandboxProcessRecord, error)
-}
-
-type MemorySandboxProcessRepository struct {
-	mu      sync.Mutex
-	records map[string]SandboxProcessRecord
-}
+type SandboxProcessRecord = productdata.SandboxProcessRecord
+type SandboxProcessRepository = productdata.SandboxProcessRepository
+type MemorySandboxProcessRepository = productdata.MemoryService
 
 type SandboxProcessStoreOptions struct {
 	Now         func() time.Time
@@ -128,6 +101,7 @@ type sandboxProcess struct {
 	exitCode   int
 	timedOut   bool
 	terminated bool
+	persistErr error
 	startedAt  time.Time
 	updatedAt  time.Time
 	endedAt    *time.Time
@@ -142,7 +116,7 @@ func NewSandboxProcessStore() *SandboxProcessStore {
 var defaultSandboxProcessStore = NewSandboxProcessStore()
 
 func NewMemorySandboxProcessRepository() *MemorySandboxProcessRepository {
-	return &MemorySandboxProcessRepository{records: map[string]SandboxProcessRecord{}}
+	return productdata.NewMemoryService()
 }
 
 func NewSandboxProcessStoreWithRepository(repo SandboxProcessRepository, options SandboxProcessStoreOptions) *SandboxProcessStore {
@@ -164,36 +138,6 @@ func NewSandboxProcessStoreWithRepository(repo SandboxProcessRepository, options
 	store := &SandboxProcessStore{processes: map[string]*sandboxProcess{}, repo: repo, now: now, maxLife: maxLife, idle: idle}
 	store.restore()
 	return store
-}
-
-func (r *MemorySandboxProcessRepository) SaveSandboxProcess(_ context.Context, record SandboxProcessRecord) error {
-	if r == nil {
-		return errors.New("sandbox process repository is unavailable")
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.records == nil {
-		r.records = map[string]SandboxProcessRecord{}
-	}
-	next := record
-	next.Argv = append([]string(nil), record.Argv...)
-	r.records[record.ProcessID] = next
-	return nil
-}
-
-func (r *MemorySandboxProcessRepository) ListSandboxProcesses(_ context.Context) ([]SandboxProcessRecord, error) {
-	if r == nil {
-		return nil, errors.New("sandbox process repository is unavailable")
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	records := make([]SandboxProcessRecord, 0, len(r.records))
-	for _, record := range r.records {
-		next := record
-		next.Argv = append([]string(nil), record.Argv...)
-		records = append(records, next)
-	}
-	return records, nil
 }
 
 func (e SandboxToolExecutor) Execute(ctx context.Context, invocation ToolInvocation) (map[string]any, error) {
@@ -244,7 +188,9 @@ func (s *SandboxProcessStore) restore() {
 			now := s.nowTime()
 			process.endedAt = &now
 			process.updatedAt = now
-			_ = s.saveProcessLocked(process)
+			if err := s.saveProcessLocked(process); err != nil {
+				process.setPersistenceError(err)
+			}
 		}
 		s.processes[record.ProcessID] = process
 	}
@@ -258,7 +204,7 @@ func processFromRecord(record SandboxProcessRecord) *sandboxProcess {
 	process := &sandboxProcess{
 		runID:     record.RunID,
 		processID: record.ProcessID,
-		argv:      append([]string(nil), record.Argv...),
+		argv:      append([]string(nil), record.ArgvSummary...),
 		cwd:       record.CwdAlias,
 		status:    record.Status,
 		stdinOpen: record.StdinOpen,
@@ -271,7 +217,7 @@ func processFromRecord(record SandboxProcessRecord) *sandboxProcess {
 		startedAt: record.StartedAt,
 		updatedAt: record.UpdatedAt,
 		endedAt:   record.EndedAt,
-		summary:   record.Summary,
+		summary:   restoredProcessSummary(record),
 		restored:  true,
 	}
 	if record.ExitCode != nil {
@@ -284,6 +230,20 @@ func processFromRecord(record SandboxProcessRecord) *sandboxProcess {
 		process.done = make(chan struct{})
 	}
 	return process
+}
+
+func restoredProcessSummary(record SandboxProcessRecord) string {
+	summary := strings.TrimSpace(record.TerminalSummary)
+	switch {
+	case strings.Contains(summary, "process missing after registry restore"):
+		return "process missing after registry restore"
+	case strings.Contains(summary, "expired by sandbox process TTL"):
+		return "expired by sandbox process TTL"
+	case strings.Contains(summary, "expired by sandbox process timeout"):
+		return "expired by sandbox process timeout"
+	default:
+		return ""
+	}
 }
 
 func outputFromRecord(tail string, cursor int, limit int) *boundedOutput {
@@ -466,15 +426,24 @@ func (s *SandboxProcessStore) start(ctx context.Context, scope workspaceScope, i
 		cancel()
 		close(process.done)
 		process.mu.Unlock()
-		_ = s.saveProcess(process)
+		if err := s.saveProcess(process); err != nil {
+			process.setPersistenceError(err)
+		}
 	}()
 	s.mu.Lock()
 	if s.processes == nil {
 		s.processes = map[string]*sandboxProcess{}
 	}
 	s.processes[processID] = process
-	_ = s.saveProcessLocked(process)
+	err = s.saveProcessLocked(process)
+	if err != nil {
+		delete(s.processes, processID)
+	}
 	s.mu.Unlock()
+	if err != nil {
+		stopSandboxProcessForPersistenceFailure(process)
+		return nil, sandboxProcessPersistenceError(err)
+	}
 	return process.result(productdata.ToolNameSandboxStartProcess, "start_process", scope.root, 0), nil
 }
 
@@ -505,6 +474,9 @@ func (s *SandboxProcessStore) continueProcess(scope workspaceScope, invocation T
 	if process.isTerminal() && sandboxContinueHasMutation(invocation.ArgumentsSummary) {
 		return nil, errors.New("sandbox process cannot mutate a terminal process")
 	}
+	if err := process.persistenceError(); err != nil {
+		return nil, err
+	}
 	if !process.isTerminal() {
 		if err := process.applyInput(invocation.ArgumentsSummary); err != nil {
 			return nil, err
@@ -515,8 +487,11 @@ func (s *SandboxProcessStore) continueProcess(scope workspaceScope, invocation T
 	if err != nil {
 		return nil, err
 	}
+	if err := s.saveProcess(process); err != nil {
+		process.setPersistenceError(err)
+		return nil, sandboxProcessPersistenceError(err)
+	}
 	result := process.result(productdata.ToolNameSandboxContinueProcess, "continue_process", scope.root, cursor)
-	_ = s.saveProcess(process)
 	return result, nil
 }
 
@@ -555,8 +530,11 @@ func (s *SandboxProcessStore) terminateProcess(scope workspaceScope, invocation 
 		}
 		<-process.done
 	}
+	if err := s.saveProcess(process); err != nil {
+		process.setPersistenceError(err)
+		return nil, sandboxProcessPersistenceError(err)
+	}
 	result := process.result(productdata.ToolNameSandboxTerminateProcess, "terminate_process", scope.root, 0)
-	_ = s.saveProcess(process)
 	return result, nil
 }
 
@@ -630,7 +608,7 @@ func (p *sandboxProcess) isTerminal() bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	switch p.status {
-	case SandboxProcessStatusExited, SandboxProcessStatusTerminated, SandboxProcessStatusFailed, SandboxProcessStatusExpired:
+	case SandboxProcessStatusExited, SandboxProcessStatusTerminated, SandboxProcessStatusFailed, SandboxProcessStatusExpired, SandboxProcessStatusLost:
 		p.stdinOpen = false
 		return true
 	}
@@ -672,19 +650,7 @@ func (p *sandboxProcess) result(toolName string, operation string, root string, 
 	nextCursor := p.stdout.Stored()
 	stdoutPreview, stdoutRedacted := sandboxSafeOutputPreview(stdout, root)
 	stderrPreview, stderrRedacted := sandboxSafeOutputPreview(p.stderr.String(), root)
-	terminalSummary := ""
-	if status != SandboxProcessStatusRunning {
-		terminalSummary = string(status)
-		if p.exitCode >= 0 {
-			terminalSummary += " exit_code=" + strconv.Itoa(p.exitCode)
-		}
-		if p.timedOut {
-			terminalSummary += " timed_out=true"
-		}
-		if p.summary != "" {
-			terminalSummary += " " + p.summary
-		}
-	}
+	terminalSummary := p.terminalSummaryLocked(status)
 	exitCode := any(nil)
 	if p.exitCode >= 0 {
 		exitCode = p.exitCode
@@ -718,6 +684,23 @@ func (p *sandboxProcess) result(toolName string, operation string, root string, 
 	}
 }
 
+func (p *sandboxProcess) terminalSummaryLocked(status SandboxProcessStatus) string {
+	if status == SandboxProcessStatusRunning {
+		return ""
+	}
+	summary := string(status)
+	if p.exitCode >= 0 {
+		summary += " exit_code=" + strconv.Itoa(p.exitCode)
+	}
+	if p.timedOut {
+		summary += " timed_out=true"
+	}
+	if p.summary != "" {
+		summary += " " + p.summary
+	}
+	return summary
+}
+
 func sandboxProcessID(runID string, toolCallID string, argv []string) string {
 	sum := sha256.Sum256([]byte(runID + "\x00" + toolCallID + "\x00" + strings.Join(argv, "\x00")))
 	return "sp_" + hex.EncodeToString(sum[:8])
@@ -742,17 +725,21 @@ func (s *SandboxProcessStore) reconcile(process *sandboxProcess) {
 			_ = killSandboxProcessGroup(process.command.Process, syscall.SIGTERM)
 		}
 		process.mu.Unlock()
-		_ = s.saveProcess(process)
+		if err := s.saveProcess(process); err != nil {
+			process.setPersistenceError(err)
+		}
 		return
 	}
 	if process.status == SandboxProcessStatusRunning && process.restored && process.command == nil {
-		process.status = SandboxProcessStatusFailed
+		process.status = SandboxProcessStatusLost
 		process.stdinOpen = false
 		process.summary = "process missing after registry restore"
 		process.updatedAt = now
 		process.endedAt = &now
 		process.mu.Unlock()
-		_ = s.saveProcess(process)
+		if err := s.saveProcess(process); err != nil {
+			process.setPersistenceError(err)
+		}
 		return
 	}
 	process.mu.Unlock()
@@ -798,6 +785,56 @@ func (s *SandboxProcessStore) saveProcessLocked(process *sandboxProcess) error {
 	return s.repo.SaveSandboxProcess(context.Background(), record)
 }
 
+func (p *sandboxProcess) setPersistenceError(err error) {
+	if p == nil || err == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.persistErr = sandboxProcessPersistenceError(err)
+	p.summary = "durable state could not be saved"
+}
+
+func (p *sandboxProcess) persistenceError() error {
+	if p == nil {
+		return nil
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.persistErr
+}
+
+func sandboxProcessPersistenceError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return errors.New("sandbox process durable state could not be saved")
+}
+
+func stopSandboxProcessForPersistenceFailure(process *sandboxProcess) {
+	if process == nil {
+		return
+	}
+	process.mu.Lock()
+	cancel := process.cancel
+	command := process.command
+	process.stdinOpen = false
+	process.status = SandboxProcessStatusFailed
+	process.summary = "durable state could not be saved"
+	now := time.Now()
+	process.updatedAt = now
+	if process.endedAt == nil {
+		process.endedAt = &now
+	}
+	process.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	if command != nil && command.Process != nil {
+		_ = killSandboxProcessGroup(command.Process, syscall.SIGTERM)
+	}
+}
+
 func (p *sandboxProcess) record() SandboxProcessRecord {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -813,25 +850,27 @@ func (p *sandboxProcess) record() SandboxProcessRecord {
 	stdoutTail := p.stdout.String()
 	stderrTail := p.stderr.String()
 	return SandboxProcessRecord{
-		RunID:        p.runID,
-		ProcessID:    p.processID,
-		Argv:         sandboxSafeArgvSummary(p.argv),
-		CwdAlias:     p.cwd,
-		Status:       status,
-		Cursor:       p.stdout.Stored(),
-		StartedAt:    p.startedAt,
-		UpdatedAt:    p.updatedAt,
-		EndedAt:      p.endedAt,
-		ExitCode:     exitCode,
-		StdoutTail:   stdoutTail,
-		StdoutCursor: p.stdout.Stored(),
-		StderrTail:   stderrTail,
-		StderrCursor: p.stderr.Stored(),
-		StdinOpen:    p.stdinOpen,
-		InputSeq:     p.inputSeq,
-		TimedOut:     p.timedOut,
-		Summary:      p.summary,
-		OutputLimit:  p.stdout.limit,
+		RunID:           p.runID,
+		ProcessID:       p.processID,
+		ArgvSummary:     sandboxSafeArgvSummary(p.argv),
+		CwdAlias:        p.cwd,
+		Status:          status,
+		Cursor:          p.stdout.Stored(),
+		StartedAt:       p.startedAt,
+		UpdatedAt:       p.updatedAt,
+		EndedAt:         p.endedAt,
+		ExitCode:        exitCode,
+		StdoutTail:      stdoutTail,
+		StdoutCursor:    p.stdout.Stored(),
+		StderrTail:      stderrTail,
+		StderrCursor:    p.stderr.Stored(),
+		StdinOpen:       p.stdinOpen,
+		InputSeq:        p.inputSeq,
+		TimedOut:        p.timedOut,
+		StdoutBytes:     p.stdout.Total(),
+		StderrBytes:     p.stderr.Total(),
+		TerminalSummary: p.terminalSummaryLocked(status),
+		OutputLimit:     p.stdout.limit,
 	}
 }
 

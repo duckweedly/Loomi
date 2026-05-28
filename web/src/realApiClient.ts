@@ -1,14 +1,24 @@
 import type { ApiClient } from './apiClient'
-import type { InstalledSkill, LocalProviderDetection, MCPServerConfigInput, MCPServerStatus, MemoryAuditItem, MemoryEntry, MemoryErrorEvent, MemoryFilters, MemoryImpressionSnapshot, MemoryOverviewSnapshot, MemoryProviderStatus, MemoryProviderUpdate, MemoryWriteProposal, Message, Persona, ProviderCapability, ProviderFamily, Run, RunEvent, RunSource, RunStatus, Thread, ToolCall, ToolCatalogItem, WebSearchConfig, WorkerQueueDiagnostics, WorkerQueueStatus, WorkerStatus, WorkspaceRootConfig } from './domain'
+import type { ApiReadiness, InstalledSkill, LocalProviderDetection, MCPServerConfigInput, MCPServerStatus, MemoryAuditItem, MemoryEntry, MemoryErrorEvent, MemoryFilters, MemoryImpressionSnapshot, MemoryOverviewSnapshot, MemoryProviderStatus, MemoryProviderUpdate, MemoryWriteProposal, Message, Persona, ProviderCapability, ProviderFamily, Run, RunEvent, RunSource, RunStatus, Thread, ToolCall, ToolCatalogItem, WebSearchConfig, WorkerQueueDiagnostics, WorkerQueueStatus, WorkerStatus, WorkspaceRootConfig } from './domain'
 import { isRuntimeActive, isRuntimeTerminal } from './runtime/executionAdapter'
 import { applyRealRunEvent } from './runtime/realExecutionAdapter'
 
 const configuredApiBaseUrl = import.meta.env.VITE_LOOMI_API_BASE_URL ?? ''
 const devApiBaseUrl = import.meta.env.DEV ? 'http://127.0.0.1:18080' : ''
 const apiBaseUrl = (configuredApiBaseUrl || devApiBaseUrl).replace(/\/$/, '')
+const configuredApiToken = import.meta.env.VITE_LOOMI_API_TOKEN ?? ''
 
 export function hasRealApiBase() {
   return apiBaseUrl.length > 0
+}
+
+export function getApiBaseUrl() {
+  return apiBaseUrl || 'same-origin'
+}
+
+export function getApiBearerToken() {
+  const stored = typeof globalThis.localStorage === 'undefined' ? '' : globalThis.localStorage.getItem('loomi.api_token') ?? ''
+  return (configuredApiToken || stored).trim()
 }
 
 export function selectSendProvider(providers: ProviderCapability[] = []) {
@@ -309,20 +319,85 @@ export class ApiRequestError extends Error {
 }
 
 async function requestJSON<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${apiBaseUrl}${path}`, {
-    ...init,
-    headers: {
-      'Content-Type': 'application/json',
-      ...init?.headers,
-    },
-  })
+  const token = getApiBearerToken()
+  let response: Response
+  try {
+    response = await fetch(`${apiBaseUrl}${path}`, {
+      ...init,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...init?.headers,
+      },
+    })
+  } catch {
+    throw new ApiRequestError(`Loomi API 未连接：${getApiBaseUrl()}。请先启动后端，或检查 VITE_LOOMI_API_BASE_URL。`, 'api_unreachable', 503)
+  }
   const body = await response.json().catch(() => null)
   if (!response.ok) {
     const message = body?.error?.message ?? `Request failed with ${response.status}`
     const code = body?.error?.code ?? 'request_failed'
+    if (response.status === 401 && /bearer|token/i.test(message)) {
+      throw new ApiRequestError('Loomi API 需要访问令牌。请设置 VITE_LOOMI_API_TOKEN，或在浏览器 localStorage 写入 loomi.api_token。', code, response.status)
+    }
     throw new ApiRequestError(message, code, response.status)
   }
   return body as T
+}
+
+async function readSSEStream(response: Response, onEvent: (event: RunEvent) => void, onError: () => void, onClosed?: () => void) {
+  const reader = response.body?.getReader()
+  if (!reader) {
+    onError()
+    return
+  }
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let eventName = ''
+  let eventData = ''
+  const flush = () => {
+    if (!eventName && !eventData) return
+    if (eventName === 'stream_closed') {
+      onClosed?.()
+    } else if (eventName === 'run_event' && eventData.trim()) {
+      try {
+        const parsed = JSON.parse(eventData) as { event: ApiRunEvent }
+        onEvent(mapApiRunEvent(parsed.event))
+      } catch {
+        onError()
+      }
+    }
+    eventName = ''
+    eventData = ''
+  }
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split(/\r?\n/)
+      buffer = lines.pop() ?? ''
+      for (const line of lines) {
+        if (line === '') {
+          flush()
+        } else if (line.startsWith('event:')) {
+          eventName = line.slice(6).trim()
+        } else if (line.startsWith('data:')) {
+          eventData += line.slice(5).trim()
+        }
+      }
+    }
+    if (buffer) {
+      const lines = buffer.split(/\r?\n/)
+      for (const line of lines) {
+        if (line.startsWith('event:')) eventName = line.slice(6).trim()
+        else if (line.startsWith('data:')) eventData += line.slice(5).trim()
+      }
+    }
+    flush()
+  } catch {
+    onError()
+  }
 }
 
 function requireArrayField<T>(body: unknown, field: string, message: string): T[] {
@@ -843,6 +918,23 @@ async function loadRunWithEvents(run: ApiRun) {
 export const realApiClient: ApiClient = {
   mode: 'real_api',
 
+  async getReadiness() {
+    const token = getApiBearerToken()
+    let response: Response
+    try {
+      response = await fetch(`${apiBaseUrl}/readyz`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      })
+    } catch {
+      throw new ApiRequestError(`Loomi API 未连接：${getApiBaseUrl()}。请先启动后端，或检查 VITE_LOOMI_API_BASE_URL。`, 'api_unreachable', 503)
+    }
+    const body = await response.json().catch(() => null) as Partial<ApiReadiness> | null
+    return {
+      status: String(body?.status ?? (response.ok ? 'ready' : 'not_ready')),
+      checks: Array.isArray(body?.checks) ? body.checks : [],
+    }
+  },
+
   async listThreads() {
     const body = await requestJSON<unknown>('/v1/threads')
     return requireArrayField<ApiThread>(body, 'threads', 'Thread list response was invalid.').map(mapThread)
@@ -1141,25 +1233,20 @@ export const realApiClient: ApiClient = {
 
   subscribeRunEvents(runId: string, afterSequence: number, onEvent: (event: RunEvent) => void, onError: () => void, onClosed?: () => void) {
     const url = `${apiBaseUrl}/v1/runs/${runId}/events/stream?after_sequence=${afterSequence}`
-    const source = new EventSource(url)
-    source.addEventListener('run_event', (raw) => {
-      try {
-        const data = JSON.parse((raw as MessageEvent).data) as { event: ApiRunEvent }
-        onEvent(mapApiRunEvent(data.event))
-      } catch {
-        onError()
-        source.close()
-      }
+    const controller = new AbortController()
+    const token = getApiBearerToken()
+    fetch(url, {
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      signal: controller.signal,
     })
-    source.addEventListener('stream_closed', () => {
-      onClosed?.()
-      source.close()
-    })
-    source.onerror = () => {
-      onError()
-      source.close()
-    }
-    return () => source.close()
+      .then((response) => {
+        if (!response.ok) throw new ApiRequestError(`Event stream failed with ${response.status}`, 'stream_failed', response.status)
+        return readSSEStream(response, onEvent, onError, onClosed)
+      })
+      .catch((err) => {
+        if (!(err instanceof DOMException && err.name === 'AbortError')) onError()
+      })
+    return () => controller.abort()
   },
 
   async createThread(title: string, mode: Thread['mode']) {

@@ -1,7 +1,8 @@
-import { useState } from 'react'
+import { useCallback, useState } from 'react'
 import { Button } from 'animal-island-ui'
-import { Check, MessageSquarePlus, MoreHorizontal, Pencil, Settings, Trash2, X } from 'lucide-react'
+import { Check, ChevronRight, MessageSquarePlus, MoreHorizontal, Pencil, Settings, Trash2, X } from 'lucide-react'
 import type { Thread } from '../domain'
+import { LoomiFloatingMenu, LoomiMenuItem } from './LoomiMenu'
 import { createSidebarFooterItems } from './sidebarFooterItems'
 
 type SidebarCopy = {
@@ -54,6 +55,7 @@ export function ThreadSidebar({
   onOpenSettings,
 }: Props) {
   const [threadMenuId, setThreadMenuId] = useState<string | null>(null)
+  const [threadMenuPosition, setThreadMenuPosition] = useState<{ top: number; left: number } | null>(null)
   const [editingThreadId, setEditingThreadId] = useState<string | null>(null)
   const [renameDraft, setRenameDraft] = useState('')
   const footerItems = createSidebarFooterItems()
@@ -73,6 +75,7 @@ export function ThreadSidebar({
 
   const renameThread = (thread: Thread) => {
     setThreadMenuId(null)
+    setThreadMenuPosition(null)
     setEditingThreadId(thread.id)
     setRenameDraft(thread.title)
   }
@@ -91,8 +94,14 @@ export function ThreadSidebar({
 
   const deleteThread = (thread: Thread) => {
     setThreadMenuId(null)
+    setThreadMenuPosition(null)
     if (window.confirm(copy.archiveThread)) onArchiveThread(thread.id)
   }
+
+  const closeThreadMenu = useCallback(() => {
+    setThreadMenuId(null)
+    setThreadMenuPosition(null)
+  }, [])
 
   if (collapsed) return null
 
@@ -143,11 +152,17 @@ export function ThreadSidebar({
                   </Button>
                   <Button
                     className="thread-action"
+                    data-loomi-menu-trigger="thread-menu"
                     aria-expanded={threadMenuId === thread.id}
                     aria-label={copy.threadActions}
                     onClick={(event) => {
                       event.stopPropagation()
-                      setThreadMenuId((current) => current === thread.id ? null : thread.id)
+                      const rect = event.currentTarget.getBoundingClientRect()
+                      setThreadMenuId((current) => {
+                        const nextId = current === thread.id ? null : thread.id
+                        setThreadMenuPosition(nextId ? { top: rect.bottom + 6, left: Math.max(12, rect.right - 156) } : null)
+                        return nextId
+                      })
                     }}
                   >
                     <MoreHorizontal size={14} />
@@ -155,10 +170,16 @@ export function ThreadSidebar({
                 </>
               )}
               {threadMenuId === thread.id && (
-                <div className="thread-menu">
-                  <button type="button" onClick={() => renameThread(thread)}><Pencil size={13} /> <span>{copy.renameThread}</span></button>
-                  <button className="danger" type="button" onClick={() => deleteThread(thread)}><Trash2 size={13} /> <span>{copy.archiveThread}</span></button>
-                </div>
+                <LoomiFloatingMenu
+                  open
+                  className="thread-menu"
+                  ignoreSelector="[data-loomi-menu-trigger='thread-menu']"
+                  onClose={closeThreadMenu}
+                  style={threadMenuPosition ? { top: threadMenuPosition.top, left: threadMenuPosition.left, width: 156 } : undefined}
+                >
+                  <LoomiMenuItem onClick={() => renameThread(thread)}><Pencil size={13} /> <span>{copy.renameThread}</span></LoomiMenuItem>
+                  <LoomiMenuItem className="danger" onClick={() => deleteThread(thread)}><Trash2 size={13} /> <span>{copy.archiveThread}</span></LoomiMenuItem>
+                </LoomiFloatingMenu>
               )}
             </div>
           ))}
@@ -166,8 +187,10 @@ export function ThreadSidebar({
       </div>
       <div className="sidebar-footer">
         {footerItems.map((item) => (
-          <Button className="sidebar-settings-button" key={item.id} htmlType="button" aria-label={copy.settings} title={copy.settings} onClick={onOpenSettings}>
-            <Settings size={18} />
+          <Button className="sidebar-settings-button" key={item.id} htmlType="button" aria-label={copy.settings} onClick={onOpenSettings}>
+            <span className="sidebar-settings-icon" aria-hidden="true"><Settings size={17} /></span>
+            <span className="sidebar-settings-label">{copy.settings}</span>
+            <ChevronRight className="sidebar-settings-chevron" size={15} aria-hidden="true" />
           </Button>
         ))}
       </div>

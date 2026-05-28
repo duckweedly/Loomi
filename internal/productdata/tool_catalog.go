@@ -350,7 +350,7 @@ func builtinBrowserCatalogEntry(name string, displayName string, description str
 
 func builtinArtifactCatalogEntries() []ToolCatalogEntry {
 	return []ToolCatalogEntry{
-		builtinArtifactCatalogEntry(ToolNameArtifactCreateText, "Artifact create text", "Create one bounded non-executable text artifact.", []string{"title", "content", "max_bytes"}, false),
+		builtinArtifactCatalogEntry(ToolNameArtifactCreateText, "Artifact create text", "Create one bounded non-executable text artifact.", []string{"title", "filename", "mime_type", "display", "content", "max_bytes"}, false),
 		builtinArtifactCatalogEntry(ToolNameArtifactRead, "Artifact read", "Read one bounded text artifact excerpt.", []string{"artifact_id", "max_bytes"}, true),
 		builtinArtifactCatalogEntry(ToolNameArtifactList, "Artifact list", "List bounded safe artifact summaries.", []string{"limit"}, true),
 	}

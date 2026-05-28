@@ -88,28 +88,34 @@ func (e WorkspaceToolExecutor) Execute(ctx context.Context, invocation ToolInvoc
 		return nil, err
 	}
 	scope.tracker = e.tracker()
+	var result map[string]any
 	switch invocation.ToolName {
 	case productdata.ToolNameWorkspaceGlob:
-		return scope.glob(ctx, invocation.ArgumentsSummary)
+		result, err = scope.glob(ctx, invocation.ArgumentsSummary)
 	case productdata.ToolNameWorkspaceGrep:
-		return scope.grep(ctx, invocation.ArgumentsSummary)
+		result, err = scope.grep(ctx, invocation.ArgumentsSummary)
 	case productdata.ToolNameWorkspaceRead:
-		return scope.read(invocation.RunID, invocation.ArgumentsSummary)
+		result, err = scope.read(invocation.RunID, invocation.ArgumentsSummary)
 	case productdata.ToolNameWorkspaceListDirectory:
-		return scope.listDirectory(ctx, invocation.ArgumentsSummary)
+		result, err = scope.listDirectory(ctx, invocation.ArgumentsSummary)
 	case productdata.ToolNameWorkspaceTreeSummary:
-		return scope.treeSummary(ctx, invocation.ArgumentsSummary)
+		result, err = scope.treeSummary(ctx, invocation.ArgumentsSummary)
 	case productdata.ToolNameWorkspaceWriteFile:
-		return scope.writeFile(invocation.ArgumentsSummary)
+		result, err = scope.writeFile(invocation.ArgumentsSummary)
 	case productdata.ToolNameWorkspaceEdit:
-		return scope.edit(invocation.RunID, invocation.ArgumentsSummary)
+		result, err = scope.edit(invocation.RunID, invocation.ArgumentsSummary)
 	case productdata.ToolNameWorkspacePatchPreview:
-		return scope.patchPreview(invocation.RunID, invocation.ArgumentsSummary)
+		result, err = scope.patchPreview(invocation.RunID, invocation.ArgumentsSummary)
 	case productdata.ToolNameWorkspacePatchApply:
-		return scope.patchApply(invocation.RunID, invocation.ArgumentsSummary)
+		result, err = scope.patchApply(invocation.RunID, invocation.ArgumentsSummary)
 	default:
 		return nil, errors.New("workspace tool is not supported")
 	}
+	if err != nil {
+		return nil, err
+	}
+	result["workspace_label"] = productdata.WorkspaceDisplayNameFromPath(scope.root)
+	return result, nil
 }
 
 func (e WorkspaceToolExecutor) tracker() *WorkspaceReadTracker {

@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -62,6 +63,7 @@ type ToolRiskLevel string
 type ToolApprovalPolicy string
 
 type ToolExecutionState string
+type SandboxProcessStatus string
 
 type ModelProviderConfig struct {
 	ID      string `json:"id"`
@@ -80,8 +82,9 @@ type WebSearchConfig struct {
 }
 
 type WorkspaceRootConfig struct {
-	UserID string `json:"user_id"`
-	Path   string `json:"-"`
+	UserID      string `json:"user_id"`
+	Path        string `json:"-"`
+	DisplayName string `json:"display_name"`
 }
 
 type MemoryProviderConfig struct {
@@ -168,6 +171,39 @@ type MCPServerConfigRecord struct {
 	TimeoutMS   int               `json:"timeout_ms"`
 }
 
+const (
+	SandboxProcessStatusRunning    SandboxProcessStatus = "running"
+	SandboxProcessStatusExited     SandboxProcessStatus = "exited"
+	SandboxProcessStatusTerminated SandboxProcessStatus = "terminated"
+	SandboxProcessStatusFailed     SandboxProcessStatus = "failed"
+	SandboxProcessStatusExpired    SandboxProcessStatus = "expired"
+	SandboxProcessStatusLost       SandboxProcessStatus = "lost"
+)
+
+type SandboxProcessRecord struct {
+	RunID           string               `json:"run_id"`
+	ProcessID       string               `json:"process_id"`
+	ArgvSummary     []string             `json:"argv_summary"`
+	CwdAlias        string               `json:"cwd_alias"`
+	Status          SandboxProcessStatus `json:"status"`
+	Cursor          int                  `json:"cursor"`
+	StartedAt       time.Time            `json:"started_at"`
+	UpdatedAt       time.Time            `json:"updated_at"`
+	EndedAt         *time.Time           `json:"ended_at,omitempty"`
+	ExitCode        *int                 `json:"exit_code,omitempty"`
+	StdoutTail      string               `json:"stdout_tail"`
+	StdoutCursor    int                  `json:"stdout_cursor"`
+	StderrTail      string               `json:"stderr_tail"`
+	StderrCursor    int                  `json:"stderr_cursor"`
+	StdoutBytes     int                  `json:"stdout_bytes"`
+	StderrBytes     int                  `json:"stderr_bytes"`
+	StdinOpen       bool                 `json:"stdin_open"`
+	InputSeq        int                  `json:"input_seq"`
+	TimedOut        bool                 `json:"timed_out"`
+	TerminalSummary string               `json:"terminal_summary"`
+	OutputLimit     int                  `json:"output_limit"`
+}
+
 func normalizeModelProviderConfig(input ModelProviderConfig) ModelProviderConfig {
 	family := strings.TrimSpace(input.Family)
 	if family == "" {
@@ -193,10 +229,24 @@ func normalizeWebSearchConfig(input WebSearchConfig) WebSearchConfig {
 }
 
 func normalizeWorkspaceRootConfig(input WorkspaceRootConfig) WorkspaceRootConfig {
-	return WorkspaceRootConfig{
-		UserID: strings.TrimSpace(input.UserID),
-		Path:   strings.TrimSpace(input.Path),
+	path := strings.TrimSpace(input.Path)
+	displayName := strings.TrimSpace(input.DisplayName)
+	if displayName == "" {
+		displayName = WorkspaceDisplayNameFromPath(path)
 	}
+	return WorkspaceRootConfig{
+		UserID:      strings.TrimSpace(input.UserID),
+		Path:        path,
+		DisplayName: displayName,
+	}
+}
+
+func WorkspaceDisplayNameFromPath(path string) string {
+	name := filepath.Base(strings.TrimSpace(path))
+	if name == "." || name == string(filepath.Separator) || name == "" {
+		return ""
+	}
+	return name
 }
 
 func normalizeMemoryProviderConfig(input MemoryProviderConfig, now time.Time) MemoryProviderConfig {
@@ -215,6 +265,103 @@ func normalizeMemoryProviderConfig(input MemoryProviderConfig, now time.Time) Me
 		Diagnostic:       RedactEventText(strings.TrimSpace(input.Diagnostic)),
 		UpdatedAt:        now,
 	}
+}
+
+func normalizeSandboxProcessRecord(input SandboxProcessRecord) SandboxProcessRecord {
+	status := input.Status
+	if status == "" {
+		status = SandboxProcessStatusRunning
+	}
+	outputLimit := input.OutputLimit
+	if outputLimit < 0 {
+		outputLimit = 0
+	}
+	return SandboxProcessRecord{
+		RunID:           strings.TrimSpace(input.RunID),
+		ProcessID:       strings.TrimSpace(input.ProcessID),
+		ArgvSummary:     safeSandboxStringSlice(input.ArgvSummary),
+		CwdAlias:        safeSandboxText(input.CwdAlias),
+		Status:          status,
+		Cursor:          maxInt(input.Cursor, 0),
+		StartedAt:       input.StartedAt,
+		UpdatedAt:       input.UpdatedAt,
+		EndedAt:         cloneTimePtr(input.EndedAt),
+		ExitCode:        cloneIntPtr(input.ExitCode),
+		StdoutTail:      safeSandboxText(input.StdoutTail),
+		StdoutCursor:    maxInt(input.StdoutCursor, 0),
+		StderrTail:      safeSandboxText(input.StderrTail),
+		StderrCursor:    maxInt(input.StderrCursor, 0),
+		StdoutBytes:     maxInt(input.StdoutBytes, 0),
+		StderrBytes:     maxInt(input.StderrBytes, 0),
+		StdinOpen:       input.StdinOpen,
+		InputSeq:        maxInt(input.InputSeq, 0),
+		TimedOut:        input.TimedOut,
+		TerminalSummary: safeSandboxText(input.TerminalSummary),
+		OutputLimit:     outputLimit,
+	}
+}
+
+func cloneSandboxProcessRecord(input SandboxProcessRecord) SandboxProcessRecord {
+	record := input
+	record.ArgvSummary = append([]string(nil), input.ArgvSummary...)
+	record.EndedAt = cloneTimePtr(input.EndedAt)
+	record.ExitCode = cloneIntPtr(input.ExitCode)
+	return record
+}
+
+func safeSandboxStringSlice(items []string) []string {
+	safe := make([]string, 0, len(items))
+	for _, item := range items {
+		safe = append(safe, safeSandboxText(item))
+	}
+	return safe
+}
+
+func safeSandboxText(text string) string {
+	text = RedactEventText(strings.TrimSpace(text))
+	if text == "" {
+		return ""
+	}
+	parts := strings.Fields(text)
+	for i, part := range parts {
+		if sandboxTextLooksLikeHostPath(part) {
+			parts[i] = "[redacted-path]"
+		}
+	}
+	if len(parts) > 0 {
+		text = strings.Join(parts, " ")
+	}
+	if sandboxTextLooksLikeHostPath(text) {
+		return "[redacted-path]"
+	}
+	return text
+}
+
+func sandboxTextLooksLikeHostPath(text string) bool {
+	return filepath.IsAbs(text) || strings.Contains(text, "/Users/") || strings.Contains(text, "/private/") || strings.Contains(text, "\\Users\\")
+}
+
+func cloneTimePtr(value *time.Time) *time.Time {
+	if value == nil {
+		return nil
+	}
+	next := *value
+	return &next
+}
+
+func cloneIntPtr(value *int) *int {
+	if value == nil {
+		return nil
+	}
+	next := *value
+	return &next
+}
+
+func maxInt(value int, min int) int {
+	if value < min {
+		return min
+	}
+	return value
 }
 
 func normalizeOpenVikingMemoryConfig(input OpenVikingMemoryConfig) OpenVikingMemoryConfig {
@@ -978,6 +1125,9 @@ func (c RunContext) SafeSummary() map[string]any {
 		"workspace_root_configured":   strings.TrimSpace(c.WorkspaceRoot.Path) != "",
 		"enabled_tool_count":          len(c.EnabledTools),
 		"has_continuation_projection": c.ContinuationProjection.Available,
+	}
+	if label := strings.TrimSpace(c.WorkspaceRoot.DisplayName); label != "" {
+		summary["workspace_label"] = label
 	}
 	if c.ProviderRoute.ProviderID != "" {
 		summary["provider_id"] = RedactEventText(c.ProviderRoute.ProviderID)
@@ -1863,7 +2013,7 @@ func validateBrowserToolCallArguments(input RecordToolCallRequestInput) (RecordT
 
 func validateArtifactToolCallArguments(input RecordToolCallRequestInput) (RecordToolCallRequestInput, error) {
 	allowed := map[string]map[string]struct{}{
-		ToolNameArtifactCreateText: {"title": {}, "content": {}, "max_bytes": {}},
+		ToolNameArtifactCreateText: {"title": {}, "filename": {}, "mime_type": {}, "display": {}, "content": {}, "max_bytes": {}},
 		ToolNameArtifactRead:       {"artifact_id": {}, "max_bytes": {}},
 		ToolNameArtifactList:       {"limit": {}},
 	}
@@ -1883,6 +2033,28 @@ func validateArtifactToolCallArguments(input RecordToolCallRequestInput) (Record
 			return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Artifact content is required.")
 		}
 		input.ArgumentsSummary["title"] = strings.TrimSpace(title)
+		for _, key := range []string{"filename", "mime_type"} {
+			value, ok := input.ArgumentsSummary[key]
+			if !ok {
+				continue
+			}
+			text, ok := value.(string)
+			if !ok {
+				return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Artifact metadata must be strings.")
+			}
+			input.ArgumentsSummary[key] = strings.TrimSpace(text)
+		}
+		if value, ok := input.ArgumentsSummary["display"]; ok {
+			display, ok := value.(string)
+			if !ok {
+				return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Artifact display must be a string.")
+			}
+			display = strings.TrimSpace(display)
+			if display != "inline" && display != "panel" {
+				return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Artifact display is not supported.")
+			}
+			input.ArgumentsSummary["display"] = display
+		}
 	case ToolNameArtifactRead:
 		artifactID, ok := input.ArgumentsSummary["artifact_id"].(string)
 		if !ok || strings.TrimSpace(artifactID) == "" {
@@ -2346,7 +2518,11 @@ func sandboxArgumentGitAllowed(args []string) bool {
 
 func sandboxArgumentValidationArgsAllowed(args []string) bool {
 	for _, arg := range args {
-		if strings.TrimSpace(arg) == "" || strings.Contains(arg, "..") || strings.HasPrefix(arg, "/") || strings.Contains(arg, ".env") || strings.Contains(arg, "secrets") {
+		trimmed := strings.TrimSpace(arg)
+		if trimmed == "./..." {
+			continue
+		}
+		if trimmed == "" || strings.Contains(trimmed, "..") || strings.HasPrefix(trimmed, "/") || strings.Contains(trimmed, ".env") || strings.Contains(trimmed, "secrets") {
 			return false
 		}
 	}
@@ -2515,6 +2691,7 @@ func NormalizeRunEventInput(input AppendRunEventInput) (AppendRunEventInput, err
 	if input.Type == EventWorkTodoUpdated {
 		input.Metadata = NormalizeWorkTodoMetadata(input.Metadata)
 	}
+	input.Metadata = AnnotateRunStepMetadata(input.Type, input.Summary, input.Metadata)
 	if input.Metadata == nil {
 		input.Metadata = map[string]any{}
 	}

@@ -41,6 +41,29 @@ func TestWorkspaceReadToolsExecuteWithinFixtureRoot(t *testing.T) {
 	}
 }
 
+func TestWorkspaceReadResultIncludesSafeWorkspaceLabel(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "Downloads")
+	if err := os.Mkdir(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "receipt.txt"), []byte("total\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	executor := WorkspaceToolExecutor{Root: root}
+	result, err := executor.Execute(context.Background(), ToolInvocation{ToolName: productdata.ToolNameWorkspaceRead, ArgumentsSummary: map[string]any{"path": "receipt.txt"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if result["workspace_label"] != "Downloads" {
+		t.Fatalf("workspace label = %+v", result)
+	}
+	encoded := fmt.Sprint(result)
+	if strings.Contains(encoded, root) {
+		t.Fatalf("workspace result leaked absolute root: %s", encoded)
+	}
+}
+
 func TestWorkspaceReadToolsRequireAuthorizedRoot(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

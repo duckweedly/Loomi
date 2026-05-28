@@ -295,7 +295,7 @@ function useThinkingStatusLabel(label: string) {
   return displayed
 }
 
-export function RunRail({ run, open, onStopRun, selectedRuntimeScript = 'success', capabilityStatus, locale = 'en', onSelectRuntimeScript }: Props) {
+export function RunRail({ run, open, selectedRuntimeScript = 'success', capabilityStatus, locale = 'en', onSelectRuntimeScript }: Props) {
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set())
   const toggleSection = (section: string) => {
     setCollapsedSections((current) => {
@@ -336,7 +336,6 @@ export function RunRail({ run, open, onStopRun, selectedRuntimeScript = 'success
               <small>{run.thinkingSummary}</small>
             </button>
           )}
-          {(run?.status === 'queued' || run?.status === 'running' || run?.status === 'retrying' || run?.status === 'recovering' || run?.status === 'blocked_on_tool_approval') && onStopRun && <button className="runtime-stop-button ghost" onClick={onStopRun}>{copy.stopRun}</button>}
           <section className="runtime-event-group recent">
             <h3>{copy.recent}</h3>
             {recentEvents.length === 0 ? <p className="runtime-event-empty">{copy.noEvents}</p> : recentEvents.map((event, index) => {

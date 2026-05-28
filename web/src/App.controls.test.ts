@@ -12,34 +12,33 @@ describe('App titlebar controls', () => {
     expect(source).not.toContain('<button className="titlebar-button"')
   })
 
-  test('keeps run details and right tools as separate controls', () => {
-    const shell = createWorkspaceShellState()
+  test('keeps the old run-details entry out of the titlebar shell', () => {
+    const source = readFileSync(resolve(import.meta.dir, 'App.tsx'), 'utf8')
 
-    shell.toggleRunDetails()
-    expect(shell.snapshot()).toMatchObject({
-      runDetailsOpen: true,
-      rightPanelMenuOpen: false,
-      rightPanelOpen: false,
-    })
-
-    shell.toggleRightPanelMenu()
-    expect(shell.snapshot()).toMatchObject({
-      runDetailsOpen: false,
-      rightPanelMenuOpen: true,
-      rightPanelOpen: false,
-    })
+    expect(source).not.toContain('openRunDetails')
+    expect(source).not.toContain('toggleRunDetails')
+    expect(source).not.toContain('AlertCircle')
   })
 
-  test('opens the right tools menu separately from the expanded right panel', () => {
+  test('uses the titlebar utility as a direct preview toggle', () => {
     const shell = createWorkspaceShellState()
 
-    shell.toggleRightPanelMenu()
-    expect(shell.snapshot().rightPanelOpen).toBe(false)
-
-    shell.openRightPanel('preview')
+    shell.togglePreviewPanel()
     expect(shell.snapshot()).toMatchObject({
       rightPanelMenuOpen: false,
       rightPanelOpen: true,
+      selectedRightPanelId: 'preview',
+    })
+  })
+
+  test('clicking the preview utility again closes the drawer without opening a menu', () => {
+    const shell = createWorkspaceShellState()
+
+    shell.togglePreviewPanel()
+    shell.togglePreviewPanel()
+    expect(shell.snapshot()).toMatchObject({
+      rightPanelMenuOpen: false,
+      rightPanelOpen: false,
       selectedRightPanelId: 'preview',
     })
   })

@@ -45,6 +45,7 @@ describe('ChatCanvas state copy', () => {
     expect(source).toContain('visibleRunForTranscript')
     expect(source).toContain("status === 'failed'")
     expect(source).toContain('thinkingHintForRun')
+    expect(source).toContain("from '../runtime/markdownNormalize'")
   })
 
   test('renders a short per-run thinking hint while assistant content is empty', () => {
@@ -115,6 +116,61 @@ describe('ChatCanvas state copy', () => {
     }))
 
     expect(html.match(/Final answer/g)).toHaveLength(1)
+  })
+
+  test('turns assistant md code payloads into a compact document card', () => {
+    const html = renderToStaticMarkup(createElement(ChatCanvas, {
+      sidebarCollapsed: false,
+      thread: { id: 'thread-a', title: 'Thread A', project: 'Loomi', mode: 'chat', updatedAt: 'Now', lifecycleStatus: 'active', runStatus: 'completed' },
+      messages: [{
+        id: 'msg-a',
+        threadId: 'thread-a',
+        role: 'assistant',
+        content: '把下面内容保存为 `三句话.md`：\n\n```md\n# 三句话的 Markdown\n\n今天我开始写一个简单的 Markdown 文档。\n```',
+        createdAt: 'Now',
+      }],
+      run: null,
+      loading: false,
+      error: null,
+      dataSourceMode: 'mock',
+      streamState: 'closed',
+      onSendMessage: () => {},
+      onStopRun: () => {},
+      locale: 'zh',
+    }))
+
+    expect(html).toContain('message-artifact-card')
+    expect(html).toContain('三句话的 Markdown')
+    expect(html).toContain('Markdown 文档')
+    expect(html).not.toContain('```md')
+    expect(html).not.toContain('今天我开始写一个简单的 Markdown 文档。')
+  })
+
+  test('flags a completed real API run that has no final assistant content', () => {
+    const html = renderToStaticMarkup(createElement(ChatCanvas, {
+      sidebarCollapsed: false,
+      thread: { id: 'thread-a', title: 'Thread A', project: 'Loomi', mode: 'chat', updatedAt: 'Now', lifecycleStatus: 'active', runStatus: 'completed' },
+      messages: [{ id: 'msg-user', threadId: 'thread-a', role: 'user', content: 'Use a tool', createdAt: 'Now' }],
+      run: {
+        id: 'run-a',
+        threadId: 'thread-a',
+        status: 'completed',
+        model: 'local_codex',
+        context: 'model_gateway',
+        events: [{ id: 'evt-final', runId: 'run-a', threadId: 'thread-a', type: 'run.completed', label: 'Run', detail: 'Run completed', time: 'Now', status: 'completed' }],
+      },
+      loading: false,
+      error: null,
+      dataSourceMode: 'real_api',
+      streamState: 'closed',
+      onSendMessage: () => {},
+      onStopRun: () => {},
+      locale: 'en',
+    }))
+
+    expect(html).toContain('Final assistant message missing')
+    expect(html).not.toContain('Reply generated')
+    expect(html).not.toContain('未生成成功回复')
   })
 
   test('uses the Animal Island typewriter for the latest completed assistant answer', () => {
@@ -260,6 +316,44 @@ describe('ChatCanvas state copy', () => {
     expect(html).toContain('<code>code</code>')
   })
 
+  test('renders desktop readiness reason and next-step actions instead of raw fetch copy', () => {
+    const html = renderToStaticMarkup(createElement(ChatCanvas, {
+      sidebarCollapsed: false,
+      thread: { id: 'thread-a', title: 'Thread A', project: 'Loomi', mode: 'chat', updatedAt: 'Now', lifecycleStatus: 'active', runStatus: 'idle' },
+      messages: [],
+      run: null,
+      loading: false,
+      error: 'Failed to fetch',
+      dataSourceMode: 'real_api',
+      streamState: 'closed',
+      desktopReadiness: {
+        primary: {
+          code: 'local_codex_detected_disabled',
+          title: 'Local Codex detected but disabled',
+          detail: 'Enable it for this API session before sending.',
+          action: 'enable_local_codex',
+          providerId: 'local_codex',
+        },
+        issues: [],
+      },
+      onRetryReadiness: () => {},
+      onOpenProviderSettings: () => {},
+      onDetectLocalProviders: () => {},
+      onEnableLocalProvider: () => {},
+      onChooseWorkspaceFolder: () => {},
+      onSendMessage: () => {},
+      onStopRun: () => {},
+      locale: 'en',
+    }))
+
+    expect(html).toContain('Local Codex detected but disabled')
+    expect(html).toContain('Enable Local Codex')
+    expect(html).toContain('Detect Local Provider')
+    expect(html).toContain('Open Settings')
+    expect(html).toContain('Retry')
+    expect(html).not.toContain('Failed to fetch')
+  })
+
   test('renders escaped and indented assistant headings without visible hash marks', () => {
     const html = renderToStaticMarkup(createElement(ChatCanvas, {
       sidebarCollapsed: false,
@@ -330,6 +424,45 @@ describe('ChatCanvas state copy', () => {
     expect(html).not.toMatch(/组织回复|梳理线索|核对上下文|提炼重点|推敲答案|收束思路|准备回答|再看一眼/)
   })
 
+  test('renders active run events in chronological assistant tool assistant order', () => {
+    const html = renderToStaticMarkup(createElement(ChatCanvas, {
+      sidebarCollapsed: false,
+      thread: { id: 'thread-a', title: 'Thread A', project: 'Loomi', mode: 'chat', updatedAt: 'Now', lifecycleStatus: 'active', runStatus: 'running' },
+      messages: [{ id: 'msg-user', threadId: 'thread-a', role: 'user', content: '查一下', createdAt: 'Now' }],
+      run: {
+        id: 'run-a',
+        threadId: 'thread-a',
+        status: 'running',
+        model: 'Model gateway',
+        context: 'model_gateway',
+        events: [
+          { id: 'evt-delta-1', runId: 'run-a', threadId: 'thread-a', sequence: 1, type: 'message.model_output_delta', label: 'message', detail: 'Model output delta', time: 'Now', status: 'running', assistantDelta: '我先查一下实时资料。', metadata: { model_phase: 'initial' } },
+          { id: 'evt-tool-start', runId: 'run-a', threadId: 'thread-a', sequence: 2, type: 'tool.call.executing', label: 'tool', detail: 'Search web running', time: 'Now', status: 'running', group: 'tool-call', metadata: { tool_call_id: 'tc-search', tool_name: 'web.search', arguments_summary: { query: 'AI news' }, execution_status: 'executing' } },
+          { id: 'evt-tool-done', runId: 'run-a', threadId: 'thread-a', sequence: 3, type: 'tool.call.succeeded', label: 'tool', detail: 'Search web completed', time: 'Now', status: 'running', group: 'tool-call', metadata: { tool_call_id: 'tc-search', tool_name: 'web.search', result_summary: { count: 3 }, execution_status: 'succeeded' } },
+          { id: 'evt-delta-2', runId: 'run-a', threadId: 'thread-a', sequence: 4, type: 'message.model_output_delta', label: 'message', detail: 'Model output delta', time: 'Later', status: 'running', assistantDelta: '查完了，重点是模型更新。', metadata: { model_phase: 'continuation' } },
+        ],
+        assistantDraft: { content: '查完了，重点是模型更新。', status: 'streaming' },
+      },
+      loading: false,
+      error: null,
+      dataSourceMode: 'real_api',
+      streamState: 'live',
+      providerCapabilities: [{ id: 'custom', family: 'openai_compatible' as const, model: 'gpt-5.5', status: 'available' as const }],
+      onSendMessage: () => {},
+      onStopRun: () => {},
+      locale: 'zh',
+    }))
+
+    const firstTextIndex = html.indexOf('我先查一下实时资料。')
+    const toolIndex = html.indexOf('搜索网页')
+    const continuationIndex = html.indexOf('查完了，重点是模型更新。')
+
+    expect(firstTextIndex).toBeGreaterThan(-1)
+    expect(toolIndex).toBeGreaterThan(firstTextIndex)
+    expect(continuationIndex).toBeGreaterThan(toolIndex)
+    expect(html.match(/搜索网页/g)).toHaveLength(1)
+  })
+
   test('does not turn multiline fenced content into inline code chips', () => {
     const html = renderToStaticMarkup(createElement(ChatCanvas, {
       sidebarCollapsed: false,
@@ -387,9 +520,7 @@ describe('ChatCanvas state copy', () => {
     const css = [
       readFileSync(resolve(import.meta.dir, '../styles/20-chat.css'), 'utf8'),
       readFileSync(resolve(import.meta.dir, '../styles/80-island-components.css'), 'utf8'),
-      readFileSync(resolve(import.meta.dir, '../styles/83-dark-compact.css'), 'utf8'),
-      readFileSync(resolve(import.meta.dir, '../styles/84-pastel-compact.css'), 'utf8'),
-      readFileSync(resolve(import.meta.dir, '../styles/86-pastel-green-finish.css'), 'utf8'),
+      readFileSync(resolve(import.meta.dir, '../styles/92-unified-workspace.css'), 'utf8'),
     ].join('\n')
 
     expect(css).toContain('.message-code-block')
@@ -431,6 +562,37 @@ describe('ChatCanvas state copy', () => {
     expect(html).toContain('---##not-heading')
   })
 
+  test('repairs dense Chinese report markdown without turning the whole report into one heading', () => {
+    const html = renderToStaticMarkup(createElement(ChatCanvas, {
+      sidebarCollapsed: false,
+      thread: { id: 'thread-a', title: 'Thread A', project: 'Loomi', mode: 'chat', updatedAt: 'Now', lifecycleStatus: 'active', runStatus: 'completed' },
+      messages: [{
+        id: 'msg-dense-report',
+        threadId: 'thread-a',
+        role: 'assistant',
+        content: '2026 年 5 月值得关注的 AIAgent 开源项目##一、 2026 年 AIAgent 开源生态的几个核心变化到 2026 年，AIAgent 已经不只是 AutoGPT 式自主循环了，主流方向明显变成： 1.-状态管理、回滚、checkpoint、人类审批、错误恢复。 -代表： LangGraph、Microsoft AutoGen、OpenAI Agents SDK。 2.-Agent 不再只是自己写 tools，而是通过标准协议连接工具、数据源、服务。 -MCP 已经成为很多 Agent 工具接入的事实标准之一。##二、 2026 年重点开源项目',
+        createdAt: 'Now',
+      }],
+      run: null,
+      loading: false,
+      error: null,
+      dataSourceMode: 'real_api',
+      streamState: 'closed',
+      providerCapabilities: [{ id: 'custom', family: 'openai_compatible' as const, model: 'gpt-5.5', status: 'available' as const }],
+      onSendMessage: () => {},
+      onStopRun: () => {},
+      locale: 'zh',
+    }))
+
+    expect(html).toContain('<p>2026 年 5 月值得关注的 AIAgent 开源项目</p>')
+    expect(html).toContain('<h2>一、 2026 年 AIAgent 开源生态的几个核心变化</h2>')
+    expect(html).toContain('<li>状态管理、回滚、checkpoint、人类审批、错误恢复。</li>')
+    expect(html).toContain('<li>Agent 不再只是自己写 tools，而是通过标准协议连接工具、数据源、服务。</li>')
+    expect(html).toContain('<h2>二、 2026 年重点开源项目</h2>')
+    expect(html).not.toContain('<h2>2026 年 5 月值得关注的 AIAgent 开源项目##一')
+    expect(html).not.toContain('代表： LangGraph、Microsoft AutoGen、OpenAI Agents SDK。 2.-Agent')
+  })
+
   test('renders markdown tables in assistant messages', () => {
     const html = renderToStaticMarkup(createElement(ChatCanvas, {
       sidebarCollapsed: false,
@@ -458,6 +620,103 @@ describe('ChatCanvas state copy', () => {
     expect(html).toContain('<td>Reuters AI News</td>')
     expect(html).toContain('<td><a href="https://example.com"')
     expect(html).not.toContain('| 序号 | 新闻 | 链接 |')
+  })
+
+  test('renders real smoke final markdown tables and code blocks', () => {
+    const html = renderToStaticMarkup(createElement(ChatCanvas, {
+      sidebarCollapsed: false,
+      thread: { id: 'thread-a', title: 'Thread A', project: 'Loomi', mode: 'chat', updatedAt: 'Now', lifecycleStatus: 'active', runStatus: 'completed' },
+      messages: [{
+        id: 'msg-final',
+        threadId: 'thread-a',
+        role: 'assistant',
+        content: '## Final\n\n| File | Kind |\n| --- | --- |\n| `cmd/loomi` | CLI |\n\n```bash\nloomi smoke agent\n```',
+        createdAt: 'Now',
+        runId: 'run-a',
+      }],
+      run: {
+        id: 'run-a',
+        threadId: 'thread-a',
+        status: 'completed',
+        model: 'local_codex',
+        context: 'model_gateway',
+        events: [{ id: 'evt-final', runId: 'run-a', threadId: 'thread-a', type: 'run.completed', label: 'Run', detail: 'Run completed', time: 'Now', status: 'completed' }],
+      },
+      loading: false,
+      error: null,
+      dataSourceMode: 'real_api',
+      streamState: 'closed',
+      onSendMessage: () => {},
+      onStopRun: () => {},
+      locale: 'en',
+    }))
+
+    expect(html).toContain('<h2>Final</h2>')
+    expect(html).toContain('<table>')
+    expect(html).toContain('<code>cmd/loomi</code>')
+    expect(html).toContain('<code class="language-bash">loomi smoke agent</code>')
+  })
+
+  test('groups consecutive run tool events as one turn activity', () => {
+    const html = renderToStaticMarkup(createElement(ChatCanvas, {
+      sidebarCollapsed: false,
+      thread: { id: 'thread-a', title: 'Thread A', project: 'Loomi', mode: 'chat', updatedAt: 'Now', lifecycleStatus: 'active', runStatus: 'running' },
+      messages: [{ id: 'msg-user', threadId: 'thread-a', role: 'user', content: 'Check files', createdAt: 'Now' }],
+      run: {
+        id: 'run-a',
+        threadId: 'thread-a',
+        status: 'running',
+        model: 'local_codex',
+        context: 'model_gateway',
+        events: [
+          { id: 'evt-tool-1', runId: 'run-a', threadId: 'thread-a', type: 'tool.call.succeeded', label: 'Tool', detail: 'done', time: 'Now', status: 'completed', sequence: 1, metadata: { tool_call_id: 'tc-1', tool_name: 'workspace.glob', arguments_summary: { pattern: '*.tsx' }, result_summary: { match_count: 2 } } },
+          { id: 'evt-tool-2', runId: 'run-a', threadId: 'thread-a', type: 'tool.call.succeeded', label: 'Tool', detail: 'done', time: 'Now', status: 'completed', sequence: 2, metadata: { tool_call_id: 'tc-2', tool_name: 'workspace.grep', arguments_summary: { pattern: 'ToolCallCard' }, result_summary: { match_count: 4 } } },
+        ],
+      },
+      loading: false,
+      error: null,
+      dataSourceMode: 'real_api',
+      streamState: 'open',
+      providerCapabilities: [{ id: 'local_codex', family: 'openai_compatible', model: 'gpt-5.5', status: 'available', executionState: 'supported' }],
+      onSendMessage: () => {},
+      onStopRun: () => {},
+      locale: 'en',
+    }))
+
+    expect(html).toContain('tool-transcript-group')
+    expect(html.match(/tool-call-draft/g)).toHaveLength(1)
+    expect(html).toContain('Find project files')
+    expect(html).toContain('Search project text')
+  })
+
+  test('keeps a waiting-for-model state after terminal tool events before continuation text arrives', () => {
+    const html = renderToStaticMarkup(createElement(ChatCanvas, {
+      sidebarCollapsed: false,
+      thread: { id: 'thread-a', title: 'Thread A', project: 'Loomi', mode: 'chat', updatedAt: 'Now', lifecycleStatus: 'active', runStatus: 'running' },
+      messages: [{ id: 'msg-user', threadId: 'thread-a', role: 'user', content: 'Search first', createdAt: 'Now' }],
+      run: {
+        id: 'run-a',
+        threadId: 'thread-a',
+        status: 'running',
+        model: 'local_codex',
+        context: 'model_gateway',
+        events: [
+          { id: 'evt-tool-1', runId: 'run-a', threadId: 'thread-a', type: 'tool.call.succeeded', label: 'Tool', detail: 'done', time: 'Now', status: 'completed', sequence: 1, metadata: { tool_call_id: 'tc-1', tool_name: 'web.search', result_summary: { count: 2 }, execution_status: 'succeeded' } },
+        ],
+      },
+      loading: false,
+      error: null,
+      dataSourceMode: 'real_api',
+      streamState: 'open',
+      providerCapabilities: [{ id: 'local_codex', family: 'openai_compatible', model: 'gpt-5.5', status: 'available', executionState: 'supported' }],
+      onSendMessage: () => {},
+      onStopRun: () => {},
+      locale: 'zh',
+    }))
+
+    expect(html).toContain('搜索网页')
+    expect(html).toContain('生成中')
+    expect(html).toMatch(/组织回复|梳理线索|核对上下文|提炼重点|推敲答案|收束思路|准备回答|再看一眼/)
   })
 
   test('does not leak stale active tool approval into a newer completed chat turn', () => {

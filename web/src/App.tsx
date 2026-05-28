@@ -1,14 +1,13 @@
 import { type CSSProperties, type PointerEvent, useCallback } from 'react'
 import { Button } from 'animal-island-ui'
 import { ConfigProvider, ThemeProvider } from '@lobehub/ui'
-import { AlertCircle, PanelLeft, PanelRight, SquarePen } from 'lucide-react'
+import { PanelLeft, PanelRight, SquarePen } from 'lucide-react'
 import { motion } from 'motion/react'
 import { ChatCanvas } from './components/ChatCanvas'
 import { RunTimeline } from './components/RunTimeline'
 import { SettingsView } from './components/SettingsView'
 import { ThreadSidebar } from './components/ThreadSidebar'
 import { getDictionary } from './i18n'
-import { deriveBackendCapabilityStatus, shouldShowProviderUnavailableWarning } from './runtime/backendCapabilityStatus'
 import { useWorkspaceState } from './state'
 import { useWorkspaceShellState } from './useWorkspaceShellState'
 
@@ -27,13 +26,13 @@ export default function App() {
     backendCapability,
     backendUnavailableAttempted,
     capabilitySignals,
-    selectedRuntimeScript,
+    desktopReadiness,
+    refreshDesktopReadiness,
     personas,
     installedSkills,
     skillsLoading,
     skillsError,
     selectedPersonaId,
-    selectRuntimeScript,
     setSelectedPersonaId,
     refresh,
     selectThread,
@@ -110,17 +109,6 @@ export default function App() {
   } = useWorkspaceState(shell.defaultWorkspaceMode)
 
   const dictionary = getDictionary(shell.locale)
-  const providerUnavailableBeforeSend = shouldShowProviderUnavailableWarning(dataSourceMode, providerCapabilities)
-  const capabilityStatus = deriveBackendCapabilityStatus({
-    dataSourceMode,
-    runtimeSource: run?.context === 'model_gateway' ? 'model_gateway' : 'local_simulated',
-    backendUnavailable: backendCapability === 'unavailable' || backendUnavailableAttempted || capabilitySignals.backendUnavailable,
-    modelSetupMissing: capabilitySignals.modelSetupMissing,
-    providerUnavailable: providerUnavailableBeforeSend,
-    activeRun: Boolean(run && (run.status === 'pending' || run.status === 'queued' || run.status === 'running' || run.status === 'retrying' || run.status === 'recovering' || run.status === 'blocked_on_tool_approval' || run.status === 'stopping')),
-    streamDisconnected: Boolean(run && (run.status === 'pending' || run.status === 'queued' || run.status === 'running' || run.status === 'retrying' || run.status === 'recovering' || run.status === 'blocked_on_tool_approval' || run.status === 'stopping') && (capabilitySignals.streamDisconnected || streamState === 'recoverable_error')),
-    runRecovering: run?.status === 'recovering' || run?.assistantDraft?.status === 'recovering',
-  })
   const workspaceStyle = { '--sidebar-width': `${shell.sidebarWidth}px` } as CSSProperties
   const workspaceClass = [
     'workspace-grid',
@@ -204,15 +192,8 @@ export default function App() {
                 <div className="titlebar-right">
                   <Button
                     className="titlebar-button"
-                    aria-label={dictionary.app.openRunDetails}
-                    onClick={shell.toggleRunDetails}
-                  >
-                    <AlertCircle size={15} strokeWidth={1.7} />
-                  </Button>
-                  <Button
-                    className="titlebar-button"
                     aria-label={dictionary.app.openRightTools}
-                    onClick={shell.toggleRightPanelMenu}
+                    onClick={shell.togglePreviewPanel}
                   >
                     <PanelRight size={15} strokeWidth={1.7} />
                   </Button>
@@ -318,15 +299,23 @@ export default function App() {
                   providerCapabilities={providerCapabilities}
                   workspaceRootConfig={workspaceRootConfig}
                   workspaceRootSaveResult={workspaceRootSaveResult}
+                  desktopReadiness={desktopReadiness}
                   personas={personas}
                   selectedPersonaId={selectedPersonaId}
                   onSelectPersona={setSelectedPersonaId}
+                  onRetryReadiness={() => void refreshDesktopReadiness()}
+                  onDetectLocalProviders={() => void detectLocalProviders()}
+                  onEnableLocalProvider={(providerId) => void enableLocalProvider(providerId)}
                   onOpenProviderSettings={() => shell.openSettings('providers')}
+                  onOpenSkillsSettings={() => shell.openSettings('skill')}
+                  onOpenConnectorsSettings={() => shell.openSettings('mcp')}
+                  onOpenPluginsSettings={() => shell.openSettings('mcp')}
                   onChooseWorkspaceFolder={() => void chooseWorkspaceFolder()}
                   onSendMessage={(content, options) => void sendMessage(content, options)}
                   onStopRun={() => void stopRun()}
                   onApproveToolCall={(toolCall) => approveToolCall(toolCall)}
                   onDenyToolCall={(toolCall) => denyToolCall(toolCall)}
+                  onOpenArtifact={(artifact) => shell.openArtifact(artifact.id)}
                   onRetryRun={retryRun}
                   onRegenerateRun={regenerateRun}
                   locale={shell.locale}
@@ -335,16 +324,11 @@ export default function App() {
             </section>
             <RunTimeline
               run={run}
-              runDetailsOpen={!shell.settingsOpen && shell.runDetailsOpen}
-              rightPanelMenuOpen={!shell.settingsOpen && shell.rightPanelMenuOpen}
+              messages={messages}
               rightToolsOpen={!shell.settingsOpen && shell.rightPanelOpen}
               selectedPanelId={shell.selectedRightPanelId}
-              onSelectPanel={shell.openRightPanel}
-              onStopRun={() => void stopRun()}
-              selectedRuntimeScript={selectedRuntimeScript}
-              capabilityStatus={capabilityStatus}
+              selectedArtifactId={shell.previewArtifactId}
               locale={shell.locale}
-              onSelectRuntimeScript={dataSourceMode === 'mock' ? selectRuntimeScript : undefined}
               selectedThreadId={selectedThreadId}
             />
           </main>

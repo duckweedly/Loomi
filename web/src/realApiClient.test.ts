@@ -1,5 +1,24 @@
 import { describe, expect, test } from 'bun:test'
-import { createClientMessageID, mapApiLocalProviderDetection, mapApiMemoryAuditItem, mapApiMemoryEntry, mapApiProviderCapability, mapApiRun, mapApiRunEvent, mapApiToolCall, mapApiWorkerQueueDiagnostics, realApiClient, selectSendProvider } from './realApiClient'
+import { createClientMessageID, getApiBaseUrl, getApiBearerToken, mapApiLocalProviderDetection, mapApiMemoryAuditItem, mapApiMemoryEntry, mapApiProviderCapability, mapApiRun, mapApiRunEvent, mapApiToolCall, mapApiWorkerQueueDiagnostics, realApiClient, selectSendProvider } from './realApiClient'
+
+async function withLocalStorage<T>(run: () => T | Promise<T>): Promise<T> {
+  if (globalThis.localStorage) return run()
+  const values = new Map<string, string>()
+  const storage = {
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => { values.set(key, value) },
+    removeItem: (key: string) => { values.delete(key) },
+    clear: () => { values.clear() },
+    key: (index: number) => Array.from(values.keys())[index] ?? null,
+    get length() { return values.size },
+  } as Storage
+  Object.defineProperty(globalThis, 'localStorage', { value: storage, configurable: true })
+  try {
+    return await run()
+  } finally {
+    Reflect.deleteProperty(globalThis, 'localStorage')
+  }
+}
 
 describe('createClientMessageID', () => {
   test('does not rely on Date.now alone', () => {
@@ -19,6 +38,83 @@ describe('createClientMessageID', () => {
 })
 
 describe('real API response validation', () => {
+  test('reports the active API base for desktop diagnostics', () => {
+    expect(getApiBaseUrl()).toBeTruthy()
+  })
+
+  test('reads a browser-local API token without exposing it in output objects', async () => {
+    await withLocalStorage(() => {
+      const previous = globalThis.localStorage?.getItem('loomi.api_token')
+      globalThis.localStorage?.setItem('loomi.api_token', 'browser-secret-token')
+      try {
+        expect(getApiBearerToken()).toBe('browser-secret-token')
+      } finally {
+        if (previous === null || previous === undefined) globalThis.localStorage?.removeItem('loomi.api_token')
+        else globalThis.localStorage?.setItem('loomi.api_token', previous)
+      }
+    })
+  })
+
+  test('sends bearer token on JSON requests when configured in browser storage', async () => {
+    await withLocalStorage(async () => {
+      const previous = globalThis.localStorage?.getItem('loomi.api_token')
+      const originalFetch = globalThis.fetch
+      let authorization = ''
+      globalThis.localStorage?.setItem('loomi.api_token', 'browser-secret-token')
+      globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+        authorization = new Headers(init?.headers).get('Authorization') ?? ''
+        return new Response(JSON.stringify({ threads: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      }) as typeof fetch
+      try {
+        await realApiClient.listThreads()
+      } finally {
+        globalThis.fetch = originalFetch
+        if (previous === null || previous === undefined) globalThis.localStorage?.removeItem('loomi.api_token')
+        else globalThis.localStorage?.setItem('loomi.api_token', previous)
+      }
+
+      expect(authorization).toBe('Bearer browser-secret-token')
+    })
+  })
+
+  test('converts raw fetch failures into a Loomi API diagnostic', async () => {
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async () => {
+      throw new TypeError('Failed to fetch')
+    }) as typeof fetch
+    try {
+      let error: unknown
+      try {
+        await realApiClient.listThreads()
+      } catch (err) {
+        error = err
+      }
+
+      expect(error).toBeInstanceOf(Error)
+      expect((error as { code?: string }).code).toBe('api_unreachable')
+      expect((error as Error).message).toContain('Loomi API 未连接')
+      expect((error as Error).message).not.toContain('Failed to fetch')
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test('reads not-ready schema state from /readyz for desktop readiness', async () => {
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      status: 'not_ready',
+      checks: [{ name: 'schema', status: 'failed', message: 'migration pending' }],
+    }), { status: 503, headers: { 'Content-Type': 'application/json' } })) as typeof fetch
+    try {
+      const readiness = await realApiClient.getReadiness?.()
+
+      expect(readiness?.status).toBe('not_ready')
+      expect(readiness?.checks[0]).toMatchObject({ name: 'schema', status: 'failed' })
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
   test('maps assistant message run id from safe metadata for terminal reconciliation', async () => {
     const originalFetch = globalThis.fetch
     globalThis.fetch = (async () => new Response(JSON.stringify({
@@ -754,6 +850,42 @@ describe('M4 run mapping', () => {
       expect(source).resolves.toContain('stream_closed'),
       expect(source).resolves.toContain('onClosed?.()'),
     ])
+  })
+
+  test('streams run events through fetch so bearer auth works in desktop renderer', async () => {
+    await withLocalStorage(async () => {
+      const previous = globalThis.localStorage?.getItem('loomi.api_token')
+      const originalFetch = globalThis.fetch
+      const requests: Array<{ url: string; authorization: string }> = []
+      globalThis.localStorage?.setItem('loomi.api_token', 'stream-secret-token')
+      globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        requests.push({ url: String(input), authorization: new Headers(init?.headers).get('Authorization') ?? '' })
+        const payload = [
+          'event: run_event',
+          'data: {"event":{"id":"evt-1","run_id":"run-1","thread_id":"thread-1","sequence":1,"category":"final","type":"run_completed","summary":"Run completed","content":null,"metadata":{},"created_at":"2026-05-27T00:00:00Z"}}',
+          '',
+          'event: stream_closed',
+          'data: {}',
+          '',
+        ].join('\n')
+        return new Response(payload, { status: 200, headers: { 'Content-Type': 'text/event-stream' } })
+      }) as typeof fetch
+      try {
+        const events: ReturnType<typeof mapApiRunEvent>[] = []
+        let closed = false
+        realApiClient.subscribeRunEvents?.('run-1', 7, (event) => events.push(event), () => {}, () => { closed = true })
+        await new Promise((resolve) => setTimeout(resolve, 10))
+
+        expect(requests[0].url).toContain('/v1/runs/run-1/events/stream?after_sequence=7')
+        expect(requests[0].authorization).toBe('Bearer stream-secret-token')
+        expect(events[0]).toMatchObject({ id: 'evt-1', status: 'completed' })
+        expect(closed).toBe(true)
+      } finally {
+        globalThis.fetch = originalFetch
+        if (previous === null || previous === undefined) globalThis.localStorage?.removeItem('loomi.api_token')
+        else globalThis.localStorage?.setItem('loomi.api_token', previous)
+      }
+    })
   })
 
   test('requests replay events with explicit after_sequence cursor', () => {

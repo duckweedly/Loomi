@@ -1,4 +1,5 @@
-.provider-warning {
+.provider-warning,
+.runtime-final-warning {
   display: flex;
   width: var(--content-column-width);
   align-items: center;
@@ -11,6 +12,33 @@
   background: color-mix(in srgb, var(--orange) 10%, transparent);
   color: var(--text-secondary);
   font-size: 13px;
+}
+
+.runtime-final-warning strong {
+  color: var(--text-primary);
+}
+
+.desktop-readiness {
+  display: grid;
+  align-items: start;
+  gap: 6px;
+}
+
+.desktop-readiness strong {
+  color: var(--text-primary);
+}
+
+.desktop-readiness-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.runtime-final-warning span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .approval-notice {
@@ -48,6 +76,7 @@
 }
 
 .provider-warning button,
+.desktop-readiness-actions button,
 .approval-notice button {
   flex: 0 0 auto;
   border: 1px solid var(--border-subtle);
@@ -706,6 +735,29 @@
   font-weight: 500;
 }
 
+.tool-card-title,
+.tool-card-preview {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tool-card-title {
+  flex: 0 1 auto;
+}
+
+.tool-card-title svg {
+  flex: 0 0 auto;
+}
+
+.tool-card-preview {
+  flex: 1 1 auto;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+
 .tool-summary {
   min-width: 0;
   margin-top: 7px;
@@ -727,6 +779,46 @@
   white-space: nowrap;
 }
 
+.tool-source-list {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.tool-source-list strong {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.tool-source-chip {
+  display: inline-flex;
+  max-width: 100%;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid color-mix(in srgb, var(--border-subtle) 58%, transparent);
+  border-radius: 999px;
+  padding: 4px 8px;
+  background: color-mix(in srgb, var(--bg-root) 42%, transparent);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.tool-source-chip span,
+.tool-source-chip em {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tool-source-chip em {
+  color: var(--text-muted);
+  font-style: normal;
+}
+
+.tool-detail-panel,
 .tool-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -734,6 +826,7 @@
   margin-top: 10px;
 }
 
+.tool-detail-panel div,
 .tool-grid div {
   min-width: 0;
   border: 1px solid color-mix(in srgb, var(--border-subtle) 58%, transparent);
@@ -746,12 +839,21 @@
   overflow-wrap: anywhere;
 }
 
+.tool-detail-panel span,
 .tool-grid span {
   display: block;
   margin-bottom: 5px;
   color: var(--text-muted);
   font-size: 11px;
   font-weight: 650;
+}
+
+.tool-detail-panel p {
+  max-height: 160px;
+  margin: 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .tool-actions {

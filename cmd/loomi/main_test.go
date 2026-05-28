@@ -581,6 +581,44 @@ func TestDoctorCommandUsesConfiguredAPITokenWithoutPrintingIt(t *testing.T) {
 	}
 }
 
+func TestDoctorCommandDoesNotPrintProviderErrorBodyOrConfigPath(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(configPath, []byte(`{"api_token":"doctor-secret"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LOOMI_CONFIG", configPath)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/readyz":
+			fmt.Fprint(w, `{"status":"ready","checks":[{"name":"database","status":"ok"},{"name":"schema","status":"ok"}]}`)
+		case "/v1/model-providers":
+			w.WriteHeader(http.StatusBadGateway)
+			fmt.Fprint(w, `{"error":{"code":"provider_failed","message":"upstream body includes doctor-secret and /Users/someone/.codex/auth.json"}}`)
+		case "/v1/tools/catalog":
+			fmt.Fprint(w, `{"tools":[{"name":"workspace.read","group":"workspace","risk_level":"low","approval_policy":"always_required","execution_state":"executable","enabled":true}],"request_id":"req_tools"}`)
+		default:
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	err := run([]string{"doctor", "--host", server.URL}, &stdout, &bytes.Buffer{})
+	if err == nil {
+		t.Fatal("expected provider failure")
+	}
+	output := stdout.String()
+	for _, leaked := range []string{"doctor-secret", configPath, ".codex/auth.json", "/Users/someone"} {
+		if strings.Contains(output, leaked) {
+			t.Fatalf("stdout leaked %q: %s", leaked, output)
+		}
+	}
+	if !strings.Contains(output, "GET /v1/model-providers returned 502") || !strings.Contains(output, "code=provider_failed") {
+		t.Fatalf("stdout = %s", output)
+	}
+}
+
 func TestDoctorCommandExplainsMissingAPIToken(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -610,6 +648,7 @@ func TestDoctorCommandExplainsMissingAPIToken(t *testing.T) {
 }
 
 func TestSmokeAgentCommandReportsProviderBoundaryBlocker(t *testing.T) {
+	failureLog := filepath.Join(t.TempDir(), "smoke-failure.json")
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
@@ -625,7 +664,7 @@ func TestSmokeAgentCommandReportsProviderBoundaryBlocker(t *testing.T) {
 	defer server.Close()
 
 	var stdout bytes.Buffer
-	err := run([]string{"smoke", "agent", "--host", server.URL, "--provider", "custom", "--prompt", "hello"}, &stdout, &bytes.Buffer{})
+	err := run([]string{"smoke", "agent", "--host", server.URL, "--provider", "custom", "--prompt", "hello", "--failure-log", failureLog}, &stdout, &bytes.Buffer{})
 	if err == nil {
 		t.Fatal("expected provider-boundary blocker exit")
 	}
@@ -636,21 +675,32 @@ func TestSmokeAgentCommandReportsProviderBoundaryBlocker(t *testing.T) {
 		"provider\tcustom status=completion-failed check_stage=completion check=completion-failed-auth http=401",
 		"blocked_reason\tprovider_auth",
 		"fix\tRefresh the provider API token",
+		"failure_log\t" + failureLog,
 	} {
 		if !strings.Contains(output, expected) {
 			t.Fatalf("stdout missing %q: %s", expected, output)
 		}
 	}
+	content, err := os.ReadFile(failureLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(content), `"blocked_reason": "provider_auth"`) || strings.Contains(string(content), "doctor-secret") {
+		t.Fatalf("failure log content = %s", string(content))
+	}
 }
 
 func TestSmokeAgentCommandRunsWithAutoApprovalAndPrintsSummary(t *testing.T) {
 	var calls []string
+	workspaceRoot := t.TempDir()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls = append(calls, r.Method+" "+r.URL.String())
 		w.Header().Set("Content-Type", "application/json")
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/readyz":
 			fmt.Fprint(w, `{"ok":true}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/workspace/root":
+			fmt.Fprint(w, `{"config":{"configured":true,"display_name":"smoke-workspace"},"request_id":"req_workspace"}`)
 		case r.Method == http.MethodPost && r.URL.Path == "/v1/model-providers/check":
 			fmt.Fprint(w, `{"provider":{"id":"custom","family":"openai_compatible","model":"model","status":"completion-ok","execution_state":"supported","check_stage":"completion","check_code":"completion-ok","http_status":200,"message":"Provider completion check succeeded."},"request_id":"req_check"}`)
 		case r.Method == http.MethodPost && r.URL.Path == "/v1/threads":
@@ -680,6 +730,10 @@ func TestSmokeAgentCommandRunsWithAutoApprovalAndPrintsSummary(t *testing.T) {
 			fmt.Fprint(w, "data: {\"id\":\"evt_6\",\"run_id\":\"run_smoke\",\"thread_id\":\"thr_smoke\",\"sequence\":6,\"type\":\"run_completed\"}\n\n")
 			fmt.Fprint(w, "event: close\n")
 			fmt.Fprint(w, "data: {\"run_id\":\"run_smoke\"}\n\n")
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/threads/thr_smoke/messages":
+			fmt.Fprint(w, `{"messages":[{"id":"msg_smoke","thread_id":"thr_smoke","role":"user","content":"hello"},{"id":"msg_final","thread_id":"thr_smoke","role":"assistant","content":"ok final summary","run_id":"run_smoke"}],"request_id":"req_messages"}`)
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/runs/run_smoke/events":
+			fmt.Fprint(w, `{"events":[{"id":"evt_1","run_id":"run_smoke","thread_id":"thr_smoke","sequence":1,"type":"model_request_started","metadata":{"model_phase":"initial","provider_id":"custom"}},{"id":"evt_2","run_id":"run_smoke","thread_id":"thr_smoke","sequence":2,"type":"tool_call_approval_required","metadata":{"tool_call_id":"tc_read","tool_name":"workspace.read","arguments_summary":{"path":"AGENTS.md"}}},{"id":"evt_3","run_id":"run_smoke","thread_id":"thr_smoke","sequence":3,"type":"tool_call_approved","metadata":{"tool_call_id":"tc_read","tool_name":"workspace.read"}},{"id":"evt_4","run_id":"run_smoke","thread_id":"thr_smoke","sequence":4,"type":"tool_call_succeeded","metadata":{"tool_call_id":"tc_read","tool_name":"workspace.read","result_summary":{"path":"AGENTS.md","truncated":false}}},{"id":"evt_5","run_id":"run_smoke","thread_id":"thr_smoke","sequence":5,"type":"model_output_delta","content":"ok"},{"id":"evt_6","run_id":"run_smoke","thread_id":"thr_smoke","sequence":6,"type":"run_completed"}],"request_id":"req_replay"}`)
 		default:
 			t.Fatalf("request = %s %s", r.Method, r.URL.String())
 		}
@@ -687,7 +741,7 @@ func TestSmokeAgentCommandRunsWithAutoApprovalAndPrintsSummary(t *testing.T) {
 	defer server.Close()
 
 	var stdout bytes.Buffer
-	err := run([]string{"smoke", "agent", "--host", server.URL, "--provider", "custom", "--auto-approve", "--prompt", "hello"}, &stdout, &bytes.Buffer{})
+	err := run([]string{"smoke", "agent", "--host", server.URL, "--provider", "custom", "--workspace", workspaceRoot, "--auto-approve", "--prompt", "hello"}, &stdout, &bytes.Buffer{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -698,7 +752,14 @@ func TestSmokeAgentCommandRunsWithAutoApprovalAndPrintsSummary(t *testing.T) {
 		"run_id\trun_smoke",
 		"final_stage\trun_completed",
 		"provider\tcustom status=completion-ok check_stage=completion check=completion-ok http=200",
+		"workspace\tsmoke-workspace",
 		"events\t6 total, 3 tool, 1 approvals",
+		"pending_approvals\t0",
+		"tool_chain\tworkspace.read",
+		"tool_order\tworkspace.read",
+		"final_persisted\tok",
+		"replay\tok events=6 terminal=run_completed",
+		"final_message\tok final summary",
 		"last_events\t0004 tool_call_succeeded workspace.read tc_read; 0005 model_output_delta; 0006 run_completed",
 	} {
 		if !strings.Contains(output, expected) {
@@ -707,6 +768,204 @@ func TestSmokeAgentCommandRunsWithAutoApprovalAndPrintsSummary(t *testing.T) {
 	}
 	if !containsMainString(calls, "POST /v1/threads/thr_smoke/runs/run_smoke/tool-calls/tc_read/approve") {
 		t.Fatalf("calls = %v", calls)
+	}
+	if !containsMainString(calls, "POST /v1/workspace/root") || !containsMainString(calls, "GET /v1/threads/thr_smoke/messages") {
+		t.Fatalf("calls = %v", calls)
+	}
+	if !containsMainString(calls, "GET /v1/runs/run_smoke/events") {
+		t.Fatalf("calls = %v", calls)
+	}
+}
+
+func TestSmokeAgentCommandBlocksRedactedFinalMessage(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/readyz":
+			fmt.Fprint(w, `{"ok":true}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/model-providers/check":
+			fmt.Fprint(w, `{"provider":{"id":"custom","family":"openai_compatible","model":"model","status":"completion-ok","execution_state":"supported"},"request_id":"req_check"}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/threads":
+			fmt.Fprint(w, `{"thread":{"id":"thr_smoke","mode":"work"},"request_id":"req_thread"}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/threads/thr_smoke/messages":
+			fmt.Fprint(w, `{"message":{"id":"msg_smoke"},"request_id":"req_msg"}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/threads/thr_smoke/runs":
+			fmt.Fprint(w, `{"run":{"id":"run_smoke","thread_id":"thr_smoke","status":"running"},"request_id":"req_run"}`)
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/runs/run_smoke/events/stream":
+			w.Header().Set("Content-Type", "text/event-stream")
+			fmt.Fprint(w, "event: run_event\n")
+			fmt.Fprint(w, "data: {\"id\":\"evt_1\",\"run_id\":\"run_smoke\",\"thread_id\":\"thr_smoke\",\"sequence\":1,\"type\":\"run_completed\"}\n\n")
+			fmt.Fprint(w, "event: close\n")
+			fmt.Fprint(w, "data: {\"run_id\":\"run_smoke\"}\n\n")
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/threads/thr_smoke/messages":
+			fmt.Fprint(w, `{"messages":[{"id":"msg_final","thread_id":"thr_smoke","role":"assistant","content":"[redacted]","run_id":"run_smoke"}],"request_id":"req_messages"}`)
+		default:
+			t.Fatalf("request = %s %s", r.Method, r.URL.String())
+		}
+	}))
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	err := run([]string{"smoke", "agent", "--host", server.URL, "--provider", "custom", "--prompt", "hello"}, &stdout, &bytes.Buffer{})
+	if err == nil {
+		t.Fatal("expected redacted final message blocker")
+	}
+	output := stdout.String()
+	for _, expected := range []string{
+		"smoke blocked",
+		"stage\tfinal_message",
+		"final_message\t[redacted]",
+		"blocked_reason\tfinal_message_redacted",
+	} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("stdout missing %q: %s", expected, output)
+		}
+	}
+}
+
+func TestSmokeAgentCommandWithThreadRejectsOldAssistantMessageWithoutCurrentRunID(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/readyz":
+			fmt.Fprint(w, `{"ok":true}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/model-providers/check":
+			fmt.Fprint(w, `{"provider":{"id":"custom","family":"openai_compatible","model":"model","status":"completion-ok","execution_state":"supported"},"request_id":"req_check"}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/threads/thr_existing/messages":
+			fmt.Fprint(w, `{"message":{"id":"msg_smoke"},"request_id":"req_msg"}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/threads/thr_existing/runs":
+			fmt.Fprint(w, `{"run":{"id":"run_current","thread_id":"thr_existing","status":"running"},"request_id":"req_run"}`)
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/runs/run_current/events/stream":
+			w.Header().Set("Content-Type", "text/event-stream")
+			fmt.Fprint(w, "event: run_event\n")
+			fmt.Fprint(w, "data: {\"id\":\"evt_1\",\"run_id\":\"run_current\",\"thread_id\":\"thr_existing\",\"sequence\":1,\"type\":\"run_completed\"}\n\n")
+			fmt.Fprint(w, "event: close\n")
+			fmt.Fprint(w, "data: {\"run_id\":\"run_current\"}\n\n")
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/threads/thr_existing/messages":
+			fmt.Fprint(w, `{"messages":[{"id":"old_user","thread_id":"thr_existing","role":"user","content":"old prompt"},{"id":"old_assistant","thread_id":"thr_existing","role":"assistant","content":"old assistant final"}],"request_id":"req_messages"}`)
+		default:
+			t.Fatalf("request = %s %s", r.Method, r.URL.String())
+		}
+	}))
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	err := run([]string{"smoke", "agent", "--host", server.URL, "--provider", "custom", "--thread", "thr_existing", "--prompt", "hello"}, &stdout, &bytes.Buffer{})
+	if err == nil {
+		t.Fatal("expected missing final message blocker")
+	}
+	output := stdout.String()
+	for _, expected := range []string{
+		"smoke blocked",
+		"stage\tfinal_message",
+		"blocked_reason\tfinal_message_missing",
+	} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("stdout missing %q: %s", expected, output)
+		}
+	}
+	if strings.Contains(output, "old assistant final") {
+		t.Fatalf("stdout used stale assistant message: %s", output)
+	}
+}
+
+func TestSmokeAgentCommandBlocksCompletedRunWithPendingApproval(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/readyz":
+			fmt.Fprint(w, `{"ok":true}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/model-providers/check":
+			fmt.Fprint(w, `{"provider":{"id":"custom","family":"openai_compatible","model":"model","status":"completion-ok","execution_state":"supported"},"request_id":"req_check"}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/threads":
+			fmt.Fprint(w, `{"thread":{"id":"thr_smoke","mode":"work"},"request_id":"req_thread"}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/threads/thr_smoke/messages":
+			fmt.Fprint(w, `{"message":{"id":"msg_smoke"},"request_id":"req_msg"}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/threads/thr_smoke/runs":
+			fmt.Fprint(w, `{"run":{"id":"run_smoke","thread_id":"thr_smoke","status":"running"},"request_id":"req_run"}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/threads/thr_smoke/runs/run_smoke/tool-calls/tc_edit/approve":
+			fmt.Fprint(w, `{"tool_call":{"tool_call_id":"tc_edit","approval_status":"approved","execution_status":"not_started"},"request_id":"req_approve"}`)
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/runs/run_smoke/events/stream":
+			w.Header().Set("Content-Type", "text/event-stream")
+			if r.URL.Query().Get("after_sequence") == "" {
+				fmt.Fprint(w, "event: run_event\n")
+				fmt.Fprint(w, "data: {\"id\":\"evt_1\",\"run_id\":\"run_smoke\",\"thread_id\":\"thr_smoke\",\"sequence\":1,\"type\":\"tool_call_approval_required\",\"metadata\":{\"tool_call_id\":\"tc_edit\",\"tool_name\":\"workspace.edit\"}}\n\n")
+				return
+			}
+			fmt.Fprint(w, "event: run_event\n")
+			fmt.Fprint(w, "data: {\"id\":\"evt_2\",\"run_id\":\"run_smoke\",\"thread_id\":\"thr_smoke\",\"sequence\":2,\"type\":\"run_completed\"}\n\n")
+			fmt.Fprint(w, "event: close\n")
+			fmt.Fprint(w, "data: {\"run_id\":\"run_smoke\"}\n\n")
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/threads/thr_smoke/messages":
+			fmt.Fprint(w, `{"messages":[{"id":"msg_final","thread_id":"thr_smoke","role":"assistant","content":"done","run_id":"run_smoke"}],"request_id":"req_messages"}`)
+		default:
+			t.Fatalf("request = %s %s", r.Method, r.URL.String())
+		}
+	}))
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	err := run([]string{"smoke", "agent", "--host", server.URL, "--provider", "custom", "--auto-approve", "--prompt", "hello"}, &stdout, &bytes.Buffer{})
+	if err == nil {
+		t.Fatal("expected pending approval blocker")
+	}
+	output := stdout.String()
+	for _, expected := range []string{
+		"smoke blocked",
+		"stage\tpending_approval",
+		"blocked_reason\tpending_approval",
+		"tool_chain\tworkspace.edit",
+		"final_message\tdone",
+	} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("stdout missing %q: %s", expected, output)
+		}
+	}
+}
+
+func TestSmokeAgentCommandBlocksGeneratedFailurePlaceholderFinalMessage(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/readyz":
+			fmt.Fprint(w, `{"ok":true}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/model-providers/check":
+			fmt.Fprint(w, `{"provider":{"id":"custom","family":"openai_compatible","model":"model","status":"completion-ok","execution_state":"supported"},"request_id":"req_check"}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/threads":
+			fmt.Fprint(w, `{"thread":{"id":"thr_smoke","mode":"work"},"request_id":"req_thread"}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/threads/thr_smoke/messages":
+			fmt.Fprint(w, `{"message":{"id":"msg_smoke"},"request_id":"req_msg"}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/threads/thr_smoke/runs":
+			fmt.Fprint(w, `{"run":{"id":"run_smoke","thread_id":"thr_smoke","status":"running"},"request_id":"req_run"}`)
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/runs/run_smoke/events/stream":
+			w.Header().Set("Content-Type", "text/event-stream")
+			fmt.Fprint(w, "event: run_event\n")
+			fmt.Fprint(w, "data: {\"id\":\"evt_1\",\"run_id\":\"run_smoke\",\"thread_id\":\"thr_smoke\",\"sequence\":1,\"type\":\"run_completed\"}\n\n")
+			fmt.Fprint(w, "event: close\n")
+			fmt.Fprint(w, "data: {\"run_id\":\"run_smoke\"}\n\n")
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/threads/thr_smoke/messages":
+			fmt.Fprint(w, `{"messages":[{"id":"msg_final","thread_id":"thr_smoke","role":"assistant","content":"未生成成功回复","run_id":"run_smoke"}],"request_id":"req_messages"}`)
+		default:
+			t.Fatalf("request = %s %s", r.Method, r.URL.String())
+		}
+	}))
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	err := run([]string{"smoke", "agent", "--host", server.URL, "--provider", "custom", "--prompt", "hello"}, &stdout, &bytes.Buffer{})
+	if err == nil {
+		t.Fatal("expected placeholder final message blocker")
+	}
+	output := stdout.String()
+	for _, expected := range []string{
+		"smoke blocked",
+		"stage\tfinal_message",
+		"blocked_reason\tfinal_message_placeholder",
+		"final_message\t未生成成功回复",
+	} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("stdout missing %q: %s", expected, output)
+		}
 	}
 }
 

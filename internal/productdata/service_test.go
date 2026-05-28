@@ -2,6 +2,10 @@ package productdata
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -160,6 +164,122 @@ func TestPrepareRunContextUsesRunScopedWorkspaceRootSnapshot(t *testing.T) {
 
 	if ctxData.WorkspaceRoot.Path != firstRoot {
 		t.Fatalf("workspace root snapshot = %q, want %q", ctxData.WorkspaceRoot.Path, firstRoot)
+	}
+}
+
+func TestPrepareRunContextExposesSafeWorkspaceLabel(t *testing.T) {
+	svc := NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	root := filepath.Join(t.TempDir(), "Downloads")
+	if err := os.Mkdir(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.SaveWorkspaceRootConfig(context.Background(), ident, WorkspaceRootConfig{Path: root}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.SyncBuiltInPersonas(context.Background(), ident, BuiltInPersonas()); err != nil {
+		t.Fatal(err)
+	}
+	thread, err := svc.CreateThread(context.Background(), ident, CreateThreadInput{Title: "Workspace label", Mode: ThreadModeWork})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _, err := svc.CreateMessage(context.Background(), ident, thread.ID, CreateMessageInput{Content: "看一下下载目录"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.StartRun(context.Background(), ident, thread.ID, StartRunInput{Source: RunSourceModelGateway, MessageID: message.ID, ProviderID: "custom", Model: "model"}); err != nil {
+		t.Fatal(err)
+	}
+	job, _, ok, err := svc.ClaimBackgroundJob(context.Background(), ident, ClaimBackgroundJobInput{WorkerID: "worker_workspace_label", LeaseSeconds: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("claim ok = false")
+	}
+	ctxData, err := svc.PrepareRunContext(context.Background(), ident, job)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if ctxData.WorkspaceRoot.DisplayName != "Downloads" {
+		t.Fatalf("workspace label = %q, want Downloads", ctxData.WorkspaceRoot.DisplayName)
+	}
+	summary := ctxData.SafeSummary()
+	if summary["workspace_label"] != "Downloads" {
+		t.Fatalf("safe summary workspace label = %+v", summary)
+	}
+	encoded := fmt.Sprint(summary)
+	if strings.Contains(encoded, root) {
+		t.Fatalf("safe summary leaked absolute root: %s", encoded)
+	}
+}
+
+func TestNewThreadUsesCurrentWorkspaceInsteadOfPreviousThreadRoot(t *testing.T) {
+	svc := NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	arkloopRoot := filepath.Join(t.TempDir(), "Arkloop")
+	downloadsRoot := filepath.Join(t.TempDir(), "Downloads")
+	for _, root := range []string{arkloopRoot, downloadsRoot} {
+		if err := os.Mkdir(root, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := svc.SyncBuiltInPersonas(context.Background(), ident, BuiltInPersonas()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.SaveWorkspaceRootConfig(context.Background(), ident, WorkspaceRootConfig{Path: arkloopRoot}); err != nil {
+		t.Fatal(err)
+	}
+	arkloopThread, err := svc.CreateThread(context.Background(), ident, CreateThreadInput{Title: "Arkloop", Mode: ThreadModeWork})
+	if err != nil {
+		t.Fatal(err)
+	}
+	arkloopMessage, _, err := svc.CreateMessage(context.Background(), ident, arkloopThread.ID, CreateMessageInput{Content: "看这个目录"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.StartRun(context.Background(), ident, arkloopThread.ID, StartRunInput{Source: RunSourceModelGateway, MessageID: arkloopMessage.ID, ProviderID: "custom", Model: "model"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.SaveWorkspaceRootConfig(context.Background(), ident, WorkspaceRootConfig{Path: downloadsRoot}); err != nil {
+		t.Fatal(err)
+	}
+	downloadsThread, err := svc.CreateThread(context.Background(), ident, CreateThreadInput{Title: "Downloads", Mode: ThreadModeWork})
+	if err != nil {
+		t.Fatal(err)
+	}
+	downloadsMessage, _, err := svc.CreateMessage(context.Background(), ident, downloadsThread.ID, CreateMessageInput{Content: "列一下刚选目录"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.StartRun(context.Background(), ident, downloadsThread.ID, StartRunInput{Source: RunSourceModelGateway, MessageID: downloadsMessage.ID, ProviderID: "custom", Model: "model"}); err != nil {
+		t.Fatal(err)
+	}
+
+	var downloadsContext RunContext
+	for i := 0; i < 2; i++ {
+		job, _, ok, err := svc.ClaimBackgroundJob(context.Background(), ident, ClaimBackgroundJobInput{WorkerID: fmt.Sprintf("worker_history_%d", i), LeaseSeconds: 5})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !ok {
+			t.Fatal("claim ok = false")
+		}
+		if job.ThreadID == downloadsThread.ID {
+			downloadsContext, err = svc.PrepareRunContext(context.Background(), ident, job)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	if downloadsContext.WorkspaceRoot.Path != downloadsRoot || downloadsContext.WorkspaceRoot.DisplayName != "Downloads" {
+		t.Fatalf("downloads context workspace = %+v, want %q", downloadsContext.WorkspaceRoot, downloadsRoot)
+	}
+	if downloadsContext.WorkspaceRoot.Path == arkloopRoot || downloadsContext.WorkspaceRoot.DisplayName == "Arkloop" {
+		t.Fatalf("new thread used previous workspace: %+v", downloadsContext.WorkspaceRoot)
 	}
 }
 
@@ -384,6 +504,53 @@ func TestSyncBuiltInPersonasCreatesDefaultVersionIdempotently(t *testing.T) {
 	}
 	if len(personas) != 1 || personas[0].ActiveVersion != "2026-05-25.1" || !personas[0].IsDefault {
 		t.Fatalf("personas = %+v", personas)
+	}
+}
+
+func TestSyncBuiltInPersonasUpdatesExistingVersionDefinition(t *testing.T) {
+	svc := NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	config := BuiltInPersonaConfig{
+		Slug:             "loomi-default",
+		Name:             "Loomi Default",
+		Description:      "General assistant",
+		SystemPrompt:     "prompt",
+		ModelRoute:       PersonaModelRoute{ProviderID: "custom", Model: "gpt-5.5"},
+		AllowedToolNames: []string{ToolNameCurrentTime},
+		ReasoningMode:    "balanced",
+		BudgetSummary:    "default budget",
+		Version:          "2026-05-27.2",
+		IsDefault:        true,
+	}
+	if _, err := svc.SyncBuiltInPersonas(context.Background(), ident, []BuiltInPersonaConfig{config}); err != nil {
+		t.Fatal(err)
+	}
+	config.AllowedToolNames = []string{ToolNameCurrentTime, ToolNameWorkspaceTreeSummary, ToolNameWorkspaceListDirectory}
+	if _, err := svc.SyncBuiltInPersonas(context.Background(), ident, []BuiltInPersonaConfig{config}); err != nil {
+		t.Fatal(err)
+	}
+
+	thread, err := svc.CreateThread(context.Background(), ident, CreateThreadInput{Title: "Work", Mode: ThreadModeWork})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _, err := svc.CreateMessage(context.Background(), ident, thread.ID, CreateMessageInput{Content: "分类当前目录"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.StartRun(context.Background(), ident, thread.ID, StartRunInput{Source: RunSourceModelGateway, MessageID: message.ID, ProviderID: "custom", Model: "model"}); err != nil {
+		t.Fatal(err)
+	}
+	job, _, ok, err := svc.ClaimBackgroundJob(context.Background(), ident, ClaimBackgroundJobInput{WorkerID: "worker_persona_update", LeaseSeconds: 5})
+	if err != nil || !ok {
+		t.Fatalf("claim ok=%v err=%v", ok, err)
+	}
+	context, err := svc.PrepareRunContext(context.Background(), ident, job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasToolResolution(context.EnabledTools, ToolNameWorkspaceTreeSummary) || !hasToolResolution(context.EnabledTools, ToolNameWorkspaceListDirectory) {
+		t.Fatalf("enabled tools = %+v", context.EnabledTools)
 	}
 }
 
@@ -1217,6 +1384,43 @@ func TestAppendRunEventRejectsTerminalRun(t *testing.T) {
 	}
 }
 
+func TestTerminalRunRejectsLateModelAndToolOverwrite(t *testing.T) {
+	svc := NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, CreateThreadInput{Title: "Run", Mode: ThreadModeWork})
+	if err != nil {
+		t.Fatalf("CreateThread() error = %v", err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, StartRunInput{})
+	if err != nil {
+		t.Fatalf("StartRun() error = %v", err)
+	}
+	if _, err := svc.AppendRunEvent(context.Background(), ident, run.ID, AppendRunEventInput{Category: RunEventCategoryFinal, Type: EventRunCompleted, Summary: "Run completed"}); err != nil {
+		t.Fatalf("AppendRunEvent(final) error = %v", err)
+	}
+	late := "late provider output"
+	if _, err := svc.AppendRunEvent(context.Background(), ident, run.ID, AppendRunEventInput{Category: RunEventCategoryMessage, Type: "model_output_completed", Summary: "Late model output", Content: &late}); err == nil || ErrorCode(err) != CodeInvalidRequest {
+		t.Fatalf("late model err = %v", err)
+	}
+	if _, _, err := svc.RecordToolCallRequest(context.Background(), ident, run.ID, RecordToolCallRequestInput{ToolCallID: "tc_late", ToolName: ToolNameWorkspaceRead, ArgumentsSummary: map[string]any{"path": "notes.txt"}, ArgumentsHash: "hash_late", ApprovalStatus: ToolCallApprovalApproved, ExecutionStatus: ToolCallExecutionNotStarted}); err == nil || ErrorCode(err) != CodeInvalidRequest {
+		t.Fatalf("late tool err = %v", err)
+	}
+	got, err := svc.GetRun(context.Background(), ident, run.ID)
+	if err != nil {
+		t.Fatalf("GetRun() error = %v", err)
+	}
+	if got.Status != RunStatusCompleted {
+		t.Fatalf("run overwritten = %+v", got)
+	}
+	events, err := svc.ListRunEvents(context.Background(), ident, run.ID, 0)
+	if err != nil {
+		t.Fatalf("ListRunEvents() error = %v", err)
+	}
+	if len(events) != 3 || events[2].Type != EventRunCompleted {
+		t.Fatalf("events overwritten = %+v", events)
+	}
+}
+
 func TestRunEventRedactsSecretText(t *testing.T) {
 	svc := NewMemoryService()
 	ident := identity.LocalDevIdentity()
@@ -1349,6 +1553,105 @@ func TestAppendRunEventOrdersPersistedEvents(t *testing.T) {
 	if got.Status != RunStatusCompleted || got.CompletedAt == nil {
 		t.Fatalf("run after final = %+v", got)
 	}
+}
+
+func TestRunStepLedgerProjectsDurableRunAndToolState(t *testing.T) {
+	svc := NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, CreateThreadInput{Title: "Step ledger", Mode: ThreadModeChat})
+	if err != nil {
+		t.Fatalf("CreateThread() error = %v", err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, StartRunInput{Source: RunSourceModelGateway, MessageID: "msg_1", ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatalf("StartRun() error = %v", err)
+	}
+	if _, err := svc.AppendRunEvent(context.Background(), ident, run.ID, AppendRunEventInput{Category: RunEventCategoryProgress, Type: "model_request_started", Summary: "Model request started", Metadata: map[string]any{"model_phase": "initial", "api_key": "sk-secret"}}); err != nil {
+		t.Fatalf("AppendRunEvent(model) error = %v", err)
+	}
+	if _, _, err := svc.RecordToolCallRequest(context.Background(), ident, run.ID, RecordToolCallRequestInput{ToolCallID: "tc_1", ToolName: ToolNameCurrentTime, ArgumentsSummary: map[string]any{"timezone": "UTC"}, ArgumentsHash: "hash_1", ApprovalStatus: ToolCallApprovalRequired, ExecutionStatus: ToolCallExecutionBlocked}); err != nil {
+		t.Fatalf("RecordToolCallRequest() error = %v", err)
+	}
+	if _, _, err := svc.ApproveToolCall(context.Background(), ident, thread.ID, run.ID, "tc_1"); err != nil {
+		t.Fatalf("ApproveToolCall() error = %v", err)
+	}
+	if _, _, err := svc.StartToolCallExecution(context.Background(), ident, thread.ID, run.ID, "tc_1"); err != nil {
+		t.Fatalf("StartToolCallExecution() error = %v", err)
+	}
+	if _, _, err := svc.CompleteToolCallSuccess(context.Background(), ident, thread.ID, run.ID, "tc_1", map[string]any{"iso_time": "2026-05-28T00:00:00Z", "api_key": "sk-secret"}); err != nil {
+		t.Fatalf("CompleteToolCallSuccess() error = %v", err)
+	}
+	if _, err := svc.AppendRunEvent(context.Background(), ident, run.ID, AppendRunEventInput{Category: RunEventCategoryProgress, Type: "model_request_started", Summary: "Model request started", Metadata: map[string]any{"model_phase": "continuation"}}); err != nil {
+		t.Fatalf("AppendRunEvent(continuation) error = %v", err)
+	}
+	if _, err := svc.AppendRunEvent(context.Background(), ident, run.ID, AppendRunEventInput{Category: RunEventCategoryFinal, Type: EventRunCompleted, Summary: "Run completed"}); err != nil {
+		t.Fatalf("AppendRunEvent(final) error = %v", err)
+	}
+	events, err := svc.ListRunEvents(context.Background(), ident, run.ID, 0)
+	if err != nil {
+		t.Fatalf("ListRunEvents() error = %v", err)
+	}
+	var continuationEvent RunEvent
+	for _, event := range events {
+		if event.Type == "model_request_started" && event.Metadata["model_phase"] == "continuation" {
+			continuationEvent = event
+		}
+	}
+	if continuationEvent.Metadata["run_step_kind"] != string(RunStepKindContinuation) || continuationEvent.Metadata["run_step_status"] != string(RunStepStatusRunning) || continuationEvent.Metadata["run_step_summary"] != "Model request started" {
+		t.Fatalf("continuation event step metadata = %+v", continuationEvent.Metadata)
+	}
+
+	ledger := BuildRunStepLedger(events)
+	got := runStepKindsAndStatuses(ledger)
+	want := []string{
+		"model_request:running",
+		"tool_requested:pending",
+		"approval:required",
+		"approval:approved",
+		"tool_execution:running",
+		"tool_execution:succeeded",
+		"continuation:running",
+		"terminal:completed",
+	}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("ledger = %v, want %v", got, want)
+	}
+	for _, step := range ledger {
+		if strings.Contains(step.Summary, "sk-secret") {
+			t.Fatalf("step summary leaked secret: %+v", step)
+		}
+		if step.Kind == RunStepKindToolExecution && step.Status == RunStepStatusSucceeded && step.ToolCallID != "tc_1" {
+			t.Fatalf("tool execution step = %+v", step)
+		}
+	}
+}
+
+func TestRunStepLedgerSeparatesPendingToolFromCompletedResult(t *testing.T) {
+	events := []RunEvent{
+		{Sequence: 1, Type: EventToolCallRequested, Summary: "Tool call requested", Metadata: map[string]any{"tool_call_id": "tc_done", "tool_name": ToolNameWorkspaceRead, "arguments_summary": map[string]any{"path": "notes.txt"}}},
+		{Sequence: 2, Type: EventToolCallSucceeded, Summary: "Tool call succeeded", Metadata: map[string]any{"tool_call_id": "tc_done", "tool_name": ToolNameWorkspaceRead, "result_summary": map[string]any{"path": "notes.txt", "content": "done"}}},
+		{Sequence: 3, Type: EventToolCallRequested, Summary: "Tool call requested", Metadata: map[string]any{"tool_call_id": "tc_pending", "tool_name": ToolNameWorkspaceGrep, "arguments_summary": map[string]any{"query": "needle"}}},
+	}
+
+	state := RebuildRunStepState(events)
+
+	if len(state.CompletedToolResults) != 1 || state.CompletedToolResults[0].ToolCallID != "tc_done" {
+		t.Fatalf("completed = %+v", state.CompletedToolResults)
+	}
+	if len(state.PendingToolCalls) != 1 || state.PendingToolCalls[0].ToolCallID != "tc_pending" {
+		t.Fatalf("pending = %+v", state.PendingToolCalls)
+	}
+	if state.NextAction != RunStepNextActionWaitForToolApproval {
+		t.Fatalf("next action = %q", state.NextAction)
+	}
+}
+
+func runStepKindsAndStatuses(steps []RunStep) []string {
+	result := make([]string, 0, len(steps))
+	for _, step := range steps {
+		result = append(result, string(step.Kind)+":"+string(step.Status))
+	}
+	return result
 }
 
 func ptr[T any](v T) *T { return &v }

@@ -3,11 +3,13 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -157,6 +159,7 @@ flags:
 flags:
   --host <url>          Loomi API host
   --provider <id>       provider id to check
+  --desktop             include desktop workspace readiness
   --output text|json`)
 		return err
 	case "smoke":
@@ -169,9 +172,11 @@ flags:
   --persona <id>                persona id
   --mode <chat|work>            thread mode, default from config
   --thread <id>                 use an existing thread
+  --workspace <path>            select workspace root for this smoke
   --prompt <text>               prompt to send
   --auto-approve                approve tool calls for this smoke only
   --timeout <duration>          smoke timeout, for example 2m
+  --failure-log <path>          write blocked/failed evidence JSON
   --output text|json`)
 		return err
 	case "run":
@@ -306,10 +311,12 @@ func cmdSmokeAgent(ctx context.Context, args []string, stdout io.Writer) error {
 	persona := fs.String("persona", cfg.Persona, "persona id")
 	mode := fs.String("mode", cfg.Mode, "thread mode")
 	threadID := fs.String("thread", "", "existing thread id")
+	workspace := fs.String("workspace", "", "workspace root path to select before the run")
 	prompt := fs.String("prompt", "Loomi harness smoke: read AGENTS.md, then reply with a one sentence completion marker.", "prompt")
 	autoApprove := fs.Bool("auto-approve", false, "approve tool calls for this smoke only")
 	timeout := fs.Duration("timeout", 2*time.Minute, "smoke timeout")
 	output := fs.String("output", "text", "text or json")
+	failureLog := fs.String("failure-log", "", "write blocked/failed smoke evidence JSON to this path")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -330,10 +337,17 @@ func cmdSmokeAgent(ctx context.Context, args []string, stdout io.Writer) error {
 		Provider:    *provider,
 		Model:       *model,
 		Persona:     *persona,
+		Workspace:   *workspace,
 		AutoApprove: *autoApprove,
 	})
 	if err != nil {
 		return err
+	}
+	if !result.OK && strings.TrimSpace(*failureLog) != "" {
+		result.FailureLogPath = strings.TrimSpace(*failureLog)
+		if err := writeSmokeFailureLog(result.FailureLogPath, result); err != nil {
+			return err
+		}
 	}
 	renderer := cli.Renderer{Out: stdout}
 	if *output == "json" {
@@ -347,6 +361,18 @@ func cmdSmokeAgent(ctx context.Context, args []string, stdout io.Writer) error {
 		return exitError{code: 1}
 	}
 	return nil
+}
+
+func writeSmokeFailureLog(path string, result cli.SmokeAgentResult) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(result, "", "  ")
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+	return os.WriteFile(path, data, 0o600)
 }
 
 func cmdVersion(args []string, stdout io.Writer) error {
@@ -377,6 +403,7 @@ func cmdDoctor(ctx context.Context, args []string, stdout io.Writer) error {
 	fs.SetOutput(io.Discard)
 	host := fs.String("host", cfg.Host, "Loomi API host")
 	provider := fs.String("provider", cfg.Provider, "provider id")
+	desktop := fs.Bool("desktop", false, "include desktop workspace readiness")
 	output := fs.String("output", "text", "text or json")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -386,7 +413,13 @@ func cmdDoctor(ctx context.Context, args []string, stdout io.Writer) error {
 	}
 	cfg.Host = *host
 	cfg.Provider = *provider
-	report := cli.RunDoctor(ctx, newClient(cfg, *host), cfg)
+	client := newClient(cfg, *host)
+	var report cli.DoctorReport
+	if *desktop {
+		report = cli.RunDesktopDoctor(ctx, client, cfg)
+	} else {
+		report = cli.RunDoctor(ctx, client, cfg)
+	}
 	renderer := cli.Renderer{Out: stdout}
 	if *output == "json" {
 		if err := renderer.PrintJSON(report); err != nil {
@@ -450,7 +483,7 @@ func cmdConfigShow(args []string, stdout io.Writer) error {
 	if *output == "json" {
 		return renderer.PrintJSON(cfg)
 	}
-	_, err = fmt.Fprintf(stdout, "path\t%s\nfound\t%v\nhost\t%s\napi_token_set\t%v\nmode\t%s\nprovider\t%s\nmodel\t%s\npersona\t%s\nscript\t%s\n", cfg.Path, cfg.Found, cfg.Host, strings.TrimSpace(cfg.APIToken) != "", cfg.Mode, cfg.Provider, cfg.Model, cfg.Persona, cfg.Script)
+	_, err = fmt.Fprintf(stdout, "path\t%s\nfound\t%v\nhost\t%s\napi_token_set\t%v\nmode\t%s\nprovider\t%s\nmodel\t%s\npersona\t%s\nscript\t%s\n", "[redacted]", cfg.Found, cfg.Host, strings.TrimSpace(cfg.APIToken) != "", cfg.Mode, cfg.Provider, cfg.Model, cfg.Persona, cfg.Script)
 	return err
 }
 
@@ -473,7 +506,7 @@ func cmdConfigSet(args []string, stdout io.Writer) error {
 	if err := cli.SaveConfigFile(cfg); err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(stdout, "set %s in %s\n", fs.Arg(0), cfg.Path)
+	_, err = fmt.Fprintf(stdout, "set %s in config\n", fs.Arg(0))
 	return err
 }
 
@@ -496,7 +529,7 @@ func cmdConfigUnset(args []string, stdout io.Writer) error {
 	if err := cli.SaveConfigFile(cfg); err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(stdout, "unset %s in %s\n", fs.Arg(0), cfg.Path)
+	_, err = fmt.Fprintf(stdout, "unset %s in config\n", fs.Arg(0))
 	return err
 }
 

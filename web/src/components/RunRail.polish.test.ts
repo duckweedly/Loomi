@@ -16,18 +16,18 @@ describe('RunRail restrained runtime polish', () => {
     expect(source).not.toContain('失败剧本')
   })
 
-  test('uses a ghost stop action label', () => {
+  test('keeps stop out of the runtime rail because the composer primary button owns it', () => {
     const source = readFileSync(resolve(import.meta.dir, 'RunRail.tsx'), 'utf8')
 
     expect(source).toContain('Stop run')
-    expect(source).toContain('runtime-stop-button ghost')
+    expect(source).not.toContain('runtime-stop-button ghost')
   })
 
   test('styles timeline with quiet dots and compact agent card', () => {
     const css = [
       readFileSync(resolve(import.meta.dir, '../styles.css'), 'utf8'),
       readFileSync(resolve(import.meta.dir, '../styles/30-runtime-panels.css'), 'utf8'),
-      readFileSync(resolve(import.meta.dir, '../styles/91-commercial-product.css'), 'utf8'),
+      readFileSync(resolve(import.meta.dir, '../styles/92-unified-workspace.css'), 'utf8'),
     ].join('\n')
 
     expect(css).toContain('.progress-row::before')

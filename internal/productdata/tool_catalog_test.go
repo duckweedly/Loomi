@@ -256,6 +256,14 @@ func TestToolCatalogIncludesArtifactRuntimeTools(t *testing.T) {
 		if name == ToolNameArtifactCreateText && tool.SafeMetadata["read_only"] != false {
 			t.Fatalf("create_text should be mutation-like artifact tool: %+v", tool)
 		}
+		if name == ToolNameArtifactCreateText {
+			args, _ := tool.SafeMetadata["arguments"].([]string)
+			for _, want := range []string{"title", "filename", "mime_type", "display", "content", "max_bytes"} {
+				if !stringSliceContains(args, want) {
+					t.Fatalf("create_text arguments missing %s: %+v", want, tool)
+				}
+			}
+		}
 		if name != ToolNameArtifactCreateText && tool.SafeMetadata["read_only"] != true {
 			t.Fatalf("%s should be read-only artifact tool: %+v", name, tool)
 		}
@@ -575,6 +583,15 @@ func catalogToolByName(tools []ToolCatalogEntry, name string) ToolCatalogEntry {
 		}
 	}
 	return ToolCatalogEntry{}
+}
+
+func stringSliceContains(values []string, needle string) bool {
+	for _, value := range values {
+		if value == needle {
+			return true
+		}
+	}
+	return false
 }
 
 func catalogResolutionByName(tools []ToolResolution, name string) ToolResolution {

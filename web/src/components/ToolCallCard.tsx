@@ -1,12 +1,21 @@
 import { useState } from 'react'
 import { Button } from 'animal-island-ui'
-import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Clock3, Search, ShieldCheck, Terminal, XCircle } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Clock3, FileText, FolderSearch, Search, ShieldCheck, Terminal, XCircle } from 'lucide-react'
 import type { ToolCall } from '../domain'
 import type { Locale } from '../i18n'
+import { getToolCallArtifact, type PreviewArtifact } from '../runtime/artifactPreview'
 import { formatSafeToolPreview, humanToolName, redactPreviewText } from '../runtime/toolPreview'
 
 type ToolAction = (toolCall: ToolCall) => Promise<void> | void
 type PhaseState = 'done' | 'active' | 'pending' | 'failed'
+type Props = {
+  toolCall: ToolCall
+  onApprove?: ToolAction
+  onDeny?: ToolAction
+  locale?: Locale
+  defaultExpanded?: boolean
+  onOpenArtifact?: (artifact: PreviewArtifact) => void
+}
 
 const copy = {
   zh: {
@@ -45,6 +54,26 @@ const copy = {
   },
 }
 
+function ArtifactResourceCard({ artifact, locale, onOpen }: { artifact: PreviewArtifact; locale: Locale; onOpen?: (artifact: PreviewArtifact) => void }) {
+  const kind = artifact.kind === 'markdown'
+    ? locale === 'zh' ? 'Markdown 文档' : 'Markdown document'
+    : locale === 'zh' ? '文档' : 'Document'
+  return (
+    <button
+      type="button"
+      className="artifact-resource-card"
+      aria-label={locale === 'zh' ? `打开 ${artifact.title}` : `Open ${artifact.title}`}
+      onClick={() => onOpen?.(artifact)}
+    >
+      <span className="artifact-resource-icon"><FileText size={17} /></span>
+      <span className="artifact-resource-copy">
+        <strong>{artifact.title}</strong>
+        <small>{kind}</small>
+      </span>
+    </button>
+  )
+}
+
 function statusLabel(status: ToolCall['status'], locale: Locale) {
   if (locale === 'zh') {
     if (status === 'approval_required') return '等待确认'
@@ -70,6 +99,13 @@ function StatusIcon({ status }: { status: ToolCall['status'] }) {
   if (status === 'denied' || status === 'cancelled') return <XCircle size={14} />
   if (status === 'running' || status === 'executing') return <Clock3 size={14} />
   return <CheckCircle2 size={14} />
+}
+
+function ToolIcon({ name }: { name: string }) {
+  if (name === 'web.search' || name.startsWith('web.')) return <Search size={14} />
+  if (name.startsWith('workspace.grep') || name.startsWith('workspace.glob') || name.startsWith('lsp.')) return <FolderSearch size={14} />
+  if (name.startsWith('workspace.') || name.startsWith('artifact.')) return <FileText size={14} />
+  return <Terminal size={14} />
 }
 
 function phaseStates(toolCall: ToolCall): PhaseState[] {
@@ -101,23 +137,35 @@ function webSearchSources(toolCall: ToolCall) {
     .slice(0, 3)
 }
 
-export function ToolCallCard({ toolCall, onApprove, onDeny, locale = 'en' }: { toolCall: ToolCall; onApprove?: ToolAction; onDeny?: ToolAction; locale?: Locale }) {
+function workspaceLabel(toolCall: ToolCall) {
+  if (!toolCall.name.startsWith('workspace.')) return ''
+  const result = toolCall.resultSummary
+  if (!result || typeof result !== 'object' || Array.isArray(result)) return ''
+  const label = (result as Record<string, unknown>).workspace_label
+  return typeof label === 'string' ? redactPreviewText(label).trim() : ''
+}
+
+export function ToolCallCard({ toolCall, onApprove, onDeny, locale = 'en', defaultExpanded = false, onOpenArtifact }: Props) {
   const [pendingAction, setPendingAction] = useState<'approve' | 'deny' | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
-  const [expanded, setExpanded] = useState(false)
+  const [expanded, setExpanded] = useState(defaultExpanded)
   const text = copy[locale]
   const argumentsSummary = formatSafeToolPreview(toolCall.argumentsSummary, locale)
   const resultSummary = formatSafeToolPreview(toolCall.resultSummary, locale)
   const inputPreview = argumentsSummary || redactPreviewText(toolCall.input)
   const outputPreview = resultSummary || redactPreviewText(toolCall.output)
+  const workspace = workspaceLabel(toolCall)
+  const workspacePreview = workspace ? `${locale === 'zh' ? '正在读取' : 'Reading'}：${workspace}` : ''
   const displayName = humanToolName(toolCall.name, locale)
   const approvalRequired = toolCall.status === 'approval_required'
   const hasDetails = Boolean(inputPreview || outputPreview || toolCall.errorMessage)
-  const compactPreview = approvalRequired
-    ? inputPreview
-    : outputPreview || inputPreview
+  const attentionState = approvalRequired || toolCall.status === 'running' || toolCall.status === 'executing' || toolCall.status === 'failed'
+  const compactPreview = attentionState
+    ? toolCall.status === 'failed' ? outputPreview || inputPreview : inputPreview || outputPreview
+    : workspacePreview || inputPreview
   const sources = webSearchSources(toolCall)
   const phases = phaseStates(toolCall)
+  const showPhaseStrip = approvalRequired || toolCall.status === 'running' || toolCall.status === 'executing'
   const summary = approvalRequired
     ? text.waiting
     : toolCall.status === 'succeeded'
@@ -128,6 +176,7 @@ export function ToolCallCard({ toolCall, onApprove, onDeny, locale = 'en' }: { t
           ? text.deniedSummary
           : text.runningSummary
   const terminal = toolCall.status === 'denied' || toolCall.status === 'succeeded' || toolCall.status === 'failed' || toolCall.status === 'cancelled'
+  const artifact = terminal ? getToolCallArtifact(toolCall) : null
   const actionsDisabled = !approvalRequired || terminal || pendingAction !== null || !onApprove || !onDeny
   const runAction = async (action: 'approve' | 'deny', handler?: ToolAction) => {
     if (!handler || actionsDisabled) return
@@ -141,24 +190,37 @@ export function ToolCallCard({ toolCall, onApprove, onDeny, locale = 'en' }: { t
       setPendingAction(null)
     }
   }
+  if (artifact && toolCall.status !== 'failed') {
+    return (
+      <div className="tool-artifact-row">
+        <ArtifactResourceCard artifact={artifact} locale={locale} onOpen={onOpenArtifact} />
+      </div>
+    )
+  }
+
   return (
-    <div className={`tool-card status-${toolCall.status}${expanded ? ' expanded' : ''}${approvalRequired ? ' needs-approval' : ''}`}>
+    <div className={`tool-card status-${toolCall.status}${expanded ? ' expanded' : ''}${approvalRequired ? ' needs-approval' : ''}${attentionState ? '' : ' compact'}`}>
       <button className="tool-card-header" type="button" disabled={!hasDetails} aria-expanded={expanded} onClick={() => setExpanded((value) => !value)}>
-        <span>{toolCall.name === 'web.search' ? <Search size={14} /> : <Terminal size={14} />} {displayName}</span>
+        <span className="tool-card-title"><ToolIcon name={toolCall.name} /> {displayName}</span>
+        {!attentionState && compactPreview && <span className="tool-card-preview">{compactPreview}</span>}
         <span className="tool-card-meta">
           <span className="tool-status-pill">{statusLabel(toolCall.status, locale)}</span>
           {hasDetails && (expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />)}
         </span>
       </button>
-      <div className="tool-summary">
-        <StatusIcon status={toolCall.status} />
-        <span>{summary}</span>
-        {compactPreview && <em>{compactPreview}</em>}
-      </div>
-      <div className="tool-phase-strip" aria-label={locale === 'zh' ? '工具阶段' : 'Tool phases'}>
-        {text.phases.map((phase, index) => <span className={`tool-phase ${phases[index]}`} key={phase}>{phase}</span>)}
-      </div>
-      {sources.length > 0 && (
+      {attentionState && (
+        <div className="tool-summary">
+          <StatusIcon status={toolCall.status} />
+          {(showPhaseStrip || toolCall.status === 'failed' || toolCall.status === 'denied' || toolCall.status === 'cancelled') && <span>{summary}</span>}
+          {compactPreview && <em>{compactPreview}</em>}
+        </div>
+      )}
+      {showPhaseStrip && (
+        <div className="tool-phase-strip" aria-label={locale === 'zh' ? '工具阶段' : 'Tool phases'}>
+          {text.phases.map((phase, index) => <span className={`tool-phase ${phases[index]}`} key={phase}>{phase}</span>)}
+        </div>
+      )}
+      {expanded && sources.length > 0 && (
         <div className="tool-source-list" aria-label={text.sources}>
           <strong>{text.sources}</strong>
           {sources.map((source, index) => (
@@ -176,9 +238,9 @@ export function ToolCallCard({ toolCall, onApprove, onDeny, locale = 'en' }: { t
         </div>
       )}
       {expanded && (
-        <div className="tool-grid">
-          <div><span>{text.input}</span>{inputPreview || '-'}</div>
-          <div><span>{text.output}</span>{outputPreview || '-'}</div>
+        <div className="tool-detail-panel">
+          {inputPreview && <div><span>{text.input}</span><p>{inputPreview}</p></div>}
+          {outputPreview && <div><span>{text.output}</span><p>{outputPreview}</p></div>}
         </div>
       )}
       {expanded && toolCall.errorMessage && <div className="tool-error">{toolCall.errorCode ? `${toolCall.errorCode}: ` : ''}{redactPreviewText(toolCall.errorMessage)}</div>}

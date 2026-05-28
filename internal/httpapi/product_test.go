@@ -225,7 +225,7 @@ func TestMessageListProjectsAssistantRunID(t *testing.T) {
 
 func TestAPIPreflightAllowsBrowserWrites(t *testing.T) {
 	srv := NewServerWithProduct(config.Config{AppEnv: "local"}, fakeChecker{}, productdata.NewMemoryService())
-	for _, origin := range []string{"http://127.0.0.1:5173", "http://localhost:5173"} {
+	for _, origin := range []string{"http://127.0.0.1:5173", "http://localhost:5173", "http://127.0.0.1:5181"} {
 		t.Run(origin, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodOptions, "/v1/threads", nil)
 			req.Header.Set("Origin", origin)
@@ -244,7 +244,7 @@ func TestAPIPreflightAllowsBrowserWrites(t *testing.T) {
 			if res.Header().Get("Access-Control-Allow-Methods") != "GET, POST, PUT, PATCH, DELETE, OPTIONS" {
 				t.Fatalf("allow methods = %q", res.Header().Get("Access-Control-Allow-Methods"))
 			}
-			if res.Header().Get("Access-Control-Allow-Headers") != "Content-Type" {
+			if res.Header().Get("Access-Control-Allow-Headers") != "Content-Type, Authorization" {
 				t.Fatalf("allow headers = %q", res.Header().Get("Access-Control-Allow-Headers"))
 			}
 			if res.Header().Get("Access-Control-Allow-Credentials") != "" {
@@ -256,7 +256,7 @@ func TestAPIPreflightAllowsBrowserWrites(t *testing.T) {
 
 func TestAPIPreflightRejectsNonLocalOrigin(t *testing.T) {
 	srv := NewServerWithProduct(config.Config{AppEnv: "local"}, fakeChecker{}, productdata.NewMemoryService())
-	for _, origin := range []string{"https://example.com", "http://127.0.0.1:5174", "http://localhost:3000"} {
+	for _, origin := range []string{"https://example.com", "http://192.168.1.2:5173", "https://localhost:5173", "http://localhost"} {
 		t.Run(origin, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodOptions, "/v1/threads", nil)
 			req.Header.Set("Origin", origin)

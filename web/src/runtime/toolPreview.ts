@@ -73,6 +73,7 @@ const keyLabels = {
     status_code: '状态',
     timezone: '时区',
     iso_time: '时间',
+    workspace_label: '工作区',
   },
   en: {},
 } as const
@@ -81,6 +82,7 @@ const allowedKeys = new Set([
   'timezone',
   'iso_time',
   'local_time',
+  'workspace_label',
   'query',
   'pattern',
   'limit',

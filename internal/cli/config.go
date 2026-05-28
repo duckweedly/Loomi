@@ -83,7 +83,7 @@ func (cfg Config) MarshalJSON() ([]byte, error) {
 		Script      string `json:"script"`
 	}
 	return json.Marshal(safeConfig{
-		Path:        cfg.Path,
+		Path:        safeConfigPath(cfg.Path),
 		Found:       cfg.Found,
 		Host:        cfg.Host,
 		APITokenSet: strings.TrimSpace(cfg.APIToken) != "",
@@ -93,6 +93,13 @@ func (cfg Config) MarshalJSON() ([]byte, error) {
 		Persona:     cfg.Persona,
 		Script:      cfg.Script,
 	})
+}
+
+func safeConfigPath(path string) string {
+	if strings.TrimSpace(path) == "" {
+		return ""
+	}
+	return "[redacted]"
 }
 
 func SaveConfigFile(cfg Config) error {

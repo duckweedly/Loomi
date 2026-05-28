@@ -38,6 +38,8 @@ The API never returns the local absolute workspace root.
 
 `POST /v1/workspace/root` accepts an absolute folder path chosen by the local desktop shell and persists it for the local user. It does not update `LOOMI_WORKSPACE_ROOT` or any process-global execution boundary. Each new run snapshots the selected root into the background job metadata, `RunContext`, and tool invocation; approved-tool resume jobs preserve that same snapshot. Responses still return only `configured` and `display_name`; they do not echo the absolute path. When no folder has been selected and no explicit local-test `LOOMI_WORKSPACE_ROOT` is present at run creation, workspace tools fail before reading instead of defaulting to the user's home directory.
 
+RunContext also carries a safe `workspace_label`, derived from the selected folder basename, for provider prompts and UI summaries. If a previous thread used `Arkloop` and the current thread starts after selecting `Downloads`, the new run uses the `Downloads` snapshot and label. User phrases such as `current directory`, `this directory`, `selected directory`, `just selected directory`, `当前目录`, `这个目录`, and `刚选目录` always mean the selected workspace root for the current run. `download directory` / `下载目录` only means Downloads when the selected workspace label is `Downloads`; otherwise the agent must ask the user to choose Downloads before using workspace tools.
+
 ## Tool Arguments
 
 `workspace.glob`:
@@ -85,6 +87,19 @@ tool_call_failed
 `workspace.glob`, `workspace.grep`, `workspace.read`, `workspace.list_directory`, and `workspace.tree_summary` are bounded read-only tools. After the user has selected a workspace root, they are recorded as auto-approved and executed by the worker without a per-call confirmation prompt. Mutating workspace tools still require explicit approval.
 
 Metadata includes `tool_source=builtin`, `tool_group=workspace`, redacted arguments, approval status, execution status, and safe result/error metadata.
+
+Successful workspace tool results include `workspace_label` so RunRail and tool cards can say which selected workspace is being read without exposing the host absolute path:
+
+```json
+{
+  "tool": "workspace.read",
+  "scope": "workspace",
+  "workspace_label": "Downloads",
+  "path": "receipt.txt",
+  "bytes_read": 128,
+  "truncated": false
+}
+```
 
 `workspace.glob` skips generated dependency/cache folders such as `node_modules`, `dist`, `build`, `.next`, `.vite`, `.venv`, `.claude`, `.cache`, `.git`, `target`, and `vendor`, and returns `skipped_dir_count`. `workspace.grep`, `workspace.list_directory`, and `workspace.tree_summary` use the same skip list. Grep skips oversized files and stops after a bounded scanned-file budget; directory tools stop after `max_entries` and cap depth at `3`.
 

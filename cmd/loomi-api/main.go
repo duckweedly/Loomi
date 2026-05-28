@@ -59,7 +59,7 @@ func main() {
 	localRunner := productruntime.NewLocalRunner(product, broadcaster)
 	mcpConfigs := mcpServerConfigs(ctx, product)
 	if product != nil && cfg.WorkerQueueEnabled && !cfg.WorkerQueuePaused {
-		worker := productruntime.NewWorker(product, broadcaster, productruntime.QueuedRunRouter{Local: localRunner, Gateway: gateway, MCPExecutor: productruntime.StdioMCPToolExecutor{Configs: mcpConfigs, ConfigLoader: func(loaderCtx context.Context) (map[string]productruntime.MCPServerConfig, error) {
+		worker := productruntime.NewWorker(product, broadcaster, productruntime.QueuedRunRouter{Local: localRunner, Gateway: gateway, SandboxStore: sandboxProcessStore(product), MCPExecutor: productruntime.StdioMCPToolExecutor{Configs: mcpConfigs, ConfigLoader: func(loaderCtx context.Context) (map[string]productruntime.MCPServerConfig, error) {
 			return mcpServerConfigs(loaderCtx, product), nil
 		}}, WebExecutor: productruntime.WebToolExecutor{TavilyAPIKey: cfg.TavilyAPIKey, BraveAPIKey: cfg.BraveSearchAPIKey}})
 		worker.LeaseSeconds = cfg.WorkerLeaseSeconds
@@ -80,6 +80,14 @@ func productServiceForPool(pool *pgxpool.Pool) productdata.Service {
 		return nil
 	}
 	return productdata.NewPostgresRepository(pool)
+}
+
+func sandboxProcessStore(product productdata.Service) *productruntime.SandboxProcessStore {
+	repo, ok := product.(productdata.SandboxProcessRepository)
+	if !ok {
+		return nil
+	}
+	return productruntime.NewSandboxProcessStoreWithRepository(repo, productruntime.SandboxProcessStoreOptions{})
 }
 
 func identityLocalDev() identity.LocalIdentity {

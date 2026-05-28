@@ -111,6 +111,51 @@ describe('RunRail tool continuation runtime states', () => {
     expect(html).toContain('Read project files failed')
   })
 
+  test('shows workspace label for workspace tool events without absolute paths', () => {
+    const html = renderToStaticMarkup(createElement(RunRail, {
+      run: {
+        id: 'run-a',
+        threadId: 'thread-a',
+        status: 'completed',
+        model: 'Model gateway',
+        context: 'model_gateway',
+        events: [
+          { id: 'evt-succeeded', sequence: 1, type: 'tool.call.succeeded', label: 'tool', detail: 'Tool call succeeded', time: 'Now', status: 'running', group: 'tool-call', metadata: { tool_group: 'workspace', tool_name: 'workspace.read', result_summary: { workspace_label: 'Downloads', path: '/Users/xuean/Downloads/receipt.txt', bytes_read: 6 } } },
+        ],
+      },
+      open: true,
+      locale: 'zh',
+    }))
+
+    expect(html).toContain('读取项目文件 完成')
+    expect(html).toContain('工作区: Downloads')
+    expect(html).not.toContain('receipt.txt')
+    expect(html).not.toContain('/Downloads/receipt')
+  })
+
+  test('keeps failed run tool history visible for real smoke regression', () => {
+    const html = renderToStaticMarkup(createElement(RunRail, {
+      run: {
+        id: 'run-a',
+        threadId: 'thread-a',
+        status: 'failed',
+        model: 'local_codex',
+        context: 'model_gateway',
+        events: [
+          { id: 'evt-list', sequence: 1, type: 'tool.call.succeeded', label: 'tool', detail: 'Tool call succeeded', time: 'Now', status: 'completed', group: 'tool-call', metadata: { tool_group: 'workspace', tool_name: 'workspace.list_directory', result_summary: { operation: 'list_directory', returned_entries: 4 } } },
+          { id: 'evt-read', sequence: 2, type: 'tool.call.failed', label: 'tool', detail: 'Tool call failed', time: 'Now', status: 'failed', group: 'tool-call', severity: 'error', metadata: { tool_group: 'workspace', tool_name: 'workspace.read', result_summary: { operation: 'read', error_code: 'workspace_file_missing' } } },
+          { id: 'evt-failed', sequence: 3, type: 'run.failed', label: 'run', detail: 'Run failed', time: 'Now', status: 'failed', group: 'run-lifecycle' },
+        ],
+      },
+      open: true,
+    }))
+
+    expect(html).toContain('Run failed')
+    expect(html).toContain('Read directory completed')
+    expect(html).toContain('Read project files failed')
+    expect(html).toContain('operation: read')
+  })
+
   test('shows workspace mutation risk and write-capable lifecycle states without raw content', () => {
     const html = renderToStaticMarkup(createElement(RunRail, {
       run: {
@@ -429,7 +474,7 @@ describe('RunRail tool continuation runtime states', () => {
     expect(html).toContain('Loop 1/3')
     expect(html).toContain('Tool loop limit reached')
     expect(html).toContain('Run stopped')
-    expect(html).toContain('Stop run')
+    expect(html).not.toContain('Stop run')
     expect(html).not.toContain('Continuation model phase')
   })
 })

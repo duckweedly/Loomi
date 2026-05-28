@@ -13,23 +13,34 @@ type SmokeAgentOptions struct {
 	Provider    string
 	Model       string
 	Persona     string
+	Workspace   string
 	AutoApprove bool
 }
 
 type SmokeAgentResult struct {
-	OK             bool               `json:"ok"`
-	Stage          string             `json:"stage"`
-	ThreadID       string             `json:"thread_id,omitempty"`
-	RunID          string             `json:"run_id,omitempty"`
-	FinalStage     string             `json:"final_stage,omitempty"`
-	Status         string             `json:"status,omitempty"`
-	BlockedReason  string             `json:"blocked_reason,omitempty"`
-	Remedy         string             `json:"remedy,omitempty"`
-	Provider       ProviderCapability `json:"provider,omitempty"`
-	EventCount     int                `json:"event_count,omitempty"`
-	ToolEventCount int                `json:"tool_event_count,omitempty"`
-	ApprovalCount  int                `json:"approval_count,omitempty"`
-	LastEvents     []string           `json:"last_events,omitempty"`
+	OK                   bool               `json:"ok"`
+	Stage                string             `json:"stage"`
+	ThreadID             string             `json:"thread_id,omitempty"`
+	RunID                string             `json:"run_id,omitempty"`
+	FinalStage           string             `json:"final_stage,omitempty"`
+	Status               string             `json:"status,omitempty"`
+	BlockedReason        string             `json:"blocked_reason,omitempty"`
+	Remedy               string             `json:"remedy,omitempty"`
+	Provider             ProviderCapability `json:"provider,omitempty"`
+	Workspace            string             `json:"workspace,omitempty"`
+	EventCount           int                `json:"event_count,omitempty"`
+	ToolEventCount       int                `json:"tool_event_count,omitempty"`
+	ApprovalCount        int                `json:"approval_count,omitempty"`
+	PendingApprovalCount int                `json:"pending_approval_count,omitempty"`
+	ToolChain            []string           `json:"tool_chain,omitempty"`
+	ToolOrder            []string           `json:"tool_order,omitempty"`
+	FinalPersisted       bool               `json:"final_persisted,omitempty"`
+	ReplayOK             bool               `json:"replay_ok,omitempty"`
+	ReplayEventCount     int                `json:"replay_event_count,omitempty"`
+	ReplayTerminalStage  string             `json:"replay_terminal_stage,omitempty"`
+	FailureLogPath       string             `json:"failure_log_path,omitempty"`
+	FinalMessage         string             `json:"final_message,omitempty"`
+	LastEvents           []string           `json:"last_events,omitempty"`
 }
 
 func RunAgentSmoke(ctx context.Context, client *Client, cfg Config, opts SmokeAgentOptions) (SmokeAgentResult, error) {
@@ -42,6 +53,16 @@ func RunAgentSmoke(ctx context.Context, client *Client, cfg Config, opts SmokeAg
 		result.BlockedReason = "api_unavailable"
 		result.Remedy = "Start loomi-api or set LOOMI_HOST / loomi config set host."
 		return result, nil
+	}
+	if workspace := strings.TrimSpace(opts.Workspace); workspace != "" {
+		result.Stage = "workspace_root"
+		config, err := client.SaveWorkspaceRoot(ctx, workspace)
+		if err != nil {
+			result.BlockedReason = "workspace_root_unavailable"
+			result.Remedy = err.Error()
+			return result, nil
+		}
+		result.Workspace = config.DisplayName
 	}
 
 	providerID := strings.TrimSpace(firstNonEmpty(opts.Provider, cfg.Provider))
@@ -96,7 +117,19 @@ func RunAgentSmoke(ctx context.Context, client *Client, cfg Config, opts SmokeAg
 	result.EventCount = len(events)
 	result.ToolEventCount = countToolEvents(events)
 	result.ApprovalCount = countApprovalRequired(events)
+	result.PendingApprovalCount = len(runResult.PendingApprovals)
+	result.ToolChain = toolChain(events)
+	result.ToolOrder = result.ToolChain
 	result.LastEvents = lastEventSummaries(events, 3)
+	finalMessage, err := finalAssistantMessage(ctx, client, result.ThreadID, result.RunID)
+	if err != nil {
+		result.Stage = "final_message"
+		result.BlockedReason = "final_message_read_error"
+		result.Remedy = err.Error()
+		return result, nil
+	}
+	result.FinalMessage = finalMessage
+	result.FinalPersisted = strings.TrimSpace(result.FinalMessage) != ""
 	result.OK = runResult.Status == "completed"
 	if !result.OK {
 		result.Stage = finalStage(events, runResult.Status)
@@ -109,8 +142,77 @@ func RunAgentSmoke(ctx context.Context, client *Client, cfg Config, opts SmokeAg
 		}
 		return result, nil
 	}
+	if result.PendingApprovalCount > 0 {
+		result.Stage = "pending_approval"
+		result.OK = false
+		result.BlockedReason = "pending_approval"
+		result.Remedy = "Run reached a terminal state with unresolved tool approval events; inspect approval and tool terminal events."
+		return result, nil
+	}
+	if strings.TrimSpace(result.FinalMessage) == "" {
+		result.Stage = "final_message"
+		result.OK = false
+		result.BlockedReason = "final_message_missing"
+		result.Remedy = "Run completed but no persisted assistant message was returned by /v1/threads/{thread_id}/messages."
+		return result, nil
+	}
+	if strings.TrimSpace(result.FinalMessage) == "[redacted]" {
+		result.Stage = "final_message"
+		result.OK = false
+		result.BlockedReason = "final_message_redacted"
+		result.Remedy = "The final assistant message was only [redacted]; inspect tool-result continuation and finalization."
+		return result, nil
+	}
+	if isInvalidSmokeFinalMessage(result.FinalMessage) {
+		result.Stage = "final_message"
+		result.OK = false
+		result.BlockedReason = "final_message_placeholder"
+		result.Remedy = "The final assistant message is a generated failure placeholder; inspect run finalization and persisted assistant messages."
+		return result, nil
+	}
+	replayEvents, err := client.ListEvents(ctx, result.RunID, 0)
+	if err != nil {
+		result.Stage = "replay"
+		result.OK = false
+		result.BlockedReason = "replay_read_error"
+		result.Remedy = err.Error()
+		return result, nil
+	}
+	result.ReplayEventCount = len(replayEvents)
+	result.ReplayTerminalStage = finalStage(replayEvents, runResult.Status)
+	result.ReplayOK = result.ReplayEventCount > 0 && result.ReplayTerminalStage == result.FinalStage
+	result.EventCount = len(replayEvents)
+	result.ToolEventCount = countToolEvents(replayEvents)
+	result.ApprovalCount = countApprovalRequired(replayEvents)
+	result.PendingApprovalCount = len(PendingApprovals(replayEvents))
+	result.ToolChain = toolChain(replayEvents)
+	result.ToolOrder = result.ToolChain
+	result.LastEvents = lastEventSummaries(replayEvents, 3)
+	if !result.ReplayOK {
+		result.Stage = "replay"
+		result.OK = false
+		result.BlockedReason = "replay_incomplete"
+		result.Remedy = "Run completed but persisted replay events did not match the live terminal stage; inspect loomi runs attach " + result.RunID + " --compact."
+		return result, nil
+	}
+	if result.PendingApprovalCount > 0 {
+		result.Stage = "pending_approval"
+		result.OK = false
+		result.BlockedReason = "pending_approval"
+		result.Remedy = "Persisted replay still has unresolved tool approval events; inspect approval and tool terminal events."
+		return result, nil
+	}
 	result.Stage = "run_completed"
 	return result, nil
+}
+
+func isInvalidSmokeFinalMessage(message string) bool {
+	switch strings.TrimSpace(message) {
+	case "未生成成功回复":
+		return true
+	default:
+		return false
+	}
 }
 
 func providerReadyForAgentSmoke(provider ProviderCapability) bool {
@@ -188,6 +290,53 @@ func countApprovalRequired(events []RunEvent) int {
 		}
 	}
 	return count
+}
+
+func toolChain(events []RunEvent) []string {
+	chain := []string{}
+	seen := map[string]struct{}{}
+	for _, event := range events {
+		if !IsToolEvent(event) {
+			continue
+		}
+		toolName := metadataString(event.Metadata, "tool_name")
+		if toolName == "" {
+			continue
+		}
+		toolCallID := eventToolCallID(event)
+		key := toolName + ":" + toolCallID
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		chain = append(chain, toolName)
+	}
+	return chain
+}
+
+func finalAssistantMessage(ctx context.Context, client *Client, threadID string, runID string) (string, error) {
+	messages, err := client.ListMessages(ctx, threadID)
+	if err != nil {
+		return "", err
+	}
+	for i := len(messages) - 1; i >= 0; i-- {
+		message := messages[i]
+		if message.Role != "assistant" {
+			continue
+		}
+		if runID != "" && messageRunID(message) != runID {
+			continue
+		}
+		return strings.TrimSpace(message.Content), nil
+	}
+	return "", nil
+}
+
+func messageRunID(message Message) string {
+	if strings.TrimSpace(message.RunID) != "" {
+		return strings.TrimSpace(message.RunID)
+	}
+	return metadataString(message.Metadata, "run_id")
 }
 
 func lastEventSummaries(events []RunEvent, limit int) []string {

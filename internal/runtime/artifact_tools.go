@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/sheridiany/loomi/internal/identity"
 	"github.com/sheridiany/loomi/internal/productdata"
@@ -52,7 +53,9 @@ func (e ArtifactToolExecutor) createText(ctx context.Context, invocation ToolInv
 	if err != nil {
 		return nil, err
 	}
-	return artifactSummary(productdata.ToolNameArtifactCreateText, "create_text", artifact), nil
+	summary := artifactSummary(productdata.ToolNameArtifactCreateText, "create_text", artifact)
+	summary["artifacts"] = []map[string]any{artifactRefSummary(artifact, artifactRefMetadataFromArguments(invocation.ArgumentsSummary))}
+	return summary, nil
 }
 
 func (e ArtifactToolExecutor) read(ctx context.Context, invocation ToolInvocation) (map[string]any, error) {
@@ -65,7 +68,9 @@ func (e ArtifactToolExecutor) read(ctx context.Context, invocation ToolInvocatio
 	if err != nil {
 		return nil, err
 	}
-	return artifactSummary(productdata.ToolNameArtifactRead, "read", artifact), nil
+	summary := artifactSummary(productdata.ToolNameArtifactRead, "read", artifact)
+	summary["artifacts"] = []map[string]any{artifactRefSummary(artifact, artifactRefMetadata{})}
+	return summary, nil
 }
 
 func (e ArtifactToolExecutor) list(ctx context.Context, invocation ToolInvocation) (map[string]any, error) {
@@ -78,7 +83,7 @@ func (e ArtifactToolExecutor) list(ctx context.Context, invocation ToolInvocatio
 	}
 	items := make([]map[string]any, 0, len(artifacts))
 	for _, artifact := range artifacts {
-		items = append(items, artifactSummary("", "list_item", artifact))
+		items = append(items, artifactRefSummary(artifact, artifactRefMetadata{}))
 	}
 	return map[string]any{
 		"tool":              productdata.ToolNameArtifactList,
@@ -112,6 +117,56 @@ func artifactSummary(tool string, operation string, artifact productdata.Artifac
 		summary["thread_id"] = artifact.ThreadID
 	}
 	return summary
+}
+
+type artifactRefMetadata struct {
+	Filename string
+	MIMEType string
+	Display  string
+}
+
+func artifactRefMetadataFromArguments(args map[string]any) artifactRefMetadata {
+	filename, _ := args["filename"].(string)
+	mimeType, _ := args["mime_type"].(string)
+	display, _ := args["display"].(string)
+	return artifactRefMetadata{
+		Filename: strings.TrimSpace(filename),
+		MIMEType: strings.TrimSpace(mimeType),
+		Display:  strings.TrimSpace(display),
+	}
+}
+
+func artifactRefSummary(artifact productdata.Artifact, metadata artifactRefMetadata) map[string]any {
+	display := metadata.Display
+	if display == "" {
+		display = "panel"
+	}
+	mimeType := metadata.MIMEType
+	if mimeType == "" {
+		mimeType = defaultArtifactMIMEType(metadata.Filename)
+	}
+	item := map[string]any{
+		"key":           artifact.ID,
+		"artifact_id":   artifact.ID,
+		"title":         artifact.Title,
+		"mime_type":     mimeType,
+		"display":       display,
+		"size":          artifact.ContentBytes,
+		"content_bytes": artifact.ContentBytes,
+		"text_excerpt":  artifact.TextExcerpt,
+	}
+	if metadata.Filename != "" {
+		item["filename"] = metadata.Filename
+	}
+	return item
+}
+
+func defaultArtifactMIMEType(filename string) string {
+	lower := strings.ToLower(strings.TrimSpace(filename))
+	if strings.HasSuffix(lower, ".md") || strings.HasSuffix(lower, ".markdown") {
+		return "text/markdown"
+	}
+	return "text/plain"
 }
 
 func artifactIDFromSummary(result map[string]any) (string, error) {
