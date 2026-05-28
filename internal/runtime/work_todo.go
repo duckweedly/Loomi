@@ -160,6 +160,10 @@ func todoTitleForTool(toolName string) string {
 		return "Search project files"
 	case toolName == productdata.ToolNameWorkspaceRead:
 		return "Read project file"
+	case toolName == productdata.ToolNameWorkspaceListDirectory:
+		return "Read directory"
+	case toolName == productdata.ToolNameWorkspaceTreeSummary:
+		return "Summarize directory"
 	case toolName == productdata.ToolNameWorkspaceWriteFile:
 		return "Create workspace file"
 	case toolName == productdata.ToolNameWorkspaceEdit:

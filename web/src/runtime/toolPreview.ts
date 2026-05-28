@@ -19,6 +19,8 @@ const toolLabels: Record<string, string> = {
   'workspace.read_file': 'Read workspace file',
   'workspace.glob': 'Find project files',
   'workspace.grep': 'Search project text',
+  'workspace.list_directory': 'Read directory',
+  'workspace.tree_summary': 'Summarize directory',
   'workspace.write_file': 'Change workspace files',
   'workspace.edit': 'Change workspace files',
   'workspace.patch_preview': 'Preview workspace patch',
@@ -39,6 +41,8 @@ const zhToolLabels: Record<string, string> = {
   'workspace.read_file': '读取工作区文件',
   'workspace.glob': '查找项目文件',
   'workspace.grep': '搜索项目文本',
+  'workspace.list_directory': '读取目录',
+  'workspace.tree_summary': '目录概览',
   'workspace.write_file': '修改工作区文件',
   'workspace.edit': '修改工作区文件',
   'workspace.patch_preview': '预览工作区补丁',
@@ -69,6 +73,7 @@ const keyLabels = {
     status_code: '状态',
     timezone: '时区',
     iso_time: '时间',
+    workspace_label: '工作区',
   },
   en: {},
 } as const
@@ -77,12 +82,21 @@ const allowedKeys = new Set([
   'timezone',
   'iso_time',
   'local_time',
+  'workspace_label',
   'query',
   'pattern',
   'limit',
   'line',
   'preview',
   'match_count',
+  'total_entries_seen',
+  'returned_entries',
+  'directories_count',
+  'files_count',
+  'by_extension',
+  'by_kind',
+  'largest_files',
+  'recent_files',
   'matches',
   'status_code',
   'bytes_read',
@@ -98,10 +112,15 @@ const allowedKeys = new Set([
   'stdout_truncated',
   'stderr_truncated',
   'process_id',
+  'argv_summary',
+  'cwd_alias',
   'next_cursor',
   'terminal_summary',
   'stdin_open',
   'input_seq',
+  'started_at',
+  'updated_at',
+  'ended_at',
   'truncated',
   'total',
   'completed_count',
@@ -176,6 +195,7 @@ export function redactPreviewText(value: string) {
 }
 
 function isSensitiveKey(key: string) {
+  if (key === 'cwd_alias') return false
   return sensitiveKeyPattern.test(key)
 }
 

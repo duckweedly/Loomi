@@ -19,7 +19,7 @@ description: Catalog, arguments, and result contract for M28 artifact tools.
     "scope": "artifact",
     "read_only": false,
     "non_executable": true,
-    "arguments": ["title", "content", "max_bytes"]
+    "arguments": ["title", "filename", "mime_type", "display", "content", "max_bytes"]
   }
 }
 ```
@@ -33,6 +33,9 @@ description: Catalog, arguments, and result contract for M28 artifact tools.
 ```json
 {
   "title": "Implementation Notes",
+  "filename": "implementation-notes.md",
+  "mime_type": "text/markdown",
+  "display": "panel",
   "content": "Bounded UTF-8 text",
   "max_bytes": 32768
 }
@@ -68,11 +71,23 @@ description: Catalog, arguments, and result contract for M28 artifact tools.
   "content_bytes": 1200,
   "text_excerpt": "Bounded UTF-8 text",
   "truncated": false,
-  "redaction_applied": false
+  "redaction_applied": false,
+  "artifacts": [
+    {
+      "key": "art_...",
+      "artifact_id": "art_...",
+      "title": "Implementation Notes",
+      "filename": "implementation-notes.md",
+      "mime_type": "text/markdown",
+      "display": "panel",
+      "content_bytes": 1200,
+      "text_excerpt": "Bounded UTF-8 text"
+    }
+  ]
 }
 ```
 
-Events and continuation context persist safe summaries only. They do not include raw unbounded content, executable controls, credentials, local paths, or raw provider payloads.
+Events and continuation context persist safe summaries only. They do not include raw unbounded content, executable controls, credentials, local paths, or raw provider payloads. Assistant messages may reference a returned artifact with `[title](artifact:<key>)`; the key must come from the tool result and must not be invented.
 
 ## Read-only HTTP Projection
 

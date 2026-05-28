@@ -22,15 +22,15 @@ go test ./internal/runtime -run 'TestWorkspaceReadTools|TestToolBrokerExecutesWo
 
 Expected backend evidence:
 
-1. Fixture root can be set through `LOOMI_WORKSPACE_ROOT`; in desktop/API runs, `/v1/workspace/root` persists the chosen folder for the local user and restores it into the process after restart. When unset, local desktop/dev defaults to the user's home directory.
+1. Fixture root can be set through `LOOMI_WORKSPACE_ROOT` at run creation; in desktop/API runs, `/v1/workspace/root` persists the chosen folder for the local user without mutating the process environment. Each run snapshots that root into the job, `RunContext`, and tool invocation. When unset, workspace tools fail before reading and the UI shows that no folder is selected.
 2. Work mode run requests `workspace.glob`, `workspace.grep`, or `workspace.read`.
 3. Run emits `tool_call_requested`, `tool_call_approved`, `tool_call_executing`, then success or failure for bounded read-only workspace tools.
 4. Worker executes through ToolBroker without per-call confirmation after the workspace root has been selected.
 5. Success triggers provider continuation and final assistant message, including auto-approved read-only calls created during continuation.
 6. Sensitive paths and symlink escape fail without leaking fixture secret content.
-7. Desktop Work composer can choose a folder; the local API persists and updates the runtime workspace root for subsequent tool calls.
+7. Desktop Work composer can choose a folder; the local API persists it for subsequent new runs while active runs keep their original root snapshot.
 8. A casual Work greeting does not expose workspace, sandbox, agent, artifact, browser, or web tools.
-9. A folder listing/classification run uses `workspace.glob` without approval and should not repeat broad directory listing calls after the first successful result.
+9. A folder listing/classification run prefers `workspace.tree_summary` or `workspace.list_directory` without approval. `workspace.glob` is used only for filename pattern matching or narrow follow-up discovery.
 
 ## UI Check
 

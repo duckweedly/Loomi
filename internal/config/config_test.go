@@ -13,7 +13,7 @@ func TestLoadAppliesLocalDefaults(t *testing.T) {
 	if cfg.AppEnv != "local" {
 		t.Fatalf("AppEnv = %q, want local", cfg.AppEnv)
 	}
-	if cfg.HTTPAddr != "127.0.0.1:8080" {
+	if cfg.HTTPAddr != "127.0.0.1:18080" {
 		t.Fatalf("HTTPAddr = %q", cfg.HTTPAddr)
 	}
 	if cfg.LogLevel != "info" {

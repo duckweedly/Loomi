@@ -188,10 +188,6 @@ func (s *Server) handleWorkspaceRoot(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		if err := os.Setenv("LOOMI_WORKSPACE_ROOT", real); err != nil {
-			writeAPIError(w, productdata.NewError(productdata.CodeInternalError, "Workspace folder could not be saved."))
-			return
-		}
 		writeJSON(w, http.StatusOK, workspaceRootResponse{Config: workspaceRootConfigFromPath(real, true), RequestID: diagnostics.NewRequestID()})
 	default:
 		writeMethodNotAllowed(w, "GET, POST")
@@ -209,29 +205,12 @@ func (s *Server) currentWorkspaceRootConfig(ctx context.Context) workspaceRootCo
 		root = strings.TrimSpace(os.Getenv("LOOMI_WORKSPACE_ROOT"))
 	}
 	if root == "" {
-		return workspaceRootConfig{Configured: false, DisplayName: "Home"}
+		return workspaceRootConfig{Configured: false, DisplayName: "No folder selected"}
 	}
 	if real, err := resolveWorkspaceRootPath(root); err == nil {
-		_ = os.Setenv("LOOMI_WORKSPACE_ROOT", real)
 		return workspaceRootConfigFromPath(real, true)
 	}
 	return workspaceRootConfigFromPath(root, false)
-}
-
-func (s *Server) applySavedWorkspaceRoot(ctx context.Context) {
-	store, ok := s.product.(productdata.WorkspaceRootConfigStore)
-	if !ok {
-		return
-	}
-	saved, err := store.GetWorkspaceRootConfig(ctx, identity.LocalDevIdentity())
-	if err != nil || strings.TrimSpace(saved.Path) == "" {
-		return
-	}
-	real, err := resolveWorkspaceRootPath(saved.Path)
-	if err != nil {
-		return
-	}
-	_ = os.Setenv("LOOMI_WORKSPACE_ROOT", real)
 }
 
 func resolveWorkspaceRootPath(path string) (string, error) {

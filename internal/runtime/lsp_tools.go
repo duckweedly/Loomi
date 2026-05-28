@@ -40,7 +40,11 @@ func LSPToolDefinitions() []ToolDefinition {
 }
 
 func (e LSPToolExecutor) Execute(ctx context.Context, invocation ToolInvocation) (map[string]any, error) {
-	scope, err := newWorkspaceScope(e.Root)
+	root := e.Root
+	if root == "" {
+		root = invocation.WorkspaceRoot
+	}
+	scope, err := newWorkspaceScope(root)
 	if err != nil {
 		return nil, err
 	}

@@ -289,8 +289,47 @@ func (r Renderer) PrintSmokeAgent(result SmokeAgentResult) error {
 			return err
 		}
 	}
+	if result.Workspace != "" {
+		if _, err := fmt.Fprintf(r.out(), "workspace\t%s\n", result.Workspace); err != nil {
+			return err
+		}
+	}
 	if result.EventCount > 0 {
 		if _, err := fmt.Fprintf(r.out(), "events\t%d total, %d tool, %d approvals\n", result.EventCount, result.ToolEventCount, result.ApprovalCount); err != nil {
+			return err
+		}
+	}
+	if result.RunID != "" {
+		if _, err := fmt.Fprintf(r.out(), "pending_approvals\t%d\n", result.PendingApprovalCount); err != nil {
+			return err
+		}
+	}
+	if len(result.ToolChain) > 0 {
+		if _, err := fmt.Fprintf(r.out(), "tool_chain\t%s\n", strings.Join(result.ToolChain, " -> ")); err != nil {
+			return err
+		}
+	}
+	if len(result.ToolOrder) > 0 {
+		if _, err := fmt.Fprintf(r.out(), "tool_order\t%s\n", strings.Join(result.ToolOrder, " -> ")); err != nil {
+			return err
+		}
+	}
+	if result.FinalPersisted {
+		if _, err := fmt.Fprintln(r.out(), "final_persisted\tok"); err != nil {
+			return err
+		}
+	}
+	if result.ReplayEventCount > 0 {
+		replayStatus := "fail"
+		if result.ReplayOK {
+			replayStatus = "ok"
+		}
+		if _, err := fmt.Fprintf(r.out(), "replay\t%s events=%d terminal=%s\n", replayStatus, result.ReplayEventCount, result.ReplayTerminalStage); err != nil {
+			return err
+		}
+	}
+	if result.FinalMessage != "" {
+		if _, err := fmt.Fprintf(r.out(), "final_message\t%s\n", compactSmokeFinalMessage(result.FinalMessage)); err != nil {
 			return err
 		}
 	}
@@ -304,12 +343,27 @@ func (r Renderer) PrintSmokeAgent(result SmokeAgentResult) error {
 			return err
 		}
 	}
+	if result.FailureLogPath != "" {
+		if _, err := fmt.Fprintf(r.out(), "failure_log\t%s\n", result.FailureLogPath); err != nil {
+			return err
+		}
+	}
 	if result.Remedy != "" {
 		if _, err := fmt.Fprintf(r.out(), "fix\t%s\n", result.Remedy); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func compactSmokeFinalMessage(message string) string {
+	message = strings.Join(strings.Fields(message), " ")
+	const limit = 240
+	runes := []rune(message)
+	if len(runes) <= limit {
+		return message
+	}
+	return string(runes[:limit-3]) + "..."
 }
 
 func smokeProviderDetail(provider ProviderCapability) string {

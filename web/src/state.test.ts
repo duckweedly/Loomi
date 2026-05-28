@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { Message, Run, Thread } from './domain'
-import { createWorkspaceSettingsState, mergeRunEvents, redactProviderCheckMessage, shouldApplyLatestRequest, shouldApplyRunStreamEvent, getWorkspaceRefreshThreadId, shouldApplySendMessageResult, shouldApplyWorkspaceRefresh, shouldSelectWorkspaceRefreshThread } from './state'
+import { createWorkspaceSettingsState, getThreadIdAfterArchive, mergeRunEvents, redactProviderCheckMessage, shouldApplyLatestRequest, shouldApplyRunStreamEvent, getWorkspaceRefreshThreadId, shouldApplySendMessageResult, shouldApplyWorkspaceRefresh, shouldSelectWorkspaceRefreshThread } from './state'
 
 const threadA: Thread = {
   id: 'thread-a',
@@ -93,6 +93,17 @@ describe('getWorkspaceRefreshThreadId', () => {
 
   test('keeps the requested thread when it exists in returned threads', () => {
     expect(getWorkspaceRefreshThreadId('thread-b', [threadA, threadB])).toBe('thread-b')
+  })
+})
+
+describe('getThreadIdAfterArchive', () => {
+  test('keeps the current selection when archiving another thread', () => {
+    expect(getThreadIdAfterArchive({ archivedThreadId: 'thread-a', currentSelectedThreadId: 'thread-b', threads: [threadA, threadB] })).toBe('thread-b')
+  })
+
+  test('selects an adjacent thread when archiving the selected thread', () => {
+    expect(getThreadIdAfterArchive({ archivedThreadId: 'thread-a', currentSelectedThreadId: 'thread-a', threads: [threadA, threadB] })).toBe('thread-b')
+    expect(getThreadIdAfterArchive({ archivedThreadId: 'thread-b', currentSelectedThreadId: 'thread-b', threads: [threadA, threadB] })).toBe('thread-a')
   })
 })
 

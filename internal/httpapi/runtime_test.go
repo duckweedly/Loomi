@@ -41,7 +41,7 @@ func TestStartRunHandlerCreatesLocalSimulatedRun(t *testing.T) {
 
 func TestModelProviderPreflightAllowsBrowserReads(t *testing.T) {
 	srv := NewServerWithProduct(config.Config{AppEnv: "local"}, fakeChecker{}, productdata.NewMemoryService())
-	for _, origin := range []string{"http://127.0.0.1:5173", "http://127.0.0.1:5180"} {
+	for _, origin := range []string{"http://127.0.0.1:5173", "http://127.0.0.1:5180", "http://127.0.0.1:5181"} {
 		req := httptest.NewRequest(http.MethodOptions, "/v1/model-providers", nil)
 		req.Header.Set("Origin", origin)
 		req.Header.Set("Access-Control-Request-Method", http.MethodGet)

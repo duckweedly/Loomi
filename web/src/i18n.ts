@@ -10,7 +10,6 @@ type Dictionary = {
     collapseSidebar: string
     openSidebar: string
     search: string
-    openRunDetails: string
     openRightTools: string
   }
   sidebar: {
@@ -87,6 +86,8 @@ type Dictionary = {
     runningDetail: string
     completedTitle: string
     completedDetail: string
+    missingFinalTitle: string
+    missingFinalDetail: string
     failedTitle: string
     failedDetail: string
     stoppedTitle: string
@@ -110,6 +111,12 @@ type Dictionary = {
     model: string
     modelUnavailable: string
     attach: string
+    addFilesAndPhotos: string
+    addFolder: string
+    skills: string
+    connectors: string
+    addPlugins: string
+    contextMenu: string
     pasteImage: string
     attachmentPending: string
     chooseWorkspaceFolder: string
@@ -125,6 +132,7 @@ type Dictionary = {
     stoppedDraft: string
     recoveringDraft: string
     modelDrafting: string
+    thinkingHints: string[]
     generating: string
   }
   settings: {
@@ -236,11 +244,10 @@ export const dictionaries: Record<Locale, Dictionary> = {
       collapseSidebar: '收起侧边栏',
       openSidebar: '打开侧边栏',
       search: '搜索',
-      openRunDetails: '打开运行详情',
-      openRightTools: '打开右侧工具',
+      openRightTools: '打开预览',
     },
     sidebar: {
-      newChat: '新对话',
+      newChat: '新会话',
       newWork: '新工作',
       projects: '项目',
       scheduled: '计划任务',
@@ -258,7 +265,7 @@ export const dictionaries: Record<Locale, Dictionary> = {
       loadingThreads: '加载会话中',
       retry: '重试',
       searchThreads: '搜索会话',
-      emptyThreads: (mode) => `暂无 ${mode} 会话`,
+      emptyThreads: () => '暂无会话',
     },
     runtime: {
       eventGroups: {
@@ -328,6 +335,8 @@ export const dictionaries: Record<Locale, Dictionary> = {
       runningDetail: '查看右侧时间线',
       completedTitle: '已完成',
       completedDetail: '回复已生成',
+      missingFinalTitle: '最终回复缺失',
+      missingFinalDetail: 'Run 已完成，但没有持久化 assistant final message。',
       failedTitle: '执行失败',
       failedDetail: '未生成成功回复',
       stoppedTitle: '已停止',
@@ -351,11 +360,17 @@ export const dictionaries: Record<Locale, Dictionary> = {
       model: '模型',
       modelUnavailable: '无可用模型',
       attach: '附件',
+      addFilesAndPhotos: '添加照片和文件',
+      addFolder: '添加文件夹',
+      skills: '技能',
+      connectors: '连接器',
+      addPlugins: '添加插件...',
+      contextMenu: '添加上下文',
       pasteImage: '剪贴板图片',
       attachmentPending: '随本条消息发送',
-      chooseWorkspaceFolder: '选择目录',
-      workspaceRootHome: '默认 Home',
-      workspaceRootSelected: (name: string) => `目录：${name}`,
+      chooseWorkspaceFolder: '选择工作区',
+      workspaceRootHome: '选择工作区',
+      workspaceRootSelected: (name: string) => `工作区 · ${name}`,
       messageLoomi: '给 Loomi 发消息',
       describeTask: '描述你要 Loomi 完成的任务',
       workReadOnlyComposer: 'M16 Work mode 只读展示计划和进度',
@@ -366,6 +381,7 @@ export const dictionaries: Record<Locale, Dictionary> = {
       stoppedDraft: '已停止生成，保留已生成内容',
       recoveringDraft: '恢复中…',
       modelDrafting: '模型正在生成回复',
+      thinkingHints: ['组织回复', '梳理线索', '核对上下文', '提炼重点', '推敲答案', '收束思路', '准备回答', '再看一眼'],
       generating: '生成中',
     },
     settings: {
@@ -475,11 +491,10 @@ export const dictionaries: Record<Locale, Dictionary> = {
       collapseSidebar: 'Collapse sidebar',
       openSidebar: 'Open sidebar',
       search: 'Search',
-      openRunDetails: 'Open run details',
-      openRightTools: 'Open right tools',
+      openRightTools: 'Open preview',
     },
     sidebar: {
-      newChat: 'New Chat',
+      newChat: 'New thread',
       newWork: 'New Work',
       projects: 'Projects',
       scheduled: 'Scheduled',
@@ -497,7 +512,7 @@ export const dictionaries: Record<Locale, Dictionary> = {
       loadingThreads: 'Loading threads',
       retry: 'Retry',
       searchThreads: 'Search threads',
-      emptyThreads: (mode) => `No ${mode} threads`,
+      emptyThreads: () => 'No threads',
     },
     runtime: {
       eventGroups: {
@@ -567,6 +582,8 @@ export const dictionaries: Record<Locale, Dictionary> = {
       runningDetail: 'View the timeline',
       completedTitle: 'Completed',
       completedDetail: 'Reply generated',
+      missingFinalTitle: 'Final assistant message missing',
+      missingFinalDetail: 'The run completed without a persisted assistant final message.',
       failedTitle: 'Run failed',
       failedDetail: 'No successful reply generated',
       stoppedTitle: 'Stopped',
@@ -590,11 +607,17 @@ export const dictionaries: Record<Locale, Dictionary> = {
       model: 'Model',
       modelUnavailable: 'No model',
       attach: 'Attach',
+      addFilesAndPhotos: 'Add files or photos',
+      addFolder: 'Add folder',
+      skills: 'Skills',
+      connectors: 'Connectors',
+      addPlugins: 'Add plugins...',
+      contextMenu: 'Add context',
       pasteImage: 'Clipboard image',
       attachmentPending: 'queued for this message',
-      chooseWorkspaceFolder: 'Choose folder',
-      workspaceRootHome: 'Default Home',
-      workspaceRootSelected: (name: string) => `Folder: ${name}`,
+      chooseWorkspaceFolder: 'Choose workspace',
+      workspaceRootHome: 'Choose workspace',
+      workspaceRootSelected: (name: string) => `Workspace · ${name}`,
       messageLoomi: 'Message Loomi',
       describeTask: 'Describe the task for Loomi',
       workReadOnlyComposer: 'M16 Work mode is read-only for plan and progress',
@@ -605,6 +628,7 @@ export const dictionaries: Record<Locale, Dictionary> = {
       stoppedDraft: 'Generation stopped; generated content was preserved',
       recoveringDraft: 'Recovering…',
       modelDrafting: 'Model is drafting a reply',
+      thinkingHints: ['Organizing reply', 'Tracing context', 'Checking details', 'Sharpening answer', 'Gathering signal', 'Preparing reply'],
       generating: 'Generating',
     },
     settings: {

@@ -20,9 +20,9 @@ The CLI keeps all durable state server-side. It only renders threads, personas, 
 
 ## Local Defaults
 
-The CLI resolves defaults from `~/.loomi/config.json`, or from `LOOMI_CONFIG` when set. Supported fields are `host`, `mode`, `provider`, `model`, `persona`, and `script`. Environment variables `LOOMI_HOST`, `LOOMI_MODE`, `LOOMI_PROVIDER`, `LOOMI_MODEL`, `LOOMI_PERSONA`, and `LOOMI_SCRIPT` override the file for command execution.
+The CLI resolves defaults from `~/.loomi/config.json`, or from `LOOMI_CONFIG` when set. Supported fields are `host`, `api_token`, `mode`, `provider`, `model`, `persona`, and `script`. Environment variables `LOOMI_HOST`, `LOOMI_API_TOKEN`, `LOOMI_MODE`, `LOOMI_PROVIDER`, `LOOMI_MODEL`, `LOOMI_PERSONA`, and `LOOMI_SCRIPT` override the file for command execution.
 
-`loomi config set <key> <value>` and `loomi config unset <key>` write only the config file, not environment variables. Writes create the parent directory with `0700` and the file with `0600`. Unsetting a key removes it from the file; command execution then falls back to built-in defaults or environment overrides.
+`loomi config set <key> <value>` and `loomi config unset <key>` write only the config file, not environment variables. Writes create the parent directory with `0700` and the file with `0600`. Unsetting a key removes it from the file; command execution then falls back to built-in defaults or environment overrides. CLI renderers expose only whether an API token is set and redact config paths from text/JSON output.
 
 ## Commands
 
@@ -32,10 +32,10 @@ The CLI resolves defaults from `~/.loomi/config.json`, or from `LOOMI_CONFIG` wh
 - `scripts/build-cli.sh` builds the local binary into `dist/loomi`, injects `version`, `commit`, and `date`, then runs `dist/loomi version` as a sanity check. `VERSION`, `COMMIT`, `DATE`, and `OUTPUT` can override the detected values.
 - `scripts/install-cli.sh` builds the binary and installs it to `~/.local/bin/loomi` by default. `PREFIX` or `TARGET` can change the target path. Existing targets are not replaced unless `LOOMI_INSTALL_OVERWRITE=1` is explicitly set.
 - `loomi completion bash|zsh|fish` prints static shell completion scripts for the current command surface.
-- `loomi doctor` checks resolved CLI config, API readiness, configured provider availability, and tool catalog availability without mutating state.
+- `loomi doctor` checks resolved CLI config, API readiness, database/schema readiness from `/readyz`, configured provider availability, tool catalog availability, and optional desktop workspace readiness without mutating state. It also warns when `VITE_LOOMI_API_BASE_URL` differs from the CLI/API host so the web renderer and doctor are not checking different stacks.
 - `loomi config show` prints resolved defaults and whether the config file was found.
-- `loomi config set <host|mode|provider|model|persona|script> <value>` persists one local default.
-- `loomi config unset <host|mode|provider|model|persona|script>` removes one persisted local default.
+- `loomi config set <host|api_token|mode|provider|model|persona|script> <value>` persists one local default.
+- `loomi config unset <host|api_token|mode|provider|model|persona|script>` removes one persisted local default.
 - `loomi chat` opens an interactive shell over the same run/event loop. Slash commands are local controls: `/help`, `/status`, `/thread`, `/new`, `/model <provider-id-or-model>`, `/persona <id-or-slug>`, `/tools [group]`, `/run [run-id]`, `/approvals [run-id]`, `/events [compact] [run-id]`, `/stop [run-id]`, and `/quit`. When a run blocks on `tool_call_approval_required`, the shell prompts inline for approve, deny, or skip, then continues through the same approval endpoint and SSE resume path.
 - `loomi sessions list` reads `/v1/threads`.
 - `loomi sessions resume <thread-id>` opens `loomi chat` on an existing thread.

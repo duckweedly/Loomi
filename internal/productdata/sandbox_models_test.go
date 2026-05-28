@@ -1,6 +1,55 @@
 package productdata
 
-import "testing"
+import (
+	"context"
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestMemorySandboxProcessRepositoryStoresSafeDurableSummary(t *testing.T) {
+	repo := NewMemoryService()
+	now := time.Now().UTC()
+	exitCode := 0
+	record := SandboxProcessRecord{
+		RunID:           "run_safe",
+		ProcessID:       "sp_safe",
+		ArgvSummary:     []string{"cat", "/Users/xuean/private", "token=secret"},
+		CwdAlias:        "/Users/xuean/Repos/personal-projects/Loomi",
+		Status:          SandboxProcessStatusExited,
+		Cursor:          42,
+		StdoutTail:      "ok\n/Users/xuean/private\ntoken=secret\n",
+		StdoutCursor:    42,
+		StderrTail:      "err token=secret\n",
+		StderrCursor:    17,
+		StdoutBytes:     99,
+		StderrBytes:     17,
+		StartedAt:       now.Add(-time.Second),
+		UpdatedAt:       now,
+		EndedAt:         &now,
+		ExitCode:        &exitCode,
+		TerminalSummary: "exited exit_code=0 token=secret /Users/xuean/private",
+		OutputLimit:     1024,
+	}
+	if err := repo.SaveSandboxProcess(context.Background(), record); err != nil {
+		t.Fatal(err)
+	}
+	records, err := repo.ListSandboxProcesses(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("records = %+v", records)
+	}
+	got := records[0]
+	rendered := strings.Join(append(append([]string{}, got.ArgvSummary...), got.CwdAlias, got.StdoutTail, got.StderrTail, got.TerminalSummary), "\n")
+	if strings.Contains(rendered, "/Users/") || strings.Contains(rendered, "token=secret") {
+		t.Fatalf("record leaked unsafe data: %+v", got)
+	}
+	if got.RunID != "run_safe" || got.ProcessID != "sp_safe" || got.Cursor != 42 || got.StdoutBytes != 99 || got.StderrBytes != 17 || got.Status != SandboxProcessStatusExited {
+		t.Fatalf("record = %+v", got)
+	}
+}
 
 func TestValidateSandboxToolCallArgumentsUsesBoundedAllowlist(t *testing.T) {
 	base := RecordToolCallRequestInput{ToolCallID: "tc_exec", ToolName: ToolNameSandboxExecCommand, ArgumentsSummary: map[string]any{"argv": []any{"pwd"}}, ApprovalStatus: ToolCallApprovalRequired, ExecutionStatus: ToolCallExecutionBlocked}
@@ -54,6 +103,7 @@ func TestValidateSandboxToolCallArgumentsUsesBoundedAllowlist(t *testing.T) {
 		{"argv": []any{"rg", "needle", "src"}},
 		{"argv": []any{"git", "diff"}},
 		{"argv": []any{"go", "test", "./internal/runtime"}},
+		{"argv": []any{"go", "test", "./..."}},
 		{"argv": []any{"bun", "run", "build", "web"}},
 	} {
 		input := base

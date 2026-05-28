@@ -337,6 +337,92 @@ func TestM75CodeAgentDailyLoopSmoke(t *testing.T) {
 	assertBodyExcludes(t, eventsBody, "m75 daily loop events", root, "fixture-secret", ".env", "secrets/token")
 }
 
+func TestM91DirectoryClassificationSmoke(t *testing.T) {
+	root := t.TempDir()
+	for _, file := range []string{
+		"src/main.go",
+		"docs/spec.md",
+		"config/app.json",
+		"dist/generated.js",
+		"tmp/cache.tmp",
+	} {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(root, file)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, file), []byte("fixture\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("LOOMI_WORKSPACE_ROOT", root)
+
+	svc := productdata.NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	if _, err := svc.SyncBuiltInPersonas(context.Background(), ident, []productdata.BuiltInPersonaConfig{{
+		Slug:             "default",
+		Name:             "Default",
+		Description:      "Default",
+		SystemPrompt:     "Classify selected directories with directory tools before reading files.",
+		ModelRoute:       productdata.PersonaModelRoute{ProviderID: "custom", Model: "model"},
+		AllowedToolNames: []string{productdata.ToolNameWorkspaceListDirectory, productdata.ToolNameWorkspaceTreeSummary, productdata.ToolNameWorkspaceRead},
+		ReasoningMode:    "balanced",
+		BudgetSummary:    "small",
+		Version:          "1",
+		IsDefault:        true,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	provider := &m91DirectoryClassificationProvider{}
+	gateway := productruntime.NewGateway(svc, nil, []productruntime.Provider{provider})
+	worker := productruntime.NewWorker(svc, nil, productruntime.QueuedRunRouter{Gateway: gateway})
+	worker.WorkerID = "worker_m91_directory_classification"
+	srv := NewServerWithRuntimes(config.Config{AppEnv: "local"}, fakeChecker{}, svc, nil, nil, gateway)
+
+	threadRes := requestJSON(t, srv, http.MethodPost, "/v1/threads", `{"title":"M91 directory classification","mode":"work"}`)
+	assertStatus(t, threadRes.Code, http.StatusCreated, threadRes.Body.String())
+	threadID := decodeStringField(t, threadRes.Body.Bytes(), "thread", "id")
+	messageRes := requestJSON(t, srv, http.MethodPost, "/v1/threads/"+threadID+"/messages", `{"content":"请看一下当前选择目录都有哪些东西，按源码/文档/配置/构建产物/临时文件分类列出。","client_message_id":"m91-user-message"}`)
+	assertStatus(t, messageRes.Code, http.StatusCreated, messageRes.Body.String())
+	messageID := decodeStringField(t, messageRes.Body.Bytes(), "message", "id")
+	runRes := requestJSON(t, srv, http.MethodPost, "/v1/threads/"+threadID+"/runs", `{"message_id":"`+messageID+`","source":"model_gateway","provider_id":"custom","model":"model"}`)
+	assertStatus(t, runRes.Code, http.StatusAccepted, runRes.Body.String())
+	runID := decodeStringField(t, runRes.Body.Bytes(), "run", "id")
+
+	if ok, err := worker.ProcessOne(context.Background()); err != nil || !ok {
+		t.Fatalf("directory classification ProcessOne ok=%v err=%v", ok, err)
+	}
+	drainM22Worker(t, worker, svc, ident, runID)
+	assertM22ToolSucceeded(t, svc, threadID, runID, "tc_m91_list_1", productdata.ToolNameWorkspaceListDirectory)
+	assertM22ToolSucceeded(t, svc, threadID, runID, "tc_m91_summary_2", productdata.ToolNameWorkspaceTreeSummary)
+	assertM22ToolSucceeded(t, svc, threadID, runID, "tc_m91_read_3", productdata.ToolNameWorkspaceRead)
+	if _, err := svc.GetToolCall(context.Background(), ident, threadID, runID, "tc_m91_grep"); err == nil {
+		t.Fatal("directory smoke should not use grep")
+	}
+	run, err := svc.GetRun(context.Background(), ident, runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Status != productdata.RunStatusCompleted {
+		t.Fatalf("run = %+v", run)
+	}
+	messages, err := svc.ListMessages(context.Background(), ident, threadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 2 || !strings.Contains(messages[1].Content, "源码") || !strings.Contains(messages[1].Content, "文档") || strings.Contains(messages[1].Content, "```json") {
+		t.Fatalf("messages = %+v", messages)
+	}
+	eventsBody := fetchM21Events(t, srv, runID)
+	for _, expected := range []string{`"tool_name":"workspace.list_directory"`, `"tool_name":"workspace.tree_summary"`, `"tool_name":"workspace.read"`, `"operation":"tree_summary"`, productdata.EventRunCompleted} {
+		if !strings.Contains(eventsBody, expected) {
+			t.Fatalf("events missing %s: %s", expected, eventsBody)
+		}
+	}
+	if strings.Contains(eventsBody, `"tool_name":"workspace.grep"`) {
+		t.Fatalf("directory classification should not grep: %s", eventsBody)
+	}
+	assertBodyExcludes(t, eventsBody, "m91 directory classification events", root, "/Users/", "secret-token")
+}
+
 func TestM75CodeAgentDailyLoopSafetyBoundaries(t *testing.T) {
 	t.Run("workspace tool is rejected outside work mode", func(t *testing.T) {
 		root := createM21WorkspaceFixture(t)
@@ -721,6 +807,10 @@ type m75CodeAgentDailyLoopProvider struct {
 	calls int
 }
 
+type m91DirectoryClassificationProvider struct {
+	calls int
+}
+
 type m76ContinuationReliabilityProvider struct {
 	calls    int
 	requests []productruntime.ProviderRequest
@@ -746,6 +836,31 @@ func (p *m75CodeAgentDailyLoopProvider) Stream(_ context.Context, _ productrunti
 		events = []productruntime.ProviderEvent{{Type: productruntime.ProviderEventToolCall, ToolName: productdata.ToolNameSandboxExecCommand, Metadata: map[string]any{"tool_call_id": "tc_exec_5", "arguments_summary": map[string]any{"argv": []any{"cat", "src/notes.txt"}, "cwd": ".", "timeout_ms": 1000, "max_output_bytes": 4096}}}}
 	default:
 		events = []productruntime.ProviderEvent{{Type: productruntime.ProviderEventTextDelta, Text: "Daily loop "}, {Type: productruntime.ProviderEventCompleted, Text: "Daily loop complete: patch applied and tests passed."}}
+	}
+	ch := make(chan productruntime.ProviderEvent, len(events))
+	for _, event := range events {
+		ch <- event
+	}
+	close(ch)
+	return ch, nil
+}
+
+func (p *m91DirectoryClassificationProvider) Config() productruntime.ProviderConfig {
+	return productruntime.ProviderConfig{ID: "custom", Family: productruntime.ProviderFamilyOpenAICompatible, BaseURL: "https://example.test/v1", APIKey: "key", Model: "model", Enabled: true}
+}
+
+func (p *m91DirectoryClassificationProvider) Stream(_ context.Context, _ productruntime.ProviderRequest) (<-chan productruntime.ProviderEvent, error) {
+	p.calls++
+	events := []productruntime.ProviderEvent{}
+	switch p.calls {
+	case 1:
+		events = []productruntime.ProviderEvent{{Type: productruntime.ProviderEventToolCall, ToolName: productdata.ToolNameWorkspaceListDirectory, Metadata: map[string]any{"tool_call_id": "tc_m91_list_1", "arguments_summary": map[string]any{"path": ".", "max_entries": 200, "depth": 2, "sort": "name"}}}}
+	case 2:
+		events = []productruntime.ProviderEvent{{Type: productruntime.ProviderEventToolCall, ToolName: productdata.ToolNameWorkspaceTreeSummary, Metadata: map[string]any{"tool_call_id": "tc_m91_summary_2", "arguments_summary": map[string]any{"path": ".", "max_entries": 200, "depth": 3}}}}
+	case 3:
+		events = []productruntime.ProviderEvent{{Type: productruntime.ProviderEventToolCall, ToolName: productdata.ToolNameWorkspaceRead, Metadata: map[string]any{"tool_call_id": "tc_m91_read_3", "arguments_summary": map[string]any{"path": "docs/spec.md", "limit": 64}}}}
+	default:
+		events = []productruntime.ProviderEvent{{Type: productruntime.ProviderEventTextDelta, Text: "目录分类："}, {Type: productruntime.ProviderEventCompleted, Text: "源码：src/main.go；文档：docs/spec.md；配置：config/app.json；构建产物：已跳过 dist；临时文件：tmp/cache.tmp。"}}
 	}
 	ch := make(chan productruntime.ProviderEvent, len(events))
 	for _, event := range events {

@@ -5,22 +5,15 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { ThreadSidebar } from './ThreadSidebar'
 import { getDictionary } from '../i18n'
-import { createSidebarModeMenuItems } from './sidebarModeMenuItems'
 
 describe('ThreadSidebar action menu items', () => {
-  test('marks New Chat as the thread creation action', () => {
-    expect(createSidebarModeMenuItems('chat')).toContainEqual({
-      id: 'new-chat',
-      label: 'New Chat',
-      action: 'create-thread',
-    })
-  })
-
   test('renders one explicit thread create icon beside the Threads label', () => {
     const source = readFileSync(resolve(import.meta.dir, 'ThreadSidebar.tsx'), 'utf8')
 
+    expect(source).toContain("import { Button } from 'animal-island-ui'")
     expect(source).toContain('<span>{copy.threads}</span>')
     expect(source).toContain('className="thread-create-button"')
+    expect(source).toContain('<Button className="thread-create-button"')
     expect(source).toContain('aria-label={copy.newChat}')
     expect(source).toContain('onClick={onCreateThread}')
     expect(source).toContain('MessageSquarePlus')
@@ -31,9 +24,19 @@ describe('ThreadSidebar action menu items', () => {
 
     expect(source).toContain("className={thread.id === selectedThreadId ? 'thread-row selected' : 'thread-row'}")
     expect(source).toContain('className={thread.id === selectedThreadId ? \'thread-card selected\' : \'thread-card\'}')
+    expect(source).toContain('<Button')
+    expect(source).not.toContain('className="nav-item"')
+    expect(source).toContain('className="thread-action"')
     expect(source).toContain('className="thread-action"')
     expect(source).toContain('aria-label={copy.threadActions}')
     expect(source).toContain('className="thread-menu"')
+    expect(source).toContain('threadMenuPosition')
+    expect(source).toContain('getBoundingClientRect()')
+    expect(source).toContain("import { LoomiFloatingMenu, LoomiMenuItem } from './LoomiMenu'")
+    expect(source).toContain('data-loomi-menu-trigger="thread-menu"')
+    expect(source).toContain('<LoomiFloatingMenu')
+    expect(source).toContain('ignoreSelector="[data-loomi-menu-trigger=\'thread-menu\']"')
+    expect(source).toContain('setThreadMenuPosition(null)')
     expect(source).toContain('renameThread(thread)')
     expect(source).not.toContain('window.prompt')
     expect(source).toContain('editingThreadId === thread.id')
@@ -53,15 +56,12 @@ describe('ThreadSidebar loading and retry states', () => {
       collapsed: false,
       threads: [],
       selectedThreadId: 'thread-a',
-      selectedMode: 'chat',
-      modeCopy: { chat: 'Chat', work: 'Work' },
       theme: 'dark',
       loading: true,
       error: 'load failed',
       copy: getDictionary('en').sidebar,
       onRefresh: () => {},
       onSelectThread: () => {},
-      onSelectMode: () => {},
       onCreateThread: () => {},
       onRenameThread: () => {},
       onArchiveThread: () => {},
@@ -72,7 +72,7 @@ describe('ThreadSidebar loading and retry states', () => {
     expect(html).toContain('Loading threads')
     expect(html).toContain('load failed')
     expect(html).toContain('Retry')
-    expect(html).toContain('No chat threads')
+    expect(html).toContain('No threads')
   })
 
   test('keeps settings as the fixed sidebar footer action', () => {
@@ -81,6 +81,11 @@ describe('ThreadSidebar loading and retry states', () => {
     expect(source).not.toContain('sidebar-search-field')
     expect(source).toContain('className="sidebar-footer"')
     expect(source).toContain('className="sidebar-settings-button"')
+    expect(source).toContain('className="sidebar-settings-icon"')
+    expect(source).toContain('className="sidebar-settings-label"')
+    expect(source).toContain('className="sidebar-settings-chevron"')
+    expect(source).toContain('<Button className="sidebar-settings-button"')
+    expect(source).not.toContain('title={copy.settings}')
     expect(source).not.toContain('className="sidebar-theme-toggle"')
     expect(source).not.toContain('settings-button-sky')
     expect(source).toContain('createSidebarFooterItems')
@@ -100,13 +105,10 @@ describe('ThreadSidebar loading and retry states', () => {
       collapsed: false,
       threads: [],
       selectedThreadId: 'thread-a',
-      selectedMode: 'chat',
-      modeCopy: { chat: 'Chat', work: 'Work' },
       theme: 'dark',
       copy: getDictionary('en').sidebar,
       onRefresh: () => {},
       onSelectThread: () => {},
-      onSelectMode: () => {},
       onCreateThread: () => {},
       onRenameThread: () => {},
       onArchiveThread: () => {},
@@ -115,6 +117,6 @@ describe('ThreadSidebar loading and retry states', () => {
     }))
 
     expect(chatHtml).not.toContain('sidebar-bottom-actions')
-    expect(chatHtml).toContain('aria-label="New Chat"')
+    expect(chatHtml).toContain('aria-label="New thread"')
   })
 })

@@ -73,7 +73,7 @@ func TestToolResolutionsMarkWebToolsAsNoApproval(t *testing.T) {
 
 func TestWorkspaceToolDefinitionsSeparateReadAndMutationRisk(t *testing.T) {
 	defs := WorkspaceToolDefinitions()
-	if len(defs) != 7 {
+	if len(defs) != 9 {
 		t.Fatalf("defs = %+v", defs)
 	}
 	for _, def := range defs {

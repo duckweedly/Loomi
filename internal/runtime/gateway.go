@@ -21,6 +21,8 @@ type Gateway struct {
 	Providers   []Provider
 }
 
+const maxProviderToolResultContentBytes = 4096
+
 type GatewayRunInput struct {
 	ThreadID   string
 	MessageID  string
@@ -148,6 +150,7 @@ func (g *Gateway) streamProviderResponse(ctx context.Context, run productdata.Ru
 			if event.Text != "" {
 				content = event.Text
 			}
+			content = naturalLanguageFinalContent(content)
 			if strings.TrimSpace(content) == "" {
 				g.fail(ctx, run.ID, "empty_response", "Model returned an empty response.")
 				return
@@ -180,9 +183,14 @@ func (g *Gateway) streamProviderResponse(ctx context.Context, run productdata.Ru
 					return
 				}
 			}
+			if guard := g.toolPlannerGuardrail(ctx, run, event); guard != nil {
+				g.failWithMetadata(ctx, run.ID, guard.Code, guard.Message, guard.Metadata)
+				return
+			}
 			_, err := g.recordToolCallRequest(ctx, run, event)
 			if err != nil {
-				g.failWithMetadata(ctx, run.ID, "tool_call_rejected", "Tool request could not be accepted.", map[string]any{"tool_name": event.ToolName, "arguments_summary": toolArgumentsSummary(event.Metadata), "error_code": string(productdata.ErrorCode(err)), "error_message": productdata.RedactEventText(err.Error())})
+				code, message := toolRequestFailure(err)
+				g.failWithMetadata(ctx, run.ID, code, message, map[string]any{"tool_name": event.ToolName, "arguments_summary": toolArgumentsSummary(event.Metadata), "error_code": string(productdata.ErrorCode(err)), "error_message": productdata.RedactEventText(err.Error())})
 				return
 			}
 			return
@@ -207,6 +215,238 @@ func (g *Gateway) streamProviderResponse(ctx context.Context, run productdata.Ru
 		}
 	}
 	g.fail(ctx, run.ID, "empty_response", "Model returned an empty response.")
+}
+
+func toolRequestFailure(err error) (string, string) {
+	if err == nil {
+		return "tool_validation_failed", "Tool request failed validation."
+	}
+	message := strings.TrimSpace(err.Error())
+	lower := strings.ToLower(message)
+	switch {
+	case strings.Contains(lower, "not allowed") || strings.Contains(lower, "chat mode") || strings.Contains(lower, "work mode"):
+		return "tool_call_rejected", "Permission was not granted for this tool in the current run. Switch to the right mode or enable the tool, then retry."
+	case strings.Contains(lower, "workspace root") || strings.Contains(lower, "workspace folder"):
+		return "tool_call_rejected", "Workspace access is not available for this run. Select a workspace folder, then retry."
+	case message != "":
+		return "tool_call_rejected", "Tool request failed validation: " + message
+	default:
+		return "tool_call_rejected", "Tool request failed validation."
+	}
+}
+
+type toolPlannerGuardrail struct {
+	Code     string
+	Message  string
+	Metadata map[string]any
+}
+
+func (g *Gateway) toolPlannerGuardrail(ctx context.Context, run productdata.Run, event ProviderEvent) *toolPlannerGuardrail {
+	if g == nil || g.Service == nil || !productdata.IsWorkspaceToolName(event.ToolName) {
+		return nil
+	}
+	thread, err := g.Service.GetThread(ctx, identity.LocalDevIdentity(), run.ThreadID)
+	if err != nil || thread.Mode != productdata.ThreadModeWork {
+		return nil
+	}
+	events, err := g.Service.ListRunEvents(ctx, identity.LocalDevIdentity(), run.ID, 0)
+	if err != nil {
+		return nil
+	}
+	arguments := toolArgumentsSummary(event.Metadata)
+	if hasNonTerminalToolCall(events) {
+		return nil
+	}
+	if repeatedWorkspaceToolRequest(events, event.ToolName, arguments) {
+		return &toolPlannerGuardrail{
+			Code:    "tool_planner_guardrail",
+			Message: "Repeated workspace tool request was blocked. Use the existing tool result or continue with a narrower next step.",
+			Metadata: map[string]any{
+				"tool_name":         event.ToolName,
+				"arguments_summary": arguments,
+				"guardrail":         "repeated_workspace_tool_arguments",
+			},
+		}
+	}
+	if !isFirstWorkspaceToolRequest(events) || !directoryInventoryIntent(g.latestUserMessage(ctx, run.ThreadID)) {
+		return nil
+	}
+	if event.ToolName == productdata.ToolNameWorkspaceTreeSummary || event.ToolName == productdata.ToolNameWorkspaceListDirectory {
+		return nil
+	}
+	return &toolPlannerGuardrail{
+		Code:    "tool_planner_guardrail",
+		Message: "Directory inventory should start with workspace_tree_summary or workspace_list_directory, not grep/glob/read.",
+		Metadata: map[string]any{
+			"tool_name":         event.ToolName,
+			"arguments_summary": arguments,
+			"guardrail":         "directory_inventory_first_tool",
+			"recommended_tool":  productdata.ToolNameWorkspaceTreeSummary,
+		},
+	}
+}
+
+func (g *Gateway) latestUserMessage(ctx context.Context, threadID string) string {
+	if g == nil || g.Service == nil {
+		return ""
+	}
+	messages, err := g.Service.ListMessages(ctx, identity.LocalDevIdentity(), threadID)
+	if err != nil {
+		return ""
+	}
+	for index := len(messages) - 1; index >= 0; index-- {
+		if messages[index].Role == productdata.MessageRoleUser {
+			return messages[index].Content
+		}
+	}
+	return ""
+}
+
+func isFirstWorkspaceToolRequest(events []productdata.RunEvent) bool {
+	for _, event := range events {
+		if event.Type == productdata.EventToolCallRequested && productdata.IsWorkspaceToolName(metadataString(event.Metadata, "tool_name")) {
+			return false
+		}
+	}
+	return true
+}
+
+func hasNonTerminalToolCall(events []productdata.RunEvent) bool {
+	pending := map[string]bool{}
+	for _, event := range events {
+		toolCallID := metadataString(event.Metadata, "tool_call_id")
+		if toolCallID == "" {
+			continue
+		}
+		switch event.Type {
+		case productdata.EventToolCallRequested:
+			pending[toolCallID] = true
+		case productdata.EventToolCallSucceeded, productdata.EventToolCallFailed, productdata.EventToolCallDenied, productdata.EventToolCallCancelled:
+			delete(pending, toolCallID)
+		}
+	}
+	return len(pending) > 0
+}
+
+func repeatedWorkspaceToolRequest(events []productdata.RunEvent, toolName string, arguments map[string]any) bool {
+	switch toolName {
+	case productdata.ToolNameWorkspaceRead, productdata.ToolNameWorkspaceListDirectory, productdata.ToolNameWorkspaceGrep:
+	default:
+		return false
+	}
+	hash := argumentsHash(arguments)
+	stateChanged := false
+	for index := len(events) - 1; index >= 0; index-- {
+		event := events[index]
+		if workspaceRepeatResetEvent(event) {
+			stateChanged = true
+		}
+		if event.Type != productdata.EventToolCallRequested {
+			continue
+		}
+		if metadataString(event.Metadata, "tool_name") != toolName {
+			continue
+		}
+		previous, ok := event.Metadata["arguments_summary"].(map[string]any)
+		if !ok {
+			continue
+		}
+		if argumentsHash(previous) == hash {
+			return !stateChanged
+		}
+	}
+	return false
+}
+
+func workspaceRepeatResetEvent(event productdata.RunEvent) bool {
+	if event.Type != productdata.EventToolCallSucceeded {
+		return false
+	}
+	switch metadataString(event.Metadata, "tool_name") {
+	case productdata.ToolNameWorkspaceWriteFile, productdata.ToolNameWorkspaceEdit, productdata.ToolNameWorkspacePatchApply:
+		return true
+	case productdata.ToolNameSandboxExecCommand, productdata.ToolNameSandboxStartProcess, productdata.ToolNameSandboxContinueProcess, productdata.ToolNameSandboxTerminateProcess:
+		return true
+	default:
+		return false
+	}
+}
+
+func directoryInventoryIntent(message string) bool {
+	lower := strings.ToLower(strings.TrimSpace(message))
+	if lower == "" {
+		return false
+	}
+	hasSubject := false
+	for _, marker := range []string{"目录", "文件夹", "folder", "directory", "tree"} {
+		if strings.Contains(lower, marker) {
+			hasSubject = true
+			break
+		}
+	}
+	if !hasSubject {
+		return false
+	}
+	for _, marker := range []string{"盘点", "分类", "有哪些", "有什么", "列出", "结构", "inventory", "classify", "what files", "what is in", "contains", "list"} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func naturalLanguageFinalContent(input string) string {
+	trimmed := strings.TrimSpace(input)
+	if trimmed == "" || !looksLikeStructuredFinalPayload(trimmed) {
+		return trimmed
+	}
+	var payload any
+	if err := json.Unmarshal([]byte(trimmed), &payload); err == nil {
+		if candidate, ok := extractStructuredFinalText(payload); ok {
+			return candidate
+		}
+	}
+	return "The tool run produced results, but the provider returned a structured payload instead of a final natural-language answer."
+}
+
+func extractStructuredFinalText(value any) (string, bool) {
+	switch typed := value.(type) {
+	case string:
+		candidate := strings.TrimSpace(typed)
+		if candidate != "" && !looksLikeStructuredFinalPayload(candidate) {
+			return candidate, true
+		}
+	case []any:
+		parts := make([]string, 0, len(typed))
+		for _, item := range typed {
+			if text, ok := extractStructuredFinalText(item); ok {
+				parts = append(parts, text)
+			}
+		}
+		if len(parts) > 0 {
+			return strings.Join(parts, "\n\n"), true
+		}
+	case map[string]any:
+		for _, key := range []string{"answer", "final", "message", "summary", "output_text", "content", "text", "result", "output"} {
+			if nested, ok := typed[key]; ok {
+				if text, ok := extractStructuredFinalText(nested); ok {
+					return text, true
+				}
+			}
+		}
+	}
+	return "", false
+}
+
+func looksLikeStructuredFinalPayload(input string) bool {
+	if input == "" {
+		return false
+	}
+	if strings.HasPrefix(input, "{") || strings.HasPrefix(input, "[") {
+		return json.Valid([]byte(input))
+	}
+	lower := strings.ToLower(input)
+	return strings.Contains(lower, `"tool_calls"`) || strings.Contains(lower, `"tool_call_id"`) || strings.Contains(lower, "<tool_call")
 }
 
 func (g *Gateway) selectProvider(providerID string) (Provider, error) {
@@ -280,7 +520,7 @@ func (g *Gateway) loadContinuationMessages(ctx context.Context, threadID string,
 		return nil, err
 	}
 	for _, item := range results {
-		resultContent, err := json.Marshal(item.Result)
+		resultContent, err := json.Marshal(compactToolResultPayload(item.Result, maxProviderToolResultContentBytes))
 		if err != nil {
 			return nil, err
 		}
@@ -470,7 +710,7 @@ func omitProviderTool(tools []ProviderToolDefinition, name string) []ProviderToo
 func builtinProviderToolDefinition(name string) (ProviderToolDefinition, bool) {
 	switch name {
 	case productdata.ToolNameLoadTools:
-		return providerTool(name, "Return safe descriptions for currently enabled Loomi tools by name or keyword.", map[string]any{"queries": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "maxItems": 5}, "names": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "maxItems": 20}, "limit": integerSchema(1, 30)}, []string{}), true
+		return providerTool(name, "query-only catalog lookup. Return safe descriptions for currently enabled Loomi tools by catalog keyword; omit query to list a bounded safe catalog.", map[string]any{"query": stringSchema("Optional catalog search phrase."), "queries": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "maxItems": 5}, "limit": integerSchema(1, 30)}, []string{}), true
 	case productdata.ToolNameLoadSkill:
 		return providerTool(name, "Return a safe installed skill summary by name without loading the instruction body.", map[string]any{"name": stringSchema("Installed skill name or keyword."), "limit": integerSchema(1, 20)}, []string{"name"}), true
 	case productdata.ToolNameWorkspaceGlob:
@@ -479,6 +719,10 @@ func builtinProviderToolDefinition(name string) (ProviderToolDefinition, bool) {
 		return providerTool(name, "Search text files under the selected workspace root. Use path \".\" for the selected folder; do not repeat the root folder name.", map[string]any{"query": stringSchema("Search query."), "path": stringSchema("Optional relative directory from the selected workspace root. Use . for the root."), "include": stringSchema("Optional file glob."), "case_sensitive": map[string]any{"type": "boolean"}, "limit": integerSchema(1, 500)}, []string{"query"}), true
 	case productdata.ToolNameWorkspaceRead:
 		return providerTool(name, "Read a bounded UTF-8 slice from one file under the selected workspace root. Paths are relative to that root.", map[string]any{"path": stringSchema("Relative file path from the selected workspace root; do not repeat the root folder name."), "offset": integerSchema(0, 1000000), "limit": integerSchema(1, 1000000), "max_bytes": integerSchema(1, 131072)}, []string{"path"}), true
+	case productdata.ToolNameWorkspaceListDirectory:
+		return providerTool(name, "Read a bounded directory listing under the selected workspace root. Use this before grep for folder listing, inventory, or classification questions. Paths are relative; use path \".\" for the selected folder.", map[string]any{"path": stringSchema("Relative directory from the selected workspace root. Use . for the selected folder."), "max_entries": integerSchema(1, 500), "depth": integerSchema(1, 3), "include_hidden": map[string]any{"type": "boolean"}, "sort": map[string]any{"type": "string", "enum": []string{"name", "modified", "size"}}}, []string{}), true
+	case productdata.ToolNameWorkspaceTreeSummary:
+		return providerTool(name, "Return a bounded classified summary of a directory tree. Prefer this over grep when the user asks what a folder contains or how files are grouped by kind.", map[string]any{"path": stringSchema("Relative directory from the selected workspace root. Use . for the selected folder."), "max_entries": integerSchema(1, 500), "depth": integerSchema(1, 3), "include_hidden": map[string]any{"type": "boolean"}, "sort": map[string]any{"type": "string", "enum": []string{"name", "modified", "size"}}}, []string{}), true
 	case productdata.ToolNameWorkspaceWriteFile:
 		return providerTool(name, "Create a new bounded UTF-8 text file under the workspace root.", map[string]any{"path": stringSchema("Relative file path."), "content": stringSchema("File content."), "max_bytes": integerSchema(1, 131072)}, []string{"path", "content"}), true
 	case productdata.ToolNameWorkspaceEdit:
@@ -521,6 +765,12 @@ func builtinProviderToolDefinition(name string) (ProviderToolDefinition, bool) {
 		return providerTool(name, "Record bounded text into a discovered input target in a run-scoped browser session.", map[string]any{"session_id": stringSchema("Browser session id."), "target": stringSchema("Input target from browser snapshot."), "text": stringSchema("Text to type.")}, []string{"session_id", "target", "text"}), true
 	case productdata.ToolNameBrowserPress:
 		return providerTool(name, "Record one bounded key press in a run-scoped browser session.", map[string]any{"session_id": stringSchema("Browser session id."), "key": map[string]any{"type": "string", "enum": []string{"Enter", "Escape", "Tab", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"}}}, []string{"session_id", "key"}), true
+	case productdata.ToolNameArtifactCreateText:
+		return providerTool(name, "Create one bounded non-executable text artifact for reports, articles, Markdown, or saveable documents. The result returns an artifacts array; cite its returned key only.", map[string]any{"title": stringSchema("Optional artifact title."), "filename": stringSchema("Optional display filename."), "mime_type": stringSchema("Optional MIME type."), "display": map[string]any{"type": "string", "enum": []string{"inline", "panel"}}, "content": stringSchema("Artifact text content."), "max_bytes": integerSchema(1, defaultArtifactMaxBytes)}, []string{"content"}), true
+	case productdata.ToolNameArtifactRead:
+		return providerTool(name, "Read one bounded text artifact excerpt by id without returning raw full content.", map[string]any{"artifact_id": stringSchema("Artifact id or key."), "max_bytes": integerSchema(1, defaultArtifactMaxBytes)}, []string{"artifact_id"}), true
+	case productdata.ToolNameArtifactList:
+		return providerTool(name, "List bounded safe artifact reference metadata for the current thread without raw content.", map[string]any{"limit": integerSchema(1, 50)}, []string{}), true
 	case productdata.ToolNameMemorySearch:
 		return providerTool(name, "Search approved Loomi memory summaries in the current safe scope.", map[string]any{"query": stringSchema("Memory search query."), "limit": integerSchema(1, 20), "scope_type": stringSchema("Optional memory scope type."), "scope_id": stringSchema("Optional memory scope id."), "source_thread_id": stringSchema("Optional source thread id."), "source_run_id": stringSchema("Optional source run id."), "source_type": stringSchema("Optional source type filter.")}, []string{"query"}), true
 	case productdata.ToolNameMemoryList:
@@ -807,9 +1057,20 @@ func runSystemPrompt(prepared *productdata.RunContext) string {
 	if prepared != nil && strings.TrimSpace(prepared.Persona.SystemPrompt) != "" {
 		base = strings.TrimSpace(prepared.Persona.SystemPrompt)
 	}
-	policy := "\n\nTool policy:\n- Use tools only when they are needed. Do not use tools for greetings, small talk, or stable general knowledge.\n- Use web_search for current events, latest information, news, prices, or external facts that may have changed.\n- Use web_fetch when the user gives a public URL or when search results need one source opened for analysis.\n- Do not call workspace, sandbox, LSP, browser, artifact, todo, or agent tools in Chat mode. Use those only when the current tool list truly exposes them for a Work run.\n- If a useful tool is not available, answer with the limitation and the next best safe option. Do not fabricate tool calls or tool results.\n- Final user-facing output must be natural language, not JSON or a tool protocol transcript."
+	policy := "\n\nOutput style:\n- Answer first, then give only the context needed to act.\n- No preface such as \"Sure\", \"Certainly\", or \"Here is\".\n- Do not repeat the user's request back to them.\n- For code changes, report what changed and what was verified; do not narrate every step.\n\nTool policy:\n- Use tools only when they are needed. Do not use tools for greetings, small talk, or stable general knowledge.\n- Use web_search for current events, latest information, news, prices, or external facts that may have changed.\n- Use web_fetch when the user gives a public URL or when search results need one source opened for analysis.\n- Do not call workspace, sandbox, LSP, browser, artifact, todo, or agent tools in Chat mode. Use those only when the current tool list truly exposes them for a Work run.\n- If a useful tool is not available, answer with the limitation and the next best safe option. Do not fabricate tool calls or tool results.\n- Final user-facing output must be natural language, not JSON or a tool protocol transcript."
 	if prepared != nil && prepared.Thread.Mode == productdata.ThreadModeWork {
-		policy += "\n\nWork mode policy:\n- This is a Work run. File and folder tasks are tool-first: inspect/list/search/classify/summarize files with workspace_glob, workspace_grep, and workspace_read before answering.\n- For folder listing or classification, start with one broad workspace_glob request using path \".\" and a sufficient limit, then summarize the visible results; do not repeat the same listing unless the user asks for a narrower folder or the result was explicitly truncated.\n- For content search, start with workspace_grep. Read specific files with workspace_read only after you have a relative path.\n- Do not tell the user to run shell commands, paste directory listings, export files, or grant oral permission when workspace tools are available. Request the tool and continue from the result.\n- Do not use sandbox commands for file reads, globbing, grep, cat/head/tail/ls-style listing, or simple classification. Use sandbox commands only for build/test/lint or commands that truly need a process.\n- Workspace tool paths are always relative to the selected workspace root. The selected folder is already the root; use \".\" for it and do not repeat the root folder name such as Downloads, Desktop, or Documents in tool paths.\n- If a requested path is outside the selected root, ask the user to choose that folder in the UI.\n- Final output should summarize the work clearly and omit raw tool protocol details."
+		workspaceLabel := strings.TrimSpace(prepared.WorkspaceRoot.DisplayName)
+		if workspaceLabel == "" {
+			workspaceLabel = productdata.WorkspaceDisplayNameFromPath(prepared.WorkspaceRoot.Path)
+		}
+		policy += "\n\nWork mode policy:\n- This is a Work run. File and folder tasks are tool-first: inspect/list/search/classify/summarize files with workspace_list_directory, workspace_tree_summary, workspace_grep, and workspace_read before answering.\n- For folder listing, inventory, or classification, start with workspace_tree_summary or workspace_list_directory using path \".\" and a bounded max_entries/depth. Do not start with grep for directory inventory.\n- Use workspace_grep only for content search. Read specific files with workspace_read only after you have a relative path.\n- Do not tell the user to run shell commands, paste directory listings, export files, or grant oral permission when workspace tools are available. Request the tool and continue from the result.\n- Do not use sandbox commands for file reads, globbing, grep, cat/head/tail/ls-style listing, or simple classification. Use sandbox commands only for build/test/lint or commands that truly need a process.\n- Workspace tool paths are always relative to the selected workspace root. The selected folder is already the root; use \".\" for it and do not repeat the root folder name such as Downloads, Desktop, or Documents in tool paths.\n- If a requested path is outside the selected root, ask the user to choose that folder in the UI.\n- Final output should summarize the work clearly and omit raw tool protocol details."
+		if workspaceLabel != "" {
+			policy += "\n\nWorkspace reference policy:\n- Selected workspace: " + productdata.RedactEventText(workspaceLabel) + "\n- When the user says current directory, this directory, selected directory, just selected directory, 当前目录, 这个目录, 刚选目录, use the selected workspace root and path \".\".\n- When the user says download directory or 下载目录, only treat it as Downloads when the selected workspace label is Downloads; otherwise ask the user to choose Downloads in the UI before using workspace tools.\n- Never infer Loomi, Arkloop, a previous thread folder, or the process working directory as the workspace for this run."
+		} else {
+			policy += "\n\nWorkspace reference policy:\n- No workspace label is available for this run. Ask the user to choose a workspace folder before using workspace tools for current directory, this directory, selected directory, just selected directory, 当前目录, 这个目录, 刚选目录, download directory, or 下载目录."
+		}
+		policy += "\n\nTool selection strategy:\n- Directory questions: use workspace_tree_summary or workspace_list_directory first with path \".\" and bounded max_entries/depth before summarizing categories.\n- Use workspace_glob only for file-name pattern matching or a narrow follow-up after directory inventory.\n- Content questions: use workspace_grep or workspace_read after you have a relative path; use grep to find candidates, then read the specific file.\n- Modification questions: use workspace_read first, then workspace_patch_preview, then workspace_patch_apply only after approval.\n- Use sandbox commands only when the user explicitly asks for a shell/process action or when verifying a change with build/test/lint."
+		policy += "\n\nArtifact/document contract:\n- Reports, articles, Markdown, and saveable documents should use artifact.create_text instead of placing the full document only in the final reply.\n- Reference saved artifacts as [title](artifact:<key>) using a key returned by artifact.create_text or artifact.list.\n- Do not invent artifact keys."
 	}
 	return base + memoryPromptContext(prepared) + policy
 }

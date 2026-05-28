@@ -4,6 +4,7 @@ import { setMockRuntimeScript } from './mockApiClient'
 import type { BackendCapabilityState, InstalledSkill, LocalProviderDetection, MCPServerConfigInput, MCPServerStatus, MemoryAuditItem, MemoryEntry, MemoryErrorEvent, MemoryFilters, MemoryImpressionSnapshot, MemoryOverviewSnapshot, MemoryProviderStatus, MemoryProviderUpdate, MemoryWriteProposal, Message, Persona, ProviderCapability, Run, RunEvent, RuntimeEvent, RuntimeScriptId, StaleEventGuard, StreamState, Thread, ThreadRuntimeState, ToolCall, ToolCatalogItem, WebSearchConfig, WorkspaceRootConfig } from './domain'
 import { isRuntimeActive, isRuntimeTerminal } from './runtime/executionAdapter'
 import { deriveCapabilitySignalFromEvent } from './runtime/backendCapabilityStatus'
+import { deriveDesktopReadiness } from './runtime/desktopReadiness'
 import { applyRealRunEvent, mapRealRuntimeCapabilitySignal } from './runtime/realExecutionAdapter'
 import { selectSendProvider } from './realApiClient'
 import { createNextThreadTitle } from './threadTitles'
@@ -64,6 +65,14 @@ export function shouldApplyWorkspaceRefresh(result: RefreshResult) {
 
 export function shouldSelectWorkspaceRefreshThread({ requestedThreadId, resolvedThreadId, currentSelectedThreadId }: { requestedThreadId: string; resolvedThreadId: string; currentSelectedThreadId: string }) {
   return Boolean(resolvedThreadId) && resolvedThreadId !== requestedThreadId && requestedThreadId === currentSelectedThreadId
+}
+
+export function getThreadIdAfterArchive({ archivedThreadId, currentSelectedThreadId, threads }: { archivedThreadId: string; currentSelectedThreadId: string; threads: Thread[] }) {
+  if (archivedThreadId !== currentSelectedThreadId) return currentSelectedThreadId
+  const archivedIndex = threads.findIndex((thread) => thread.id === archivedThreadId)
+  const remaining = threads.filter((thread) => thread.id !== archivedThreadId)
+  if (remaining.length === 0) return ''
+  return remaining[Math.min(Math.max(archivedIndex, 0), remaining.length - 1)]?.id || ''
 }
 
 export function shouldApplySendMessageResult({ requestedThreadId, currentSelectedThreadId }: { requestedThreadId: string; currentSelectedThreadId: string }) {
@@ -199,6 +208,19 @@ export function applyRunStreamEventToRun(run: Run, event: RunEvent): Run {
   const shouldApplyAssistantDelta = !event.assistantDelta || event.sequence === undefined || maxSequence <= event.sequence
   let nextRun: Run = event.type.startsWith('tool.call.') ? applyRealRunEvent(run, { ...event, runId: event.runId ?? run.id, threadId: event.threadId ?? run.threadId }) : { ...run, events: mergeRunEvents(run.events, [event]) }
   if (event.assistantDelta && shouldApplyAssistantDelta) nextRun = applyAssistantDeltaToRun(nextRun, event.assistantDelta, event.id)
+  if (isAssistantFinalContentEvent(event)) {
+    return {
+      ...nextRun,
+      status: 'completed',
+      completedAt: event.time,
+      assistantDraft: {
+        content: event.content ?? nextRun.assistantDraft?.content ?? '',
+        status: 'completed',
+        messageId: nextRun.assistantDraft?.messageId,
+        lastEventId: event.id,
+      },
+    }
+  }
 
   if (event.status === 'running' || event.status === 'blocked_on_tool_approval') return { ...nextRun, status: event.status }
   if (event.status === 'completed') {
@@ -238,6 +260,28 @@ export function applyRunStreamEventToRun(run: Run, event: RunEvent): Run {
     }
   }
   return { ...nextRun, status: event.status }
+}
+
+export function reconcileRunWithPersistedAssistant(run: Run, messages: Message[]): Run {
+  if (!isRuntimeTerminal(run.status)) return run
+  const assistant = [...messages].reverse().find((message) => (
+    message.role === 'assistant'
+    && message.threadId === run.threadId
+    && message.runId === run.id
+    && message.content.trim()
+  ))
+  if (!assistant) return run
+  const current = run.assistantDraft
+  if (current?.content === assistant.content && current.messageId === assistant.id && current.status === 'completed') return run
+  return {
+    ...run,
+    assistantDraft: {
+      content: assistant.content,
+      status: 'completed',
+      messageId: assistant.id,
+      lastEventId: current?.lastEventId,
+    },
+  }
 }
 
 function hasRunEventIdentity(run: Run, event: RunEvent) {
@@ -310,10 +354,13 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [backendUnavailableAttempted, setBackendUnavailableAttempted] = useState(false)
+  const [apiConnected, setApiConnected] = useState(apiClient.mode !== 'real_api')
+  const [dbReady, setDBReady] = useState(true)
   const [capabilitySignals, setCapabilitySignals] = useState({ backendUnavailable: false, modelSetupMissing: false, providerUnavailable: false, streamDisconnected: false })
   const [selectedRuntimeScript, setSelectedRuntimeScript] = useState<RuntimeScriptId>('success')
   const [providerCapabilities, setProviderCapabilities] = useState<ProviderCapability[]>([])
   const [toolCatalog, setToolCatalog] = useState<ToolCatalogItem[]>([])
+  const [toolCatalogLoaded, setToolCatalogLoaded] = useState(false)
   const [webSearchConfig, setWebSearchConfig] = useState<WebSearchConfig | null>(null)
   const [webSearchSaveResult, setWebSearchSaveResult] = useState<ProviderSaveResult>({ status: 'idle' })
   const [workspaceRootConfig, setWorkspaceRootConfig] = useState<WorkspaceRootConfig | null>(null)
@@ -365,6 +412,34 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
     [selectedThreadId, threads],
   )
 
+  const desktopReadiness = useMemo(() => deriveDesktopReadiness({
+    apiConnected,
+    dbReady,
+    providerCapabilities,
+    localProviderDetections,
+    toolCatalog,
+    toolCatalogLoaded,
+    workspaceRootConfig,
+  }), [apiConnected, dbReady, localProviderDetections, providerCapabilities, toolCatalog, toolCatalogLoaded, workspaceRootConfig])
+
+  const refreshDesktopReadiness = useCallback(async () => {
+    if (!apiClient.getReadiness) {
+      setApiConnected(true)
+      setDBReady(true)
+      return
+    }
+    try {
+      const readiness = await apiClient.getReadiness()
+      setApiConnected(true)
+      setDBReady(readiness.status === 'ready' && !readiness.checks.some((check) => check.status === 'failed'))
+      setCapabilitySignals((current) => ({ ...current, backendUnavailable: false }))
+    } catch (err) {
+      setApiConnected(false)
+      setDBReady(false)
+      setCapabilitySignals((current) => ({ ...current, ...mapRealRuntimeCapabilitySignal(err), backendUnavailable: true }))
+    }
+  }, [])
+
   const refresh = useCallback(async (threadId = selectedThreadId) => {
     setLoading(true)
     setError(null)
@@ -375,15 +450,19 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
         ? await Promise.all([apiClient.getThreadMessages(nextThreadId), apiClient.getThreadRun(nextThreadId)])
         : [[], null]
       if (!shouldApplyWorkspaceRefresh({ requestedThreadId: threadId, currentSelectedThreadId: selectedThreadIdRef.current, threads: nextThreads, messages: nextMessages, run: nextRun })) return
+      const reconciledRun = nextRun ? reconcileRunWithPersistedAssistant(nextRun, nextMessages) : null
       setThreads(nextThreads)
       setMessages(nextMessages)
-      setRun(nextRun)
+      setRun(reconciledRun)
+      setApiConnected(true)
+      setDBReady(true)
       setCapabilitySignals({ backendUnavailable: false, modelSetupMissing: false, providerUnavailable: false, streamDisconnected: false })
-      setStreamState(nextRun && shouldBlockRuntimeSubmit(nextRun) ? 'connecting' : 'closed')
+      setStreamState(reconciledRun && shouldBlockRuntimeSubmit(reconciledRun) ? 'connecting' : 'closed')
       if (!threadId && nextThreadId) setSelectedThreadId(nextThreadId)
       else if (shouldSelectWorkspaceRefreshThread({ requestedThreadId: threadId, resolvedThreadId: nextThreadId, currentSelectedThreadId: selectedThreadIdRef.current })) setSelectedThreadId(nextThreadId)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'API request failed')
+      setApiConnected(false)
       setCapabilitySignals((current) => ({ ...current, ...mapRealRuntimeCapabilitySignal(err) }))
       setMessages([])
       setRun(null)
@@ -391,6 +470,10 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
       setLoading(false)
     }
   }, [selectedThreadId])
+
+  useEffect(() => {
+    void refreshDesktopReadiness()
+  }, [refreshDesktopReadiness])
 
   useEffect(() => {
     void refresh(selectedThreadId)
@@ -404,7 +487,10 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
     let cancelled = false
     apiClient.listModelProviders()
       .then((providers) => {
-        if (!cancelled) setProviderCapabilities(providers.map(redactProviderCapabilityMessage))
+        if (!cancelled) {
+          setProviderCapabilities(providers.map(redactProviderCapabilityMessage))
+          setApiConnected(true)
+        }
       })
       .catch((err) => {
         if (!cancelled) {
@@ -485,6 +571,10 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
     }
   }, [])
 
+  useEffect(() => {
+    void detectLocalProviders()
+  }, [detectLocalProviders])
+
   const enableLocalProvider = useCallback(async (providerId: string) => {
     if (!apiClient.enableLocalProvider) {
       setLocalProviderDetectionError('Local provider enable endpoint unavailable')
@@ -524,10 +614,16 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
     let cancelled = false
     apiClient.listToolCatalog()
       .then((tools) => {
-        if (!cancelled) setToolCatalog(tools)
+        if (!cancelled) {
+          setToolCatalog(tools)
+          setToolCatalogLoaded(true)
+        }
       })
       .catch(() => {
-        if (!cancelled) setToolCatalog([])
+        if (!cancelled) {
+          setToolCatalog([])
+          setToolCatalogLoaded(true)
+        }
       })
     return () => {
       cancelled = true
@@ -560,7 +656,10 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
     let cancelled = false
     apiClient.getWorkspaceRoot()
       .then((config) => {
-        if (!cancelled) setWorkspaceRootConfig(config)
+        if (!cancelled) {
+          setWorkspaceRootConfig(config)
+          setApiConnected(true)
+        }
       })
       .catch(() => {
         if (!cancelled) setWorkspaceRootConfig(null)
@@ -749,16 +848,19 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
   }, [loadMemoryAudit, loadMemoryEntries, memoryFilters, memoryQuery])
 
   useEffect(() => {
+    if (!apiConnected) return
     void loadMemoryEntries('', memoryFilters)
-  }, [loadMemoryEntries])
+  }, [apiConnected, loadMemoryEntries, memoryFilters])
 
   useEffect(() => {
+    if (!apiConnected) return
     void loadMemoryAudit(memoryFilters)
-  }, [loadMemoryAudit])
+  }, [apiConnected, loadMemoryAudit, memoryFilters])
 
   useEffect(() => {
+    if (!apiConnected) return
     void loadMemoryWriteProposals(memoryFilters)
-  }, [loadMemoryWriteProposals])
+  }, [apiConnected, loadMemoryWriteProposals, memoryFilters])
 
   const approveMemoryWriteProposal = useCallback(async (proposal: MemoryWriteProposal) => {
     if (!apiClient.approveMemoryWriteProposal) return
@@ -829,6 +931,9 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
       ])
       if (overview) setMemoryOverviewSnapshot(overview)
       if (impression) setMemoryImpressionSnapshot(impression)
+    } catch {
+      setMemoryOverviewSnapshot(null)
+      setMemoryImpressionSnapshot(null)
     } finally {
       setMemorySnapshotLoading(false)
     }
@@ -880,10 +985,11 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
   }, [loadMemoryAudit, loadMemoryEntries, memoryFilters, memoryQuery, refreshMemorySnapshots])
 
   useEffect(() => {
+    if (!apiConnected) return
     void refreshMemoryProviderStatus()
     void refreshMemoryErrors()
     void refreshMemorySnapshots()
-  }, [refreshMemoryErrors, refreshMemoryProviderStatus, refreshMemorySnapshots])
+  }, [apiConnected, refreshMemoryErrors, refreshMemoryProviderStatus, refreshMemorySnapshots])
 
   useEffect(() => {
     if (!run || !shouldBlockRuntimeSubmit(run) || !apiClient.subscribeRunEvents) {
@@ -901,10 +1007,11 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
       try {
         const [nextMessages, nextRun] = await Promise.all([apiClient.getThreadMessages(threadId), apiClient.getThreadRun(threadId)])
         if (cancelled || !nextRun || nextRun.id !== activeRunID) return
+        const reconciledRun = reconcileRunWithPersistedAssistant(nextRun, nextMessages)
         setMessages(nextMessages)
-        setRun(nextRun)
-        runRef.current = nextRun
-        if (!shouldBlockRuntimeSubmit(nextRun)) {
+        setRun(reconciledRun)
+        runRef.current = reconciledRun
+        if (!shouldBlockRuntimeSubmit(reconciledRun)) {
           setCapabilitySignals((current) => ({ ...current, streamDisconnected: false }))
           setStreamState((current) => (current === 'closed' ? current : 'closed'))
         }
@@ -1004,11 +1111,20 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
     setError(null)
     try {
       await apiClient.archiveThread(threadId)
-      await refresh('')
+      const nextThreadId = getThreadIdAfterArchive({ archivedThreadId: threadId, currentSelectedThreadId: selectedThreadIdRef.current, threads })
+      setThreads((current) => current.filter((thread) => thread.id !== threadId))
+      if (nextThreadId !== selectedThreadIdRef.current) {
+        setSelectedThreadId(nextThreadId)
+        if (!nextThreadId) {
+          setMessages([])
+          setRun(null)
+        }
+      }
+      await refresh(nextThreadId)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'API request failed')
     }
-  }, [refresh])
+  }, [refresh, threads])
 
   const stopRun = useCallback(async () => {
     if (!run || !shouldBlockRuntimeSubmit(run)) return
@@ -1202,6 +1318,8 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
     backendCapability: executionAdapter.runtimeCapability,
     backendUnavailableAttempted: backendUnavailableAttempted || capabilitySignals.backendUnavailable,
     capabilitySignals,
+    desktopReadiness,
+    refreshDesktopReadiness,
     selectedRuntimeScript,
     providerCapabilities,
     toolCatalog,

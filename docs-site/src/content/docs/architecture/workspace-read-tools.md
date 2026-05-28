@@ -19,7 +19,9 @@ provider tool request
 
 ## Scope
 
-The workspace root is resolved from the persisted local user workspace root when available, then mirrored into `LOOMI_WORKSPACE_ROOT` for the current API process. If no folder has been saved, the local desktop/dev runtime defaults to the user's home directory so common requests like `Downloads`, `Desktop`, and `Documents` can run without a prior folder picker.
+The workspace root is resolved from the persisted local user workspace root when a run starts. That value is snapshotted into the background job metadata, surfaced through `RunContext`, and copied into each workspace tool invocation by the queued runner. Approved-tool resume jobs preserve the original run snapshot, so changing the desktop-selected folder during an active run does not move that run's execution boundary.
+
+`/v1/workspace/root` no longer mutates `LOOMI_WORKSPACE_ROOT`; the environment variable is only a local/test fallback read at run creation when no persisted folder exists. If no folder has been saved and no explicit local-test `LOOMI_WORKSPACE_ROOT` is present, workspace tools fail before reading. Loomi no longer treats the user's home directory as an implicit workspace root; the desktop folder picker or explicit local test environment is the authorization boundary.
 
 The desktop shell can update the persisted runtime root after the user explicitly chooses a folder. Tool arguments are still normalized as relative workspace paths. Absolute paths, home expansion, `..` traversal, symlink escape, and paths outside the resolved root are rejected before content access.
 
@@ -36,9 +38,9 @@ Sensitive paths are denied before opening files:
 
 ## Results
 
-`workspace.read` returns bounded UTF-8 text with `offset`, `limit`, `bytes_read`, `utf8_valid`, and `truncated` metadata. Binary content is summarized as unsupported and does not return raw bytes.
+`workspace.read` returns bounded UTF-8 text with `offset`, `limit`, `bytes_read`, `utf8_valid`, and `truncated` metadata. Binary content is summarized as unsupported and does not return raw bytes. Directory reads are treated as a safe successful summary with `kind=directory`, empty `content`, bounded relative `entries`, and guidance to use `workspace.glob` or read a concrete file path; they do not terminate the run.
 
-`workspace.glob` and `workspace.grep` walk with result limits and return relative paths only. Grep returns safe line excerpts and match counts.
+`workspace.glob` and `workspace.grep` walk with result limits and return relative paths only. Both skip generated dependency/cache folders before walking into them. Grep also has a scanned-file budget for no-match searches, skips oversized files, and returns safe line excerpts and scan counters.
 
 ## Catalog And Persona
 
@@ -48,7 +50,7 @@ Once the desktop shell has selected a workspace root, `workspace.glob`, `workspa
 
 The built-in persona may list workspace tools, but RunContext filters them out for Chat mode. Work mode enables tools through the existing persona/catalog resolution path and then narrows the callable surface to the latest user intent. A casual greeting should not expose workspace, sandbox, agent, artifact, browser, or web tools. A folder listing/classification request exposes the bounded workspace read tools and hides sandbox/process tools unless the user explicitly asks to run a command.
 
-For folder listing or classification, the model is guided to make one broad `workspace.glob` call with a sufficient limit, summarize the visible result, and avoid repeating the same listing. After a successful `workspace.glob`, provider continuations omit `workspace.glob` while keeping `workspace.grep` and `workspace.read` available for targeted follow-up inspection.
+For folder listing or classification, the model is guided to use `workspace.tree_summary` or `workspace.list_directory` first with bounded depth and entry limits, then read a few representative files if needed. `workspace.glob` is reserved for filename pattern matching or narrow follow-up discovery, and `workspace.grep` is reserved for content search.
 
 ## Non-Goals
 

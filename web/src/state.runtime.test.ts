@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import type { Message, Run } from './domain'
 import { createRuntimeEvent, getRuntimeScriptSteps } from './runtime/runtimeScripts'
-import { appendRuntimeEventToRun, applyAssistantDeltaToRun, applyModelGatewayEventToRun, applyRunStreamEventToRun, createRegenerateAttemptRun, createRetryAttemptRun, createWorkspaceSettingsState, shouldApplyIncomingRunEvent, shouldBlockRuntimeSubmit, shouldIgnoreTerminalRuntimeEvent, shouldUpdateStreamStateForRunEvent } from './state'
+import { appendRuntimeEventToRun, applyAssistantDeltaToRun, applyModelGatewayEventToRun, applyRunStreamEventToRun, createRegenerateAttemptRun, createRetryAttemptRun, createWorkspaceSettingsState, reconcileRunWithPersistedAssistant, shouldApplyIncomingRunEvent, shouldBlockRuntimeSubmit, shouldIgnoreTerminalRuntimeEvent, shouldUpdateStreamStateForRunEvent } from './state'
 
 const run: Run = {
   id: 'run-a',
@@ -208,6 +208,41 @@ describe('runtime state orchestration helpers', () => {
     expect(next.assistantDraft).toMatchObject({ content: 'formatted final', status: 'completed', lastEventId: 'evt-final-message' })
     expect(next.events.map((event) => event.id)).toEqual(['evt-run-completed', 'evt-final-message'])
     expect(shouldApplyIncomingRunEvent(completedRun, finalEvent)).toBe(true)
+  })
+
+  test('uses persisted assistant message as completed run source of truth', () => {
+    const completedRun: Run = {
+      ...run,
+      status: 'completed',
+      assistantDraft: { content: '[redacted]', status: 'completed', lastEventId: 'evt-final' },
+    }
+    const messages: Message[] = [
+      message,
+      { id: 'msg-assistant', threadId: run.threadId, role: 'assistant', content: '## Final\n\n- rendered from message', createdAt: 'Now', runId: run.id },
+    ]
+
+    const reconciled = reconcileRunWithPersistedAssistant(completedRun, messages)
+
+    expect(reconciled.assistantDraft).toEqual({ content: '## Final\n\n- rendered from message', status: 'completed', messageId: 'msg-assistant', lastEventId: 'evt-final' })
+  })
+
+  test('promotes live model output completion before run terminal event', () => {
+    const runningRun: Run = {
+      ...run,
+      status: 'running',
+      assistantDraft: { content: '##Final###1.collapsed', status: 'streaming', lastEventId: 'evt-delta' },
+      events: [{ id: 'evt-delta', runId: run.id, threadId: run.threadId, sequence: 1, type: 'message.model_output_delta', label: 'message', detail: 'Model output delta', content: '##Final', assistantDelta: '##Final', time: 'Now', status: 'running' }],
+    }
+    const finalContent = '## Final\n\n### 1. Summary\n\n| Path | Meaning |\n| --- | --- |\n| `src` | Code |'
+    const finalEvent = { id: 'evt-final-message', runId: run.id, threadId: run.threadId, sequence: 2, type: 'message.model_output_completed', label: 'message', detail: 'Model output completed', content: finalContent, time: 'Now', status: 'running' } as const
+    const runCompleted = { id: 'evt-run-completed', runId: run.id, threadId: run.threadId, sequence: 3, type: 'run.completed', label: 'Run', detail: 'Run completed', content: null, time: 'Later', status: 'completed' } as const
+
+    const completedWithFinalContent = applyRunStreamEventToRun(runningRun, finalEvent)
+    const next = applyRunStreamEventToRun(completedWithFinalContent, runCompleted)
+
+    expect(completedWithFinalContent.assistantDraft).toMatchObject({ content: finalContent, status: 'completed', lastEventId: 'evt-final-message' })
+    expect(next.assistantDraft?.content).toBe(finalContent)
+    expect(next.status).toBe('completed')
   })
 
   test('replays stopping and stopped worker events', () => {

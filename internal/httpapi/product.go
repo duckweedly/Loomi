@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/sheridiany/loomi/internal/diagnostics"
 	"github.com/sheridiany/loomi/internal/identity"
@@ -26,6 +27,13 @@ type threadListResponse struct {
 	RequestID string               `json:"request_id"`
 }
 
+func nonNilThreads(threads []productdata.Thread) []productdata.Thread {
+	if threads == nil {
+		return []productdata.Thread{}
+	}
+	return threads
+}
+
 type personaListResponse struct {
 	Personas  []productdata.Persona `json:"personas"`
 	RequestID string                `json:"request_id"`
@@ -37,13 +45,55 @@ type skillListResponse struct {
 }
 
 type messageResponse struct {
-	Message   productdata.Message `json:"message"`
-	RequestID string              `json:"request_id"`
+	Message   apiMessage `json:"message"`
+	RequestID string     `json:"request_id"`
 }
 
 type messageListResponse struct {
-	Messages  []productdata.Message `json:"messages"`
-	RequestID string                `json:"request_id"`
+	Messages  []apiMessage `json:"messages"`
+	RequestID string       `json:"request_id"`
+}
+
+type apiMessage struct {
+	ID                 string                  `json:"id"`
+	ThreadID           string                  `json:"thread_id"`
+	Role               productdata.MessageRole `json:"role"`
+	Content            string                  `json:"content"`
+	Metadata           map[string]any          `json:"metadata"`
+	ClientMessageID    *string                 `json:"client_message_id,omitempty"`
+	RunID              string                  `json:"run_id,omitempty"`
+	AttemptOfMessageID string                  `json:"attempt_of_message_id,omitempty"`
+	CreatedAt          time.Time               `json:"created_at"`
+}
+
+func newAPIMessage(message productdata.Message) apiMessage {
+	return apiMessage{
+		ID:                 message.ID,
+		ThreadID:           message.ThreadID,
+		Role:               message.Role,
+		Content:            message.Content,
+		Metadata:           message.Metadata,
+		ClientMessageID:    message.ClientMessageID,
+		RunID:              metadataString(message.Metadata, "run_id"),
+		AttemptOfMessageID: metadataString(message.Metadata, "attempt_of_message_id"),
+		CreatedAt:          message.CreatedAt,
+	}
+}
+
+func newAPIMessages(messages []productdata.Message) []apiMessage {
+	items := make([]apiMessage, 0, len(messages))
+	for _, message := range messages {
+		items = append(items, newAPIMessage(message))
+	}
+	return items
+}
+
+func metadataString(metadata map[string]any, key string) string {
+	value, ok := metadata[key].(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(value)
 }
 
 type createThreadRequest struct {
@@ -87,7 +137,7 @@ func (s *Server) handleThreads(w http.ResponseWriter, r *http.Request) {
 			writeAPIError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, threadListResponse{Threads: threads, RequestID: diagnostics.NewRequestID()})
+		writeJSON(w, http.StatusOK, threadListResponse{Threads: nonNilThreads(threads), RequestID: diagnostics.NewRequestID()})
 	case http.MethodPost:
 		var req createThreadRequest
 		if err := decodeJSONRequest(r, &req); err != nil {
@@ -230,7 +280,7 @@ func (s *Server) handleThreadMessages(w http.ResponseWriter, r *http.Request, th
 		if messages == nil {
 			messages = []productdata.Message{}
 		}
-		writeJSON(w, http.StatusOK, messageListResponse{Messages: messages, RequestID: diagnostics.NewRequestID()})
+		writeJSON(w, http.StatusOK, messageListResponse{Messages: newAPIMessages(messages), RequestID: diagnostics.NewRequestID()})
 	case http.MethodPost:
 		var req createMessageRequest
 		if err := decodeJSONRequest(r, &req); err != nil {
@@ -246,7 +296,7 @@ func (s *Server) handleThreadMessages(w http.ResponseWriter, r *http.Request, th
 		if !created {
 			status = http.StatusOK
 		}
-		writeJSON(w, status, messageResponse{Message: message, RequestID: diagnostics.NewRequestID()})
+		writeJSON(w, status, messageResponse{Message: newAPIMessage(message), RequestID: diagnostics.NewRequestID()})
 	default:
 		writeMethodNotAllowed(w, "GET, POST")
 	}

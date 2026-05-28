@@ -16,18 +16,18 @@ describe('RunRail restrained runtime polish', () => {
     expect(source).not.toContain('失败剧本')
   })
 
-  test('uses a ghost stop action label', () => {
+  test('keeps stop out of the runtime rail because the composer primary button owns it', () => {
     const source = readFileSync(resolve(import.meta.dir, 'RunRail.tsx'), 'utf8')
 
     expect(source).toContain('Stop run')
-    expect(source).toContain('runtime-stop-button ghost')
+    expect(source).not.toContain('runtime-stop-button ghost')
   })
 
   test('styles timeline with quiet dots and compact agent card', () => {
     const css = [
       readFileSync(resolve(import.meta.dir, '../styles.css'), 'utf8'),
       readFileSync(resolve(import.meta.dir, '../styles/30-runtime-panels.css'), 'utf8'),
-      readFileSync(resolve(import.meta.dir, '../styles/91-commercial-product.css'), 'utf8'),
+      readFileSync(resolve(import.meta.dir, '../styles/92-unified-workspace.css'), 'utf8'),
     ].join('\n')
 
     expect(css).toContain('.progress-row::before')
@@ -142,6 +142,66 @@ describe('RunRail restrained runtime polish', () => {
 
     expect(html).toContain('Provider unavailable')
     expect(html).toContain('provider rejected')
+  })
+
+  test('hides positive runtime capability copy in the rail', () => {
+    const html = renderToStaticMarkup(createElement(RunRail, {
+      open: true,
+      capabilityStatus: 'model-gateway',
+      run: null,
+    }))
+
+    expect(html).not.toContain('Model gateway')
+    expect(html).not.toContain('Real provider execution is available')
+    expect(html).not.toContain('capability-rail model-gateway')
+  })
+
+  test('renders run-level thinking hint with elapsed seconds while assistant draft is empty', () => {
+    const html = renderToStaticMarkup(createElement(RunRail, {
+      open: true,
+      locale: 'zh',
+      run: {
+        id: 'run-thinking',
+        threadId: 'thread-a',
+        status: 'running',
+        model: 'Model gateway',
+        context: 'model_gateway',
+        createdAt: new Date().toISOString(),
+        events: [],
+        assistantDraft: { content: '', status: 'streaming' },
+      },
+    }))
+
+    expect(html).toMatch(/组织回复 0s|梳理线索 0s|核对上下文 0s|提炼重点 0s|推敲答案 0s|收束思路 0s|准备回答 0s|再看一眼 0s/)
+    expect(html).not.toContain('模型正在生成回复')
+  })
+
+  test('routes run thinking status through incremental typewriter helper', () => {
+    const source = readFileSync(resolve(import.meta.dir, 'RunRail.tsx'), 'utf8')
+
+    expect(source).toContain('nextTypewriterFrame')
+    expect(source).toContain('prefers-reduced-motion')
+  })
+
+  test('renders safe completed thought summary without hidden reasoning content', () => {
+    const html = renderToStaticMarkup(createElement(RunRail, {
+      open: true,
+      locale: 'zh',
+      run: {
+        id: 'run-thinking-summary',
+        threadId: 'thread-a',
+        status: 'completed',
+        model: 'Model gateway',
+        context: 'model_gateway',
+        events: [],
+        thinkingSummary: '检查输入并收束答案',
+        thinkingDurationSeconds: 12,
+      },
+    }))
+
+    expect(html).toContain('思考 12s')
+    expect(html).toContain('检查输入并收束答案')
+    expect(html).not.toContain('raw hidden reasoning')
   })
 
   test('renders human-first tool event labels without raw tool names or paths', () => {

@@ -1,9 +1,21 @@
 import { describe, expect, test } from 'bun:test'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { ToolCallCard } from './ToolCallCard'
 
 describe('ToolCallCard M7 approval-required state', () => {
+  test('uses animal-island-ui Button for approval actions and removes old lobe tags', () => {
+    const source = readFileSync(resolve(import.meta.dir, 'ToolCallCard.tsx'), 'utf8')
+
+    expect(source).toContain("import { Button } from 'animal-island-ui'")
+    expect(source).not.toContain("from '@lobehub/ui'")
+    expect(source).toContain('className="tool-status-pill"')
+    expect(source).toContain('<Button className="primary"')
+    expect(source).toContain('<Button disabled={actionsDisabled}')
+  })
+
   test('renders tool name redacted arguments and disabled approval controls', () => {
     const html = renderToStaticMarkup(createElement(ToolCallCard, {
       toolCall: {
@@ -85,10 +97,40 @@ describe('ToolCallCard M7 approval-required state', () => {
     }))
 
     expect(html).toContain('Completed')
-    expect(html).toContain('2026-05-25T10:00:00Z')
+    expect(html).toContain('timezone: UTC')
+    expect(html).not.toContain('2026-05-25T10:00:00Z')
+    expect(html).not.toContain('Tool phases')
+    expect(html).not.toContain('Tool completed.')
     expect(html).not.toContain('tool-grid')
     expect(html).not.toContain('Approving')
     expect(html).not.toContain('Denying')
+  })
+
+  test('renders completed artifact tools as compact document resources', () => {
+    const html = renderToStaticMarkup(createElement(ToolCallCard, {
+      locale: 'zh',
+      toolCall: {
+        id: 'tool_artifact',
+        toolCallId: 'tc_artifact',
+        name: 'artifact.create_text',
+        status: 'succeeded',
+        approvalStatus: 'approved',
+        executionStatus: 'succeeded',
+        summary: 'Tool call succeeded',
+        input: '',
+        output: '',
+        argumentsSummary: { title: '三句话的 Markdown' },
+        resultSummary: { operation: 'create_text', artifact_id: 'art_mock', title: '三句话的 Markdown', filename: '三句话.md', mime_type: 'text/markdown', text_excerpt: '# 三句话' },
+        errorCode: null,
+        errorMessage: null,
+      },
+    }))
+
+    expect(html).toContain('artifact-resource-card')
+    expect(html).toContain('三句话的 Markdown')
+    expect(html).toContain('Markdown 文档')
+    expect(html).not.toContain('请求')
+    expect(html).not.toContain('结果')
   })
 
   test('renders human-first tool labels without raw names in primary UI', () => {
@@ -140,6 +182,7 @@ describe('ToolCallCard M7 approval-required state', () => {
     }))
 
     const applyHtml = renderToStaticMarkup(createElement(ToolCallCard, {
+      defaultExpanded: true,
       toolCall: {
         id: 'tool_apply',
         toolCallId: 'tc_apply',
@@ -171,8 +214,82 @@ describe('ToolCallCard M7 approval-required state', () => {
     expect(applyHtml).not.toContain('patch_123')
   })
 
+  test('renders directory browser tools with safe summaries and no absolute paths', () => {
+    const listHtml = renderToStaticMarkup(createElement(ToolCallCard, {
+      defaultExpanded: true,
+      toolCall: {
+        id: 'tool_list',
+        toolCallId: 'tc_list',
+        name: 'workspace.list_directory',
+        status: 'succeeded',
+        approvalStatus: 'approved',
+        executionStatus: 'succeeded',
+        summary: 'Tool call succeeded',
+        input: '',
+        output: '',
+        argumentsSummary: { path: '/Users/xuean/Downloads', max_entries: 200, depth: 2 },
+        resultSummary: { operation: 'list_directory', path: '.', returned_entries: 12, total_entries_seen: 12, directories_count: 3, files_count: 9, truncated: false },
+        errorCode: null,
+        errorMessage: null,
+      },
+    }))
+    const summaryHtml = renderToStaticMarkup(createElement(ToolCallCard, {
+      defaultExpanded: true,
+      toolCall: {
+        id: 'tool_tree',
+        toolCallId: 'tc_tree',
+        name: 'workspace.tree_summary',
+        status: 'succeeded',
+        approvalStatus: 'approved',
+        executionStatus: 'succeeded',
+        summary: 'Tool call succeeded',
+        input: '',
+        output: '',
+        argumentsSummary: { path: '.', max_entries: 200, depth: 3 },
+        resultSummary: { operation: 'tree_summary', by_kind: { code: 2, document: 4 }, by_extension: { '.go': 2 }, largest_files: [{ path: 'src/secret-token.txt', size: 100 }], recent_files: [{ path: '/Users/xuean/Downloads/report.pdf' }] },
+        errorCode: null,
+        errorMessage: null,
+      },
+    }))
+
+    expect(listHtml).toContain('Read directory')
+    expect(listHtml).toContain('returned_entries: 12')
+    expect(listHtml).toContain('directories_count: 3')
+    expect(listHtml).not.toContain('/Users/')
+    expect(summaryHtml).toContain('Summarize directory')
+    expect(summaryHtml).toContain('by_kind')
+    expect(summaryHtml).not.toContain('secret-token')
+    expect(summaryHtml).not.toContain('/Users/')
+  })
+
+  test('shows safe workspace label for workspace tool cards', () => {
+    const html = renderToStaticMarkup(createElement(ToolCallCard, {
+      locale: 'zh',
+      toolCall: {
+        id: 'tool_workspace',
+        toolCallId: 'tc_workspace',
+        name: 'workspace.read',
+        status: 'succeeded',
+        approvalStatus: 'approved',
+        executionStatus: 'succeeded',
+        summary: 'Tool call succeeded',
+        input: '',
+        output: '',
+        argumentsSummary: { path: '/Users/xuean/Downloads/receipt.txt' },
+        resultSummary: { workspace_label: 'Downloads', path: 'receipt.txt', bytes_read: 6, truncated: false },
+        errorCode: null,
+        errorMessage: null,
+      },
+    }))
+
+    expect(html).toContain('正在读取：Downloads')
+    expect(html).not.toContain('/Users/')
+    expect(html).not.toContain('receipt.txt')
+  })
+
   test('renders sandbox process lifecycle cards with bounded safe summaries', () => {
     const html = renderToStaticMarkup(createElement(ToolCallCard, {
+      defaultExpanded: true,
       toolCall: {
         id: 'tool_process',
         toolCallId: 'tc_process',
@@ -196,6 +313,36 @@ describe('ToolCallCard M7 approval-required state', () => {
     expect(html).not.toContain('sandbox.terminate_process')
     expect(html).not.toContain('/Users/')
     expect(html).not.toContain('TOKEN=secret')
+  })
+
+  test('renders sandbox process resume metadata without unsafe paths or raw output', () => {
+    const html = renderToStaticMarkup(createElement(ToolCallCard, {
+      defaultExpanded: true,
+      toolCall: {
+        id: 'tool_process_resume',
+        toolCallId: 'tc_process_resume',
+        name: 'sandbox.continue_process',
+        status: 'succeeded',
+        approvalStatus: 'approved',
+        executionStatus: 'succeeded',
+        summary: 'Tool call succeeded',
+        input: '',
+        output: '',
+        argumentsSummary: { process_id: 'sp_resume', cursor: 0 },
+        resultSummary: { operation: 'continue_process', process_id: 'sp_resume', argv_summary: ['cat'], cwd_alias: '.', status: 'exited', terminal_summary: 'exited exit_code=0', next_cursor: 2048, stdout: 'token=secret /Users/xuean/Loomi/project', started_at: '2026-05-27T09:00:00Z', updated_at: '2026-05-27T09:00:01Z', ended_at: '2026-05-27T09:00:01Z' },
+        errorCode: null,
+        errorMessage: null,
+      },
+    }))
+
+    expect(html).toContain('Continue sandbox process')
+    expect(html).toContain('argv_summary: cat')
+    expect(html).toContain('cwd_alias: .')
+    expect(html).toContain('status: exited')
+    expect(html).toContain('next_cursor: 2048')
+    expect(html).toContain('terminal_summary: exited exit_code=0')
+    expect(html).not.toContain('/Users/')
+    expect(html).not.toContain('token=secret')
   })
 
   test('hides unknown raw tool names behind a generic label', () => {
@@ -280,11 +427,13 @@ describe('ToolCallCard M7 approval-required state', () => {
     }))
 
     expect(html).toContain('搜索网页')
-    expect(html).toContain('工具已完成')
-    expect(html).toContain('Reuters AI News')
-    expect(html).toContain('来源')
-    expect(html).toContain('example.com')
-    expect(html).toContain('LLM News Today')
+    expect(html).toContain('搜索词: latest AI news')
+    expect(html).not.toContain('Reuters AI News')
+    expect(html).not.toContain('工具阶段')
+    expect(html).not.toContain('工具已完成')
+    expect(html).not.toContain('来源')
+    expect(html).not.toContain('example.com')
+    expect(html).not.toContain('LLM News Today')
     expect(html).not.toContain('结果: 2')
     expect(html).not.toContain('approval_status')
     expect(html).not.toContain('execution_status')
@@ -293,8 +442,40 @@ describe('ToolCallCard M7 approval-required state', () => {
     expect(html).not.toContain('tool: web.search')
   })
 
+  test('reveals completed tool request result and sources only when expanded', () => {
+    const html = renderToStaticMarkup(createElement(ToolCallCard, {
+      locale: 'zh',
+      defaultExpanded: true,
+      toolCall: {
+        id: 'tool_search_expanded',
+        toolCallId: 'tc_search_expanded',
+        name: 'web.search',
+        status: 'succeeded',
+        approvalStatus: 'approved',
+        executionStatus: 'succeeded',
+        summary: 'Tool call succeeded',
+        input: '',
+        output: '',
+        argumentsSummary: { query: 'latest AI news', provider: 'brave', limit: 5 },
+        resultSummary: { operation: 'search', provider: 'brave', query: 'latest AI news', result_count: 2, tool: 'web.search', items: [{ title: 'Reuters AI News', url: 'https://example.com/reuters', snippet: 'safe summary' }, { title: 'LLM News Today', url: 'https://example.com/llm', snippet: 'safe summary' }] },
+        errorCode: null,
+        errorMessage: null,
+      },
+    }))
+
+    expect(html).toContain('aria-expanded="true"')
+    expect(html).toContain('请求')
+    expect(html).toContain('结果')
+    expect(html).toContain('来源')
+    expect(html).toContain('Reuters AI News')
+    expect(html).toContain('example.com')
+    expect(html).toContain('LLM News Today')
+    expect(html).not.toContain('tool: web.search')
+  })
+
   test('redacts sensitive tool arguments results and raw text payloads', () => {
     const html = renderToStaticMarkup(createElement(ToolCallCard, {
+      defaultExpanded: true,
       toolCall: {
         id: 'tool_1',
         toolCallId: 'tc_1',

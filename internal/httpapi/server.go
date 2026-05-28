@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 
@@ -56,7 +57,6 @@ func NewServerWithRuntime(cfg config.Config, checker db.Checker, product product
 func NewServerWithRuntimes(cfg config.Config, checker db.Checker, product productdata.Service, broadcaster *productruntime.Broadcaster, runner RuntimeRunner, gatewayRunner GatewayRunner) *Server {
 	providers := append(productruntime.ProviderConfigsFromConfig(cfg), savedProviderConfigs(product)...)
 	s := &Server{cfg: cfg, checker: checker, product: product, broadcaster: broadcaster, runner: runner, gatewayRunner: gatewayRunner, providers: providers, skillDiscoveryInput: productruntime.DefaultSkillDiscoveryInput(), localProviderEnablements: map[string]productruntime.LocalProviderCapability{}, mux: http.NewServeMux()}
-	s.applySavedWorkspaceRoot(context.Background())
 	s.mux.HandleFunc("GET /healthz", s.handleHealthz)
 	s.mux.HandleFunc("GET /readyz", s.handleReadyz)
 	s.mux.HandleFunc("GET /v1/me", s.handleCurrentIdentity)
@@ -97,7 +97,7 @@ func savedProviderConfigs(product productdata.Service) []productruntime.Provider
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if strings.HasPrefix(r.URL.Path, "/v1/") || r.URL.Path == "/v1" {
+	if s.isLocalAPIDiagnosticPath(r.URL.Path) || strings.HasPrefix(r.URL.Path, "/v1/") || r.URL.Path == "/v1" {
 		s.setCORSHeaders(w, r)
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
@@ -105,6 +105,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.mux.ServeHTTP(w, r)
+}
+
+func (s *Server) isLocalAPIDiagnosticPath(path string) bool {
+	return path == "/healthz" || path == "/readyz"
 }
 
 func (s *Server) setCORSHeaders(w http.ResponseWriter, r *http.Request) {
@@ -115,12 +119,16 @@ func (s *Server) setCORSHeaders(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Origin", origin)
 	w.Header().Set("Vary", "Origin")
 	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 }
 
 func (s *Server) isLocalWebDevOrigin(origin string) bool {
 	if s.cfg.AppEnv != "local" && s.cfg.AppEnv != "development" {
 		return false
 	}
-	return origin == "http://127.0.0.1:5173" || origin == "http://localhost:5173" || origin == "http://127.0.0.1:5180" || origin == "http://localhost:5180"
+	parsed, err := url.Parse(origin)
+	if err != nil || parsed.Scheme != "http" || parsed.Port() == "" {
+		return false
+	}
+	return parsed.Hostname() == "127.0.0.1" || parsed.Hostname() == "localhost"
 }

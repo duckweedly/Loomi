@@ -138,6 +138,8 @@ func builtinWorkspaceCatalogEntries() []ToolCatalogEntry {
 		builtinWorkspaceReadCatalogEntry(ToolNameWorkspaceGlob, "Workspace glob", "Find files under the configured workspace root.", []string{"pattern", "path", "limit"}),
 		builtinWorkspaceReadCatalogEntry(ToolNameWorkspaceGrep, "Workspace grep", "Search text files under the configured workspace root.", []string{"query", "path", "include", "case_sensitive", "limit"}),
 		builtinWorkspaceReadCatalogEntry(ToolNameWorkspaceRead, "Workspace read", "Read a bounded UTF-8 text slice from one workspace file.", []string{"path", "offset", "limit", "max_bytes"}),
+		builtinWorkspaceReadCatalogEntry(ToolNameWorkspaceListDirectory, "Workspace list directory", "Read a bounded directory listing with safe relative paths.", []string{"path", "max_entries", "depth", "include_hidden", "sort"}),
+		builtinWorkspaceReadCatalogEntry(ToolNameWorkspaceTreeSummary, "Workspace tree summary", "Summarize and classify a bounded directory tree.", []string{"path", "max_entries", "depth", "include_hidden", "sort"}),
 		builtinWorkspaceMutationCatalogEntry(ToolNameWorkspaceWriteFile, "Workspace write file", "Create a bounded UTF-8 text file under the configured workspace root.", []string{"path", "content", "max_bytes"}),
 		builtinWorkspaceMutationCatalogEntry(ToolNameWorkspaceEdit, "Workspace edit", "Apply one bounded exact text replacement inside a workspace file.", []string{"path", "old_text", "new_text", "max_bytes"}),
 		builtinWorkspaceMutationCatalogEntry(ToolNameWorkspacePatchPreview, "Workspace patch preview", "Preview one bounded exact text replacement before applying it.", []string{"path", "old_text", "new_text", "max_bytes"}),
@@ -348,7 +350,7 @@ func builtinBrowserCatalogEntry(name string, displayName string, description str
 
 func builtinArtifactCatalogEntries() []ToolCatalogEntry {
 	return []ToolCatalogEntry{
-		builtinArtifactCatalogEntry(ToolNameArtifactCreateText, "Artifact create text", "Create one bounded non-executable text artifact.", []string{"title", "content", "max_bytes"}, false),
+		builtinArtifactCatalogEntry(ToolNameArtifactCreateText, "Artifact create text", "Create one bounded non-executable text artifact.", []string{"title", "filename", "mime_type", "display", "content", "max_bytes"}, false),
 		builtinArtifactCatalogEntry(ToolNameArtifactRead, "Artifact read", "Read one bounded text artifact excerpt.", []string{"artifact_id", "max_bytes"}, true),
 		builtinArtifactCatalogEntry(ToolNameArtifactList, "Artifact list", "List bounded safe artifact summaries.", []string{"limit"}, true),
 	}

@@ -10,6 +10,10 @@
 *.tmp
 *.swp
 
+/tmp/
+/loomi-preview-empty-*.png
+/thread-menu-portal.png
+
 node_modules/
 dist/
 build/
