@@ -137,7 +137,11 @@ func (r Renderer) PrintAgentTasks(tasks []AgentTask) error {
 		if len(goal) > 120 {
 			goal = goal[:117] + "..."
 		}
-		if _, err := fmt.Fprintf(r.out(), "%s\t%s\t%s\t%s\t%s\n", task.ID, task.Status, task.Role, task.RunID, goal); err != nil {
+		runID := task.RunID
+		if task.ChildRunID != "" {
+			runID = runID + " -> " + task.ChildRunID
+		}
+		if _, err := fmt.Fprintf(r.out(), "%s\t%s\t%s\t%s\t%s\n", task.ID, task.Status, task.Role, runID, goal); err != nil {
 			return err
 		}
 	}
@@ -509,7 +513,7 @@ func formatToolArguments(toolName string, args map[string]any) string {
 			toolField("query", quoteToolText(metadataStringValue(args, "query"))),
 			toolField("limit", metadataNumberValue(args, "limit")),
 		)
-	case "agent.spawn", "agent.complete":
+	case "agent.spawn", "agent.start", "agent.complete", "agent.fail":
 		return joinToolFields(
 			toolField("task", metadataStringValue(args, "task_id")),
 			toolField("role", metadataStringValue(args, "role")),
@@ -594,7 +598,7 @@ func formatToolResult(toolName string, result map[string]any) string {
 		return joinToolFields(toolField("items", metadataLenValue(result, "items")))
 	case "tool.load_tools":
 		return joinToolFields(toolField("tools", metadataLenValue(result, "tools")))
-	case "agent.spawn", "agent.complete":
+	case "agent.spawn", "agent.start", "agent.complete", "agent.fail":
 		return joinToolFields(
 			toolField("task", metadataStringValue(result, "task_id")),
 			toolField("status", metadataStringValue(result, "status")),

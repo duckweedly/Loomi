@@ -153,6 +153,9 @@ type AgentTask struct {
 	Goal          string `json:"goal"`
 	Status        string `json:"status"`
 	ResultSummary string `json:"result_summary,omitempty"`
+	ChildThreadID string `json:"child_thread_id,omitempty"`
+	ChildRunID    string `json:"child_run_id,omitempty"`
+	DelegatedAt   string `json:"delegated_at,omitempty"`
 	CreatedAt     string `json:"created_at"`
 	UpdatedAt     string `json:"updated_at"`
 }

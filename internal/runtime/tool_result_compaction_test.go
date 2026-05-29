@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -75,4 +76,37 @@ func TestCompactToolResultPayloadPreservesReadableSummaryAfterRedaction(t *testi
 	if strings.Contains(output, "sk-live-test") {
 		t.Fatalf("secret leaked in output: %q", output)
 	}
+}
+
+func TestCompactToolResultPayloadBoundsAggregateArraySize(t *testing.T) {
+	items := make([]any, 0, 500)
+	for i := 0; i < 500; i++ {
+		items = append(items, map[string]any{"path": "src/file.txt", "line": i, "text": "needle"})
+	}
+	input := map[string]any{
+		"operation": "grep",
+		"matches":   items,
+	}
+
+	got := compactToolResultPayload(input, 700)
+	encoded := compactToolResultJSONForTest(t, got)
+
+	if len(encoded) > 700 {
+		t.Fatalf("encoded length = %d: %s", len(encoded), encoded)
+	}
+	if got["truncated"] != true {
+		t.Fatalf("expected aggregate truncation metadata: %+v", got)
+	}
+	if !strings.Contains(encoded, "tool result compacted") {
+		t.Fatalf("encoded = %s", encoded)
+	}
+}
+
+func compactToolResultJSONForTest(t *testing.T, payload map[string]any) string {
+	t.Helper()
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(encoded)
 }

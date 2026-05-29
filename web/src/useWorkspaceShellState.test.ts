@@ -102,13 +102,69 @@ describe('createWorkspaceShellState', () => {
     expect(createWorkspaceShellState().snapshot()).toMatchObject({ defaultWorkspaceMode: 'chat', locale: 'zh', providerDraftSettings: { baseUrl: '', model: '', apiKeySet: false } })
   })
 
+  test('supports system theme as the default preference and pins manual choices', () => {
+    const shell = createWorkspaceShellState({ theme: 'dark', themePreference: 'system' })
+
+    shell.setThemePreference('light')
+
+    expect(shell.snapshot()).toMatchObject({
+      theme: 'light',
+      themePreference: 'light',
+    })
+
+    shell.setThemePreference('system')
+
+    expect(shell.snapshot().themePreference).toBe('system')
+    expect(['dark', 'light']).toContain(shell.snapshot().theme)
+  })
+
+  test('legacy theme toggle becomes an explicit manual override', () => {
+    const shell = createWorkspaceShellState({ theme: 'dark', themePreference: 'system' })
+
+    shell.toggleTheme()
+
+    expect(shell.snapshot()).toMatchObject({
+      theme: 'light',
+      themePreference: 'light',
+    })
+  })
+
+  test('starts with a narrow open sidebar and keeps resize bounds tight', () => {
+    const shell = createWorkspaceShellState()
+    const appSource = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+
+    expect(shell.snapshot().sidebarWidth).toBe(136)
+    expect(appSource).toContain('Math.min(sidebarMaxWidth, Math.max(sidebarMinWidth, startWidth + moveEvent.clientX - startX))')
+
+    shell.setSidebarWidth(999)
+    expect(shell.snapshot().sidebarWidth).toBe(172)
+
+    shell.setSidebarWidth(120)
+    expect(shell.snapshot().sidebarWidth).toBe(128)
+  })
+
+  test('persists user-adjusted sidebar width across shell recreation', () => {
+    const source = readFileSync(new URL('./useWorkspaceShellState.ts', import.meta.url), 'utf8')
+
+    expect(source).toContain("const sidebarWidthStorageKey = 'loomi.sidebarWidth'")
+    expect(source).toContain('readStoredSidebarWidth()')
+    expect(source).toContain('isLegacyDefaultSidebarWidth(storedWidth)')
+    expect(source).toContain('156')
+    expect(source).toContain('148')
+    expect(source).toContain('168')
+    expect(source).toContain('184')
+    expect(source).toContain('writeStoredSidebarWidth(next.sidebarWidth)')
+    expect(source).toContain('clampSidebarWidth(action.sidebarWidth)')
+  })
+
   test('resolves the default theme from the system before a manual override exists', () => {
     const source = readFileSync(new URL('./useWorkspaceShellState.ts', import.meta.url), 'utf8')
 
     expect(source).toContain("window.matchMedia('(prefers-color-scheme: dark)')")
     expect(source).toContain("const themeStorageKey = 'loomi.theme'")
-    expect(source).toContain('readStoredTheme() ?? resolveSystemTheme()')
-    expect(source).toContain('writeStoredTheme(next.theme)')
+    expect(source).toContain("themePreference: storedTheme ?? 'system'")
+    expect(source).toContain('clearStoredTheme()')
+    expect(source).toContain('writeStoredTheme(action.themePreference)')
   })
 })
 

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -926,6 +927,44 @@ func TestRunEventStreamSubscribesBeforeHistoryRead(t *testing.T) {
 	}
 }
 
+func TestRunEventStreamBackfillsDroppedLiveEvents(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	run := createRuntimeTestRun(t, svc)
+	broadcaster := productruntime.NewBroadcaster()
+	srv := NewServerWithRuntime(config.Config{AppEnv: "local"}, fakeChecker{}, &burstDuringListService{Service: svc, broadcaster: broadcaster, burst: 20}, broadcaster, nil)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cancel()
+	req := httptest.NewRequest(http.MethodGet, "/v1/runs/"+run.ID+"/events/stream", nil).WithContext(ctx)
+	res := httptest.NewRecorder()
+	srv.ServeHTTP(res, req)
+
+	body := res.Body.String()
+	if !strings.Contains(body, "burst_event_20") || !strings.Contains(body, productdata.EventRunCompleted) || !strings.Contains(body, "event: stream_closed") {
+		t.Fatalf("stream did not backfill dropped live events: %s", body)
+	}
+}
+
+func TestRunEventStreamSendsHeartbeatWhileIdle(t *testing.T) {
+	previous := sseHeartbeatInterval
+	sseHeartbeatInterval = 20 * time.Millisecond
+	defer func() { sseHeartbeatInterval = previous }()
+	svc := productdata.NewMemoryService()
+	run := createRuntimeTestRun(t, svc)
+	broadcaster := productruntime.NewBroadcaster()
+	srv := NewServerWithRuntime(config.Config{AppEnv: "local"}, fakeChecker{}, svc, broadcaster, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
+	defer cancel()
+	req := httptest.NewRequest(http.MethodGet, "/v1/runs/"+run.ID+"/events/stream", nil).WithContext(ctx)
+	res := httptest.NewRecorder()
+
+	srv.ServeHTTP(res, req)
+
+	if !strings.Contains(res.Body.String(), ": heartbeat") {
+		t.Fatalf("stream heartbeat missing: %s", res.Body.String())
+	}
+}
+
 func TestRunEventStreamFlushesHistoryAndCloseMarker(t *testing.T) {
 	svc := productdata.NewMemoryService()
 	run := createRuntimeTestRun(t, svc)
@@ -998,6 +1037,34 @@ type publishDuringListService struct {
 	productdata.Service
 	broadcaster *productruntime.Broadcaster
 	published   bool
+}
+
+type burstDuringListService struct {
+	productdata.Service
+	broadcaster *productruntime.Broadcaster
+	published   bool
+	burst       int
+}
+
+func (s *burstDuringListService) ListRunEvents(ctx context.Context, ident identity.LocalIdentity, runID string, afterSequence int) ([]productdata.RunEvent, error) {
+	events, err := s.Service.ListRunEvents(ctx, ident, runID, afterSequence)
+	if err != nil || s.published {
+		return events, err
+	}
+	s.published = true
+	for i := 1; i <= s.burst; i++ {
+		event, err := s.Service.AppendRunEvent(ctx, ident, runID, productdata.AppendRunEventInput{Category: productdata.RunEventCategoryProgress, Type: fmt.Sprintf("burst_event_%02d", i), Summary: "Burst event"})
+		if err != nil {
+			return events, err
+		}
+		s.broadcaster.Publish(event)
+	}
+	final, err := s.Service.AppendRunEvent(ctx, ident, runID, productdata.AppendRunEventInput{Category: productdata.RunEventCategoryFinal, Type: productdata.EventRunCompleted, Summary: "Run completed"})
+	if err != nil {
+		return events, err
+	}
+	s.broadcaster.Publish(final)
+	return events, nil
 }
 
 func (s publishDuringListService) ListRunEvents(ctx context.Context, ident identity.LocalIdentity, runID string, afterSequence int) ([]productdata.RunEvent, error) {

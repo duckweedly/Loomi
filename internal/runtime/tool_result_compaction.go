@@ -1,13 +1,51 @@
 package runtime
 
-import "strings"
+import (
+	"encoding/json"
+	"strings"
+)
 
 func compactToolResultPayload(input map[string]any, maxBytes int) map[string]any {
 	result := make(map[string]any, len(input))
 	for key, value := range input {
 		result[key] = compactToolResultValue(value, maxBytes)
 	}
-	return result
+	if maxBytes <= 0 {
+		return result
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil || len(encoded) <= maxBytes {
+		return result
+	}
+	return compactAggregateToolResultPayload(string(encoded), len(encoded), maxBytes)
+}
+
+func compactAggregateToolResultPayload(encoded string, encodedBytes int, maxBytes int) map[string]any {
+	result := map[string]any{
+		"summary":       "tool result compacted before provider continuation",
+		"truncated":     true,
+		"omitted_bytes": encodedBytes - maxBytes,
+		"excerpt":       compactToolResultText(encoded, maxBytes/2),
+	}
+	for {
+		next, err := json.Marshal(result)
+		if err != nil || len(next) <= maxBytes {
+			return result
+		}
+		excerpt, ok := result["excerpt"].(string)
+		if !ok || excerpt == "" {
+			return map[string]any{
+				"summary":       "tool result compacted before provider continuation",
+				"truncated":     true,
+				"omitted_bytes": encodedBytes - maxBytes,
+			}
+		}
+		if len(excerpt) <= 32 {
+			delete(result, "excerpt")
+			continue
+		}
+		result["excerpt"] = compactToolResultText(excerpt, len(excerpt)/2)
+	}
 }
 
 func compactToolResultValue(value any, maxBytes int) any {

@@ -33,6 +33,14 @@ func TestAgentSpawnListAndComplete(t *testing.T) {
 		t.Fatalf("spawned = %+v", spawned)
 	}
 
+	started, err := executor.Execute(context.Background(), ToolInvocation{ThreadID: thread.ID, RunID: run.ID, ToolName: productdata.ToolNameAgentStart, ArgumentsSummary: map[string]any{"task_id": taskID}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if started["operation"] != "start" || started["status"] != string(productdata.AgentTaskStatusInProgress) {
+		t.Fatalf("started = %+v", started)
+	}
+
 	list, err := executor.Execute(context.Background(), ToolInvocation{ThreadID: thread.ID, RunID: run.ID, ToolName: productdata.ToolNameAgentList, ArgumentsSummary: map[string]any{"limit": 10}})
 	if err != nil {
 		t.Fatal(err)
@@ -42,12 +50,33 @@ func TestAgentSpawnListAndComplete(t *testing.T) {
 		t.Fatalf("list = %+v", list)
 	}
 
+	delegated, err := executor.Execute(context.Background(), ToolInvocation{ThreadID: thread.ID, RunID: run.ID, ToolName: productdata.ToolNameAgentDelegate, ArgumentsSummary: map[string]any{"task_id": taskID}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if delegated["operation"] != "delegate" || delegated["status"] != string(productdata.AgentTaskStatusInProgress) || delegated["autonomous_execution"] != true || delegated["child_thread_id"] == "" || delegated["child_run_id"] == "" {
+		t.Fatalf("delegated = %+v", delegated)
+	}
+
 	completed, err := executor.Execute(context.Background(), ToolInvocation{ThreadID: thread.ID, RunID: run.ID, ToolName: productdata.ToolNameAgentComplete, ArgumentsSummary: map[string]any{"task_id": taskID, "result_summary": "No safety issue found"}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if completed["operation"] != "complete" || completed["status"] != string(productdata.AgentTaskStatusCompleted) || completed["result_summary"] != "No safety issue found" {
 		t.Fatalf("completed = %+v", completed)
+	}
+
+	failedSpawn, err := executor.Execute(context.Background(), ToolInvocation{ThreadID: thread.ID, RunID: run.ID, ToolName: productdata.ToolNameAgentSpawn, ArgumentsSummary: map[string]any{"role": "researcher", "goal": "Research missing context"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	failedTaskID, _ := failedSpawn["task_id"].(string)
+	failed, err := executor.Execute(context.Background(), ToolInvocation{ThreadID: thread.ID, RunID: run.ID, ToolName: productdata.ToolNameAgentFail, ArgumentsSummary: map[string]any{"task_id": failedTaskID, "result_summary": "Blocked by missing context"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if failed["operation"] != "fail" || failed["status"] != string(productdata.AgentTaskStatusFailed) || failed["result_summary"] != "Blocked by missing context" {
+		t.Fatalf("failed = %+v", failed)
 	}
 }
 

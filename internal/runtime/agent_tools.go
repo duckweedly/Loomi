@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/sheridiany/loomi/internal/identity"
 	"github.com/sheridiany/loomi/internal/productdata"
@@ -16,7 +17,10 @@ func AgentToolDefinitions() []ToolDefinition {
 	return []ToolDefinition{
 		{Name: productdata.ToolNameAgentSpawn, ApprovalPolicy: ToolApprovalAlwaysRequired, SafetyClass: ToolSafetyNoSideEffectInternal, Source: ToolSourceInternal, ExecutionState: ToolExecutionAllowlisted},
 		{Name: productdata.ToolNameAgentList, ApprovalPolicy: ToolApprovalAlwaysRequired, SafetyClass: ToolSafetyNoSideEffectInternal, Source: ToolSourceInternal, ExecutionState: ToolExecutionAllowlisted},
+		{Name: productdata.ToolNameAgentStart, ApprovalPolicy: ToolApprovalAlwaysRequired, SafetyClass: ToolSafetyNoSideEffectInternal, Source: ToolSourceInternal, ExecutionState: ToolExecutionAllowlisted},
+		{Name: productdata.ToolNameAgentDelegate, ApprovalPolicy: ToolApprovalAlwaysRequired, SafetyClass: ToolSafetyNoSideEffectInternal, Source: ToolSourceInternal, ExecutionState: ToolExecutionAllowlisted},
 		{Name: productdata.ToolNameAgentComplete, ApprovalPolicy: ToolApprovalAlwaysRequired, SafetyClass: ToolSafetyNoSideEffectInternal, Source: ToolSourceInternal, ExecutionState: ToolExecutionAllowlisted},
+		{Name: productdata.ToolNameAgentFail, ApprovalPolicy: ToolApprovalAlwaysRequired, SafetyClass: ToolSafetyNoSideEffectInternal, Source: ToolSourceInternal, ExecutionState: ToolExecutionAllowlisted},
 	}
 }
 
@@ -29,8 +33,14 @@ func (e AgentToolExecutor) Execute(ctx context.Context, invocation ToolInvocatio
 		return e.spawn(ctx, invocation)
 	case productdata.ToolNameAgentList:
 		return e.list(ctx, invocation)
+	case productdata.ToolNameAgentStart:
+		return e.start(ctx, invocation)
+	case productdata.ToolNameAgentDelegate:
+		return e.delegate(ctx, invocation)
 	case productdata.ToolNameAgentComplete:
 		return e.complete(ctx, invocation)
+	case productdata.ToolNameAgentFail:
+		return e.fail(ctx, invocation)
 	default:
 		return nil, errors.New("agent tool is not supported")
 	}
@@ -74,6 +84,31 @@ func (e AgentToolExecutor) list(ctx context.Context, invocation ToolInvocation) 
 	}, nil
 }
 
+func (e AgentToolExecutor) start(ctx context.Context, invocation ToolInvocation) (map[string]any, error) {
+	taskID, _ := invocation.ArgumentsSummary["task_id"].(string)
+	task, err := e.Tasks.StartAgentTask(ctx, identity.LocalDevIdentity(), productdata.StartAgentTaskInput{
+		ThreadID: invocation.ThreadID,
+		TaskID:   taskID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return agentTaskSummary(productdata.ToolNameAgentStart, "start", task), nil
+}
+
+func (e AgentToolExecutor) delegate(ctx context.Context, invocation ToolInvocation) (map[string]any, error) {
+	taskID, _ := invocation.ArgumentsSummary["task_id"].(string)
+	task, err := e.Tasks.DelegateAgentTask(ctx, identity.LocalDevIdentity(), productdata.DelegateAgentTaskInput{
+		ThreadID:         invocation.ThreadID,
+		TaskID:           taskID,
+		ParentToolCallID: invocation.ToolCallID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return agentTaskSummary(productdata.ToolNameAgentDelegate, "delegate", task), nil
+}
+
 func (e AgentToolExecutor) complete(ctx context.Context, invocation ToolInvocation) (map[string]any, error) {
 	taskID, _ := invocation.ArgumentsSummary["task_id"].(string)
 	resultSummary, _ := invocation.ArgumentsSummary["result_summary"].(string)
@@ -86,6 +121,20 @@ func (e AgentToolExecutor) complete(ctx context.Context, invocation ToolInvocati
 		return nil, err
 	}
 	return agentTaskSummary(productdata.ToolNameAgentComplete, "complete", task), nil
+}
+
+func (e AgentToolExecutor) fail(ctx context.Context, invocation ToolInvocation) (map[string]any, error) {
+	taskID, _ := invocation.ArgumentsSummary["task_id"].(string)
+	resultSummary, _ := invocation.ArgumentsSummary["result_summary"].(string)
+	task, err := e.Tasks.FailAgentTask(ctx, identity.LocalDevIdentity(), productdata.FailAgentTaskInput{
+		ThreadID:      invocation.ThreadID,
+		TaskID:        taskID,
+		ResultSummary: resultSummary,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return agentTaskSummary(productdata.ToolNameAgentFail, "fail", task), nil
 }
 
 func agentTaskSummary(tool string, operation string, task productdata.AgentTask) map[string]any {
@@ -108,6 +157,21 @@ func agentTaskSummary(tool string, operation string, task productdata.AgentTask)
 	}
 	if task.ThreadID != "" {
 		summary["thread_id"] = task.ThreadID
+	}
+	if task.ChildThreadID != "" {
+		summary["child_thread_id"] = task.ChildThreadID
+	}
+	if task.ChildRunID != "" {
+		summary["child_run_id"] = task.ChildRunID
+	}
+	if task.ParentToolCallID != "" {
+		summary["parent_tool_call_id"] = task.ParentToolCallID
+	}
+	if task.DelegatedAt != nil {
+		summary["delegated_at"] = task.DelegatedAt.Format(time.RFC3339Nano)
+	}
+	if tool == productdata.ToolNameAgentDelegate {
+		summary["autonomous_execution"] = true
 	}
 	return summary
 }

@@ -279,12 +279,19 @@ func TestToolCatalogIncludesAgentRuntimeTools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{ToolNameAgentSpawn, ToolNameAgentList, ToolNameAgentComplete} {
+	for _, name := range []string{ToolNameAgentSpawn, ToolNameAgentList, ToolNameAgentStart, ToolNameAgentDelegate, ToolNameAgentComplete, ToolNameAgentFail} {
 		tool := catalogToolByName(tools, name)
 		if tool.Source != ToolCatalogSourceBuiltin || tool.Group != ToolCatalogGroupAgent || tool.RiskLevel != ToolRiskMedium || tool.ApprovalPolicy != ToolApprovalAlwaysRequired {
 			t.Fatalf("%s metadata = %+v", name, tool)
 		}
-		if !tool.Enabled || tool.ExecutionState != ToolExecutionStateExecutable || tool.SafeMetadata["scope"] != "agent" || tool.SafeMetadata["coordination_only"] != true || tool.SafeMetadata["autonomous_execution"] != false {
+		if !tool.Enabled || tool.ExecutionState != ToolExecutionStateExecutable || tool.SafeMetadata["scope"] != "agent" {
+			t.Fatalf("%s safe metadata = %+v", name, tool)
+		}
+		if name == ToolNameAgentDelegate {
+			if tool.SafeMetadata["coordination_only"] != false || tool.SafeMetadata["autonomous_execution"] != true {
+				t.Fatalf("agent.delegate safe metadata = %+v", tool)
+			}
+		} else if tool.SafeMetadata["coordination_only"] != true || tool.SafeMetadata["autonomous_execution"] != false {
 			t.Fatalf("%s safe metadata = %+v", name, tool)
 		}
 		if name == ToolNameAgentList && tool.SafeMetadata["read_only"] != true {

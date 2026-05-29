@@ -55,7 +55,7 @@ The saved provider updates both `GET /v1/model-providers` and the in-process mod
 }
 ```
 
-A tool call is scoped by `thread_id`, `run_id`, and `tool_call_id`. The same `(run_id, tool_call_id)` request is idempotent and returns the existing projection without duplicating events. M7 allowed only one tool call per run; M22 starts a bounded Work-mode continuation path where a run can record a later workspace read tool call after the previous call reaches a terminal execution state.
+A tool call is scoped by `thread_id`, `run_id`, and `tool_call_id`. The same `(run_id, tool_call_id)` request is idempotent only when the replayed request matches the existing tool name, candidate schema hash, approval/execution starting state, and argument identity. A conflicting duplicate id is rejected before new events are written. M7 allowed only one tool call per run; M22 starts a bounded Work-mode continuation path where a run can record a later workspace read tool call after the previous call reaches a terminal execution state.
 
 ## Run status
 
@@ -174,7 +174,7 @@ The provider-neutral continuation context uses in-memory roles:
 
 OpenAI-compatible providers serialize these as an assistant `tool_calls` message followed by a matching `tool` message. Loomi does not persist a durable `messages.role = tool` row for this MVP.
 
-The second model stream reuses existing run events with `metadata.model_phase = "continuation"`. For M22, continuation can request another enabled workspace read tool and runtime records it as a fresh approval-required tool call:
+The second model stream reuses existing run events with `metadata.model_phase = "continuation"`. For M22, continuation can request another enabled tool from the run snapshot, including workspace, memory/notebook, web, browser, artifact, coordination, and todo tools, and runtime records it as a fresh approval-required or auto-approved tool call according to that tool's policy:
 
 ```json
 {
@@ -189,13 +189,19 @@ The second model stream reuses existing run events with `metadata.model_phase = 
 }
 ```
 
-Only one non-terminal tool call may exist in a run. Workspace continuation is capped at three accepted tool calls; exceeding the cap records `tool_loop_limit_reached` and fails the run without recording the extra call. Continuation requests for non-workspace tools, tools outside the run's enabled tool snapshot, or Chat-mode-only tools still record `unsupported_tool_loop` and fail without execution. Repeating an already-requested `tool_call_id` during continuation records `duplicate_tool_call_id` and does not duplicate approval-required events.
+Only one non-terminal tool turn may exist in a run. Continuation is capped at six accepted tool calls; exceeding the cap records `tool_loop_limit_reached` and fails the run without recording the over-budget turn. Continuation requests for unsupported tools, tools outside the run's enabled tool snapshot, or Chat-mode-only tools still record `unsupported_tool_loop` and fail without execution. Repeating an already-requested `tool_call_id` during continuation records `duplicate_tool_call_id` and does not duplicate approval-required events; lower-level product data also rejects conflicting duplicate ids if a retry reaches the repository boundary directly. Denying or stopping a run cancels every unresolved sibling tool call and records `tool_call_cancelled` before the terminal run event.
 
-M95 adds a runtime guard before recording Work-mode workspace tool requests. Directory inventory/classification intent must start with `workspace.tree_summary` or `workspace.list_directory`; first-call `workspace.grep`, broad inventory `workspace.glob`, and repeated same-argument `workspace.read`, `workspace.list_directory`, or `workspace.grep` requests fail with `tool_planner_guardrail`. These rejected requests do not create `tool_calls` rows; the terminal `run_failed` event carries safe metadata including `guardrail`, `tool_name`, `arguments_summary`, and, when applicable, `recommended_tool`.
+M95 adds a runtime guard before recording Work-mode workspace tool requests. Directory inventory/classification intent must start with `workspace.tree_summary` or `workspace.list_directory`; first-call `workspace.grep`, broad inventory `workspace.glob`, and repeated same-tool same-argument workspace read-only requests fail with `tool_planner_guardrail`. The repeat key includes both tool name and argument hash, so `workspace.list_directory {"path":"."}` and `workspace.read {"path":"."}` do not collide, while repeated `workspace.glob` or `workspace.tree_summary` calls with the same arguments do. The repeat guard also applies within a single provider turn before buffered continuation tool calls are recorded, so duplicate same-argument workspace reads cannot be batch-executed just because they arrived together. These rejected requests do not create `tool_calls` rows; the terminal `run_failed` event carries safe metadata including `guardrail`, `tool_name`, `arguments_summary`, and, when applicable, `recommended_tool`.
 
-M80 clarifies the durable resume contract without adding fields. If a worker retry sees an approved tool call that already reached `tool_call_succeeded`, it may resume the missing continuation only when the event suffix has no continuation start, later tool request, or final run event. Pending `tool_call_requested` events without a matching `tool_call_succeeded` are not serialized into provider continuation input.
+M80 clarifies the durable resume contract. If a worker retry sees an approved tool call that already reached `tool_call_succeeded`, it may resume the missing continuation only when the event suffix has no continuation output, later tool request, or final run event. Pending `tool_call_requested` events without a matching `tool_call_succeeded` are not serialized into provider continuation input.
 
-M97 keeps that contract but moves the retry decision onto `RebuildRunStepState`: pending tools remain separate from completed results, a later continuation step suppresses duplicate continuation, and terminal steps stop late model/tool writes.
+M97 keeps that contract but moves the retry decision onto `RebuildRunStepState`: pending tools remain separate from completed results, continuation output suppresses duplicate continuation, and terminal steps stop late model/tool writes. A continuation request start without output is recoverable after worker restart.
+
+M98 persists that run-step state as a rebuildable checkpoint in `run_step_state_projections`. `run_events` is still the source of truth for audit and SSE replay. Provider continuation uses the projection for completed tool results, enabled tools, loop counts, route metadata, MCP candidate schema hashes, and safe MCP availability, falling back to events when the projection cannot be read; if the projection is stale, product data catches it up from events before returning it.
+
+Before the queued runner calls the provider for continuation, it claims the continuation by writing `model_request_started` with `model_phase=continuation`, the source `tool_call_id`, the current `job_id`, and a short `claim_expires_at` lease. The same job cannot claim the same completed tool result twice, and a different job cannot claim that frontier while the prior claim lease is active. If a worker dies after the claim but before continuation output, a later recovery job with a new `job_id` may claim after the lease expires; once continuation output exists, further claims are rejected. PostgreSQL claim decisions use the run-step projection and only catch up events after the projection cursor instead of replaying the whole run history on every continuation.
+
+Tool lifecycle event metadata also uses the run-step projection for `loop_index` and `loop_max`. The tool-call projection remains responsible for status, arguments, result, and error metadata, while `RunStepState.SeenToolCallIDs` preserves event-order loop numbering without rereading the full run event stream.
 
 ## Diagnostics
 
@@ -230,7 +236,7 @@ The scoped tool-call read and decision paths are:
 
 Approve is valid from `approval_status = required` and `execution_status = blocked`. It records `tool_call_approved`, changes execution to `not_started`, and queues the existing M6 worker path for resume. Repeated approve returns the current approved projection without duplicating events or jobs.
 
-Deny is valid before execution starts. It records `tool_call_denied`, cancels pending run jobs, marks the tool execution cancelled, and writes `run_stopped`. Repeated deny returns the current denied projection without duplicate events.
+Deny is valid only while the call is still `approval_status = required` and `execution_status = blocked`. It records `tool_call_denied`, cancels pending run jobs, marks the tool execution cancelled, and writes `run_stopped`. Repeated deny returns the current denied projection without duplicate events. Deny after approve is rejected, including the window where the approved call has not started execution yet.
 
 Wrong thread/run/user scope returns not found. Incompatible states such as terminal execution or reversing a denied call return a safe invalid request error.
 

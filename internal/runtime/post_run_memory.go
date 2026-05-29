@@ -58,14 +58,12 @@ func proposePostRunMemory(ctx context.Context, svc productdata.Service, ident id
 }
 
 func commitPostRunExternalMemory(ctx context.Context, svc productdata.Service, ident identity.LocalIdentity, run productdata.Run, status productdata.MemoryProviderStatus, content string) error {
-	events, err := svc.ListRunEvents(ctx, ident, run.ID, 0)
+	committed, err := svc.HasRunEventType(ctx, ident, run.ID, eventMemoryProviderCommitCompleted)
 	if err != nil {
 		return err
 	}
-	for _, event := range events {
-		if event.Type == eventMemoryProviderCommitCompleted {
-			return nil
-		}
+	if committed {
+		return nil
 	}
 	result, handled, err := MemoryToolExecutor{Service: svc, Ident: ident}.externalMemoryWrite(ctx, "Run outcome", content)
 	if !handled {

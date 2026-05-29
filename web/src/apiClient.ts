@@ -8,7 +8,7 @@ export type ApiClient = {
   mode: 'mock' | 'real_api'
   listThreads(): Promise<Thread[]>
   getThreadMessages(threadId: string): Promise<Message[]>
-  getThreadRun(threadId: string): Promise<Run>
+  getThreadRun(threadId: string, options?: { afterSequence?: number; existingEvents?: Run['events'] }): Promise<Run>
   getRunEvents(runId: string, afterSequence?: number): Promise<Run['events']>
   listPersonas?(): Promise<Persona[]>
   listSkills?(): Promise<InstalledSkill[]>

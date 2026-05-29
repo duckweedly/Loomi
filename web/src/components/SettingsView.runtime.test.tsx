@@ -6,7 +6,10 @@ describe('SettingsView runtime rows', () => {
 
     expect(source).not.toContain('t.dataSourceMode')
     expect(source).not.toContain('t.mockRuntimeScenario')
-    expect(source).toContain('t.theme')
+    expect(source).toContain('const isAppearance')
+    expect(source).toContain('{isAppearance &&')
+    expect(source).toContain('themePreference')
+    expect(source).toContain("value: 'system', label: t.system")
     expect(source).not.toContain('RuntimeStatusRows')
     expect(source).not.toContain('t.streamState')
   })
@@ -28,6 +31,10 @@ describe('SettingsView runtime rows', () => {
     expect(source).toContain('ProviderManagementPanel')
     expect(source).toContain('t.providerAdd')
     expect(source).toContain('t.aboutLocalApp')
+    expect(source).toContain('about-settings-card')
+    expect(source).toContain('t.appVersionValue')
+    expect(source).not.toContain('t.appVersionHelper} status="mock"')
+    expect(await Bun.file(new URL('./settingsCatalog.ts', import.meta.url)).text()).not.toContain('placeholder build metadata')
   })
 })
 

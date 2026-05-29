@@ -27,6 +27,7 @@ function baseSettingsProps(): Parameters<typeof SettingsView>[0] {
     selectedCategoryId: 'skill',
     defaultWorkspaceMode: 'work',
     theme: 'light',
+    themePreference: 'system',
     backendCapability: 'available',
     streamState: 'closed',
     providerCapabilities: [],

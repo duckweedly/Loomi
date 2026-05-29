@@ -159,13 +159,13 @@ export function ToolCallCard({ toolCall, onApprove, onDeny, locale = 'en', defau
   const displayName = humanToolName(toolCall.name, locale)
   const approvalRequired = toolCall.status === 'approval_required'
   const hasDetails = Boolean(inputPreview || outputPreview || toolCall.errorMessage)
-  const attentionState = approvalRequired || toolCall.status === 'running' || toolCall.status === 'executing' || toolCall.status === 'failed'
-  const compactPreview = attentionState
+  const attentionState = approvalRequired
+  const compactPreview = attentionState || toolCall.status === 'failed'
     ? toolCall.status === 'failed' ? outputPreview || inputPreview : inputPreview || outputPreview
     : workspacePreview || inputPreview
   const sources = webSearchSources(toolCall)
   const phases = phaseStates(toolCall)
-  const showPhaseStrip = approvalRequired || toolCall.status === 'running' || toolCall.status === 'executing'
+  const showPhaseStrip = approvalRequired
   const summary = approvalRequired
     ? text.waiting
     : toolCall.status === 'succeeded'

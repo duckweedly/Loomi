@@ -9,7 +9,7 @@ import { SettingsView } from './components/SettingsView'
 import { ThreadSidebar } from './components/ThreadSidebar'
 import { getDictionary } from './i18n'
 import { useWorkspaceState } from './state'
-import { useWorkspaceShellState } from './useWorkspaceShellState'
+import { sidebarMaxWidth, sidebarMinWidth, useWorkspaceShellState } from './useWorkspaceShellState'
 
 export default function App() {
   const shell = useWorkspaceShellState()
@@ -122,7 +122,7 @@ export default function App() {
     event.currentTarget.setPointerCapture(event.pointerId)
 
     const handlePointerMove = (moveEvent: globalThis.PointerEvent) => {
-      shell.setSidebarWidth(Math.min(420, Math.max(300, startWidth + moveEvent.clientX - startX)))
+      shell.setSidebarWidth(Math.min(sidebarMaxWidth, Math.max(sidebarMinWidth, startWidth + moveEvent.clientX - startX)))
     }
 
     const handlePointerUp = () => {
@@ -205,6 +205,7 @@ export default function App() {
                   selectedCategoryId={shell.settingsCategoryId}
                   defaultWorkspaceMode={shell.defaultWorkspaceMode}
                   theme={shell.theme}
+                  themePreference={shell.themePreference}
                   backendCapability={backendCapability}
                   providerCapabilities={providerCapabilities}
                   workspaceRootConfig={workspaceRootConfig}
@@ -247,9 +248,7 @@ export default function App() {
                   onSelectLocale={shell.setLocale}
                   onSelectCategory={shell.setSettingsCategory}
                   onSelectDefaultWorkspaceMode={shell.setDefaultWorkspaceMode}
-                  onSelectTheme={(theme) => {
-                    if (theme !== shell.theme) shell.toggleTheme()
-                  }}
+                  onSelectTheme={shell.setThemePreference}
                   onProviderDraftSettingsChange={shell.setProviderDraftSettings}
                   onSaveProvider={(settings) => {
                     void saveProvider({ baseUrl: settings.baseUrl, model: settings.model, apiKey: settings.apiKey })

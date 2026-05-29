@@ -34,6 +34,8 @@ Only one active run is allowed per thread while a run is `pending`, `queued`, `r
 
 Background jobs store a redacted metadata snapshot for the queued execution input. Claims increment `ownership_version`; completion, failure, and lease renewal require the current worker id and ownership version.
 
+Owned job failure is atomic in the Postgres repository: the `background_jobs` row, terminal `runs` row, `job_attempt_failed` event, and final `run_failed` event commit together. A failure to persist those events is returned to the worker caller.
+
 ## Run statuses
 
 M6 frontend/backend run states include:

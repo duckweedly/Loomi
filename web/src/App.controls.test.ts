@@ -42,4 +42,15 @@ describe('App titlebar controls', () => {
       selectedRightPanelId: 'preview',
     })
   })
+
+  test('keeps long thread titles contained in the titlebar', () => {
+    const css = readFileSync(resolve(import.meta.dir, 'styles/92-unified-workspace.css'), 'utf8')
+
+    expect(css).toContain('.main-thread-title {\n  min-width: 0 !important;')
+    expect(css).toContain('max-width: clamp(120px, 42vw, 420px) !important;')
+    expect(css).not.toContain('calc(100vw - 420px)')
+    expect(css).toContain('.main-thread-title > span:not(.titlebar-brand-icon)')
+    expect(css).toContain('text-overflow: ellipsis !important;')
+    expect(css).toContain('white-space: nowrap !important;')
+  })
 })

@@ -34,6 +34,7 @@ Runtime tests cover:
 - repeated continuation `tool_call_id` failure with `duplicate_tool_call_id`
 - workspace tool outside the run enabled-tool snapshot failing before approval
 - one non-terminal tool-call invariant
+- enabled runtime tools can participate in continuation when present in the run snapshot
 - unsupported continuation still failing with `unsupported_tool_loop`
 - bounded command and LSP tools can participate in continuation when they are enabled for the run
 - safe todo metadata normalization, runtime todo snapshot emission, provider `todo.write` snapshot emission, and Work-mode-only replay projection

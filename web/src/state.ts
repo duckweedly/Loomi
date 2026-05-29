@@ -17,6 +17,38 @@ type RefreshResult = {
   run: Run | null
 }
 
+type ThreadSnapshot = {
+  messages: Message[]
+  run: Run | null
+}
+
+function runSnapshotKey(run: Run | null) {
+  if (!run) return ''
+  return [
+    run.id,
+    run.status,
+    run.events.length,
+    run.toolCalls?.length ?? 0,
+    run.assistantDraft?.status ?? '',
+    run.assistantDraft?.content ?? '',
+  ].join('\u001f')
+}
+
+function messageSnapshotKey(messages: Message[]) {
+  return messages.map((message) => [
+    message.id,
+    message.role,
+    message.runId ?? '',
+    message.content,
+    message.createdAt,
+  ].join('\u001f')).join('\u001e')
+}
+
+export function areThreadSnapshotsEqual(left: ThreadSnapshot, right: ThreadSnapshot) {
+  return messageSnapshotKey(left.messages) === messageSnapshotKey(right.messages)
+    && runSnapshotKey(left.run) === runSnapshotKey(right.run)
+}
+
 export type ProviderCheckStatus = 'idle' | 'checking' | 'success' | 'failed'
 
 export type ProviderCheckResult = {
@@ -67,6 +99,10 @@ export function shouldSelectWorkspaceRefreshThread({ requestedThreadId, resolved
   return Boolean(resolvedThreadId) && resolvedThreadId !== requestedThreadId && requestedThreadId === currentSelectedThreadId
 }
 
+export function shouldSendWorkspaceRefreshIntoLoading({ threads, messages, run }: { threads: Thread[]; messages: Message[]; run: Run | null }) {
+  return threads.length === 0 && messages.length === 0 && !run
+}
+
 export function getThreadIdAfterArchive({ archivedThreadId, currentSelectedThreadId, threads }: { archivedThreadId: string; currentSelectedThreadId: string; threads: Thread[] }) {
   if (archivedThreadId !== currentSelectedThreadId) return currentSelectedThreadId
   const archivedIndex = threads.findIndex((thread) => thread.id === archivedThreadId)
@@ -77,6 +113,26 @@ export function getThreadIdAfterArchive({ archivedThreadId, currentSelectedThrea
 
 export function shouldApplySendMessageResult({ requestedThreadId, currentSelectedThreadId }: { requestedThreadId: string; currentSelectedThreadId: string }) {
   return requestedThreadId === currentSelectedThreadId
+}
+
+function mentionsWorkspaceRequest(content: string) {
+  return /下载目录|下载文件夹|downloads?|文件|目录|文件夹|工作区|workspace|folder|directory/i.test(content)
+}
+
+function isWorkspaceContinuation(content: string) {
+  return /^(现在呢|现在|继续|好了|可以了|再试|试一下|那现在|now|continue|retry|try again|[?？])$/i.test(content.trim())
+}
+
+function hasWorkspaceConversationContext(messages: Message[]) {
+  return messages.some((message) => {
+    if (message.role === 'user') return mentionsWorkspaceRequest(message.content)
+    return /没有可用的本地文件\/目录访问工具|不能直接查看或整理你的下载目录|请选择下载目录|授权下载目录|选择下载目录/.test(message.content)
+  })
+}
+
+export function shouldPromoteThreadForWorkspaceSend({ thread, workspaceRootConfig, content, messages }: { thread: Thread | null | undefined; workspaceRootConfig: WorkspaceRootConfig | null | undefined; content: string; messages: Message[] }) {
+  if (!thread || thread.mode === 'work' || !workspaceRootConfig?.configured) return false
+  return mentionsWorkspaceRequest(content) || (isWorkspaceContinuation(content) && hasWorkspaceConversationContext(messages))
 }
 
 export function shouldApplyRunStreamEvent({ eventThreadId, eventRunId, selectedThreadId, currentRunId }: { eventThreadId: string; eventRunId: string; selectedThreadId: string; currentRunId: string }) {
@@ -139,6 +195,10 @@ export function shouldBlockRuntimeSubmit(run: Run | null) {
   return run ? isRuntimeActive(run.status) : false
 }
 
+export function isOptimisticSendRun(run: Run | null) {
+  return Boolean(run?.id.startsWith('optimistic-run-'))
+}
+
 export function appendRuntimeEventToRun(run: Run, event: RuntimeEvent): Run {
   if (isRuntimeTerminal(run.status)) return run
 
@@ -177,6 +237,10 @@ export function shouldApplyIncomingRunEvent(run: Run, event: RunEvent) {
 
 export function shouldUpdateStreamStateForRunEvent(run: Run, event: RunEvent) {
   return shouldApplyIncomingRunEvent(run, event)
+}
+
+export function shouldReconcileTerminalStreamEvent(event: RunEvent) {
+  return !isRuntimeActive(event.status)
 }
 
 export function shouldIgnoreTerminalRuntimeEvent(run: Run) {
@@ -314,6 +378,38 @@ export function createRegenerateAttemptRun(run: Run, attemptOfMessageId: string)
   }
 }
 
+export function createOptimisticSendSnapshot({ threadId, content, model }: { threadId: string; content: string; model?: string | null }): ThreadSnapshot {
+  const createdAt = new Date().toISOString()
+  const idSuffix = `${createdAt}-${Math.random().toString(36).slice(2, 8)}`
+  return {
+    messages: [{
+      id: `optimistic-user-${idSuffix}`,
+      threadId,
+      role: 'user',
+      content,
+      createdAt,
+    }],
+    run: {
+      id: `optimistic-run-${idSuffix}`,
+      threadId,
+      status: 'pending',
+      model: model || 'pending',
+      context: 'model_gateway',
+      events: [],
+      assistantDraft: { content: '', status: 'pending' },
+      createdAt,
+    },
+  }
+}
+
+export const minimumOptimisticThinkingMs = 520
+
+export async function waitForMinimumOptimisticThinking(startedAt: number, minimumMs = minimumOptimisticThinkingMs) {
+  const remaining = minimumMs - (Date.now() - startedAt)
+  if (remaining <= 0) return
+  await new Promise((resolve) => window.setTimeout(resolve, remaining))
+}
+
 export function createWorkspaceSettingsState(input: Partial<{ defaultWorkspaceMode: Thread['mode']; selectedRuntimeScript: RuntimeScriptId }> = {}) {
   return {
     defaultWorkspaceMode: input.defaultWorkspaceMode ?? 'chat',
@@ -398,13 +494,21 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
   const [memorySnapshotLoading, setMemorySnapshotLoading] = useState(false)
   const [pendingDeleteMemoryEntry, setPendingDeleteMemoryEntry] = useState<MemoryEntry | null>(null)
   const selectedThreadIdRef = useRef(selectedThreadId)
+  const threadsRef = useRef<Thread[]>(threads)
+  const messagesRef = useRef<Message[]>(messages)
   const runRef = useRef<Run | null>(run)
+  const workspaceRefreshRequestRef = useRef(0)
+  const threadSelectionRequestRef = useRef(0)
+  const skipNextSelectedThreadRefreshRef = useRef(false)
+  const threadSnapshotsRef = useRef<Map<string, ThreadSnapshot>>(new Map())
   const memoryEntriesRequestRef = useRef(0)
   const memoryAuditRequestRef = useRef(0)
   const memoryProposalsRequestRef = useRef(0)
   const memoryDetailRequestRef = useRef(0)
 
   selectedThreadIdRef.current = selectedThreadId
+  threadsRef.current = threads
+  messagesRef.current = messages
   runRef.current = run
 
   const selectedThread = useMemo(
@@ -441,7 +545,10 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
   }, [])
 
   const refresh = useCallback(async (threadId = selectedThreadId) => {
-    setLoading(true)
+    const requestID = workspaceRefreshRequestRef.current + 1
+    workspaceRefreshRequestRef.current = requestID
+    const blockingLoading = shouldSendWorkspaceRefreshIntoLoading({ threads: threadsRef.current, messages: messagesRef.current, run: runRef.current })
+    setLoading(blockingLoading)
     setError(null)
     try {
       const nextThreads = await apiClient.listThreads()
@@ -449,6 +556,7 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
       const [nextMessages, nextRun] = nextThreadId
         ? await Promise.all([apiClient.getThreadMessages(nextThreadId), apiClient.getThreadRun(nextThreadId)])
         : [[], null]
+      if (!shouldApplyLatestRequest(requestID, workspaceRefreshRequestRef.current)) return
       if (!shouldApplyWorkspaceRefresh({ requestedThreadId: threadId, currentSelectedThreadId: selectedThreadIdRef.current, threads: nextThreads, messages: nextMessages, run: nextRun })) return
       const reconciledRun = nextRun ? reconcileRunWithPersistedAssistant(nextRun, nextMessages) : null
       setThreads(nextThreads)
@@ -461,13 +569,16 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
       if (!threadId && nextThreadId) setSelectedThreadId(nextThreadId)
       else if (shouldSelectWorkspaceRefreshThread({ requestedThreadId: threadId, resolvedThreadId: nextThreadId, currentSelectedThreadId: selectedThreadIdRef.current })) setSelectedThreadId(nextThreadId)
     } catch (err) {
+      if (!shouldApplyLatestRequest(requestID, workspaceRefreshRequestRef.current)) return
       setError(err instanceof Error ? err.message : 'API request failed')
       setApiConnected(false)
       setCapabilitySignals((current) => ({ ...current, ...mapRealRuntimeCapabilitySignal(err) }))
-      setMessages([])
-      setRun(null)
+      if (blockingLoading) {
+        setMessages([])
+        setRun(null)
+      }
     } finally {
-      setLoading(false)
+      if (shouldApplyLatestRequest(requestID, workspaceRefreshRequestRef.current)) setLoading(false)
     }
   }, [selectedThreadId])
 
@@ -476,6 +587,10 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
   }, [refreshDesktopReadiness])
 
   useEffect(() => {
+    if (skipNextSelectedThreadRefreshRef.current) {
+      skipNextSelectedThreadRefreshRef.current = false
+      return
+    }
     void refresh(selectedThreadId)
   }, [refresh, selectedThreadId])
 
@@ -853,6 +968,11 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
   }, [apiConnected, loadMemoryEntries, memoryFilters])
 
   useEffect(() => {
+    if (!selectedThreadId) return
+    threadSnapshotsRef.current.set(selectedThreadId, { messages, run })
+  }, [messages, run, selectedThreadId])
+
+  useEffect(() => {
     if (!apiConnected) return
     void loadMemoryAudit(memoryFilters)
   }, [apiConnected, loadMemoryAudit, memoryFilters])
@@ -992,6 +1112,10 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
   }, [apiConnected, refreshMemoryErrors, refreshMemoryProviderStatus, refreshMemorySnapshots])
 
   useEffect(() => {
+    if (isOptimisticSendRun(run)) {
+      setStreamState((current) => (current === 'connecting' ? current : 'connecting'))
+      return
+    }
     if (!run || !shouldBlockRuntimeSubmit(run) || !apiClient.subscribeRunEvents) {
       setStreamState((current) => {
         const next = run && shouldBlockRuntimeSubmit(run) ? 'recoverable_error' : 'closed'
@@ -1001,12 +1125,16 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
     }
     let cancelled = false
     const activeRunID = run.id
-    const reconcileActiveRun = async () => {
+    const reconcileActiveRun = async (options: { allowAfterCleanup?: boolean } = {}) => {
       const threadId = selectedThreadIdRef.current
       if (!threadId) return
       try {
-        const [nextMessages, nextRun] = await Promise.all([apiClient.getThreadMessages(threadId), apiClient.getThreadRun(threadId)])
-        if (cancelled || !nextRun || nextRun.id !== activeRunID) return
+        const currentRun = runRef.current
+        const [nextMessages, nextRun] = await Promise.all([
+          apiClient.getThreadMessages(threadId),
+          apiClient.getThreadRun(threadId, currentRun?.id === activeRunID ? { afterSequence: getMaxRunEventSequence(currentRun.events, 0), existingEvents: currentRun.events } : undefined),
+        ])
+        if ((cancelled && !options.allowAfterCleanup) || !nextRun || nextRun.id !== activeRunID || threadId !== selectedThreadIdRef.current) return
         const reconciledRun = reconcileRunWithPersistedAssistant(nextRun, nextMessages)
         setMessages(nextMessages)
         setRun(reconciledRun)
@@ -1031,6 +1159,7 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
           runRef.current = nextRun
           return nextRun
         })
+        if (shouldReconcileTerminalStreamEvent(event)) void reconcileActiveRun({ allowAfterCleanup: true })
         setCapabilitySignals((current) => ({ ...current, ...deriveCapabilitySignalFromEvent(event), streamDisconnected: isRuntimeActive(event.status) ? current.streamDisconnected : false }))
         setStreamState((current) => {
           const next = isRuntimeActive(event.status) ? 'live' : 'closed'
@@ -1057,9 +1186,40 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
     }
   }, [run?.id, run?.status])
 
-  const selectThread = useCallback((threadId: string) => {
+  const applyThreadSnapshot = useCallback((threadId: string, snapshot: ThreadSnapshot) => {
+    if (threadId === selectedThreadIdRef.current && areThreadSnapshotsEqual({ messages: messagesRef.current, run: runRef.current }, snapshot)) return
+    if (threadId !== selectedThreadIdRef.current) skipNextSelectedThreadRefreshRef.current = true
     setSelectedThreadId(threadId)
+    setMessages(snapshot.messages)
+    setRun(snapshot.run)
+    setStreamState(snapshot.run && shouldBlockRuntimeSubmit(snapshot.run) ? 'connecting' : 'closed')
   }, [])
+
+  const selectThread = useCallback(async (threadId: string) => {
+    if (!threadId || threadId === selectedThreadIdRef.current) return
+    const requestID = threadSelectionRequestRef.current + 1
+    threadSelectionRequestRef.current = requestID
+    setError(null)
+
+    const cached = threadSnapshotsRef.current.get(threadId)
+    if (cached) applyThreadSnapshot(threadId, cached)
+
+    try {
+      const [nextMessages, nextRun] = await Promise.all([
+        apiClient.getThreadMessages(threadId),
+        apiClient.getThreadRun(threadId),
+      ])
+      if (!shouldApplyLatestRequest(requestID, threadSelectionRequestRef.current)) return
+      const reconciledRun = nextRun ? reconcileRunWithPersistedAssistant(nextRun, nextMessages) : null
+      threadSnapshotsRef.current.set(threadId, { messages: nextMessages, run: reconciledRun })
+      applyThreadSnapshot(threadId, { messages: nextMessages, run: reconciledRun })
+      setCapabilitySignals({ backendUnavailable: false, modelSetupMissing: false, providerUnavailable: false, streamDisconnected: false })
+    } catch (err) {
+      if (!shouldApplyLatestRequest(requestID, threadSelectionRequestRef.current)) return
+      setError(err instanceof Error ? err.message : 'API request failed')
+      setCapabilitySignals((current) => ({ ...current, ...mapRealRuntimeCapabilitySignal(err) }))
+    }
+  }, [applyThreadSnapshot])
 
   const sendMessage = useCallback(async (content: string, options?: { providerId?: string; model?: string }) => {
     const trimmed = content.trim()
@@ -1068,9 +1228,20 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
     setError(null)
     setBackendUnavailableAttempted(false)
     setCapabilitySignals({ backendUnavailable: false, modelSetupMissing: false, providerUnavailable: false, streamDisconnected: false })
+    const optimisticSnapshot = createOptimisticSendSnapshot({ threadId: requestedThreadId, content: trimmed, model: options?.model })
+    const optimisticStartedAt = Date.now()
+    setMessages((current) => [...current, ...optimisticSnapshot.messages])
+    setRun(optimisticSnapshot.run)
+    runRef.current = optimisticSnapshot.run
+    setStreamState('connecting')
     try {
+      if (shouldPromoteThreadForWorkspaceSend({ thread: selectedThread, workspaceRootConfig, content: trimmed, messages }) && apiClient.updateThread) {
+        const updated = await apiClient.updateThread(requestedThreadId, { mode: 'work' })
+        setThreads((current) => current.map((thread) => thread.id === updated.id ? updated : thread))
+      }
       const result = await apiClient.sendMessage(requestedThreadId, trimmed, selectedPersonaId || undefined, options)
       const nextThreads = await apiClient.listThreads()
+      await waitForMinimumOptimisticThinking(optimisticStartedAt)
       if (!shouldApplySendMessageResult({ requestedThreadId, currentSelectedThreadId: selectedThreadIdRef.current })) return
       setMessages(result.messages)
       setRun(result.run)
@@ -1081,19 +1252,26 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
       setError(err instanceof Error ? err.message : 'API request failed')
       setCapabilitySignals((current) => ({ ...current, ...mapRealRuntimeCapabilitySignal(err) }))
     }
-  }, [selectedPersonaId, selectedThreadId])
+  }, [messages, selectedPersonaId, selectedThread, selectedThreadId, workspaceRootConfig])
 
   const createThread = useCallback(async (mode: Thread['mode'] = defaultWorkspaceMode) => {
     if (!apiClient.createThread) return
     setError(null)
     try {
       const thread = await apiClient.createThread(createNextThreadTitle(threads), mode)
-      setSelectedThreadId(thread.id)
-      await refresh(thread.id)
+      const [nextThreads, nextMessages, nextRun] = await Promise.all([
+        apiClient.listThreads(),
+        apiClient.getThreadMessages(thread.id),
+        apiClient.getThreadRun(thread.id),
+      ])
+      const nextSnapshot = { messages: nextMessages, run: nextRun ? reconcileRunWithPersistedAssistant(nextRun, nextMessages) : null }
+      threadSnapshotsRef.current.set(thread.id, nextSnapshot)
+      setThreads(nextThreads.some((item) => item.id === thread.id) ? nextThreads : [thread, ...nextThreads])
+      applyThreadSnapshot(thread.id, nextSnapshot)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'API request failed')
     }
-  }, [defaultWorkspaceMode, refresh, threads])
+  }, [applyThreadSnapshot, defaultWorkspaceMode, threads])
 
   const renameThread = useCallback(async (threadId: string, title: string) => {
     if (!apiClient.updateThread) return
@@ -1109,22 +1287,31 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
   const archiveThread = useCallback(async (threadId: string) => {
     if (!apiClient.archiveThread) return
     setError(null)
+    threadSelectionRequestRef.current += 1
+    const archivedSelectedThread = threadId === selectedThreadIdRef.current
+    const nextThreadId = getThreadIdAfterArchive({ archivedThreadId: threadId, currentSelectedThreadId: selectedThreadIdRef.current, threads })
+    let nextSnapshot = nextThreadId ? threadSnapshotsRef.current.get(nextThreadId) : undefined
+    if (!archivedSelectedThread) setThreads((current) => current.filter((thread) => thread.id !== threadId))
     try {
       await apiClient.archiveThread(threadId)
-      const nextThreadId = getThreadIdAfterArchive({ archivedThreadId: threadId, currentSelectedThreadId: selectedThreadIdRef.current, threads })
-      setThreads((current) => current.filter((thread) => thread.id !== threadId))
-      if (nextThreadId !== selectedThreadIdRef.current) {
-        setSelectedThreadId(nextThreadId)
-        if (!nextThreadId) {
-          setMessages([])
-          setRun(null)
-        }
+      if (nextThreadId && !nextSnapshot) {
+        const [nextMessages, nextRun] = await Promise.all([
+          apiClient.getThreadMessages(nextThreadId),
+          apiClient.getThreadRun(nextThreadId),
+        ])
+        nextSnapshot = { messages: nextMessages, run: nextRun ? reconcileRunWithPersistedAssistant(nextRun, nextMessages) : null }
+        threadSnapshotsRef.current.set(nextThreadId, nextSnapshot)
       }
-      await refresh(nextThreadId)
+      threadSnapshotsRef.current.delete(threadId)
+      if (archivedSelectedThread) setThreads((current) => current.filter((thread) => thread.id !== threadId))
+      if (archivedSelectedThread) {
+        if (nextThreadId && nextSnapshot) applyThreadSnapshot(nextThreadId, nextSnapshot)
+        else if (!nextThreadId) applyThreadSnapshot('', { messages: [], run: null })
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'API request failed')
     }
-  }, [refresh, threads])
+  }, [applyThreadSnapshot, threads])
 
   const stopRun = useCallback(async () => {
     if (!run || !shouldBlockRuntimeSubmit(run)) return
@@ -1298,12 +1485,18 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
       }
       const config = await apiClient.saveWorkspaceRoot({ path: selected.path })
       setWorkspaceRootConfig(config)
+      const threadId = selectedThreadIdRef.current
+      const currentThread = threads.find((thread) => thread.id === threadId)
+      if (threadId && currentThread?.mode !== 'work' && apiClient.updateThread) {
+        const updated = await apiClient.updateThread(threadId, { mode: 'work' })
+        setThreads((current) => current.map((thread) => thread.id === updated.id ? updated : thread))
+      }
       setWorkspaceRootSaveResult({ status: 'success', message: `已授权 ${config.displayName}` })
       setError(null)
     } catch (err) {
       setWorkspaceRootSaveResult({ status: 'failed', message: err instanceof Error ? err.message : 'Workspace folder save failed' })
     }
-  }, [])
+  }, [threads])
 
   return {
     threads,

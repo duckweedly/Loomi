@@ -43,6 +43,53 @@ describe('messageArtifactPreview', () => {
     expect(stripMessageArtifactSource(message.content)).toBe(message.content)
   })
 
+  test('extracts bare generated markdown documents as preview artifacts', () => {
+    const message = {
+      id: 'msg-doc',
+      content: 'markdown#项目名称一句话介绍这个项目是做什么的。##目录-[项目简介](#项目简介)-[功能特性](#功能特性)-[快速开始](#快速开始)##项目简介这里填写项目背景。##功能特性-支持核心功能一-支持核心功能二##许可证MIT',
+    }
+
+    expect(extractMessageArtifact(message)).toMatchObject({
+      id: 'message:msg-doc:markdown',
+      title: '项目名称',
+      filename: 'Markdown.md',
+      kind: 'markdown',
+    })
+    expect(extractMessageArtifact(message)?.content).toContain('# 项目名称')
+    expect(extractMessageArtifact(message)?.content).toContain('## 目录')
+    expect(stripMessageArtifactSource(message.content)).toBe('')
+  })
+
+  test('extracts inline markdown file content prompts without explicit save intent', () => {
+    const message = {
+      id: 'msg-file-content',
+      content: '如果你想要“一个 Markdown 文件内容”，直接用下面这个通用版： ` markdown #文档标题##概述这里写文档的简要说明。 ##目标-目标一-目标二##内容###1. 第一部分这里写第一部分内容。 ` 如果你要特定类型，告诉我类型即可。',
+    }
+
+    expect(extractMessageArtifact(message)).toMatchObject({
+      id: 'message:msg-file-content:markdown',
+      title: '文档标题',
+      filename: 'Markdown.md',
+      kind: 'markdown',
+      content: '# 文档标题\n\n## 概述\n\n这里写文档的简要说明。\n\n## 目标\n- 目标一\n- 目标二\n\n## 内容\n\n1. 第一部分这里写第一部分内容。',
+    })
+    expect(stripMessageArtifactSource(message.content)).toBe('如果你想要“一个 Markdown 文件内容”，直接用下面这个通用版：  如果你要特定类型，告诉我类型即可。')
+  })
+
+  test('extracts loose markdown file payloads when stream recovery drops code fences', () => {
+    const message = {
+      id: 'msg-loose-file-content',
+      content: '如果你想要“一个Markdown文件内容”，直接用下面这个通用版：markdown #文档标题##概述这里写文档的简要说明。##目标-目标一-目标二如果你要特定类型，告诉我类型即可。',
+    }
+
+    expect(extractMessageArtifact(message)).toMatchObject({
+      id: 'message:msg-loose-file-content:markdown',
+      title: '文档标题',
+      content: '# 文档标题\n\n## 概述\n\n这里写文档的简要说明。\n\n## 目标\n- 目标一\n- 目标二',
+    })
+    expect(stripMessageArtifactSource(message.content)).toBe('如果你想要“一个Markdown文件内容”，直接用下面这个通用版：如果你要特定类型，告诉我类型即可。')
+  })
+
   test('extracts artifact protocol links without treating the link text as source content', () => {
     const message = {
       id: 'msg-c',

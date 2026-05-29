@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"os"
 	"sort"
 	"strings"
@@ -28,7 +29,10 @@ type Service interface {
 	GetRun(context.Context, identity.LocalIdentity, string) (Run, error)
 	GetCurrentRun(context.Context, identity.LocalIdentity, string) (Run, error)
 	ListRunEvents(context.Context, identity.LocalIdentity, string, int) ([]RunEvent, error)
+	HasRunEventType(context.Context, identity.LocalIdentity, string, string) (bool, error)
 	AppendRunEvent(context.Context, identity.LocalIdentity, string, AppendRunEventInput) (RunEvent, error)
+	GetRunStepState(context.Context, identity.LocalIdentity, string) (RunStepState, error)
+	ClaimToolContinuation(context.Context, identity.LocalIdentity, ClaimToolContinuationInput) (RunEvent, bool, error)
 	PrepareRunContext(context.Context, identity.LocalIdentity, BackgroundJob) (RunContext, error)
 	ListToolCatalog(context.Context, identity.LocalIdentity) ([]ToolCatalogEntry, error)
 	ListMCPDiscoveryEvents(context.Context, identity.LocalIdentity) ([]RunEvent, error)
@@ -74,7 +78,16 @@ type ArtifactService interface {
 type AgentTaskService interface {
 	SpawnAgentTask(context.Context, identity.LocalIdentity, SpawnAgentTaskInput) (AgentTask, error)
 	ListAgentTasks(context.Context, identity.LocalIdentity, ListAgentTasksInput) ([]AgentTask, error)
+	StartAgentTask(context.Context, identity.LocalIdentity, StartAgentTaskInput) (AgentTask, error)
+	DelegateAgentTask(context.Context, identity.LocalIdentity, DelegateAgentTaskInput) (AgentTask, error)
+	ReconcileAgentTaskChildRuns(context.Context, identity.LocalIdentity, int) ([]AgentTaskChildRunReconciliation, error)
 	CompleteAgentTask(context.Context, identity.LocalIdentity, CompleteAgentTaskInput) (AgentTask, error)
+	FailAgentTask(context.Context, identity.LocalIdentity, FailAgentTaskInput) (AgentTask, error)
+}
+
+type ContextSourceService interface {
+	CreateContextSource(context.Context, identity.LocalIdentity, CreateContextSourceInput) (ContextSource, error)
+	ListContextSources(context.Context, identity.LocalIdentity, ListContextSourcesInput) ([]ContextSource, error)
 }
 
 type MemorySnapshotService interface {
@@ -130,9 +143,11 @@ type MemoryService struct {
 	messages           map[string][]Message
 	runs               map[string]Run
 	runEvents          map[string][]RunEvent
+	runStepStates      map[string]RunStepState
 	memoryAuditEvents  []RunEvent
 	backgroundJobs     map[string]BackgroundJob
 	toolCalls          map[string]ToolCall
+	toolCallHashes     map[string]string
 	personas           map[string]Persona
 	personaVersions    map[string]PersonaVersion
 	personaSnapshots   map[string]PersonaSnapshot
@@ -142,6 +157,7 @@ type MemoryService struct {
 	memoryDecisionKeys map[string]MemoryWriteDecision
 	artifacts          map[string]Artifact
 	agentTasks         map[string]AgentTask
+	contextSources     map[string]ContextSource
 	modelProviders     map[string]ModelProviderConfig
 	webSearchConfigs   map[string]WebSearchConfig
 	workspaceRoots     map[string]WorkspaceRootConfig
@@ -158,9 +174,11 @@ func NewMemoryService() *MemoryService {
 		messages:           map[string][]Message{},
 		runs:               map[string]Run{},
 		runEvents:          map[string][]RunEvent{},
+		runStepStates:      map[string]RunStepState{},
 		memoryAuditEvents:  []RunEvent{},
 		backgroundJobs:     map[string]BackgroundJob{},
 		toolCalls:          map[string]ToolCall{},
+		toolCallHashes:     map[string]string{},
 		personas:           map[string]Persona{},
 		personaVersions:    map[string]PersonaVersion{},
 		personaSnapshots:   map[string]PersonaSnapshot{},
@@ -170,6 +188,7 @@ func NewMemoryService() *MemoryService {
 		memoryDecisionKeys: map[string]MemoryWriteDecision{},
 		artifacts:          map[string]Artifact{},
 		agentTasks:         map[string]AgentTask{},
+		contextSources:     map[string]ContextSource{},
 		modelProviders:     map[string]ModelProviderConfig{},
 		webSearchConfigs:   map[string]WebSearchConfig{},
 		workspaceRoots:     map[string]WorkspaceRootConfig{},
@@ -473,6 +492,185 @@ func (s *MemoryService) ListAgentTasks(_ context.Context, ident identity.LocalId
 	return result, nil
 }
 
+func (s *MemoryService) StartAgentTask(_ context.Context, ident identity.LocalIdentity, input StartAgentTaskInput) (AgentTask, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user := s.ensureUserLocked(ident)
+	thread, ok := s.threads[input.ThreadID]
+	if !ok || thread.UserID != user.ID {
+		return AgentTask{}, NewError(CodeThreadNotFound, "Thread not found.")
+	}
+	task, ok := s.agentTasks[strings.TrimSpace(input.TaskID)]
+	if !ok || task.ThreadID != thread.ID {
+		return AgentTask{}, NewError(CodeInvalidRequest, "Agent task not found.")
+	}
+	if task.Status != AgentTaskStatusSpawned {
+		return AgentTask{}, NewError(CodeInvalidRequest, "Agent task is already terminal or running.")
+	}
+	task.Status = AgentTaskStatusInProgress
+	task.UpdatedAt = s.now()
+	s.agentTasks[task.ID] = task
+	return task, nil
+}
+
+func (s *MemoryService) DelegateAgentTask(_ context.Context, ident identity.LocalIdentity, input DelegateAgentTaskInput) (AgentTask, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user := s.ensureUserLocked(ident)
+	parentThread, ok := s.threads[input.ThreadID]
+	if !ok || parentThread.UserID != user.ID || parentThread.Mode != ThreadModeWork {
+		return AgentTask{}, NewError(CodeThreadNotFound, "Thread not found.")
+	}
+	task, ok := s.agentTasks[strings.TrimSpace(input.TaskID)]
+	if !ok || task.ThreadID != parentThread.ID {
+		return AgentTask{}, NewError(CodeInvalidRequest, "Agent task not found.")
+	}
+	if task.Status != AgentTaskStatusSpawned && task.Status != AgentTaskStatusInProgress {
+		return AgentTask{}, NewError(CodeInvalidRequest, "Agent task is already terminal.")
+	}
+	parentToolCallID := strings.TrimSpace(input.ParentToolCallID)
+	if task.ChildRunID != "" || task.ChildThreadID != "" {
+		if parentToolCallID != "" && parentToolCallID == strings.TrimSpace(task.ParentToolCallID) {
+			return task, nil
+		}
+		return AgentTask{}, NewError(CodeInvalidRequest, "Agent task is already delegated.")
+	}
+	parentRun, ok := s.runs[task.RunID]
+	if !ok || parentRun.UserID != user.ID || parentRun.ThreadID != parentThread.ID {
+		return AgentTask{}, NewError(CodeRunNotFound, "Run not found.")
+	}
+	route := s.providerRouteForRunLocked(parentRun.ID)
+	if parentRun.Source == RunSourceModelGateway && route.ProviderID == "" {
+		return AgentTask{}, NewError(CodeInvalidRequest, "Parent run provider route is unavailable.")
+	}
+	now := s.now()
+	childThread := s.upsertThreadLocked(NewThreadID(), user.ID, agentChildThreadTitle(task), ThreadModeWork, parentThread.PersonaID)
+	message, err := s.appendMessageLocked(NewMessageID(), childThread.ID, user.ID, MessageRoleUser, agentChildPrompt(parentThread, task), map[string]any{"parent_thread_id": parentThread.ID, "parent_run_id": parentRun.ID, "parent_agent_task_id": task.ID}, nil)
+	if err != nil {
+		return AgentTask{}, err
+	}
+	childRun, err := s.startRunLocked(user, childThread.ID, StartRunInput{Source: RunSourceModelGateway, MessageID: message.ID, ProviderID: route.ProviderID, Model: route.Model, PersonaID: parentThread.PersonaID})
+	if err != nil {
+		return AgentTask{}, err
+	}
+	task.Status = AgentTaskStatusInProgress
+	task.ChildThreadID = childThread.ID
+	task.ChildRunID = childRun.ID
+	task.ParentToolCallID = parentToolCallID
+	task.DelegatedAt = &now
+	task.UpdatedAt = now
+	s.agentTasks[task.ID] = task
+	return task, nil
+}
+
+func (s *MemoryService) ReconcileAgentTaskChildRuns(_ context.Context, ident identity.LocalIdentity, limit int) ([]AgentTaskChildRunReconciliation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user := s.ensureUserLocked(ident)
+	if limit <= 0 || limit > 20 {
+		limit = 20
+	}
+	reconciled := []AgentTaskChildRunReconciliation{}
+	for id, task := range s.agentTasks {
+		if len(reconciled) >= limit || task.Status != AgentTaskStatusInProgress || strings.TrimSpace(task.ChildRunID) == "" || strings.TrimSpace(task.ParentToolCallID) == "" {
+			continue
+		}
+		parentThread, ok := s.threads[task.ThreadID]
+		if !ok || parentThread.UserID != user.ID {
+			continue
+		}
+		childRun, ok := s.runs[task.ChildRunID]
+		if !ok || childRun.UserID != user.ID || !IsRunTerminal(childRun.Status) {
+			continue
+		}
+		parentRun, ok := s.runs[task.RunID]
+		if !ok || parentRun.UserID != user.ID || IsRunTerminal(parentRun.Status) {
+			continue
+		}
+		key := parentRun.ID + ":" + strings.TrimSpace(task.ParentToolCallID)
+		call, ok := s.toolCalls[key]
+		if !ok || call.ExecutionStatus != ToolCallExecutionExecuting {
+			continue
+		}
+		now := s.now()
+		resultText := s.agentChildRunResultTextLocked(task, childRun)
+		task.ResultSummary = resultText
+		if childRun.Status == RunStatusCompleted {
+			task.Status = AgentTaskStatusCompleted
+		} else {
+			task.Status = AgentTaskStatusFailed
+		}
+		task.UpdatedAt = now
+		s.agentTasks[id] = task
+		result := agentTaskResultSummary(ToolNameAgentDelegate, task, childRun, resultText)
+		call.ExecutionStatus = ToolCallExecutionSucceeded
+		call.ResultSummary = result
+		call.UpdatedAt = now
+		s.toolCalls[key] = call
+		parentRun.Status = RunStatusQueued
+		parentRun.CompletedAt = nil
+		parentRun.UpdatedAt = now
+		s.runs[parentRun.ID] = parentRun
+		succeeded := s.appendRunEventLocked(parentRun, RunEventCategoryProgress, EventToolCallSucceeded, "Delegated agent child run completed", nil, toolCallEventMetadataForState(s.runStepStates[parentRun.ID], call), now)
+		jobID := NewBackgroundJobID()
+		metadata := map[string]any{"source": string(parentRun.Source), "job_id": jobID, "tool_call_id": call.ToolCallID, "resume_reason": "agent_child_run_completed", "child_run_id": childRun.ID, "agent_task_id": task.ID}
+		if workspaceRoot := s.workspaceRootPathForRunLocked(user.ID, parentRun.ID); workspaceRoot != "" {
+			metadata["workspace_root_path"] = workspaceRoot
+			metadata["workspace_label"] = WorkspaceDisplayNameFromPath(workspaceRoot)
+		}
+		queued := s.appendRunEventLocked(parentRun, RunEventCategoryProgress, EventRunQueued, "Run queued", nil, metadata, now)
+		s.backgroundJobs[jobID] = BackgroundJob{ID: jobID, RunID: parentRun.ID, ThreadID: parentRun.ThreadID, UserID: parentRun.UserID, Kind: BackgroundJobKindRunExecution, Status: BackgroundJobStatusQueued, Priority: 50, MaxAttempts: 3, ScheduledAt: now, Metadata: metadata, CreatedAt: now, UpdatedAt: now}
+		reconciled = append(reconciled, AgentTaskChildRunReconciliation{Task: task, Run: parentRun, Events: []RunEvent{succeeded, queued}})
+	}
+	return reconciled, nil
+}
+
+func (s *MemoryService) agentChildRunResultTextLocked(task AgentTask, childRun Run) string {
+	resultSummary := "Child run " + string(childRun.Status) + "."
+	for index := len(s.messages[childRun.ThreadID]) - 1; index >= 0; index-- {
+		message := s.messages[childRun.ThreadID][index]
+		if message.Role != MessageRoleAssistant {
+			continue
+		}
+		resultSummary = RedactEventText(strings.TrimSpace(message.Content))
+		if len([]rune(resultSummary)) > 1000 {
+			resultSummary = string([]rune(resultSummary)[:1000])
+		}
+		break
+	}
+	return resultSummary
+}
+
+func agentTaskResultSummary(tool string, task AgentTask, childRun Run, resultSummary string) map[string]any {
+	summary := map[string]any{
+		"scope":                "agent",
+		"operation":            "delegate",
+		"task_id":              task.ID,
+		"role":                 task.Role,
+		"goal":                 task.Goal,
+		"status":               string(task.Status),
+		"result_summary":       RedactEventText(resultSummary),
+		"child_thread_id":      task.ChildThreadID,
+		"child_run_id":         task.ChildRunID,
+		"child_status":         string(childRun.Status),
+		"autonomous_execution": true,
+		"redaction_applied":    true,
+	}
+	if tool != "" {
+		summary["tool"] = tool
+	}
+	if task.RunID != "" {
+		summary["run_id"] = task.RunID
+	}
+	if task.ThreadID != "" {
+		summary["thread_id"] = task.ThreadID
+	}
+	if task.ParentToolCallID != "" {
+		summary["parent_tool_call_id"] = task.ParentToolCallID
+	}
+	return summary
+}
+
 func (s *MemoryService) CompleteAgentTask(_ context.Context, ident identity.LocalIdentity, input CompleteAgentTaskInput) (AgentTask, error) {
 	summary := strings.TrimSpace(input.ResultSummary)
 	if summary == "" || len([]rune(summary)) > 4000 {
@@ -489,8 +687,38 @@ func (s *MemoryService) CompleteAgentTask(_ context.Context, ident identity.Loca
 	if !ok || task.ThreadID != thread.ID {
 		return AgentTask{}, NewError(CodeInvalidRequest, "Agent task not found.")
 	}
+	if task.Status != AgentTaskStatusSpawned && task.Status != AgentTaskStatusInProgress {
+		return AgentTask{}, NewError(CodeInvalidRequest, "Agent task is already terminal.")
+	}
 	now := s.now()
 	task.Status = AgentTaskStatusCompleted
+	task.ResultSummary = RedactEventText(summary)
+	task.UpdatedAt = now
+	s.agentTasks[task.ID] = task
+	return task, nil
+}
+
+func (s *MemoryService) FailAgentTask(_ context.Context, ident identity.LocalIdentity, input FailAgentTaskInput) (AgentTask, error) {
+	summary := strings.TrimSpace(input.ResultSummary)
+	if summary == "" || len([]rune(summary)) > 4000 {
+		return AgentTask{}, NewError(CodeInvalidRequest, "Agent result summary is invalid.")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user := s.ensureUserLocked(ident)
+	thread, ok := s.threads[input.ThreadID]
+	if !ok || thread.UserID != user.ID {
+		return AgentTask{}, NewError(CodeThreadNotFound, "Thread not found.")
+	}
+	task, ok := s.agentTasks[strings.TrimSpace(input.TaskID)]
+	if !ok || task.ThreadID != thread.ID {
+		return AgentTask{}, NewError(CodeInvalidRequest, "Agent task not found.")
+	}
+	if task.Status != AgentTaskStatusSpawned && task.Status != AgentTaskStatusInProgress {
+		return AgentTask{}, NewError(CodeInvalidRequest, "Agent task is already terminal.")
+	}
+	now := s.now()
+	task.Status = AgentTaskStatusFailed
 	task.ResultSummary = RedactEventText(summary)
 	task.UpdatedAt = now
 	s.agentTasks[task.ID] = task
@@ -714,6 +942,92 @@ func (s *MemoryService) ArchiveThread(_ context.Context, ident identity.LocalIde
 	return thread, nil
 }
 
+func (s *MemoryService) CreateContextSource(_ context.Context, ident identity.LocalIdentity, input CreateContextSourceInput) (ContextSource, error) {
+	normalized, err := NormalizeContextSourceInput(input)
+	if err != nil {
+		return ContextSource{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user := s.ensureUserLocked(ident)
+	thread, ok := s.threads[normalized.ThreadID]
+	if !ok || thread.UserID != user.ID {
+		return ContextSource{}, NewError(CodeThreadNotFound, "Thread not found.")
+	}
+	if s.contextSources == nil {
+		s.contextSources = map[string]ContextSource{}
+	}
+	now := s.now()
+	source := ContextSource{
+		ID:        NewContextSourceID(),
+		ThreadID:  thread.ID,
+		UserID:    user.ID,
+		Kind:      normalized.Kind,
+		Title:     normalized.Title,
+		Locator:   normalized.Locator,
+		Summary:   normalized.Summary,
+		Status:    ContextSourceStatusRegistered,
+		Metadata:  RedactEventMetadata(normalized.Metadata),
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	s.contextSources[source.ID] = source
+	return source, nil
+}
+
+func (s *MemoryService) ListContextSources(_ context.Context, ident identity.LocalIdentity, input ListContextSourcesInput) ([]ContextSource, error) {
+	threadID := strings.TrimSpace(input.ThreadID)
+	if threadID == "" {
+		return nil, NewError(CodeInvalidRequest, "Thread id is required.")
+	}
+	limit := input.Limit
+	if limit <= 0 || limit > 50 {
+		limit = 50
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user := s.ensureUserLocked(ident)
+	thread, ok := s.threads[threadID]
+	if !ok || thread.UserID != user.ID {
+		return nil, NewError(CodeThreadNotFound, "Thread not found.")
+	}
+	sources := make([]ContextSource, 0, len(s.contextSources))
+	for _, source := range s.contextSources {
+		if source.ThreadID == threadID && source.UserID == user.ID {
+			sources = append(sources, source)
+		}
+	}
+	sort.SliceStable(sources, func(i, j int) bool {
+		if sources[i].CreatedAt.Equal(sources[j].CreatedAt) {
+			return sources[i].ID < sources[j].ID
+		}
+		return sources[i].CreatedAt.Before(sources[j].CreatedAt)
+	})
+	if len(sources) > limit {
+		sources = sources[:limit]
+	}
+	return sources, nil
+}
+
+func (s *MemoryService) contextSourcesForThreadLocked(threadID string, userID string) []ContextSource {
+	sources := make([]ContextSource, 0, len(s.contextSources))
+	for _, source := range s.contextSources {
+		if source.ThreadID == threadID && source.UserID == userID {
+			sources = append(sources, source)
+		}
+	}
+	sort.SliceStable(sources, func(i, j int) bool {
+		if sources[i].CreatedAt.Equal(sources[j].CreatedAt) {
+			return sources[i].ID < sources[j].ID
+		}
+		return sources[i].CreatedAt.Before(sources[j].CreatedAt)
+	})
+	if len(sources) > 10 {
+		return sources[:10]
+	}
+	return sources
+}
+
 func (s *MemoryService) CreateMessage(_ context.Context, ident identity.LocalIdentity, threadID string, input CreateMessageInput) (Message, bool, error) {
 	content, err := NormalizeMessageContent(input.Content)
 	if err != nil {
@@ -786,6 +1100,10 @@ func (s *MemoryService) StartRun(_ context.Context, ident identity.LocalIdentity
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	user := s.ensureUserLocked(ident)
+	return s.startRunLocked(user, threadID, input)
+}
+
+func (s *MemoryService) startRunLocked(user User, threadID string, input StartRunInput) (Run, error) {
 	thread, ok := s.threads[threadID]
 	if !ok || thread.UserID != user.ID || thread.LifecycleStatus != ThreadLifecycleActive {
 		return Run{}, NewError(CodeThreadNotFound, "Thread not found.")
@@ -832,8 +1150,10 @@ func (s *MemoryService) StartRun(_ context.Context, ident identity.LocalIdentity
 	eventMetadata := RedactEventMetadata(metadata)
 	job := BackgroundJob{ID: jobID, RunID: run.ID, ThreadID: threadID, UserID: user.ID, Kind: BackgroundJobKindRunExecution, Status: BackgroundJobStatusQueued, Priority: 100, MaxAttempts: 3, ScheduledAt: now, Metadata: metadata, CreatedAt: now, UpdatedAt: now}
 	s.backgroundJobs[job.ID] = job
-	s.runEvents[run.ID] = append(s.runEvents[run.ID], RunEvent{ID: NewRunEventID(), RunID: run.ID, ThreadID: threadID, UserID: user.ID, Sequence: 1, Category: RunEventCategoryLifecycle, Type: "run_created", Summary: "Run created", Metadata: eventMetadata, CreatedAt: now})
-	s.runEvents[run.ID] = append(s.runEvents[run.ID], RunEvent{ID: NewRunEventID(), RunID: run.ID, ThreadID: threadID, UserID: user.ID, Sequence: 2, Category: RunEventCategoryLifecycle, Type: EventRunQueued, Summary: "Run queued", Metadata: RedactEventMetadata(map[string]any{"job_id": job.ID}), CreatedAt: now})
+	created := RunEvent{ID: NewRunEventID(), RunID: run.ID, ThreadID: threadID, UserID: user.ID, Sequence: 1, Category: RunEventCategoryLifecycle, Type: "run_created", Summary: "Run created", Metadata: eventMetadata, CreatedAt: now}
+	queued := RunEvent{ID: NewRunEventID(), RunID: run.ID, ThreadID: threadID, UserID: user.ID, Sequence: 2, Category: RunEventCategoryLifecycle, Type: EventRunQueued, Summary: "Run queued", Metadata: RedactEventMetadata(map[string]any{"job_id": job.ID}), CreatedAt: now}
+	s.runEvents[run.ID] = append(s.runEvents[run.ID], created, queued)
+	s.runStepStates[run.ID] = AdvanceRunStepState(AdvanceRunStepState(s.runStepStates[run.ID], created), queued)
 	thread.UpdatedAt = now
 	s.threads[threadID] = thread
 	return run, nil
@@ -888,6 +1208,23 @@ func (s *MemoryService) ListRunEvents(_ context.Context, ident identity.LocalIde
 	return events, nil
 }
 
+func (s *MemoryService) HasRunEventType(_ context.Context, ident identity.LocalIdentity, runID string, eventType string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user := s.ensureUserLocked(ident)
+	run, ok := s.runs[runID]
+	if !ok || run.UserID != user.ID {
+		return false, NewError(CodeRunNotFound, "Run not found.")
+	}
+	eventType = strings.TrimSpace(eventType)
+	for _, event := range s.runEvents[runID] {
+		if event.Type == eventType {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func (s *MemoryService) AppendRunEvent(_ context.Context, ident identity.LocalIdentity, runID string, input AppendRunEventInput) (RunEvent, error) {
 	input, err := NormalizeRunEventInput(input)
 	if err != nil {
@@ -906,6 +1243,7 @@ func (s *MemoryService) AppendRunEvent(_ context.Context, ident identity.LocalId
 	now := s.now()
 	event := RunEvent{ID: NewRunEventID(), RunID: run.ID, ThreadID: run.ThreadID, UserID: user.ID, Sequence: len(s.runEvents[run.ID]) + 1, Category: input.Category, Type: input.Type, Summary: input.Summary, Content: input.Content, Metadata: input.Metadata, CreatedAt: now}
 	s.runEvents[run.ID] = append(s.runEvents[run.ID], event)
+	s.runStepStates[run.ID] = AdvanceRunStepState(s.runStepStates[run.ID], event)
 	if isMemoryAuditEvent(event.Type) {
 		auditEvent := event
 		auditEvent.Sequence = len(s.memoryAuditEvents) + 1
@@ -926,6 +1264,48 @@ func (s *MemoryService) AppendRunEvent(_ context.Context, ident identity.LocalId
 	return event, nil
 }
 
+func (s *MemoryService) GetRunStepState(_ context.Context, ident identity.LocalIdentity, runID string) (RunStepState, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user := s.ensureUserLocked(ident)
+	run, ok := s.runs[runID]
+	if !ok || run.UserID != user.ID {
+		return RunStepState{}, NewError(CodeRunNotFound, "Run not found.")
+	}
+	if state, ok := s.runStepStates[run.ID]; ok {
+		return state, nil
+	}
+	state := RebuildRunStepState(s.runEvents[run.ID])
+	s.runStepStates[run.ID] = state
+	return state, nil
+}
+
+func (s *MemoryService) ClaimToolContinuation(_ context.Context, ident identity.LocalIdentity, input ClaimToolContinuationInput) (RunEvent, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user := s.ensureUserLocked(ident)
+	run, ok := s.runs[strings.TrimSpace(input.RunID)]
+	if !ok || run.UserID != user.ID || run.ThreadID != strings.TrimSpace(input.ThreadID) {
+		return RunEvent{}, false, NewError(CodeRunNotFound, "Run not found.")
+	}
+	if IsRunTerminal(run.Status) {
+		return RunEvent{}, false, nil
+	}
+	now := s.now()
+	state := s.runStepStates[run.ID]
+	if state.LastEventSequence == 0 && len(s.runEvents[run.ID]) > 0 {
+		state = RebuildRunStepState(s.runEvents[run.ID])
+		s.runStepStates[run.ID] = state
+	}
+	if !toolContinuationClaimAllowed(state, input.ToolCallID, input.JobID, now, s.activeContinuationJobLocked(run.ID, user.ID, now)) {
+		return RunEvent{}, false, nil
+	}
+	event := s.appendRunEventLocked(run, RunEventCategoryProgress, "model_request_started", "Model request started", nil, toolContinuationClaimMetadata(input, now), now)
+	run.UpdatedAt = now
+	s.runs[run.ID] = run
+	return event, true, nil
+}
+
 func (s *MemoryService) PrepareRunContext(ctx context.Context, ident identity.LocalIdentity, job BackgroundJob) (RunContext, error) {
 	run, err := s.GetRun(ctx, ident, job.RunID)
 	if err != nil {
@@ -942,26 +1322,32 @@ func (s *MemoryService) PrepareRunContext(ctx context.Context, ident identity.Lo
 	if err != nil {
 		return RunContext{}, err
 	}
-	events, err := s.ListRunEvents(ctx, ident, run.ID, 0)
-	if err != nil {
-		return RunContext{}, err
+	state, stateErr := s.GetRunStepState(ctx, ident, run.ID)
+	useStateContext := stateErr == nil && runStepStateCanPrepareContext(run, state)
+	if !useStateContext {
+		if stateErr != nil {
+			return RunContext{}, stateErr
+		}
+		return RunContext{}, NewError(CodeInvalidRequest, "Run context state is incomplete.")
 	}
-	context, err := buildRunContext(run, thread, messages, job, events)
+	context, err := buildRunContextFromState(run, thread, messages, job, state)
 	if err != nil {
 		return RunContext{}, err
 	}
 	s.mu.Lock()
 	context.Persona = s.personaSnapshots[run.ID]
 	s.mu.Unlock()
-	applyPersonaToRunContext(&context, events)
+	applyPersonaToRunContextFromState(&context, state)
 	snapshot := s.buildMemorySnapshot(ctx, ident, run, thread)
 	context.MemorySnapshot = snapshot
 	context.NotebookSnapshot = s.buildNotebookSnapshot(ctx, ident, run, thread)
+	context.ContextSources = s.contextSourcesForThreadLocked(thread.ID, run.UserID)
 	status, err := s.GetMemoryProviderStatus(ctx, ident)
 	if err == nil {
 		context.MemoryReadiness = status
 		context.EnabledTools = FilterMemoryToolResolutionsForProvider(context.EnabledTools, status)
 	}
+	_, _ = s.AppendRunEvent(ctx, ident, run.ID, AppendRunEventInput{Category: RunEventCategoryProgress, Type: EventContextSourcesLoaded, Summary: "Context sources loaded", Metadata: contextSourcesEventMetadata(context.ContextSources)})
 	_, _ = s.AppendRunEvent(ctx, ident, run.ID, AppendRunEventInput{Category: RunEventCategoryProgress, Type: EventMemorySnapshotLoaded, Summary: "Memory snapshot loaded", Metadata: memorySnapshotEventMetadata(snapshot)})
 	return context, nil
 }
@@ -1440,6 +1826,79 @@ func buildRunContext(run Run, thread Thread, messages []Message, job BackgroundJ
 	return context, nil
 }
 
+func buildRunContextFromState(run Run, thread Thread, messages []Message, job BackgroundJob, state RunStepState) (RunContext, error) {
+	if run.Source == RunSourceModelGateway && len(messages) == 0 {
+		return RunContext{}, NewError(CodeInvalidRequest, "Run context message history is required.")
+	}
+	metadata := job.Metadata
+	if metadata == nil {
+		metadata = map[string]any{}
+	}
+	providerID := firstNonEmpty(metadataStringValue(metadata, "provider_id"), state.ProviderID)
+	model := firstNonEmpty(metadataStringValue(metadata, "model"), state.Model)
+	messageID := firstNonEmpty(metadataStringValue(metadata, "message_id"), state.TriggerMessageID)
+	toolCallID := metadataStringValue(metadata, "tool_call_id")
+	if run.Source == RunSourceModelGateway {
+		if providerID == "" || messageID == "" {
+			return RunContext{}, NewError(CodeInvalidRequest, "Run context provider route is required.")
+		}
+		if !containsMessage(messages, messageID) {
+			return RunContext{}, NewError(CodeInvalidRequest, "Run context message history is incomplete.")
+		}
+	}
+	enabledTools := []ToolResolution{{
+		Name:            ToolNameCurrentTime,
+		ApprovalPolicy:  string(ToolApprovalAlwaysRequired),
+		ExecutionState:  string(ToolExecutionStateExecutable),
+		Source:          string(ToolCatalogSourceBuiltin),
+		Group:           string(ToolCatalogGroupRuntime),
+		InputSchemaHash: builtinCurrentTimeCatalogEntry().InputSchemaHash,
+		RiskLevel:       string(ToolRiskLow),
+	}}
+	if len(state.EnabledToolNames) > 0 {
+		enabledTools = toolResolutionsForNamesAndState(state.EnabledToolNames, state)
+	}
+	context := RunContext{
+		Run:           run,
+		Thread:        thread,
+		Messages:      append([]Message(nil), messages...),
+		Job:           job,
+		WorkspaceRoot: WorkspaceRootConfig{UserID: run.UserID, Path: metadataStringValue(metadata, "workspace_root_path"), DisplayName: workspaceRootLabel(metadataStringValue(metadata, "workspace_root_path"), metadata)},
+		ProviderRoute: ProviderRoute{
+			ProviderID: providerID,
+			Model:      model,
+			Available:  providerID != "",
+		},
+		EnabledTools:    enabledTools,
+		MCPAvailability: mcpAvailabilityForRunStepState(enabledTools, state),
+	}
+	if toolCallID != "" {
+		context.ContinuationProjection = ContinuationProjection{ToolCallID: toolCallID, Available: hasToolResultInState(state, toolCallID)}
+	}
+	return context, nil
+}
+
+func runStepStateCanPrepareContext(run Run, state RunStepState) bool {
+	if run.Source == RunSourceModelGateway && (state.TriggerMessageID == "" || state.ProviderID == "") {
+		return false
+	}
+	for _, name := range state.EnabledToolNames {
+		if IsMCPToolName(name) && strings.TrimSpace(state.MCPToolSchemaHashes[name]) == "" && !mcpCandidateInState(state, name) {
+			return false
+		}
+	}
+	return true
+}
+
+func hasToolResultInState(state RunStepState, toolCallID string) bool {
+	for _, step := range state.CompletedToolResults {
+		if toolCallID == "" || step.ToolCallID == toolCallID {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *MemoryService) buildMemorySnapshot(ctx context.Context, ident identity.LocalIdentity, run Run, thread Thread) MemorySnapshot {
 	output, err := s.SearchMemory(ctx, ident, MemorySearchInput{ScopeType: MemoryScopeThread, ScopeID: thread.ID, Limit: 5, Purpose: "run_context"})
 	if err != nil {
@@ -1731,6 +2190,14 @@ func memorySnapshotEventMetadata(snapshot MemorySnapshot) map[string]any {
 	return map[string]any{"status": snapshot.LoadStatus, "entry_count": len(snapshot.Entries), "limit": snapshot.Limit, "redaction_applied": snapshot.RedactionApplied}
 }
 
+func contextSourcesEventMetadata(sources []ContextSource) map[string]any {
+	return RedactEventMetadata(map[string]any{
+		"context_source_count": len(sources),
+		"context_source_kinds": contextSourceKinds(sources),
+		"redaction_applied":    true,
+	})
+}
+
 func isMemoryAuditEvent(eventType string) bool {
 	switch eventType {
 	case EventMemorySnapshotLoaded, EventMemoryWriteProposed, EventMemoryWriteApproved, EventMemoryWriteDenied, EventMemoryEntryDeleted:
@@ -1918,6 +2385,28 @@ func applyPersonaToRunContext(context *RunContext, events []RunEvent) {
 	context.MCPAvailability = mcpAvailabilityForToolResolutions(context.EnabledTools, events)
 }
 
+func applyPersonaToRunContextFromState(context *RunContext, state RunStepState) {
+	if context == nil {
+		return
+	}
+	if context.Persona.ID != "" {
+		if context.Persona.ModelRoute.ProviderID != "" && !isExplicitLocalProviderRoute(context.ProviderRoute.ProviderID) {
+			context.ProviderRoute.ProviderID = context.Persona.ModelRoute.ProviderID
+			context.ProviderRoute.Available = true
+		}
+		if context.Persona.ModelRoute.Model != "" && !isExplicitLocalProviderRoute(context.ProviderRoute.ProviderID) {
+			context.ProviderRoute.Model = context.Persona.ModelRoute.Model
+		}
+		context.EnabledTools = toolResolutionsForNamesAndState(context.Persona.AllowedToolNames, state)
+		if context.Thread.Mode != ThreadModeWork {
+			context.EnabledTools = withoutWorkModeToolResolutions(context.EnabledTools)
+		} else {
+			context.EnabledTools = workToolResolutionsForLatestIntent(context.EnabledTools, context.Messages)
+		}
+	}
+	context.MCPAvailability = mcpAvailabilityForRunStepState(context.EnabledTools, state)
+}
+
 func workToolResolutionsForLatestIntent(tools []ToolResolution, messages []Message) []ToolResolution {
 	intent := latestUserIntent(messages)
 	if !intent.scoped {
@@ -1965,7 +2454,7 @@ func latestUserIntent(messages []Message) workIntent {
 	intent.web = strings.Contains(content, "http://") || strings.Contains(content, "https://") || containsAny(content, []string{"网页", "联网", "搜索", "新闻", "最新", "web", "search", "fetch", "github"})
 	intent.browser = containsAny(content, []string{"浏览器", "打开网页", "点击", "截图", "browser", "screenshot", "click"})
 	intent.artifact = containsAny(content, []string{"产物", "artifact", "文档", "报告", "生成文件"})
-	intent.agent = containsAny(content, []string{"子任务", "并行", "多agent", "multi-agent", "spawn", "reviewer"})
+	intent.agent = containsAny(content, []string{"子任务", "并行", "多agent", "multi-agent", "spawn", "delegate", "delegated", "subagent", "child agent", "reviewer"})
 	intent.memory = containsAny(content, []string{"记忆", "memory", "记住", "偏好"})
 	intent.todo = containsAny(content, []string{"计划", "步骤", "待办", "todo", "plan"})
 	intent.scoped = intent.workspaceRead || intent.workspaceWrite || intent.command || intent.lsp || intent.web || intent.browser || intent.artifact || intent.agent || intent.memory || intent.todo || isChineseCasualGreeting(content)
@@ -2041,6 +2530,47 @@ func runModel(inputProviderID string, inputModel string, snapshot PersonaSnapsho
 
 func isExplicitLocalProviderRoute(providerID string) bool {
 	return strings.HasPrefix(strings.TrimSpace(providerID), "local_")
+}
+
+func (s *MemoryService) providerRouteForRunLocked(runID string) ProviderRoute {
+	for _, event := range s.runEvents[runID] {
+		if event.Type != "run_created" {
+			continue
+		}
+		providerID := metadataStringValue(event.Metadata, "provider_id")
+		model := metadataStringValue(event.Metadata, "model")
+		return ProviderRoute{ProviderID: providerID, Model: model, Available: providerID != ""}
+	}
+	for _, job := range s.backgroundJobs {
+		if job.RunID != runID {
+			continue
+		}
+		providerID := metadataStringValue(job.Metadata, "provider_id")
+		model := metadataStringValue(job.Metadata, "model")
+		return ProviderRoute{ProviderID: providerID, Model: model, Available: providerID != ""}
+	}
+	return ProviderRoute{}
+}
+
+func agentChildThreadTitle(task AgentTask) string {
+	role := strings.TrimSpace(task.Role)
+	if role == "" {
+		role = "agent"
+	}
+	title := role + ": " + strings.TrimSpace(task.Goal)
+	runes := []rune(title)
+	if len(runes) > MaxThreadTitleLength {
+		title = string(runes[:MaxThreadTitleLength])
+	}
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return "Agent task"
+	}
+	return title
+}
+
+func agentChildPrompt(parent Thread, task AgentTask) string {
+	return strings.TrimSpace("You are the " + task.Role + " child agent for parent thread " + parent.ID + ".\n\nTask:\n" + task.Goal)
 }
 
 func validateBuiltInPersonaConfigs(configs []BuiltInPersonaConfig) error {
@@ -2119,6 +2649,43 @@ func toolResolutionsForNames(names []string) []ToolResolution {
 	return toolResolutionsForNamesAndEvents(names, nil)
 }
 
+func toolResolutionsForNamesAndState(names []string, state RunStepState) []ToolResolution {
+	tools := toolResolutionsForNamesAndEvents(names, nil)
+	seen := map[string]bool{}
+	for _, tool := range tools {
+		seen[tool.Name] = true
+	}
+	for _, name := range names {
+		toolName := strings.TrimSpace(name)
+		if !IsMCPToolName(toolName) || seen[toolName] {
+			continue
+		}
+		hash := strings.TrimSpace(state.MCPToolSchemaHashes[toolName])
+		if hash == "" && !mcpCandidateInState(state, toolName) {
+			continue
+		}
+		tools = append(tools, ToolResolution{
+			Name:            toolName,
+			ApprovalPolicy:  string(ToolApprovalAlwaysRequired),
+			ExecutionState:  string(ToolExecutionStateExecutable),
+			Source:          string(ToolCatalogSourceMCP),
+			Group:           string(ToolCatalogGroupMCP),
+			InputSchemaHash: hash,
+			RiskLevel:       string(ToolRiskMedium),
+		})
+	}
+	return tools
+}
+
+func mcpCandidateInState(state RunStepState, toolName string) bool {
+	for _, candidate := range state.MCPAvailability.CandidateNames {
+		if candidate == toolName {
+			return true
+		}
+	}
+	return false
+}
+
 func toolResolutionsForNamesAndEvents(names []string, events []RunEvent) []ToolResolution {
 	catalog := ToolCatalogFromEvents(events)
 	byName := map[string]ToolCatalogEntry{}
@@ -2176,6 +2743,144 @@ func mcpAvailabilityForToolResolutions(tools []ToolResolution, events []RunEvent
 		if len(server.CandidateNames) > 0 {
 			server.CandidateCount = len(server.CandidateNames)
 			names = append(names, server.CandidateNames...)
+		}
+		if server.Enabled {
+			serversEnabled++
+		}
+		switch server.DiscoveryStatus {
+		case "succeeded":
+			serversSucceeded++
+		case "failed", "rejected":
+			serversFailed++
+		}
+		if server.RedactedErrorCode != "" {
+			errorCodes = appendUniqueString(errorCodes, server.RedactedErrorCode)
+		}
+		if server.LastDiscoveredAt != "" && server.LastDiscoveredAt > lastDiscoveredAt {
+			lastDiscoveredAt = server.LastDiscoveredAt
+		}
+		serverSummaries = append(serverSummaries, *server)
+	}
+	names = uniqueSortedStrings(names)
+	return MCPToolAvailabilitySummary{
+		ServersConfigured:           len(serverSummaries),
+		ServersEnabled:              serversEnabled,
+		ServersSucceeded:            serversSucceeded,
+		ServersFailed:               serversFailed,
+		ServerSummaries:             serverSummaries,
+		CandidateNames:              names,
+		NonExecutableCandidateNames: nonExecutableMCPNames(names, executableNames),
+		ExecutionEnabled:            len(executableNames) > 0,
+		RedactedErrorCodes:          errorCodes,
+		LastDiscoveredAt:            lastDiscoveredAt,
+	}
+}
+
+func mcpAvailabilityForRunStepState(tools []ToolResolution, state RunStepState) MCPToolAvailabilitySummary {
+	names := append([]string(nil), state.MCPAvailability.CandidateNames...)
+	executableNames := make([]string, 0)
+	byServer := map[string]*MCPServerAvailabilitySummary{}
+	for _, summary := range state.MCPAvailability.ServerSummaries {
+		server := summary
+		if server.ServerSlug == "" {
+			continue
+		}
+		byServer[server.ServerSlug] = &server
+	}
+	nonExecutable := map[string]bool{}
+	for _, name := range state.MCPAvailability.NonExecutableCandidateNames {
+		nonExecutable[name] = true
+	}
+	for _, name := range state.MCPAvailability.CandidateNames {
+		if !nonExecutable[name] {
+			executableNames = appendUniqueString(executableNames, name)
+		}
+	}
+	for _, tool := range tools {
+		if !IsMCPToolName(tool.Name) {
+			continue
+		}
+		names = appendUniqueString(names, tool.Name)
+		if tool.ExecutionState == string(ToolExecutionStateExecutable) {
+			executableNames = appendUniqueString(executableNames, tool.Name)
+		}
+		slug := mcpServerSlugFromToolName(tool.Name)
+		server := ensureMCPServerAvailability(byServer, slug)
+		server.CandidateNames = appendUniqueString(server.CandidateNames, tool.Name)
+		server.CandidateCount = len(server.CandidateNames)
+		if strings.TrimSpace(state.MCPToolSchemaHashes[tool.Name]) != "" {
+			server.DiscoveryStatus = "succeeded"
+		}
+	}
+	for name, hash := range state.MCPToolSchemaHashes {
+		if !IsMCPToolName(name) || strings.TrimSpace(hash) == "" {
+			continue
+		}
+		names = appendUniqueString(names, name)
+		slug := mcpServerSlugFromToolName(name)
+		server := ensureMCPServerAvailability(byServer, slug)
+		server.DiscoveryStatus = "succeeded"
+		server.CandidateNames = appendUniqueString(server.CandidateNames, name)
+		server.CandidateCount = len(server.CandidateNames)
+	}
+	return mcpAvailabilitySummaryFromServers(byServer, names, executableNames)
+}
+
+func advanceMCPAvailabilitySummary(current MCPToolAvailabilitySummary, event RunEvent) MCPToolAvailabilitySummary {
+	byServer := map[string]*MCPServerAvailabilitySummary{}
+	for _, summary := range current.ServerSummaries {
+		server := summary
+		if server.ServerSlug == "" {
+			continue
+		}
+		byServer[server.ServerSlug] = &server
+	}
+	applyMCPDiscoveryEvent(byServer, event)
+	names := append([]string(nil), current.CandidateNames...)
+	executableNames := []string{}
+	nonExecutable := map[string]bool{}
+	for _, name := range current.NonExecutableCandidateNames {
+		nonExecutable[name] = true
+	}
+	for _, name := range current.CandidateNames {
+		if !nonExecutable[name] {
+			executableNames = appendUniqueString(executableNames, name)
+		}
+	}
+	if event.Type == "mcp_discovery_succeeded" && metadataStringValue(event.Metadata, "status") == "succeeded" {
+		for _, name := range metadataStringSlice(event.Metadata, "candidate_names") {
+			if IsMCPToolName(name) {
+				executableNames = appendUniqueString(executableNames, name)
+			}
+		}
+	}
+	for _, server := range byServer {
+		names = appendUniqueStrings(names, server.CandidateNames...)
+	}
+	return mcpAvailabilitySummaryFromServers(byServer, names, executableNames)
+}
+
+func mcpAvailabilitySummaryFromServers(byServer map[string]*MCPServerAvailabilitySummary, names []string, executableNames []string) MCPToolAvailabilitySummary {
+	if len(names) == 0 && len(byServer) == 0 {
+		return MCPToolAvailabilitySummary{}
+	}
+	serverSlugs := make([]string, 0, len(byServer))
+	for slug := range byServer {
+		serverSlugs = append(serverSlugs, slug)
+	}
+	sort.Strings(serverSlugs)
+	serverSummaries := make([]MCPServerAvailabilitySummary, 0, len(serverSlugs))
+	errorCodes := make([]string, 0)
+	lastDiscoveredAt := ""
+	serversEnabled := 0
+	serversSucceeded := 0
+	serversFailed := 0
+	for _, slug := range serverSlugs {
+		server := byServer[slug]
+		sort.Strings(server.CandidateNames)
+		if len(server.CandidateNames) > 0 {
+			server.CandidateCount = len(server.CandidateNames)
+			names = appendUniqueStrings(names, server.CandidateNames...)
 		}
 		if server.Enabled {
 			serversEnabled++
@@ -2438,18 +3143,22 @@ func (s *MemoryService) RecordToolCallRequest(_ context.Context, ident identity.
 		return ToolCall{}, nil, NewError(CodeInvalidRequest, "Terminal runs cannot request tools.")
 	}
 	for _, existing := range s.toolCalls {
-		if existing.RunID == run.ID && existing.ToolCallID != input.ToolCallID && !isToolCallTerminal(existing) {
+		if existing.RunID == run.ID && existing.ToolCallID != input.ToolCallID && !isToolCallTerminal(existing) && !pendingToolCallRequestCanCoexist(existing.ToolCallID, existing.ToolName, existing.ApprovalStatus, existing.ExecutionStatus, input) {
 			return ToolCall{}, nil, NewError(CodeInvalidRequest, "Another tool call is already pending or executing.")
 		}
 	}
 	key := run.ID + ":" + input.ToolCallID
 	if existing, ok := s.toolCalls[key]; ok {
+		if !toolCallRequestMatchesExisting(existing, s.toolCallHashes[key], input, RedactEventMetadata(input.ArgumentsSummary)) {
+			return ToolCall{}, nil, NewError(CodeInvalidRequest, "Tool call id was already used for a different request.")
+		}
 		return existing, nil, nil
 	}
 	now := s.now()
 	arguments := RedactEventMetadata(input.ArgumentsSummary)
 	call := ToolCall{ID: NewToolCallID(), ThreadID: run.ThreadID, RunID: run.ID, ToolCallID: input.ToolCallID, ToolName: input.ToolName, CandidateSchemaHash: input.CandidateSchemaHash, ArgumentsSummary: arguments, ApprovalStatus: input.ApprovalStatus, ExecutionStatus: input.ExecutionStatus, RequestedAt: now, UpdatedAt: now}
 	s.toolCalls[key] = call
+	s.toolCallHashes[key] = strings.TrimSpace(input.ArgumentsHash)
 	autoApproved := call.ApprovalStatus == ToolCallApprovalApproved && call.ExecutionStatus == ToolCallExecutionNotStarted
 	if autoApproved {
 		run.Status = RunStatusQueued
@@ -2465,7 +3174,7 @@ func (s *MemoryService) RecordToolCallRequest(_ context.Context, ident identity.
 			s.backgroundJobs[id] = job
 		}
 	}
-	metadata := toolCallEventMetadataForRun(s.runEvents[run.ID], call)
+	metadata := toolCallEventMetadataForState(s.runStepStates[run.ID], call)
 	requested := s.appendRunEventLocked(run, RunEventCategoryProgress, EventToolCallRequested, "Tool call requested", nil, metadata, now)
 	if autoApproved {
 		approved := s.appendRunEventLocked(run, RunEventCategoryProgress, EventToolCallApproved, "Tool call auto-approved", nil, metadata, now)
@@ -2482,6 +3191,48 @@ func isToolCallTerminal(call ToolCall) bool {
 	default:
 		return false
 	}
+}
+
+func toolCallStartsAutoApproved(call ToolCall) bool {
+	return ToolCallRequestInputStartsAutoApproved(RecordToolCallRequestInput{ToolName: call.ToolName, ApprovalStatus: call.ApprovalStatus, ExecutionStatus: call.ExecutionStatus})
+}
+
+func pendingToolCallRequestCanCoexist(existingToolCallID string, existingToolName string, existingApprovalStatus ToolCallApprovalStatus, existingExecutionStatus ToolCallExecutionStatus, input RecordToolCallRequestInput) bool {
+	if existingToolCallID == input.ToolCallID {
+		return true
+	}
+	if existingExecutionStatus == ToolCallExecutionExecuting || input.ExecutionStatus == ToolCallExecutionExecuting {
+		return false
+	}
+	existing := RecordToolCallRequestInput{ToolName: existingToolName, ApprovalStatus: existingApprovalStatus, ExecutionStatus: existingExecutionStatus}
+	if ToolCallRequestInputStartsAutoApproved(existing) || existingApprovalStatus == ToolCallApprovalRequired && existingExecutionStatus == ToolCallExecutionBlocked {
+		return ToolCallRequestInputStartsAutoApproved(input) || input.ApprovalStatus == ToolCallApprovalRequired && input.ExecutionStatus == ToolCallExecutionBlocked
+	}
+	return false
+}
+
+func toolCallRequestMatchesExisting(existing ToolCall, existingArgumentsHash string, input RecordToolCallRequestInput, arguments map[string]any) bool {
+	if existing.ToolCallID != input.ToolCallID ||
+		existing.ToolName != input.ToolName ||
+		existing.CandidateSchemaHash != input.CandidateSchemaHash ||
+		existing.ApprovalStatus != input.ApprovalStatus ||
+		existing.ExecutionStatus != input.ExecutionStatus {
+		return false
+	}
+	existingHash := strings.TrimSpace(existingArgumentsHash)
+	nextHash := strings.TrimSpace(input.ArgumentsHash)
+	if existingHash != "" || nextHash != "" {
+		return existingHash != "" && existingHash == nextHash
+	}
+	existingArguments, err := json.Marshal(existing.ArgumentsSummary)
+	if err != nil {
+		return false
+	}
+	nextArguments, err := json.Marshal(arguments)
+	if err != nil {
+		return false
+	}
+	return string(existingArguments) == string(nextArguments)
 }
 
 func (s *MemoryService) ApproveToolCall(_ context.Context, ident identity.LocalIdentity, threadID string, runID string, toolCallID string) (ToolCall, []RunEvent, error) {
@@ -2530,7 +3281,7 @@ func (s *MemoryService) ApproveToolCall(_ context.Context, ident identity.LocalI
 		metadata["workspace_label"] = WorkspaceDisplayNameFromPath(workspaceRoot)
 	}
 	s.backgroundJobs[jobID] = BackgroundJob{ID: jobID, RunID: run.ID, ThreadID: run.ThreadID, UserID: user.ID, Kind: BackgroundJobKindRunExecution, Status: BackgroundJobStatusQueued, Priority: 50, MaxAttempts: 3, ScheduledAt: now, Metadata: metadata, CreatedAt: now, UpdatedAt: now}
-	event := s.appendRunEventLocked(run, RunEventCategoryProgress, EventToolCallApproved, "Tool call approved", nil, toolCallEventMetadataForRun(s.runEvents[run.ID], call), now)
+	event := s.appendRunEventLocked(run, RunEventCategoryProgress, EventToolCallApproved, "Tool call approved", nil, toolCallEventMetadataForState(s.runStepStates[run.ID], call), now)
 	return call, []RunEvent{event}, nil
 }
 
@@ -2545,7 +3296,7 @@ func (s *MemoryService) DenyToolCall(_ context.Context, ident identity.LocalIden
 	if call.ApprovalStatus == ToolCallApprovalDenied {
 		return call, nil, nil
 	}
-	if call.ExecutionStatus == ToolCallExecutionExecuting || call.ExecutionStatus == ToolCallExecutionSucceeded || call.ExecutionStatus == ToolCallExecutionFailed || call.ExecutionStatus == ToolCallExecutionCancelled {
+	if call.ApprovalStatus != ToolCallApprovalRequired || call.ExecutionStatus != ToolCallExecutionBlocked {
 		return ToolCall{}, nil, NewError(CodeInvalidRequest, "Tool call cannot be denied.")
 	}
 	if IsRunTerminal(run.Status) {
@@ -2567,9 +3318,26 @@ func (s *MemoryService) DenyToolCall(_ context.Context, ident identity.LocalIden
 			s.backgroundJobs[id] = job
 		}
 	}
-	denied := s.appendRunEventLocked(run, RunEventCategoryProgress, EventToolCallDenied, "Tool call denied by user", nil, toolCallEventMetadataForRun(s.runEvents[run.ID], call), now)
+	denied := s.appendRunEventLocked(run, RunEventCategoryProgress, EventToolCallDenied, "Tool call denied by user", nil, toolCallEventMetadataForState(s.runStepStates[run.ID], call), now)
+	cancelled := s.cancelUnresolvedToolCallsLocked(run, call.ToolCallID, now)
 	final := s.appendRunEventLocked(run, RunEventCategoryFinal, EventRunStopped, "Run stopped after tool denial", nil, map[string]any{"tool_call_id": call.ToolCallID, "reason": "tool_call_denied"}, now)
-	return call, []RunEvent{denied, final}, nil
+	events := append([]RunEvent{denied}, cancelled...)
+	events = append(events, final)
+	return call, events, nil
+}
+
+func (s *MemoryService) cancelUnresolvedToolCallsLocked(run Run, exceptToolCallID string, now time.Time) []RunEvent {
+	events := []RunEvent{}
+	for key, call := range s.toolCalls {
+		if call.RunID != run.ID || call.ToolCallID == strings.TrimSpace(exceptToolCallID) || isToolCallTerminal(call) {
+			continue
+		}
+		call.ExecutionStatus = ToolCallExecutionCancelled
+		call.UpdatedAt = now
+		s.toolCalls[key] = call
+		events = append(events, s.appendRunEventLocked(run, RunEventCategoryProgress, EventToolCallCancelled, "Tool call cancelled", nil, toolCallEventMetadataForState(s.runStepStates[run.ID], call), now))
+	}
+	return events
 }
 
 func (s *MemoryService) StartToolCallExecution(_ context.Context, ident identity.LocalIdentity, threadID string, runID string, toolCallID string) (ToolCall, []RunEvent, error) {
@@ -2593,7 +3361,7 @@ func (s *MemoryService) StartToolCallExecution(_ context.Context, ident identity
 	call.ExecutionStatus = ToolCallExecutionExecuting
 	call.UpdatedAt = now
 	s.toolCalls[key] = call
-	event := s.appendRunEventLocked(run, RunEventCategoryProgress, EventToolCallExecuting, "Tool call executing", nil, toolCallEventMetadataForRun(s.runEvents[run.ID], call), now)
+	event := s.appendRunEventLocked(run, RunEventCategoryProgress, EventToolCallExecuting, "Tool call executing", nil, toolCallEventMetadataForState(s.runStepStates[run.ID], call), now)
 	return call, []RunEvent{event}, nil
 }
 
@@ -2616,12 +3384,38 @@ func (s *MemoryService) CompleteToolCallSuccess(_ context.Context, ident identit
 	call.ResultSummary = RedactEventMetadata(resultSummary)
 	call.UpdatedAt = now
 	s.toolCalls[key] = call
-	run.Status = RunStatusRunning
+	run.Status = s.runStatusAfterToolSuccessLocked(run.ID)
 	run.CompletedAt = nil
 	run.UpdatedAt = now
 	s.runs[run.ID] = run
-	succeeded := s.appendRunEventLocked(run, RunEventCategoryProgress, EventToolCallSucceeded, "Tool call succeeded", nil, toolCallEventMetadataForRun(s.runEvents[run.ID], call), now)
+	succeeded := s.appendRunEventLocked(run, RunEventCategoryProgress, EventToolCallSucceeded, "Tool call succeeded", nil, toolCallEventMetadataForState(s.runStepStates[run.ID], call), now)
 	return call, []RunEvent{succeeded}, nil
+}
+
+func (s *MemoryService) runStatusAfterToolSuccessLocked(runID string) RunStatus {
+	hasReady := false
+	hasBlocked := false
+	for _, call := range s.toolCalls {
+		if call.RunID != runID || isToolCallTerminal(call) {
+			continue
+		}
+		if call.ExecutionStatus == ToolCallExecutionExecuting {
+			return RunStatusRunning
+		}
+		if call.ApprovalStatus == ToolCallApprovalApproved && call.ExecutionStatus == ToolCallExecutionNotStarted {
+			hasReady = true
+		}
+		if call.ApprovalStatus == ToolCallApprovalRequired && call.ExecutionStatus == ToolCallExecutionBlocked {
+			hasBlocked = true
+		}
+	}
+	if hasReady {
+		return RunStatusQueued
+	}
+	if hasBlocked {
+		return RunStatusBlockedOnToolApproval
+	}
+	return RunStatusRunning
 }
 
 func (s *MemoryService) FailToolCallExecution(_ context.Context, ident identity.LocalIdentity, threadID string, runID string, toolCallID string, errorCode string, errorMessage string) (ToolCall, []RunEvent, error) {
@@ -2658,7 +3452,7 @@ func (s *MemoryService) FailToolCallExecution(_ context.Context, ident identity.
 	run.ErrorMessage = &message
 	run.UpdatedAt = now
 	s.runs[run.ID] = run
-	failed := s.appendRunEventLocked(run, RunEventCategoryError, EventToolCallFailed, message, nil, toolCallEventMetadataForRun(s.runEvents[run.ID], call), now)
+	failed := s.appendRunEventLocked(run, RunEventCategoryError, EventToolCallFailed, message, nil, toolCallEventMetadataForState(s.runStepStates[run.ID], call), now)
 	final := s.appendRunEventLocked(run, RunEventCategoryFinal, EventRunFailed, message, nil, map[string]any{"tool_call_id": call.ToolCallID, "error_code": code}, now)
 	return call, []RunEvent{failed, final}, nil
 }
@@ -2687,9 +3481,50 @@ func (s *MemoryService) StopRun(_ context.Context, ident identity.LocalIdentity,
 			s.backgroundJobs[id] = job
 		}
 	}
+	cancelled := s.cancelUnresolvedToolCallsLocked(run, "", now)
+	cascadeEvents := s.stopDelegatedChildRunsLocked(user.ID, run, now)
 	lifecycle := s.appendRunEventLocked(run, RunEventCategoryProgress, EventStopRequested, "Stop requested", nil, map[string]any{}, now)
 	final := s.appendRunEventLocked(run, RunEventCategoryFinal, EventRunStopped, "Run stopped", nil, map[string]any{}, now)
-	return StopRunOutput{Run: run, Result: StopRunResultStopped, Events: []RunEvent{lifecycle, final}}, nil
+	events := append(cancelled, cascadeEvents...)
+	events = append(events, lifecycle, final)
+	return StopRunOutput{Run: run, Result: StopRunResultStopped, Events: events}, nil
+}
+
+func (s *MemoryService) stopDelegatedChildRunsLocked(userID string, parentRun Run, now time.Time) []RunEvent {
+	events := []RunEvent{}
+	for id, task := range s.agentTasks {
+		if task.RunID != parentRun.ID || task.ThreadID != parentRun.ThreadID || task.Status != AgentTaskStatusInProgress || strings.TrimSpace(task.ChildRunID) == "" {
+			continue
+		}
+		childRun, ok := s.runs[task.ChildRunID]
+		if !ok || childRun.UserID != userID {
+			continue
+		}
+		task.Status = AgentTaskStatusFailed
+		task.ResultSummary = "Parent run stopped before delegated child run completed."
+		task.UpdatedAt = now
+		s.agentTasks[id] = task
+		for jobID, job := range s.backgroundJobs {
+			if job.RunID == childRun.ID && job.UserID == userID && !IsBackgroundJobTerminal(job.Status) {
+				job.Status = BackgroundJobStatusCancelled
+				job.UpdatedAt = now
+				s.backgroundJobs[jobID] = job
+			}
+		}
+		if IsRunTerminal(childRun.Status) {
+			continue
+		}
+		childRun.StopRequestedAt = &now
+		childRun.Status = RunStatusStopped
+		childRun.UpdatedAt = now
+		childRun.CompletedAt = &now
+		s.runs[childRun.ID] = childRun
+		events = append(events, s.cancelUnresolvedToolCallsLocked(childRun, "", now)...)
+		metadata := map[string]any{"parent_run_id": parentRun.ID, "parent_thread_id": parentRun.ThreadID, "agent_task_id": task.ID, "reason": "parent_run_stopped"}
+		events = append(events, s.appendRunEventLocked(childRun, RunEventCategoryProgress, EventStopRequested, "Child run stopped after parent stop", nil, metadata, now))
+		events = append(events, s.appendRunEventLocked(childRun, RunEventCategoryFinal, EventRunStopped, "Child run stopped", nil, metadata, now))
+	}
+	return events
 }
 
 func (s *MemoryService) scopedToolCallLocked(userID string, threadID string, runID string, toolCallID string) (Run, ToolCall, string, error) {
@@ -2822,13 +3657,26 @@ func safeWorkspaceMutationArguments(toolName string, args map[string]any) map[st
 	return safe
 }
 
-func toolCallEventMetadataForRun(events []RunEvent, call ToolCall) map[string]any {
+func toolCallEventMetadataForState(state RunStepState, call ToolCall) map[string]any {
 	metadata := toolCallEventMetadata(call)
-	loopIndex := toolCallLoopIndex(events, call.ToolCallID)
+	loopIndex := toolCallLoopIndexFromIDs(state.SeenToolCallIDs, call.ToolCallID)
 	if loopIndex <= 0 {
-		loopIndex = nextToolCallLoopIndex(events)
+		loopIndex = len(state.SeenToolCallIDs) + 1
 	}
 	return withToolLoopMetadata(metadata, loopIndex)
+}
+
+func toolCallLoopIndexFromIDs(ids []string, toolCallID string) int {
+	toolCallID = strings.TrimSpace(toolCallID)
+	if toolCallID == "" {
+		return 0
+	}
+	for index, id := range ids {
+		if strings.TrimSpace(id) == toolCallID {
+			return index + 1
+		}
+	}
+	return 0
 }
 
 func withToolLoopMetadata(metadata map[string]any, loopIndex int) map[string]any {
@@ -2840,42 +3688,6 @@ func withToolLoopMetadata(metadata map[string]any, loopIndex int) map[string]any
 		metadata[LoopMetadataKeyMax] = DefaultMaxBoundedToolCallsPerRun
 	}
 	return metadata
-}
-
-func toolCallLoopIndex(events []RunEvent, toolCallID string) int {
-	seen := map[string]bool{}
-	index := 0
-	for _, event := range events {
-		if event.Type != EventToolCallRequested {
-			continue
-		}
-		id, _ := event.Metadata["tool_call_id"].(string)
-		id = strings.TrimSpace(id)
-		if id == "" || seen[id] {
-			continue
-		}
-		index++
-		seen[id] = true
-		if id == toolCallID {
-			return index
-		}
-	}
-	return 0
-}
-
-func nextToolCallLoopIndex(events []RunEvent) int {
-	seen := map[string]bool{}
-	for _, event := range events {
-		if event.Type != EventToolCallRequested {
-			continue
-		}
-		id, _ := event.Metadata["tool_call_id"].(string)
-		id = strings.TrimSpace(id)
-		if id != "" {
-			seen[id] = true
-		}
-	}
-	return len(seen) + 1
 }
 
 func (s *MemoryService) ClaimBackgroundJob(_ context.Context, ident identity.LocalIdentity, input ClaimBackgroundJobInput) (BackgroundJob, Run, bool, error) {
@@ -2992,11 +3804,13 @@ func (s *MemoryService) RecoverBackgroundJobs(_ context.Context, ident identity.
 			run.CompletedAt = &now
 			run.ErrorCode = &code
 			run.ErrorMessage = &message
+			toolEvents := s.failExecutingToolCallsForRecoveryLocked(run, code, message, now)
 			event := s.appendRunEventLocked(run, RunEventCategoryError, EventJobRetryExhausted, message, nil, map[string]any{"job_id": job.ID, "attempt_count": job.AttemptCount, "error_code": code}, now)
 			final := s.appendRunEventLocked(run, RunEventCategoryFinal, EventRunFailed, message, nil, map[string]any{"job_id": job.ID, "error_code": code}, now)
 			s.runs[run.ID] = run
 			s.backgroundJobs[id] = job
-			recoveries = append(recoveries, BackgroundJobRecovery{Job: job, Run: run, Events: []RunEvent{event, final}, Exhausted: true})
+			events := append(toolEvents, event, final)
+			recoveries = append(recoveries, BackgroundJobRecovery{Job: job, Run: run, Events: events, Exhausted: true})
 			continue
 		}
 		job.Status = BackgroundJobStatusQueued
@@ -3004,13 +3818,51 @@ func (s *MemoryService) RecoverBackgroundJobs(_ context.Context, ident identity.
 		job.LeaseExpiresAt = nil
 		job.ScheduledAt = now.Add(retryBackoffDuration(job.AttemptCount))
 		run.Status = RunStatusRecovering
+		toolEvents := s.resetExecutingToolCallsForRecoveryLocked(run, now)
 		recovering := s.appendRunEventLocked(run, RunEventCategoryProgress, EventJobRecovering, "Job recovering", nil, map[string]any{"job_id": job.ID, "previous_worker_id": previousWorkerID, "attempt": job.AttemptCount}, now)
 		retry := s.appendRunEventLocked(run, RunEventCategoryProgress, EventJobRetryScheduled, "Job retry scheduled", nil, map[string]any{"job_id": job.ID, "next_attempt": job.AttemptCount + 1, "scheduled_at": job.ScheduledAt}, now)
 		s.runs[run.ID] = run
 		s.backgroundJobs[id] = job
-		recoveries = append(recoveries, BackgroundJobRecovery{Job: job, Run: run, Events: []RunEvent{recovering, retry}})
+		events := append(toolEvents, recovering, retry)
+		recoveries = append(recoveries, BackgroundJobRecovery{Job: job, Run: run, Events: events})
 	}
 	return recoveries, nil
+}
+
+func (s *MemoryService) resetExecutingToolCallsForRecoveryLocked(run Run, now time.Time) []RunEvent {
+	events := []RunEvent{}
+	for key, call := range s.toolCalls {
+		if call.RunID != run.ID || call.ExecutionStatus != ToolCallExecutionExecuting {
+			continue
+		}
+		call.ExecutionStatus = ToolCallExecutionNotStarted
+		call.UpdatedAt = now
+		s.toolCalls[key] = call
+		metadata := toolCallEventMetadataForState(s.runStepStates[run.ID], call)
+		metadata["recovery_reason"] = "worker_lease_expired"
+		event := s.appendRunEventLocked(run, RunEventCategoryProgress, EventToolCallApproved, "Tool call returned to queue after worker recovery", nil, metadata, now)
+		events = append(events, event)
+	}
+	return events
+}
+
+func (s *MemoryService) failExecutingToolCallsForRecoveryLocked(run Run, code string, message string, now time.Time) []RunEvent {
+	events := []RunEvent{}
+	for key, call := range s.toolCalls {
+		if call.RunID != run.ID || call.ExecutionStatus != ToolCallExecutionExecuting {
+			continue
+		}
+		call.ExecutionStatus = ToolCallExecutionFailed
+		call.ErrorCode = &code
+		call.ErrorMessage = &message
+		call.UpdatedAt = now
+		s.toolCalls[key] = call
+		metadata := toolCallEventMetadataForState(s.runStepStates[run.ID], call)
+		metadata["recovery_reason"] = "worker_lease_exhausted"
+		event := s.appendRunEventLocked(run, RunEventCategoryError, EventToolCallFailed, message, nil, metadata, now)
+		events = append(events, event)
+	}
+	return events
 }
 
 func retryBackoffDuration(attemptCount int) time.Duration {
@@ -3120,11 +3972,82 @@ func (s *MemoryService) WorkerQueueDiagnostics(_ context.Context, ident identity
 	return diagnostics, nil
 }
 
+func (s *MemoryService) activeContinuationJobLocked(runID string, userID string, now time.Time) func(string) bool {
+	return func(jobID string) bool {
+		job, ok := s.backgroundJobs[strings.TrimSpace(jobID)]
+		if !ok || job.RunID != runID || job.UserID != userID || job.Status != BackgroundJobStatusLeased || job.LeaseExpiresAt == nil {
+			return false
+		}
+		return job.LeaseExpiresAt.After(now)
+	}
+}
+
+const continuationClaimLease = 30 * time.Second
+
+func toolContinuationClaimAllowed(state RunStepState, toolCallID string, jobID string, now time.Time, activeJob func(string) bool) bool {
+	toolCallID = strings.TrimSpace(toolCallID)
+	jobID = strings.TrimSpace(jobID)
+	if toolCallID == "" || jobID == "" || state.NextAction != RunStepNextActionContinueModel || len(state.CompletedToolResults) == 0 {
+		return false
+	}
+	lastCompleted := state.CompletedToolResults[len(state.CompletedToolResults)-1]
+	toolCompleted := false
+	for _, completed := range state.CompletedToolResults {
+		if completed.ToolCallID == toolCallID {
+			toolCompleted = true
+			break
+		}
+	}
+	if !toolCompleted {
+		return false
+	}
+	for _, step := range state.Steps {
+		if step.Kind != RunStepKindContinuation || step.Sequence <= lastCompleted.Sequence {
+			continue
+		}
+		claimedJobID := metadataStringValue(step.SafeMetadata, "job_id")
+		if claimedJobID == jobID || continuationClaimActive(step, now) || (claimedJobID != "" && activeJob != nil && activeJob(claimedJobID)) {
+			return false
+		}
+	}
+	return true
+}
+
+func continuationClaimActive(step RunStep, now time.Time) bool {
+	raw := metadataStringValue(step.SafeMetadata, "claim_expires_at")
+	if raw == "" {
+		return false
+	}
+	expiresAt, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil {
+		return false
+	}
+	return expiresAt.After(now)
+}
+
+func toolContinuationClaimMetadata(input ClaimToolContinuationInput, now time.Time) map[string]any {
+	metadata := map[string]any{
+		"model_phase":          "continuation",
+		"tool_call_id":         strings.TrimSpace(input.ToolCallID),
+		"job_id":               strings.TrimSpace(input.JobID),
+		"continuation_claimed": true,
+		"claim_expires_at":     now.Add(continuationClaimLease).UTC().Format(time.RFC3339Nano),
+	}
+	if providerID := strings.TrimSpace(input.ProviderID); providerID != "" {
+		metadata["provider_id"] = providerID
+	}
+	if model := strings.TrimSpace(input.Model); model != "" {
+		metadata["model"] = model
+	}
+	return metadata
+}
+
 func (s *MemoryService) appendRunEventLocked(run Run, category RunEventCategory, eventType string, summary string, content *string, metadata map[string]any, createdAt time.Time) RunEvent {
 	summary = RedactEventText(summary)
 	metadata = AnnotateRunStepMetadata(eventType, summary, metadata)
 	event := RunEvent{ID: NewRunEventID(), RunID: run.ID, ThreadID: run.ThreadID, UserID: run.UserID, Sequence: len(s.runEvents[run.ID]) + 1, Category: category, Type: eventType, Summary: summary, Content: content, Metadata: RedactEventMetadata(metadata), CreatedAt: createdAt}
 	s.runEvents[run.ID] = append(s.runEvents[run.ID], event)
+	s.runStepStates[run.ID] = AdvanceRunStepState(s.runStepStates[run.ID], event)
 	return event
 }
 

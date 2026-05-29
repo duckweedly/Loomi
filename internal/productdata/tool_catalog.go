@@ -380,7 +380,10 @@ func builtinAgentCatalogEntries() []ToolCatalogEntry {
 	return []ToolCatalogEntry{
 		builtinAgentCatalogEntry(ToolNameAgentSpawn, "Agent spawn", "Create one bounded child coordination task.", []string{"role", "goal"}, false),
 		builtinAgentCatalogEntry(ToolNameAgentList, "Agent list", "List bounded child coordination task summaries.", []string{"limit"}, true),
+		builtinAgentCatalogEntry(ToolNameAgentStart, "Agent start", "Mark one child coordination task in progress.", []string{"task_id"}, false),
+		builtinAgentCatalogEntry(ToolNameAgentDelegate, "Agent delegate", "Create one approval-gated child thread and queued child model run for an existing task.", []string{"task_id"}, false),
 		builtinAgentCatalogEntry(ToolNameAgentComplete, "Agent complete", "Complete one child coordination task with a bounded result summary.", []string{"task_id", "result_summary"}, false),
+		builtinAgentCatalogEntry(ToolNameAgentFail, "Agent fail", "Fail one child coordination task with a bounded result summary.", []string{"task_id", "result_summary"}, false),
 	}
 }
 
@@ -397,8 +400,8 @@ func builtinAgentCatalogEntry(name string, displayName string, description strin
 		ExecutionState: ToolExecutionStateExecutable,
 		SafeMetadata: map[string]any{
 			"arguments":            append([]string(nil), arguments...),
-			"autonomous_execution": false,
-			"coordination_only":    true,
+			"autonomous_execution": name == ToolNameAgentDelegate,
+			"coordination_only":    name != ToolNameAgentDelegate,
 			"read_only":            readOnly,
 			"scope":                "agent",
 		},

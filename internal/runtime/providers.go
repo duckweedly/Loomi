@@ -212,7 +212,7 @@ func (p *HTTPProvider) buildRequest(ctx context.Context, request ProviderRequest
 }
 
 func (p *HTTPProvider) buildAnthropicRequest(ctx context.Context, request ProviderRequest) (*http.Request, error) {
-	body := anthropicRequestBody{Model: selectedModel(request.Model, p.providerConfig.Model), MaxTokens: 4096, Stream: true, System: request.SystemPrompt, Messages: anthropicMessages(request.Messages)}
+	body := anthropicRequestBody{Model: selectedModel(request.Model, p.providerConfig.Model), MaxTokens: 4096, Stream: true, System: request.SystemPrompt, Messages: anthropicMessages(request.Messages), Tools: anthropicTools(request.Tools)}
 	if len(body.Messages) == 0 {
 		return nil, errors.New("Provider request messages are required.")
 	}
@@ -228,6 +228,10 @@ func (p *HTTPProvider) buildAnthropicRequest(ctx context.Context, request Provid
 
 func (p *HTTPProvider) buildOpenAICompatibleRequest(ctx context.Context, request ProviderRequest) (*http.Request, error) {
 	body := openAIRequestBody{Model: selectedModel(request.Model, p.providerConfig.Model), Stream: true, Messages: openAIMessages(request.Messages), Tools: openAITools(request.Tools)}
+	if len(body.Tools) > 0 {
+		enabled := true
+		body.ParallelToolCalls = &enabled
+	}
 	if strings.TrimSpace(request.SystemPrompt) != "" {
 		system := request.SystemPrompt
 		body.Messages = append([]openAIMessage{{Role: "system", Content: &system}}, body.Messages...)
@@ -245,7 +249,7 @@ func (p *HTTPProvider) buildOpenAICompatibleRequest(ctx context.Context, request
 }
 
 func (p *HTTPProvider) buildGeminiRequest(ctx context.Context, request ProviderRequest) (*http.Request, error) {
-	body := geminiRequestBody{Contents: geminiContents(request.Messages)}
+	body := geminiRequestBody{Contents: geminiContents(request.Messages), Tools: geminiTools(request.Tools)}
 	if len(body.Contents) == 0 {
 		return nil, errors.New("Provider request messages are required.")
 	}
@@ -429,6 +433,8 @@ func parseProviderSSE(ctx context.Context, family ProviderFamily, body io.Reader
 	var dataLines []string
 	terminal := false
 	openAIState := openAIStreamAccumulator{}
+	anthropicState := anthropicStreamAccumulator{}
+	geminiState := geminiStreamAccumulator{}
 	dispatch := func() {
 		if len(dataLines) == 0 {
 			eventName = ""
@@ -448,7 +454,7 @@ func parseProviderSSE(ctx context.Context, family ProviderFamily, body io.Reader
 		}
 		if (family == ProviderFamilyOpenAI || family == ProviderFamilyOpenAICompatible) && openAIState.dispatch(ctx, data, ch) {
 			terminal = true
-		} else if family != ProviderFamilyOpenAI && family != ProviderFamilyOpenAICompatible && dispatchProviderEvent(ctx, family, eventName, data, ch) {
+		} else if family != ProviderFamilyOpenAI && family != ProviderFamilyOpenAICompatible && dispatchProviderEvent(ctx, family, eventName, data, ch, &anthropicState, &geminiState) {
 			terminal = true
 		}
 		eventName = ""
@@ -458,6 +464,9 @@ func parseProviderSSE(ctx context.Context, family ProviderFamily, body io.Reader
 		line := scanner.Text()
 		if line == "" {
 			dispatch()
+			if terminal {
+				break
+			}
 			continue
 		}
 		if strings.HasPrefix(line, "event:") {
@@ -468,15 +477,22 @@ func parseProviderSSE(ctx context.Context, family ProviderFamily, body io.Reader
 			dataLines = append(dataLines, strings.TrimSpace(strings.TrimPrefix(line, "data:")))
 		}
 	}
-	dispatch()
-	if err := scanner.Err(); err != nil {
-		_ = sendProviderEvent(ctx, ch, ProviderEvent{Type: ProviderEventError, ErrorCode: "stream_error", Message: "Provider stream failed."})
+	if !terminal {
+		dispatch()
+	}
+	if !terminal {
+		if err := scanner.Err(); err != nil {
+			_ = sendProviderEvent(ctx, ch, ProviderEvent{Type: ProviderEventError, ErrorCode: "stream_error", Message: "Provider stream failed."})
+			return true
+		}
+	}
+	if terminal {
 		return true
 	}
 	return terminal
 }
 
-func dispatchProviderEvent(ctx context.Context, family ProviderFamily, eventName string, data string, ch chan<- ProviderEvent) bool {
+func dispatchProviderEvent(ctx context.Context, family ProviderFamily, eventName string, data string, ch chan<- ProviderEvent, anthropicState *anthropicStreamAccumulator, geminiState *geminiStreamAccumulator) bool {
 	if data == "" {
 		return false
 	}
@@ -486,11 +502,11 @@ func dispatchProviderEvent(ctx context.Context, family ProviderFamily, eventName
 	}
 	switch family {
 	case ProviderFamilyAnthropic:
-		return dispatchAnthropicEvent(ctx, eventName, data, ch)
+		return anthropicState.dispatch(ctx, eventName, data, ch)
 	case ProviderFamilyOpenAI, ProviderFamilyOpenAICompatible:
 		return dispatchOpenAIEvent(ctx, data, ch)
 	case ProviderFamilyGemini:
-		return dispatchGeminiEvent(ctx, data, ch)
+		return geminiState.dispatch(ctx, data, ch)
 	default:
 		return false
 	}
@@ -509,7 +525,23 @@ type openAIToolCallAccumulator struct {
 	Args strings.Builder
 }
 
+type anthropicStreamAccumulator struct {
+	toolCalls map[int]*anthropicToolCallAccumulator
+}
+
+type anthropicToolCallAccumulator struct {
+	ID    string
+	Name  string
+	Input map[string]any
+	Args  strings.Builder
+}
+
 func dispatchAnthropicEvent(ctx context.Context, eventName string, data string, ch chan<- ProviderEvent) bool {
+	state := anthropicStreamAccumulator{}
+	return state.dispatch(ctx, eventName, data, ch)
+}
+
+func (s *anthropicStreamAccumulator) dispatch(ctx context.Context, eventName string, data string, ch chan<- ProviderEvent) bool {
 	var event anthropicStreamEvent
 	if err := json.Unmarshal([]byte(data), &event); err != nil {
 		_ = sendProviderEvent(ctx, ch, ProviderEvent{Type: ProviderEventError, ErrorCode: "parse_error", Message: "Provider stream could not be parsed."})
@@ -520,7 +552,29 @@ func dispatchAnthropicEvent(ctx context.Context, eventName string, data string, 
 		return true
 	}
 	if event.Type == "content_block_start" && event.ContentBlock.Type == "tool_use" {
-		_ = sendProviderEvent(ctx, ch, providerToolCallEvent(event.ContentBlock.Name, nil))
+		if len(event.ContentBlock.Input) == 0 && strings.TrimSpace(event.ContentBlock.ID) != "" {
+			if s.toolCalls == nil {
+				s.toolCalls = map[int]*anthropicToolCallAccumulator{}
+			}
+			s.toolCalls[event.Index] = &anthropicToolCallAccumulator{ID: event.ContentBlock.ID, Name: event.ContentBlock.Name, Input: event.ContentBlock.Input}
+			return false
+		}
+		_ = sendProviderEvent(ctx, ch, providerToolCallEvent(event.ContentBlock.Name, toolCallMetadata(event.ContentBlock.ID, event.ContentBlock.Input)))
+		return false
+	}
+	if event.Type == "content_block_delta" && event.Delta.Type == "input_json_delta" {
+		if s.toolCalls == nil {
+			return false
+		}
+		acc := s.toolCalls[event.Index]
+		if acc == nil {
+			return false
+		}
+		acc.Args.WriteString(event.Delta.PartialJSON)
+		return false
+	}
+	if event.Type == "content_block_stop" {
+		_ = s.flushToolCall(ctx, event.Index, ch)
 		return false
 	}
 	if event.Type == "content_block_delta" && event.Delta.Type == "text_delta" && event.Delta.Text != "" {
@@ -531,11 +585,47 @@ func dispatchAnthropicEvent(ctx context.Context, eventName string, data string, 
 		_ = sendProviderEvent(ctx, ch, ProviderEvent{Type: ProviderEventRefusal, Message: "Model response was refused."})
 		return true
 	}
+	if event.Type == "message_delta" && event.Delta.StopReason == "max_tokens" {
+		_ = sendProviderEvent(ctx, ch, ProviderEvent{Type: ProviderEventError, ErrorCode: "provider_incomplete", Message: "Provider response was truncated before completion.", Metadata: map[string]any{"finish_reason": "max_tokens"}})
+		return true
+	}
 	if event.Type == "message_stop" || eventName == "message_stop" {
+		s.flushAllToolCalls(ctx, ch)
 		_ = sendProviderEvent(ctx, ch, ProviderEvent{Type: ProviderEventCompleted})
 		return true
 	}
 	return false
+}
+
+func (s *anthropicStreamAccumulator) flushToolCall(ctx context.Context, index int, ch chan<- ProviderEvent) bool {
+	if s.toolCalls == nil {
+		return false
+	}
+	acc := s.toolCalls[index]
+	if acc == nil || acc.Name == "" {
+		return false
+	}
+	input := acc.Input
+	if raw := acc.Args.String(); raw != "" {
+		input = parseToolArgumentsSummary(raw)
+	}
+	_ = sendProviderEvent(ctx, ch, providerToolCallEvent(acc.Name, toolCallMetadata(acc.ID, input)))
+	delete(s.toolCalls, index)
+	return true
+}
+
+func (s *anthropicStreamAccumulator) flushAllToolCalls(ctx context.Context, ch chan<- ProviderEvent) {
+	if s.toolCalls == nil {
+		return
+	}
+	indexes := make([]int, 0, len(s.toolCalls))
+	for index := range s.toolCalls {
+		indexes = append(indexes, index)
+	}
+	sort.Ints(indexes)
+	for _, index := range indexes {
+		s.flushToolCall(ctx, index, ch)
+	}
 }
 
 func (s *openAIStreamAccumulator) dispatch(ctx context.Context, data string, ch chan<- ProviderEvent) bool {
@@ -584,7 +674,11 @@ func (s *openAIStreamAccumulator) dispatch(ctx context.Context, data string, ch 
 		if choice.FinishReason == "tool_calls" || choice.FinishReason == "function_call" {
 			return s.flushToolCall(ctx, ch)
 		}
-		if choice.FinishReason == "stop" || choice.FinishReason == "length" {
+		if choice.FinishReason == "length" {
+			_ = sendProviderEvent(ctx, ch, ProviderEvent{Type: ProviderEventError, ErrorCode: "provider_incomplete", Message: "Provider response was truncated before completion.", Metadata: map[string]any{"finish_reason": "length"}})
+			return true
+		}
+		if choice.FinishReason == "stop" {
 			_ = s.flushToolCall(ctx, ch)
 			_ = sendProviderEvent(ctx, ch, ProviderEvent{Type: ProviderEventCompleted, FinishInfo: choice.FinishReason})
 			return true
@@ -599,6 +693,7 @@ func dispatchOpenAIEvent(ctx context.Context, data string, ch chan<- ProviderEve
 }
 
 func (s *openAIStreamAccumulator) flushToolCall(ctx context.Context, ch chan<- ProviderEvent) bool {
+	sent := false
 	if s.toolCalls != nil {
 		indexes := make([]int, 0, len(s.toolCalls))
 		for index := range s.toolCalls {
@@ -619,6 +714,9 @@ func (s *openAIStreamAccumulator) flushToolCall(ctx context.Context, ch chan<- P
 			}
 			_ = sendProviderEvent(ctx, ch, providerToolCallEvent(acc.Name, metadata))
 			delete(s.toolCalls, index)
+			sent = true
+		}
+		if sent {
 			return true
 		}
 	}
@@ -715,6 +813,12 @@ func internalProviderToolName(name string) string {
 		return productdata.ToolNameBrowserType
 	case "browser_press":
 		return productdata.ToolNameBrowserPress
+	case "artifact_create_text":
+		return productdata.ToolNameArtifactCreateText
+	case "artifact_read":
+		return productdata.ToolNameArtifactRead
+	case "artifact_list":
+		return productdata.ToolNameArtifactList
 	case "memory_search":
 		return productdata.ToolNameMemorySearch
 	case "memory_list":
@@ -754,13 +858,22 @@ func internalProviderToolName(name string) string {
 	}
 }
 
+type geminiStreamAccumulator struct {
+	nextToolIndex int
+}
+
 func dispatchGeminiEvent(ctx context.Context, data string, ch chan<- ProviderEvent) bool {
+	state := geminiStreamAccumulator{}
+	return state.dispatch(ctx, data, ch)
+}
+
+func (s *geminiStreamAccumulator) dispatch(ctx context.Context, data string, ch chan<- ProviderEvent) bool {
 	var event geminiStreamEvent
 	if err := json.Unmarshal([]byte(data), &event); err != nil {
 		_ = sendProviderEvent(ctx, ch, ProviderEvent{Type: ProviderEventError, ErrorCode: "parse_error", Message: "Provider stream could not be parsed."})
 		return true
 	}
-	for _, candidate := range event.Candidates {
+	for candidateIndex, candidate := range event.Candidates {
 		if candidate.FinishReason == "SAFETY" || candidate.FinishReason == "BLOCKED" || candidate.FinishReason == "RECITATION" {
 			_ = sendProviderEvent(ctx, ch, ProviderEvent{Type: ProviderEventRefusal, Message: "Model response was refused."})
 			return true
@@ -770,11 +883,31 @@ func dispatchGeminiEvent(ctx context.Context, data string, ch chan<- ProviderEve
 				_ = sendProviderEvent(ctx, ch, ProviderEvent{Type: ProviderEventTextDelta, Text: part.Text})
 			}
 			if part.FunctionCall.Name != "" {
-				_ = sendProviderEvent(ctx, ch, providerToolCallEvent(part.FunctionCall.Name, nil))
+				toolCallID := fmt.Sprintf("gemini_tool_%d_%d", candidateIndex, s.nextToolIndex)
+				s.nextToolIndex++
+				_ = sendProviderEvent(ctx, ch, providerToolCallEvent(part.FunctionCall.Name, toolCallMetadata(toolCallID, part.FunctionCall.Args)))
 			}
+		}
+		if candidate.FinishReason == "MAX_TOKENS" {
+			_ = sendProviderEvent(ctx, ch, ProviderEvent{Type: ProviderEventError, ErrorCode: "provider_incomplete", Message: "Provider response was truncated before completion.", Metadata: map[string]any{"finish_reason": "MAX_TOKENS"}})
+			return true
 		}
 	}
 	return false
+}
+
+func toolCallMetadata(toolCallID string, arguments map[string]any) map[string]any {
+	metadata := map[string]any{}
+	if strings.TrimSpace(toolCallID) != "" {
+		metadata["tool_call_id"] = strings.TrimSpace(toolCallID)
+	}
+	if len(arguments) > 0 {
+		metadata["arguments_summary"] = arguments
+	}
+	if len(metadata) == 0 {
+		return nil
+	}
+	return metadata
 }
 
 func jsonRequest(ctx context.Context, endpoint string, body any) (*http.Request, error) {
@@ -920,6 +1053,13 @@ type anthropicRequestBody struct {
 	Stream    bool               `json:"stream"`
 	System    string             `json:"system,omitempty"`
 	Messages  []anthropicMessage `json:"messages"`
+	Tools     []anthropicTool    `json:"tools,omitempty"`
+}
+
+type anthropicTool struct {
+	Name        string         `json:"name"`
+	Description string         `json:"description,omitempty"`
+	InputSchema map[string]any `json:"input_schema"`
 }
 
 type anthropicMessage struct {
@@ -929,7 +1069,12 @@ type anthropicMessage struct {
 
 type anthropicContentBlock struct {
 	Type         string             `json:"type"`
-	Text         string             `json:"text"`
+	Text         string             `json:"text,omitempty"`
+	ID           string             `json:"id,omitempty"`
+	Name         string             `json:"name,omitempty"`
+	Input        map[string]any     `json:"input,omitempty"`
+	ToolUseID    string             `json:"tool_use_id,omitempty"`
+	Content      string             `json:"content,omitempty"`
 	CacheControl *anthropicCacheCtl `json:"cache_control,omitempty"`
 }
 
@@ -940,6 +1085,14 @@ type anthropicCacheCtl struct {
 func anthropicMessages(messages []ProviderMessage) []anthropicMessage {
 	result := make([]anthropicMessage, 0, len(messages))
 	for _, message := range messages {
+		if message.Role == ProviderMessageRoleAssistantToolCall {
+			result = append(result, anthropicMessage{Role: "assistant", Content: []anthropicContentBlock{{Type: "tool_use", ID: message.ToolCallID, Name: providerToolName(message.ToolName), Input: productdata.RedactEventMetadata(message.ArgumentsSummary)}}})
+			continue
+		}
+		if message.Role == ProviderMessageRoleToolResult {
+			result = append(result, anthropicMessage{Role: "user", Content: []anthropicContentBlock{{Type: "tool_result", ToolUseID: message.ToolCallID, Content: message.Content}}})
+			continue
+		}
 		role := "user"
 		if message.Role == "assistant" {
 			role = "assistant"
@@ -954,11 +1107,23 @@ func anthropicMessages(messages []ProviderMessage) []anthropicMessage {
 	return result
 }
 
+func anthropicTools(tools []ProviderToolDefinition) []anthropicTool {
+	result := make([]anthropicTool, 0, len(tools))
+	for _, tool := range tools {
+		if tool.ProviderName == "" || len(tool.Parameters) == 0 {
+			continue
+		}
+		result = append(result, anthropicTool{Name: tool.ProviderName, Description: tool.Description, InputSchema: tool.Parameters})
+	}
+	return result
+}
+
 type openAIRequestBody struct {
-	Model    string           `json:"model"`
-	Stream   bool             `json:"stream"`
-	Messages []openAIMessage  `json:"messages"`
-	Tools    []openAIToolSpec `json:"tools,omitempty"`
+	Model             string           `json:"model"`
+	Stream            bool             `json:"stream"`
+	Messages          []openAIMessage  `json:"messages"`
+	Tools             []openAIToolSpec `json:"tools,omitempty"`
+	ParallelToolCalls *bool            `json:"parallel_tool_calls,omitempty"`
 }
 
 type openAIMessage struct {
@@ -992,10 +1157,27 @@ type openAIToolDefinition struct {
 
 func openAIMessages(messages []ProviderMessage) []openAIMessage {
 	result := make([]openAIMessage, 0, len(messages))
-	for _, message := range messages {
+	for index := 0; index < len(messages); index++ {
+		message := messages[index]
 		if message.Role == ProviderMessageRoleAssistantToolCall {
-			arguments, _ := json.Marshal(message.ArgumentsSummary)
-			result = append(result, openAIMessage{Role: "assistant", ToolCalls: []openAIToolCall{{ID: message.ToolCallID, Type: "function", Function: openAIToolFunction{Name: providerToolName(message.ToolName), Arguments: string(arguments)}}}})
+			toolCalls := []openAIToolCall{}
+			toolResults := []openAIMessage{}
+			for index < len(messages) && messages[index].Role == ProviderMessageRoleAssistantToolCall {
+				call := messages[index]
+				arguments, _ := json.Marshal(call.ArgumentsSummary)
+				toolCalls = append(toolCalls, openAIToolCall{ID: call.ToolCallID, Type: "function", Function: openAIToolFunction{Name: providerToolName(call.ToolName), Arguments: string(arguments)}})
+				if index+1 < len(messages) && messages[index+1].Role == ProviderMessageRoleToolResult && messages[index+1].ToolCallID == call.ToolCallID {
+					resultMessage := messages[index+1]
+					content := resultMessage.Content
+					toolResults = append(toolResults, openAIMessage{Role: "tool", Content: &content, ToolCallID: resultMessage.ToolCallID})
+					index += 2
+					continue
+				}
+				index++
+			}
+			result = append(result, openAIMessage{Role: "assistant", ToolCalls: toolCalls})
+			result = append(result, toolResults...)
+			index--
 			continue
 		}
 		if message.Role == ProviderMessageRoleToolResult {
@@ -1082,6 +1264,12 @@ func providerToolName(name string) string {
 		return "browser_type"
 	case productdata.ToolNameBrowserPress:
 		return "browser_press"
+	case productdata.ToolNameArtifactCreateText:
+		return "artifact_create_text"
+	case productdata.ToolNameArtifactRead:
+		return "artifact_read"
+	case productdata.ToolNameArtifactList:
+		return "artifact_list"
 	case productdata.ToolNameMemorySearch:
 		return "memory_search"
 	case productdata.ToolNameMemoryList:
@@ -1123,6 +1311,17 @@ func providerToolName(name string) string {
 
 type geminiRequestBody struct {
 	Contents []geminiContent `json:"contents"`
+	Tools    []geminiTool    `json:"tools,omitempty"`
+}
+
+type geminiTool struct {
+	FunctionDeclarations []geminiFunctionDeclaration `json:"functionDeclarations"`
+}
+
+type geminiFunctionDeclaration struct {
+	Name        string         `json:"name"`
+	Description string         `json:"description,omitempty"`
+	Parameters  map[string]any `json:"parameters"`
 }
 
 type geminiContent struct {
@@ -1131,12 +1330,39 @@ type geminiContent struct {
 }
 
 type geminiPart struct {
-	Text string `json:"text,omitempty"`
+	Text             string                  `json:"text,omitempty"`
+	FunctionCall     *geminiFunctionCall     `json:"functionCall,omitempty"`
+	FunctionResponse *geminiFunctionResponse `json:"functionResponse,omitempty"`
+}
+
+type geminiFunctionCall struct {
+	Name string         `json:"name"`
+	Args map[string]any `json:"args,omitempty"`
+}
+
+type geminiFunctionResponse struct {
+	Name     string         `json:"name"`
+	Response map[string]any `json:"response"`
 }
 
 func geminiContents(messages []ProviderMessage) []geminiContent {
 	result := make([]geminiContent, 0, len(messages))
 	for _, message := range messages {
+		if message.Role == ProviderMessageRoleAssistantToolCall {
+			result = append(result, geminiContent{Role: "model", Parts: []geminiPart{{FunctionCall: &geminiFunctionCall{Name: providerToolName(message.ToolName), Args: productdata.RedactEventMetadata(message.ArgumentsSummary)}}}})
+			continue
+		}
+		if message.Role == ProviderMessageRoleToolResult {
+			response := map[string]any{}
+			if err := json.Unmarshal([]byte(message.Content), &response); err != nil || response == nil {
+				response = map[string]any{"content": message.Content}
+			}
+			if message.ToolCallID != "" {
+				response["tool_call_id"] = message.ToolCallID
+			}
+			result = append(result, geminiContent{Role: "user", Parts: []geminiPart{{FunctionResponse: &geminiFunctionResponse{Name: providerToolName(message.ToolName), Response: response}}}})
+			continue
+		}
 		role := "user"
 		if message.Role == "assistant" {
 			role = "model"
@@ -1146,16 +1372,34 @@ func geminiContents(messages []ProviderMessage) []geminiContent {
 	return result
 }
 
+func geminiTools(tools []ProviderToolDefinition) []geminiTool {
+	declarations := make([]geminiFunctionDeclaration, 0, len(tools))
+	for _, tool := range tools {
+		if tool.ProviderName == "" || len(tool.Parameters) == 0 {
+			continue
+		}
+		declarations = append(declarations, geminiFunctionDeclaration{Name: tool.ProviderName, Description: tool.Description, Parameters: tool.Parameters})
+	}
+	if len(declarations) == 0 {
+		return nil
+	}
+	return []geminiTool{{FunctionDeclarations: declarations}}
+}
+
 type anthropicStreamEvent struct {
 	Type  string `json:"type"`
+	Index int    `json:"index"`
 	Delta struct {
-		Type       string `json:"type"`
-		Text       string `json:"text"`
-		StopReason string `json:"stop_reason"`
+		Type        string `json:"type"`
+		Text        string `json:"text"`
+		PartialJSON string `json:"partial_json"`
+		StopReason  string `json:"stop_reason"`
 	} `json:"delta"`
 	ContentBlock struct {
-		Type string `json:"type"`
-		Name string `json:"name"`
+		Type  string         `json:"type"`
+		ID    string         `json:"id"`
+		Name  string         `json:"name"`
+		Input map[string]any `json:"input"`
 	} `json:"content_block"`
 	Error struct {
 		Type    string `json:"type"`
@@ -1196,7 +1440,8 @@ type geminiStreamEvent struct {
 			Parts []struct {
 				Text         string `json:"text"`
 				FunctionCall struct {
-					Name string `json:"name"`
+					Name string         `json:"name"`
+					Args map[string]any `json:"args"`
 				} `json:"functionCall"`
 			} `json:"parts"`
 		} `json:"content"`

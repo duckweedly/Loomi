@@ -159,8 +159,12 @@ type Dictionary = {
     workspaceDefaultsDescription: string
     defaultWorkspaceMode: string
     defaultWorkspaceModeHelper: string
+    displayPreferences: string
+    displayPreferencesDescription: string
     theme: string
     themeHelper: string
+    themeResolved: (theme: string) => string
+    system: string
     light: string
     dark: string
     providerConsoleTitle: string
@@ -226,6 +230,7 @@ type Dictionary = {
     appNameHelper: string
     appVersion: string
     appVersionHelper: string
+    appVersionValue: string
     appStatus: string
     appStatusHelper: string
     previewControl: string
@@ -335,8 +340,8 @@ export const dictionaries: Record<Locale, Dictionary> = {
       runningDetail: '查看右侧时间线',
       completedTitle: '已完成',
       completedDetail: '回复已生成',
-      missingFinalTitle: '最终回复缺失',
-      missingFinalDetail: 'Run 已完成，但没有持久化 assistant final message。',
+      missingFinalTitle: '未生成回复',
+      missingFinalDetail: '这轮结束时没有拿到可显示内容，可以重试。',
       failedTitle: '执行失败',
       failedDetail: '未生成成功回复',
       stoppedTitle: '已停止',
@@ -408,8 +413,12 @@ export const dictionaries: Record<Locale, Dictionary> = {
       workspaceDefaultsDescription: '只影响后续本地工作区动作的当前会话偏好。',
       defaultWorkspaceMode: '默认工作区模式',
       defaultWorkspaceModeHelper: '影响之后从侧边栏创建的本地会话。',
+      displayPreferences: '显示偏好',
+      displayPreferencesDescription: '语言只作用于当前会话；主题默认跟随系统，手动选择后才固定。',
       theme: '主题',
-      themeHelper: '切换当前工作区界面的明暗显示。',
+      themeHelper: '默认跟随系统；手动选择后固定为浅色或深色。',
+      themeResolved: (theme: string) => `当前显示为${theme}`,
+      system: '系统',
       light: '浅色',
       dark: '深色',
       providerConsoleTitle: 'Provider Test Console',
@@ -469,12 +478,13 @@ export const dictionaries: Record<Locale, Dictionary> = {
       localProviderCredentialRedacted: 'credential redacted',
       localProviderExecutionUnsupported: 'Local Codex is enabled but execution is not supported yet',
       localProviderExecutionSupported: 'execution supported',
-      aboutLocalApp: '本地应用状态',
-      aboutLocalAppDescription: '显示已知本地状态；构建和账号信息仍是占位。',
+      aboutLocalApp: '应用信息',
+      aboutLocalAppDescription: '当前桌面会话的应用和连接状态。',
       appName: '应用',
       appNameHelper: '当前运行的 Loomi web shell。',
       appVersion: '版本',
-      appVersionHelper: 'M5.5 暂不读取构建版本。',
+      appVersionHelper: '当前本地桌面预览构建。',
+      appVersionValue: '本地预览',
       appStatus: '状态',
       appStatusHelper: '真实 API 和后端能力的组合状态。',
       previewControl: '预览控件',
@@ -582,8 +592,8 @@ export const dictionaries: Record<Locale, Dictionary> = {
       runningDetail: 'View the timeline',
       completedTitle: 'Completed',
       completedDetail: 'Reply generated',
-      missingFinalTitle: 'Final assistant message missing',
-      missingFinalDetail: 'The run completed without a persisted assistant final message.',
+      missingFinalTitle: 'No reply generated',
+      missingFinalDetail: 'This turn finished without displayable content. Try again.',
       failedTitle: 'Run failed',
       failedDetail: 'No successful reply generated',
       stoppedTitle: 'Stopped',
@@ -655,8 +665,12 @@ export const dictionaries: Record<Locale, Dictionary> = {
       workspaceDefaultsDescription: 'Session-local preferences for future local workspace actions.',
       defaultWorkspaceMode: 'Default workspace mode',
       defaultWorkspaceModeHelper: 'Applies to future local conversations created from the sidebar.',
+      displayPreferences: 'Display preferences',
+      displayPreferencesDescription: 'Language is session-local; theme follows the system unless pinned manually.',
       theme: 'Theme',
-      themeHelper: 'Switches the current workspace between light and dark appearance.',
+      themeHelper: 'Follows the system by default; manual choices pin light or dark.',
+      themeResolved: (theme: string) => `Currently shown as ${theme}`,
+      system: 'System',
       light: 'Light',
       dark: 'Dark',
       providerConsoleTitle: 'Provider Test Console',
@@ -716,12 +730,13 @@ export const dictionaries: Record<Locale, Dictionary> = {
       localProviderCredentialRedacted: 'credential redacted',
       localProviderExecutionUnsupported: 'Local Codex is enabled but execution is not supported yet',
       localProviderExecutionSupported: 'execution supported',
-      aboutLocalApp: 'Local app status',
-      aboutLocalAppDescription: 'Shows known local state; build and account metadata remain placeholders.',
+      aboutLocalApp: 'App information',
+      aboutLocalAppDescription: 'Application and connection state for this desktop session.',
       appName: 'Application',
       appNameHelper: 'The current Loomi web shell.',
       appVersion: 'Version',
-      appVersionHelper: 'M5.5 does not read build metadata yet.',
+      appVersionHelper: 'Current local desktop preview build.',
+      appVersionValue: 'Local preview',
       appStatus: 'Status',
       appStatusHelper: 'Combined Real API and backend capability status.',
       previewControl: 'Preview control',

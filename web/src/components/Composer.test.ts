@@ -202,6 +202,10 @@ describe('Composer interactions', () => {
     expect(source).toContain('onOpenSkills?.()')
     expect(source).toContain('onOpenConnectors?.()')
     expect(source).toContain('onOpenPlugins?.()')
+    expect(source).toContain('disabled={!onChooseWorkspaceFolder}')
+    expect(source).toContain('disabled={!onOpenSkills}')
+    expect(source).toContain('disabled={!onOpenConnectors}')
+    expect(source).toContain('disabled={!onOpenPlugins}')
     expect(source).not.toContain('composer-folder-status')
   })
 

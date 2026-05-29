@@ -48,3 +48,20 @@ Expected evidence:
 4. Provider continuation requests carry tool result messages in durable event order, growing from the first result to all six results.
 5. The assistant message for the run is persisted once.
 6. After `run_completed`, late model output and late tool continuation requests are rejected.
+
+## M98 Parallel Tool And Retry Smoke
+
+Focused command:
+
+```bash
+go test ./internal/runtime -run 'TestHTTPProviderFlushesMultipleOpenAIToolCalls|TestGatewayRecordsMultipleProviderToolCallsInOneTurn|TestQueuedRunRouterExecutesParallelAutoApprovedToolsBeforeContinuation|TestGatewayRetriesTransientProviderFailureBeforeOutput|TestGatewayDoesNotRetryProviderFailureAfterVisibleOutput' -count=1
+```
+
+Expected evidence:
+
+1. OpenAI-compatible streamed tool calls with multiple indexes emit every tool call, not only the first one.
+2. Gateway records multiple auto-approved read-only tool calls from one provider turn.
+3. Queued runner executes the ready auto-approved batch before starting continuation.
+4. Continuation receives all completed batch tool-call/result pairs in durable event order.
+5. Retryable provider failure before visible output schedules a retry and can recover.
+6. Provider failure after visible output is not retried, preventing duplicate output or tool state.

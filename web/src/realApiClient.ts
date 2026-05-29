@@ -355,9 +355,11 @@ async function readSSEStream(response: Response, onEvent: (event: RunEvent) => v
   let buffer = ''
   let eventName = ''
   let eventData = ''
+  let closed = false
   const flush = () => {
     if (!eventName && !eventData) return
     if (eventName === 'stream_closed') {
+      closed = true
       onClosed?.()
     } else if (eventName === 'run_event' && eventData.trim()) {
       try {
@@ -395,6 +397,7 @@ async function readSSEStream(response: Response, onEvent: (event: RunEvent) => v
       }
     }
     flush()
+    if (!closed) onError()
   } catch {
     onError()
   }
@@ -910,9 +913,36 @@ function deferredRun(threadId: string): Run {
   }
 }
 
-async function loadRunWithEvents(run: ApiRun) {
-  const events = await realApiClient.getRunEvents(run.id)
-  return mapApiRun(run, events)
+function requestsDownloadsWorkspace(content: string) {
+  return /下载目录|下载文件夹|downloads?|download folder|download directory/i.test(content)
+}
+
+function requestsDocumentsWorkspace(content: string) {
+  return /文稿目录|文稿文件夹|documents?|document folder|document directory/i.test(content)
+}
+
+function requestsLocalWorkspace(content: string) {
+  return /文件|目录|文件夹|工作区|workspace|folder|directory|downloads?|documents?/i.test(content)
+}
+
+function isDownloadsWorkspace(config?: WorkspaceRootConfig | null) {
+  return Boolean(config?.configured && /^(downloads?|下载)$/i.test(config.displayName.trim()))
+}
+
+function isDocumentsWorkspace(config?: WorkspaceRootConfig | null) {
+  return Boolean(config?.configured && /^(documents?|文稿)$/i.test(config.displayName.trim()))
+}
+
+function shouldPauseForWorkspaceAuthorization(content: string, config?: WorkspaceRootConfig | null) {
+  if (requestsDownloadsWorkspace(content)) return !isDownloadsWorkspace(config)
+  if (requestsDocumentsWorkspace(content)) return !isDocumentsWorkspace(config)
+  return requestsLocalWorkspace(content) && !config?.configured
+}
+
+async function loadRunWithEvents(run: ApiRun, options: { afterSequence?: number; existingEvents?: RunEvent[] } = {}) {
+  const afterSequence = options.afterSequence ?? 0
+  const events = await realApiClient.getRunEvents(run.id, afterSequence)
+  return mapApiRun(run, afterSequence > 0 ? [...(options.existingEvents ?? []), ...events] : events)
 }
 
 export const realApiClient: ApiClient = {
@@ -945,10 +975,10 @@ export const realApiClient: ApiClient = {
     return requireArrayField<ApiMessage>(body, 'messages', 'Message list response was invalid.').map(mapMessage)
   },
 
-  async getThreadRun(threadId: string) {
+  async getThreadRun(threadId: string, options: { afterSequence?: number; existingEvents?: RunEvent[] } = {}) {
     try {
       const body = await requestJSON<{ run: ApiRun }>(`/v1/threads/${threadId}/runs/current`)
-      return loadRunWithEvents(body.run)
+      return loadRunWithEvents(body.run, options)
     } catch (err) {
       if (err instanceof ApiRequestError && err.code === 'run_not_found') return deferredRun(threadId)
       throw err
@@ -1271,11 +1301,6 @@ export const realApiClient: ApiClient = {
   },
 
   async sendMessage(threadId: string, content: string, personaId?: string, options?: { providerId?: string; model?: string }) {
-    const providers = await this.listModelProviders?.()
-    const provider = options?.providerId
-      ? providers?.find((candidate) => candidate.id === options.providerId && providerCanSend(candidate)) ?? selectSendProvider(providers)
-      : selectSendProvider(providers)
-    if (!provider) throw new ApiRequestError('Model provider is unavailable.', 'provider_unavailable', 503)
     try {
       const currentRun = await this.getThreadRun(threadId)
       if (isRuntimeActive(currentRun.status)) throw new ApiRequestError('当前会话还有任务未结束，请先确认或停止当前任务。', 'active_run_exists', 409)
@@ -1283,10 +1308,27 @@ export const realApiClient: ApiClient = {
       if (err instanceof ApiRequestError && err.code === 'active_run_exists') throw err
       if (err instanceof ApiRequestError && err.status !== 404) throw err
     }
+    const workspaceRoot = await this.getWorkspaceRoot?.()
+    const pauseForWorkspaceAuthorization = shouldPauseForWorkspaceAuthorization(content, workspaceRoot)
+    let provider: ProviderCapability | undefined
+    if (!pauseForWorkspaceAuthorization) {
+      const providers = await this.listModelProviders?.()
+      provider = options?.providerId
+        ? providers?.find((candidate) => candidate.id === options.providerId && providerCanSend(candidate)) ?? selectSendProvider(providers)
+        : selectSendProvider(providers)
+      if (!provider) throw new ApiRequestError('Model provider is unavailable.', 'provider_unavailable', 503)
+    }
     const created = await requestJSON<{ message: ApiMessage }>(`/v1/threads/${threadId}/messages`, {
       method: 'POST',
       body: JSON.stringify({ content, client_message_id: createClientMessageID() }),
     })
+    if (pauseForWorkspaceAuthorization) {
+      return {
+        messages: await this.getThreadMessages(threadId),
+        run: deferredRun(threadId),
+      }
+    }
+    if (!provider) throw new ApiRequestError('Model provider is unavailable.', 'provider_unavailable', 503)
     let run: Run | undefined
     try {
       run = await this.startRun?.(threadId, { messageId: created.message.id, source: 'model_gateway', providerId: provider.id, model: options?.model || provider.model, personaId })

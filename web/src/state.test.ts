@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { Message, Run, Thread } from './domain'
-import { createWorkspaceSettingsState, getThreadIdAfterArchive, mergeRunEvents, redactProviderCheckMessage, shouldApplyLatestRequest, shouldApplyRunStreamEvent, getWorkspaceRefreshThreadId, shouldApplySendMessageResult, shouldApplyWorkspaceRefresh, shouldSelectWorkspaceRefreshThread } from './state'
+import { areThreadSnapshotsEqual, createWorkspaceSettingsState, getThreadIdAfterArchive, mergeRunEvents, redactProviderCheckMessage, shouldApplyLatestRequest, shouldApplyRunStreamEvent, getWorkspaceRefreshThreadId, shouldSendWorkspaceRefreshIntoLoading, shouldApplySendMessageResult, shouldApplyWorkspaceRefresh, shouldSelectWorkspaceRefreshThread } from './state'
 
 const threadA: Thread = {
   id: 'thread-a',
@@ -107,6 +107,17 @@ describe('getThreadIdAfterArchive', () => {
   })
 })
 
+describe('areThreadSnapshotsEqual', () => {
+  test('treats identical thread snapshots as stable to avoid redundant redraws', () => {
+    expect(areThreadSnapshotsEqual({ messages: [messageA], run: runA }, { messages: [{ ...messageA }], run: { ...runA, events: [] } })).toBe(true)
+  })
+
+  test('detects changed message or run content before applying a fresh thread snapshot', () => {
+    expect(areThreadSnapshotsEqual({ messages: [messageA], run: runA }, { messages: [{ ...messageA, content: 'B' }], run: runA })).toBe(false)
+    expect(areThreadSnapshotsEqual({ messages: [messageA], run: runA }, { messages: [messageA], run: { ...runA, status: 'running' } })).toBe(false)
+  })
+})
+
 describe('shouldSelectWorkspaceRefreshThread', () => {
   test('selects the resolved thread when the requested id is missing but still current', () => {
     expect(shouldSelectWorkspaceRefreshThread({ requestedThreadId: 'thread-brief', resolvedThreadId: 'thread-a', currentSelectedThreadId: 'thread-brief' })).toBe(true)
@@ -143,6 +154,15 @@ describe('shouldApplyWorkspaceRefresh', () => {
   })
 })
 
+describe('shouldSendWorkspaceRefreshIntoLoading', () => {
+  test('only uses the blocking loading state for the first empty workspace load', () => {
+    expect(shouldSendWorkspaceRefreshIntoLoading({ threads: [], messages: [], run: null })).toBe(true)
+    expect(shouldSendWorkspaceRefreshIntoLoading({ threads: [threadA], messages: [], run: null })).toBe(false)
+    expect(shouldSendWorkspaceRefreshIntoLoading({ threads: [], messages: [messageA], run: null })).toBe(false)
+    expect(shouldSendWorkspaceRefreshIntoLoading({ threads: [], messages: [], run: runA })).toBe(false)
+  })
+})
+
 describe('shouldApplySendMessageResult', () => {
   test('rejects a send result when the user has switched threads', () => {
     expect(shouldApplySendMessageResult({ requestedThreadId: 'thread-a', currentSelectedThreadId: 'thread-b' })).toBe(false)
@@ -150,6 +170,24 @@ describe('shouldApplySendMessageResult', () => {
 
   test('allows a send result for the current selected thread', () => {
     expect(shouldApplySendMessageResult({ requestedThreadId: 'thread-a', currentSelectedThreadId: 'thread-a' })).toBe(true)
+  })
+})
+
+describe('thread selection visual stability', () => {
+  test('waits for an uncached thread snapshot before swapping the selected conversation', async () => {
+    const source = await Bun.file(new URL('./state.ts', import.meta.url)).text()
+
+    expect(source).not.toContain("else {\n      skipNextSelectedThreadRefreshRef.current = true\n      setSelectedThreadId(threadId)\n    }")
+    expect(source).not.toContain('if (!cached) setSelectedThreadId(threadId)')
+    expect(source).toContain('if (cached) applyThreadSnapshot(threadId, cached)')
+  })
+
+  test('archives the selected thread after the next snapshot is ready', async () => {
+    const source = await Bun.file(new URL('./state.ts', import.meta.url)).text()
+
+    expect(source).toContain('if (!archivedSelectedThread) setThreads((current) => current.filter((thread) => thread.id !== threadId))')
+    expect(source).toContain('await apiClient.archiveThread(threadId)')
+    expect(source).toContain('if (archivedSelectedThread) setThreads((current) => current.filter((thread) => thread.id !== threadId))')
   })
 })
 
@@ -168,6 +206,8 @@ describe('run stream state helpers', () => {
       expect(source).resolves.toContain('mergeRunEvents'),
       expect(source).resolves.toContain('reconcileActiveRun'),
       expect(source).resolves.toContain('window.setInterval'),
+      expect(source).resolves.toContain('afterSequence: getMaxRunEventSequence'),
+      expect(source).resolves.toContain('existingEvents: currentRun.events'),
       expect(source).resolves.not.toContain('run?.events.length'),
     ])
   })

@@ -62,6 +62,8 @@ M5 provider output is converted into the existing run-event envelope:
 | Category | Type | Meaning |
 | --- | --- | --- |
 | `progress` | `model_request_started` | Gateway selected a provider and started request context construction. |
+| `progress` | `context_compacted` | Gateway compacted oversized provider input before serialization; metadata contains counts, byte budgets, preserved/dropped tool-pair counts, and strategy only. |
+| `progress` | `model_request_retry_scheduled` | A retryable provider failure happened before visible output or tool requests; another attempt is scheduled with bounded backoff. |
 | `message` | `model_output_delta` | Incremental assistant text from provider streaming. |
 | `message` | `model_output_completed` | Final assistant text is ready and has been persisted as conversation history. |
 | `progress` | `tool_call_blocked` | Provider requested tool/function use; M5 records the boundary and does not execute it. |
@@ -73,6 +75,10 @@ M5 provider output is converted into the existing run-event envelope:
 | `final` | `run_completed`, `run_failed`, `run_stopped` | Terminal run outcome. |
 
 SSE continues to use `run_event` frames and `after_sequence` history replay from M4.
+
+Gateway provider retry is intentionally narrow. `provider_rate_limited`, `provider_timeout`, retryable `provider_error`, and empty attempts are retried up to three total attempts only when the attempt has not emitted visible text, a tool request, or a final assistant message. The HTTP provider maps 429 to `provider_rate_limited`, 408/504 to `provider_timeout`, and pre-output transport errors such as temporary connection resets to retryable provider failures. Once output or tool state is durable, the failure is recorded instead of replaying the provider request. OpenAI-compatible `finish_reason=length`, Anthropic `max_tokens`, Gemini `MAX_TOKENS`, and Local Codex Responses `response.incomplete` are recorded as `provider_incomplete`; Loomi does not persist truncated output as a final assistant answer.
+
+Provider context compaction is an input-shaping event, not a mutation of conversation history. When emitted, `context_compacted.metadata` may include `model_phase`, `budget_bytes`, `message_budget_bytes`, `recent_message_window`, `original_bytes`, `compacted_bytes`, `original_count`, `compacted_count`, `omitted_messages`, `truncated_fields`, `preserved_tool_pairs`, `dropped_tool_pairs`, `strategy`, and `redaction_applied`. It must not include raw message content, tool arguments, tool output, provider payloads, file contents, or secret-bearing paths.
 
 Frontend clients treat live token deltas as an interim draft only. `model_output_completed` promotes the draft immediately, and the terminal refresh reconciles the run against the persisted assistant message whose `run_id` matches the run. If those two sources disagree, the persisted assistant message wins because it is the conversation history source of truth. This keeps Markdown rendering stable even when replayed events contain partial token fragments or redacted debug summaries.
 

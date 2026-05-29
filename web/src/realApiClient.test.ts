@@ -888,12 +888,69 @@ describe('M4 run mapping', () => {
     })
   })
 
+  test('treats SSE EOF without stream_closed as recoverable stream error', async () => {
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async () => {
+      const payload = [
+        'event: run_event',
+        'data: {"event":{"id":"evt-1","run_id":"run-1","thread_id":"thread-1","sequence":1,"category":"message","type":"model_output_delta","summary":"Model output delta","content":"Hel","metadata":{},"created_at":"2026-05-27T00:00:00Z"}}',
+        '',
+      ].join('\n')
+      return new Response(payload, { status: 200, headers: { 'Content-Type': 'text/event-stream' } })
+    }) as typeof fetch
+    try {
+      const events: ReturnType<typeof mapApiRunEvent>[] = []
+      let errors = 0
+      let closed = false
+      realApiClient.subscribeRunEvents?.('run-1', 0, (event) => events.push(event), () => { errors++ }, () => { closed = true })
+      await new Promise((resolve) => setTimeout(resolve, 10))
+
+      expect(events[0]).toMatchObject({ id: 'evt-1', assistantDelta: 'Hel' })
+      expect(errors).toBe(1)
+      expect(closed).toBe(false)
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
   test('requests replay events with explicit after_sequence cursor', () => {
     const source = Bun.file(new URL('./realApiClient.ts', import.meta.url)).text()
     return Promise.all([
       expect(source).resolves.toContain('getRunEvents(runId: string, afterSequence = 0)'),
       expect(source).resolves.toContain('after_sequence=${afterSequence}'),
     ])
+  })
+
+  test('refreshes current run with an event cursor instead of replaying full history', async () => {
+    const originalFetch = globalThis.fetch
+    const requests: string[] = []
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input)
+      requests.push(url)
+      if (url.includes('/v1/threads/thread-1/runs/current')) {
+        return new Response(JSON.stringify({ run: { id: 'run-1', thread_id: 'thread-1', status: 'running', source: 'model_gateway', created_at: '2026-05-27T00:00:00Z', updated_at: '2026-05-27T00:00:02Z' } }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      }
+      if (url.includes('/v1/runs/run-1/events?after_sequence=2')) {
+        return new Response(JSON.stringify({ events: [{ id: 'evt-3', run_id: 'run-1', thread_id: 'thread-1', sequence: 3, category: 'message', type: 'model_output_delta', summary: 'Model output delta', content: 'lo', metadata: {}, created_at: '2026-05-27T00:00:02Z' }] }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      }
+      return new Response(JSON.stringify({ events: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    }) as typeof fetch
+    try {
+      const run = await realApiClient.getThreadRun('thread-1', {
+        afterSequence: 2,
+        existingEvents: [
+          mapApiRunEvent({ id: 'evt-1', run_id: 'run-1', thread_id: 'thread-1', sequence: 1, category: 'message', type: 'model_output_delta', summary: 'Model output delta', content: 'Hel', metadata: {}, created_at: '2026-05-27T00:00:00Z' }),
+          mapApiRunEvent({ id: 'evt-2', run_id: 'run-1', thread_id: 'thread-1', sequence: 2, category: 'progress', type: 'job_claimed', summary: 'Job claimed', content: null, metadata: {}, created_at: '2026-05-27T00:00:01Z' }),
+        ],
+      })
+
+      expect(requests.some((url) => url.includes('/v1/runs/run-1/events?after_sequence=2'))).toBe(true)
+      expect(requests.some((url) => url.endsWith('/v1/runs/run-1/events'))).toBe(false)
+      expect(run.events.map((event) => event.id)).toEqual(['evt-1', 'evt-2', 'evt-3'])
+      expect(run.assistantDraft?.content).toBe('Hello')
+    } finally {
+      globalThis.fetch = originalFetch
+    }
   })
 
   test('maps model delta final and error events into assistant draft signals', () => {
@@ -1001,17 +1058,25 @@ describe('M4 run mapping', () => {
     return expect(source).resolves.toContain("source: 'model_gateway'")
   })
 
-  test('real sendMessage checks provider and active run before creating a user message', async () => {
+  test('real sendMessage checks active run and workspace authorization before creating a user message', async () => {
     const source = await Bun.file(new URL('./realApiClient.ts', import.meta.url)).text()
-    const providerCheck = source.indexOf('const provider = options?.providerId')
     const activeRunCheck = source.indexOf('const currentRun = await this.getThreadRun(threadId)')
+    const workspaceCheck = source.indexOf('const workspaceRoot = await this.getWorkspaceRoot?.()')
+    const pauseCheck = source.indexOf('shouldPauseForWorkspaceAuthorization(content, workspaceRoot)')
+    const providerCheck = source.indexOf('provider = options?.providerId')
     const messageCreate = source.indexOf("requestJSON<{ message: ApiMessage }>(`/v1/threads/${threadId}/messages`")
 
-    expect(providerCheck).toBeGreaterThan(0)
-    expect(activeRunCheck).toBeGreaterThan(providerCheck)
+    expect(activeRunCheck).toBeGreaterThan(0)
+    expect(workspaceCheck).toBeGreaterThan(activeRunCheck)
+    expect(pauseCheck).toBeGreaterThan(workspaceCheck)
+    expect(providerCheck).toBeGreaterThan(pauseCheck)
     expect(messageCreate).toBeGreaterThan(activeRunCheck)
+    expect(messageCreate).toBeGreaterThan(pauseCheck)
     expect(source).toContain("model: options?.model || provider.model")
     expect(source).toContain('当前会话还有任务未结束，请先确认或停止当前任务。')
+    expect(source).toContain('return /下载目录|下载文件夹|downloads?|download folder|download directory/i.test(content)')
+    expect(source).toContain('return /文稿目录|文稿文件夹|documents?|document folder|document directory/i.test(content)')
+    expect(source).toContain('run: deferredRun(threadId)')
   })
 
   test('real sendMessage prefers supported local codex over saved custom provider', () => {

@@ -199,6 +199,8 @@ describe('SettingsView tools catalog', () => {
 
     expect(source).toContain('function ToolsPanel')
     expect(source).toContain('data-testid="tools-catalog-list"')
+    expect(source).toContain('toolOperationalMeta')
+    expect(source).toContain('toolSafetyChips')
     expect(source).toContain('tool.source')
     expect(source).toContain('tool.group')
     expect(source).toContain('read-only')
@@ -222,6 +224,30 @@ describe('SettingsView tools catalog', () => {
     expect(source).not.toContain('raw_result')
     const toolsPanelSource = source.slice(source.indexOf('function ToolsPanel'), source.indexOf('function WebSearchPanel'))
     expect(toolsPanelSource).not.toContain('secret')
+  })
+
+  test('renders tools as compact scan rows without routine state badge noise', () => {
+    const tools: ToolCatalogItem[] = [{
+      name: 'workspace.write_file',
+      displayName: 'Workspace write file',
+      description: 'Create or replace a file under the configured workspace root.',
+      source: 'builtin',
+      group: 'workspace',
+      riskLevel: 'high',
+      approvalPolicy: 'always_required',
+      enabled: true,
+      executionState: 'executable',
+      safeMetadata: { write_capable: true, scope: 'workspace' },
+    }]
+    const html = renderToStaticMarkup(<SettingsView {...baseSettingsProps()} toolCatalog={tools} />)
+
+    expect(html).toContain('workspace.write_file')
+    expect(html).toContain('工作区范围')
+    expect(html).toContain('高风险')
+    expect(html).toContain('始终需批准')
+    expect(html).toContain('可写')
+    expect(html).not.toContain('已启用')
+    expect(html).not.toContain('>可执行<')
   })
 
   test('Tools category is read-only, not a placeholder write surface', async () => {
@@ -328,6 +354,7 @@ function baseSettingsProps(): Parameters<typeof SettingsView>[0] {
     selectedCategoryId: 'tools',
     defaultWorkspaceMode: 'work',
     theme: 'light',
+    themePreference: 'system',
     backendCapability: 'available',
     streamState: 'closed',
     selectedThreadTitle: 'M21 smoke',

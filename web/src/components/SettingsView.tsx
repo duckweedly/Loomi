@@ -1,9 +1,9 @@
 import { Button } from 'animal-island-ui'
-import { ArrowLeft, Check, ChevronDown, ChevronRight, Minus, Plus, RefreshCw, Search, Settings as SettingsIcon, X } from 'lucide-react'
+import { ArrowLeft, Bot, Brain, Check, ChevronDown, Globe2, Info, Minus, Palette, Plug, Plus, RefreshCw, Search, Settings as SettingsIcon, ShieldCheck, X } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 import type { BackendCapabilityState, InstalledSkill, LocalProviderDetection, MCPServerConfigInput, MCPServerStatus, MemoryAuditItem, MemoryEntry, MemoryErrorEvent, MemoryFilters, MemoryImpressionSnapshot, MemoryOverviewSnapshot, MemoryProviderStatus, MemoryProviderUpdate, MemoryWriteProposal, Persona, ProviderCapability, Thread, ToolCatalogItem, WebSearchConfig, WorkspaceRootConfig } from '../domain'
 import type { ProviderCheckResult, ProviderSaveResult } from '../state'
-import type { ProviderDraftSettings } from '../useWorkspaceShellState'
+import type { ProviderDraftSettings, ThemePreference } from '../useWorkspaceShellState'
 import type { Locale } from '../i18n'
 import { getDictionary } from '../i18n'
 import { MemoryPanel } from './MemoryPanel'
@@ -14,6 +14,7 @@ type Props = {
   selectedCategoryId: SettingsCategoryId
   defaultWorkspaceMode: Thread['mode']
   theme: 'dark' | 'light'
+  themePreference: ThemePreference
   backendCapability: BackendCapabilityState
   providerCapabilities: ProviderCapability[]
   workspaceRootConfig?: WorkspaceRootConfig | null
@@ -56,7 +57,7 @@ type Props = {
   onSelectLocale: (locale: Locale) => void
   onSelectCategory: (categoryId: SettingsCategoryId) => void
   onSelectDefaultWorkspaceMode: (mode: Thread['mode']) => void
-  onSelectTheme: (theme: 'dark' | 'light') => void
+  onSelectTheme: (theme: ThemePreference) => void
   onProviderDraftSettingsChange: (settings: ProviderDraftSettings) => void
   onSaveProvider: (settings: ProviderDraftSettings) => void
   onSaveWebSearchKeys?: (input: { tavilyApiKey?: string; braveApiKey?: string }) => void
@@ -90,6 +91,18 @@ type Props = {
 
 const categoryGroups = Object.keys(settingsCategoryGroups) as SettingsCategoryGroup[]
 
+const settingsNavIcons: Record<SettingsCategoryId, ReactNode> = {
+  general: <SettingsIcon size={15} />,
+  appearance: <Palette size={15} />,
+  providers: <Bot size={15} />,
+  'web-search': <Globe2 size={15} />,
+  skill: <Brain size={15} />,
+  mcp: <Plug size={15} />,
+  memory: <Brain size={15} />,
+  tools: <ShieldCheck size={15} />,
+  about: <Info size={15} />,
+}
+
 function statusLabel(status: SettingRowStatus, t: ReturnType<typeof getDictionary>['settings']) {
   if (status === 'working') return t.working
   if (status === 'read_only') return t.readOnly
@@ -113,11 +126,8 @@ function localProviderStatusLabel(status: LocalProviderDetection['status'], t: R
   return t.unavailable
 }
 
-function categoryStatusLabel(category: SettingsCategory, t: ReturnType<typeof getDictionary>['settings']) {
-  if (category.status === 'working') return t.working
-  if (category.status === 'read_only') return t.readOnly
-  if (category.status === 'mixed') return t.mixed
-  return t.previewOnly
+function shouldShowSettingStatus(status: SettingRowStatus) {
+  return status !== 'working'
 }
 
 function SettingRow({ label, helperText, status, control, t }: { label: string; helperText: string; status: SettingRowStatus; control: ReactNode; t: ReturnType<typeof getDictionary>['settings'] }) {
@@ -126,7 +136,7 @@ function SettingRow({ label, helperText, status, control, t }: { label: string; 
       <div className="setting-row-copy">
         <div className="setting-row-title">
           <span>{label}</span>
-          <span className={`setting-status-badge ${status}`}>{statusLabel(status, t)}</span>
+          {shouldShowSettingStatus(status) && <span className={`setting-status-badge ${status}`}>{statusLabel(status, t)}</span>}
         </div>
         <p>{helperText}</p>
       </div>
@@ -523,9 +533,9 @@ function MemorySnapshotPanel({ overview, impression, loading, locale, onRebuildO
 
 function SegmentedControl<T extends string>({ value, options, onChange }: { value: T; options: { value: T; label: string }[]; onChange: (value: T) => void }) {
   return (
-    <div className="settings-segmented-control">
+    <div className="settings-segmented-control" role="radiogroup">
       {options.map((option) => (
-        <button key={option.value} className={option.value === value ? 'selected' : undefined} onClick={() => onChange(option.value)}>
+        <button key={option.value} type="button" role="radio" aria-checked={option.value === value} className={option.value === value ? 'selected' : undefined} onClick={() => onChange(option.value)}>
           {option.label}
         </button>
       ))}
@@ -535,6 +545,17 @@ function SegmentedControl<T extends string>({ value, options, onChange }: { valu
 
 function StatusValue({ children }: { children: ReactNode }) {
   return <span className="settings-status-value">{children}</span>
+}
+
+function SettingsNavItem({ category, selected, onSelect }: { category: SettingsCategory; selected: boolean; onSelect: () => void }) {
+  return (
+    <Button className={selected ? 'selected' : undefined} aria-label={`${category.label}: ${category.description}`} onClick={onSelect}>
+      <span className="settings-nav-icon" aria-hidden="true">{settingsNavIcons[category.id]}</span>
+      <span className="settings-nav-copy">
+        <span>{category.label}</span>
+      </span>
+    </Button>
+  )
 }
 
 type ProviderKind = 'openai_responses' | 'openai_chat_completions' | 'anthropic' | 'google_gemini'
@@ -670,12 +691,12 @@ function ProviderManagementPanel({
             <Button className="provider-secondary-action" onClick={onDetectLocalProviders}>{t.localProviderDetectAction}</Button>
           </div>
         )}
-        <div className="provider-card-grid">
+        <div className="provider-card-grid provider-row-list">
           {visibleProviders.map((provider) => {
             const result = providerCheckResults[provider.id]
             return (
-              <article className={`provider-management-card ${provider.enabled ? 'enabled' : 'idle'}`} key={provider.id}>
-                <div className="provider-card-header">
+              <article className={`provider-management-card provider-row-card ${provider.enabled ? 'enabled' : 'idle'}`} key={provider.id}>
+                <div className="provider-card-header provider-row-main">
                   <div className="provider-card-title">
                     <strong>{provider.name}</strong>
                     <code>{provider.route}</code>
@@ -685,7 +706,7 @@ function ProviderManagementPanel({
                     {provider.readOnly && <span>{t.readOnly}</span>}
                   </div>
                 </div>
-                <div className="provider-card-body">
+                <div className="provider-card-body provider-row-meta">
                   <span className={`provider-status-line ${provider.status}`}>
                     <span aria-hidden="true" />
                     {provider.statusText}
@@ -694,7 +715,7 @@ function ProviderManagementPanel({
                   <p>{provider.family} · {provider.model}</p>
                   {result?.message && <small>{t.providerCheckResult(result.status, result.message)}</small>}
                 </div>
-                <div className="provider-card-actions">
+                <div className="provider-card-actions provider-row-actions">
                   {provider.localProvider && !provider.enabled && provider.detectedStatus === 'available' && (
                     <Button className="provider-card-test" onClick={() => onEnableLocalProvider(provider.id)}>
                       {t.localProviderEnableForSession}
@@ -718,8 +739,8 @@ function ProviderManagementPanel({
       </div>
 
       {isAddOpen && (
-        <div className="provider-modal-backdrop" role="presentation">
-          <section className="provider-modal" role="dialog" aria-modal="true" aria-label={t.providerAdd}>
+        <div className="provider-modal-backdrop" role="presentation" onClick={onCloseAdd}>
+          <section className="provider-modal" role="dialog" aria-modal="true" aria-label={t.providerAdd} onClick={(event) => event.stopPropagation()}>
             <header className="provider-modal-header">
               <h2>{t.providerAdd}</h2>
               <button aria-label={t.close} onClick={onCloseAdd}>
@@ -885,6 +906,34 @@ function toolScopeLabel(tool: ToolCatalogItem, locale: Locale) {
   return locale === 'zh' ? `${toolBadgeLabel(value, locale)}范围` : `${value} scope`
 }
 
+function toolOperationalMeta(tool: ToolCatalogItem, locale: Locale) {
+  const meta = [
+    toolBadgeLabel(tool.source, locale),
+    toolBadgeLabel(tool.group, locale),
+    toolScopeLabel(tool, locale),
+    toolBadgeLabel(tool.riskLevel, locale),
+    toolBadgeLabel(tool.approvalPolicy, locale),
+  ]
+  if (!tool.enabled || tool.executionState !== 'executable') {
+    meta.push(toolBadgeLabel(tool.enabled ? 'enabled' : 'disabled', locale))
+    meta.push(toolBadgeLabel(tool.executionState, locale))
+  }
+  return meta.filter(Boolean)
+}
+
+function toolSafetyChips(tool: ToolCatalogItem, locale: Locale) {
+  const chips: string[] = []
+  if (tool.safeMetadata?.write_capable === true) chips.push(toolBadgeLabel('write-capable', locale))
+  if (tool.safeMetadata?.exec_capable === true) chips.push(toolBadgeLabel('exec-capable', locale))
+  if (tool.safeMetadata?.non_executable === true) chips.push(toolBadgeLabel('non-executable', locale))
+  if (tool.safeMetadata?.coordination_only === true) chips.push(toolBadgeLabel('coordination-only', locale))
+  if (tool.safeMetadata?.autonomous_execution === false) chips.push(toolBadgeLabel('no autonomous execution', locale))
+  if (tool.safeMetadata?.approval_gated === true) chips.push(toolBadgeLabel('approval-gated', locale))
+  if (tool.safeMetadata?.network_access === 'public_http_only') chips.push(toolBadgeLabel('public HTTP only', locale))
+  if (!chips.length && tool.safeMetadata?.read_only === true) chips.push(toolBadgeLabel('read-only', locale))
+  return chips.slice(0, 4)
+}
+
 function skillSourceLabel(skill: InstalledSkill, locale: Locale) {
   if (skill.sourceLabel) return skill.sourceLabel
   const labels: Record<string, string> = {
@@ -935,13 +984,15 @@ function SkillPanel({ personas, skills, loading, error, locale }: { personas: Pe
               <div className="tools-catalog-main">
                 <div className="tools-catalog-heading">
                   <strong>{persona.name}</strong>
-                  <code>{persona.slug}</code>
+                </div>
+                <div className="tools-catalog-meta">
+                  <span>{persona.slug}</span>
+                  <span>{copy.version}: {persona.activeVersion}</span>
                 </div>
                 <p>{persona.description}</p>
               </div>
               <div className="tools-catalog-badges">
                 {persona.isDefault && <span>{copy.default}</span>}
-                <span>{copy.version}: {persona.activeVersion}</span>
               </div>
             </article>
           )) : <StatusValue>{copy.noPersona}</StatusValue>}
@@ -959,12 +1010,12 @@ function SkillPanel({ personas, skills, loading, error, locale }: { personas: Pe
                   <strong>{skill.name}</strong>
                   {skill.package && <code>{skill.package}</code>}
                 </div>
+                <div className="tools-catalog-meta">
+                  <span>{skillSourceLabel(skill, locale)}</span>
+                  <span>{copy.installed}</span>
+                </div>
                 <p>{skill.description || skill.path}</p>
                 <small>{skill.path}</small>
-              </div>
-              <div className="tools-catalog-badges">
-                <span>{skillSourceLabel(skill, locale)}</span>
-                <span>{copy.installed}</span>
               </div>
             </article>
           )) : <StatusValue>{copy.noSkills}</StatusValue>}
@@ -981,6 +1032,8 @@ function ToolsPanel({ tools, locale }: { tools: ToolCatalogItem[]; locale: Local
     <div className="tools-catalog-list" data-testid="tools-catalog-list">
       {visibleTools.map((tool) => {
         const copy = toolCopy(tool, locale)
+        const meta = toolOperationalMeta(tool, locale)
+        const chips = toolSafetyChips(tool, locale)
         return (
           <article className="tools-catalog-row" key={tool.name}>
             <div className="tools-catalog-main">
@@ -988,25 +1041,14 @@ function ToolsPanel({ tools, locale }: { tools: ToolCatalogItem[]; locale: Local
                 <strong>{copy.name}</strong>
                 <code>{tool.name}</code>
               </div>
+              <div className="tools-catalog-meta">
+                {meta.map((item) => <span key={item}>{item}</span>)}
+              </div>
               <p>{copy.description}</p>
               {tool.inputSchemaHash && <small>{tool.inputSchemaHash}</small>}
             </div>
             <div className="tools-catalog-badges">
-              <span>{toolBadgeLabel(tool.source, locale)}</span>
-              <span>{toolBadgeLabel(tool.group, locale)}</span>
-              {tool.safeMetadata?.read_only === true && <span>{toolBadgeLabel('read-only', locale)}</span>}
-              {tool.safeMetadata?.write_capable === true && <span>{toolBadgeLabel('write-capable', locale)}</span>}
-              {tool.safeMetadata?.exec_capable === true && <span>{toolBadgeLabel('exec-capable', locale)}</span>}
-              {tool.safeMetadata?.non_executable === true && <span>{toolBadgeLabel('non-executable', locale)}</span>}
-              {tool.safeMetadata?.coordination_only === true && <span>{toolBadgeLabel('coordination-only', locale)}</span>}
-              {tool.safeMetadata?.autonomous_execution === false && <span>{toolBadgeLabel('no autonomous execution', locale)}</span>}
-              {tool.safeMetadata?.approval_gated === true && <span>{toolBadgeLabel('approval-gated', locale)}</span>}
-              <span>{toolScopeLabel(tool, locale)}</span>
-              {tool.safeMetadata?.network_access === 'public_http_only' && <span>{toolBadgeLabel('public HTTP only', locale)}</span>}
-              <span>{toolBadgeLabel(tool.riskLevel, locale)}</span>
-              <span>{toolBadgeLabel(tool.approvalPolicy, locale)}</span>
-              <span>{toolBadgeLabel(tool.enabled ? 'enabled' : 'disabled', locale)}</span>
-              <span>{toolBadgeLabel(tool.executionState, locale)}</span>
+              {chips.map((chip) => <span key={chip}>{chip}</span>)}
             </div>
           </article>
         )
@@ -1051,28 +1093,28 @@ function WebSearchPanel({ tools, locale, config, saveResult, onSave }: { tools: 
 
   return (
     <div className="settings-card-stack web-search-settings" data-testid="web-search-settings">
-      <section className="settings-card">
+      <section className="settings-card routine-settings-card web-search-card">
         <div className="settings-card-head">
           <h2>{copy.title}</h2>
           <p>{copy.description}</p>
         </div>
         <div className="web-search-simple-form">
-          <label>
+          <label className="web-search-provider-row">
             <span>{copy.tavily}</span>
             <input type="password" value={tavilyApiKey} placeholder={config?.hasTavilyKey ? copy.hidden : 'tvly-...'} onChange={(event) => setTavilyApiKey(event.target.value)} />
           </label>
-          <label>
+          <label className="web-search-provider-row">
             <span>{copy.brave}</span>
             <input type="password" value={braveApiKey} placeholder={config?.hasBraveKey ? copy.hidden : 'BSA...'} onChange={(event) => setBraveApiKey(event.target.value)} />
           </label>
-          <div className="web-search-actions">
-            <button className="provider-add-button" disabled={!canSave || saveResult?.status === 'saving'} onClick={() => {
+          <div className="web-search-actions web-search-footer-row">
+            <button className="provider-add-button web-search-save-button" disabled={!canSave || saveResult?.status === 'saving'} onClick={() => {
               onSave({ tavilyApiKey, braveApiKey })
               setTavilyApiKey('')
               setBraveApiKey('')
             }}>{saveResult?.status === 'saving' ? copy.saving : copy.save}</button>
             <span>{status}</span>
-            {webSearch ? <code>web.search</code> : <span>{copy.toolMissing}</span>}
+            <span>{webSearch ? 'web.search' : copy.toolMissing}</span>
           </div>
           {saveResult?.status === 'success' && <p className="web-search-save-status">{copy.saved}</p>}
           {saveResult?.status === 'failed' && saveResult.message && <p className="web-search-save-status error">{saveResult.message}</p>}
@@ -1113,19 +1155,19 @@ function MCPPanel({ servers, locale, actionResult, onSave, onDelete, onDiscover 
 
   return (
     <div className="mcp-settings-surface" data-testid="mcp-settings">
-      <section className="mcp-config-form" aria-label={copy.title}>
+      <section className="mcp-config-form mcp-config-row-list" aria-label={copy.title}>
         <h2>{copy.title}</h2>
         <div className="mcp-form-grid">
-          <label><span>{copy.name}</span><input value={displayName} placeholder="Local Search" onChange={(event) => setDisplayName(event.target.value)} /></label>
-          <label><span>{copy.slug}</span><input value={slug} placeholder="local-search" onChange={(event) => setSlug(event.target.value)} /></label>
-          <label className="mcp-form-wide"><span>{copy.command}</span><input value={command} placeholder="/path/to/mcp-server" onChange={(event) => setCommand(event.target.value)} /></label>
-          <label><span>{copy.args}</span><textarea value={argsText} placeholder={copy.argsHint} onChange={(event) => setArgsText(event.target.value)} /></label>
-          <label><span>{copy.env}</span><textarea value={envText} placeholder={copy.envHint} onChange={(event) => setEnvText(event.target.value)} /></label>
-          <label><span>{copy.timeout}</span><input type="number" min={100} max={60000} value={timeoutMs} onChange={(event) => setTimeoutMs(Number(event.target.value) || 5000)} /></label>
-          <label className="mcp-checkbox"><input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} /><span>{copy.enabled}</span></label>
+          <label className="mcp-config-row"><span>{copy.name}</span><input value={displayName} placeholder="Local Search" onChange={(event) => setDisplayName(event.target.value)} /></label>
+          <label className="mcp-config-row"><span>{copy.slug}</span><input value={slug} placeholder="local-search" onChange={(event) => setSlug(event.target.value)} /></label>
+          <label className="mcp-form-wide mcp-config-row mcp-config-row-wide"><span>{copy.command}</span><input value={command} placeholder="/path/to/mcp-server" onChange={(event) => setCommand(event.target.value)} /></label>
+          <label className="mcp-config-row mcp-config-row-textarea"><span>{copy.args}</span><textarea value={argsText} placeholder={copy.argsHint} onChange={(event) => setArgsText(event.target.value)} /></label>
+          <label className="mcp-config-row mcp-config-row-textarea"><span>{copy.env}</span><textarea value={envText} placeholder={copy.envHint} onChange={(event) => setEnvText(event.target.value)} /></label>
+          <label className="mcp-config-row"><span>{copy.timeout}</span><input type="number" min={100} max={60000} value={timeoutMs} onChange={(event) => setTimeoutMs(Number(event.target.value) || 5000)} /></label>
+          <label className="mcp-checkbox mcp-config-row mcp-config-row-checkbox"><span>{copy.enabled}</span><input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} /></label>
         </div>
         <div className="mcp-form-actions">
-          <button className="provider-add-button" disabled={!canSave || isBusy} onClick={() => onSave?.({ slug: slug.trim(), displayName: displayName.trim(), enabled, transport: 'stdio', command: command.trim(), args: parseMCPArgs(argsText), env: parseMCPEnv(envText), timeoutMs })}>{isBusy ? copy.saving : copy.save}</button>
+          <button className="provider-add-button mcp-save-button" disabled={!canSave || isBusy} onClick={() => onSave?.({ slug: slug.trim(), displayName: displayName.trim(), enabled, transport: 'stdio', command: command.trim(), args: parseMCPArgs(argsText), env: parseMCPEnv(envText), timeoutMs })}>{isBusy ? copy.saving : copy.save}</button>
           <span>{copy.commandHidden}</span>
           {actionResult?.message && <span className={actionResult.status === 'failed' ? 'skill-error' : undefined}>{actionResult.message}</span>}
         </div>
@@ -1134,7 +1176,7 @@ function MCPPanel({ servers, locale, actionResult, onSave, onDelete, onDiscover 
       {!servers.length ? <StatusValue>{copy.empty}</StatusValue> : (
         <div className="tools-catalog-list" data-testid="mcp-server-list">
           {servers.map((server) => (
-            <article className="tools-catalog-row" key={server.serverSafeId}>
+            <article className="tools-catalog-row mcp-server-row" key={server.serverSafeId}>
               <div className="tools-catalog-main">
                 <div className="tools-catalog-heading">
                   <strong>{server.displayName || server.serverSlug}</strong>
@@ -1143,15 +1185,15 @@ function MCPPanel({ servers, locale, actionResult, onSave, onDelete, onDiscover 
                 <p>{server.candidateNames.join(', ') || (locale === 'zh' ? '未发现工具' : 'No discovered tools')}</p>
                 {server.redactedErrorCode && <small>{server.redactedErrorCode}</small>}
               </div>
-              <div className="tools-catalog-badges">
+              <div className="tools-catalog-badges mcp-server-actions">
                 <span>{server.transport}</span>
                 <span>{server.configSource}</span>
                 <span>{toolBadgeLabel(server.enabled ? 'enabled' : 'disabled', locale)}</span>
                 <span>{toolBadgeLabel(server.discoveryStatus, locale)}</span>
                 <span>{server.executionMode}</span>
                 <span>{locale === 'zh' ? `${server.candidateCount} 个工具` : `${server.candidateCount} tools`}</span>
-                <button onClick={() => onDiscover?.(server.serverSlug)} disabled={isBusy}>{copy.discover}</button>
-                <button onClick={() => onDelete?.(server.serverSlug)} disabled={isBusy}>{copy.remove}</button>
+                <button className="mcp-server-action-button" onClick={() => onDiscover?.(server.serverSlug)} disabled={isBusy}>{copy.discover}</button>
+                <button className="mcp-server-action-button danger" onClick={() => onDelete?.(server.serverSlug)} disabled={isBusy}>{copy.remove}</button>
               </div>
             </article>
           ))}
@@ -1166,6 +1208,7 @@ export function SettingsView({
   selectedCategoryId,
   defaultWorkspaceMode,
   theme,
+  themePreference,
   backendCapability,
   providerCapabilities,
   personas = [],
@@ -1241,6 +1284,7 @@ export function SettingsView({
   const t = dictionary.settings
   const selectedCategory = getSettingsCategory(selectedCategoryId, locale)
   const isGeneral = selectedCategory.id === 'general'
+  const isAppearance = selectedCategory.id === 'appearance'
   const isProviders = selectedCategory.id === 'providers'
   const isWebSearch = selectedCategory.id === 'web-search'
   const isSkill = selectedCategory.id === 'skill'
@@ -1260,11 +1304,7 @@ export function SettingsView({
           <div className="settings-nav-group" key={group}>
             <span>{settingsCategoryGroups[group][locale]}</span>
             {getSettingsCategoriesByGroup(group, locale).map((category) => (
-              <Button key={category.id} className={category.id === selectedCategoryId ? 'selected' : undefined} onClick={() => onSelectCategory(category.id)}>
-                <span>{category.label}</span>
-                <small>{categoryStatusLabel(category, t)}</small>
-                <ChevronRight size={13} />
-              </Button>
+              <SettingsNavItem key={category.id} category={category} selected={category.id === selectedCategoryId} onSelect={() => onSelectCategory(category.id)} />
             ))}
           </div>
         ))}
@@ -1281,31 +1321,16 @@ export function SettingsView({
             <Button className="provider-add-button" onClick={() => setIsProviderAddOpen(true)}>
               <Plus size={18} /> {t.providerAdd}
             </Button>
-          ) : (
-            <span className={`settings-category-pill ${selectedCategory.status}`}>{categoryStatusLabel(selectedCategory, t)}</span>
-          )}
+          ) : null}
         </header>
 
         {isGeneral && (
           <div className="settings-card-stack">
-            <section className="settings-card">
+            <section className="settings-card routine-settings-card">
               <div className="settings-card-head">
                 <h2>{t.workspaceDefaults}</h2>
                 <p>{t.workspaceDefaultsDescription}</p>
               </div>
-              <SettingRow
-                label={t.language}
-                helperText={t.languageHelper}
-                status="working"
-                t={t}
-                control={(
-                  <SegmentedControl
-                    value={locale}
-                    options={[{ value: 'zh', label: t.chinese }, { value: 'en', label: t.english }]}
-                    onChange={onSelectLocale}
-                  />
-                )}
-              />
               <SettingRow
                 label={t.defaultWorkspaceMode}
                 helperText={t.defaultWorkspaceModeHelper}
@@ -1319,16 +1344,40 @@ export function SettingsView({
                   />
                 )}
               />
+            </section>
+          </div>
+        )}
+
+        {isAppearance && (
+          <div className="settings-card-stack">
+            <section className="settings-card routine-settings-card">
+              <div className="settings-card-head">
+                <h2>{t.displayPreferences}</h2>
+                <p>{t.displayPreferencesDescription}</p>
+              </div>
               <SettingRow
                 label={t.theme}
-                helperText={t.themeHelper}
+                helperText={`${t.themeHelper} ${t.themeResolved(theme === 'dark' ? t.dark : t.light)}`}
                 status="working"
                 t={t}
                 control={(
                   <SegmentedControl
-                    value={theme}
-                    options={[{ value: 'light', label: t.light }, { value: 'dark', label: t.dark }]}
+                    value={themePreference}
+                    options={[{ value: 'system', label: t.system }, { value: 'light', label: t.light }, { value: 'dark', label: t.dark }]}
                     onChange={onSelectTheme}
+                  />
+                )}
+              />
+              <SettingRow
+                label={t.language}
+                helperText={t.languageHelper}
+                status="working"
+                t={t}
+                control={(
+                  <SegmentedControl
+                    value={locale}
+                    options={[{ value: 'zh', label: t.chinese }, { value: 'en', label: t.english }]}
+                    onChange={onSelectLocale}
                   />
                 )}
               />
@@ -1436,14 +1485,14 @@ export function SettingsView({
 
         {isAbout && (
           <div className="settings-card-stack">
-            <section className="settings-card">
+            <section className="settings-card routine-settings-card about-settings-card">
               <div className="settings-card-head">
                 <h2>{t.aboutLocalApp}</h2>
                 <p>{t.aboutLocalAppDescription}</p>
               </div>
-              <SettingRow label={t.appName} helperText={t.appNameHelper} status="read_only" t={t} control={<StatusValue>Loomi</StatusValue>} />
-              <SettingRow label={t.appVersion} helperText={t.appVersionHelper} status="mock" t={t} control={<StatusValue>{t.previewOnly}</StatusValue>} />
-              <SettingRow label={t.appStatus} helperText={t.appStatusHelper} status="read_only" t={t} control={<StatusValue>Real API · {capabilityLabel(backendCapability, t)}</StatusValue>} />
+              <SettingRow label={t.appName} helperText={t.appNameHelper} status="working" t={t} control={<StatusValue>Loomi</StatusValue>} />
+              <SettingRow label={t.appVersion} helperText={t.appVersionHelper} status="working" t={t} control={<StatusValue>{t.appVersionValue}</StatusValue>} />
+              <SettingRow label={t.appStatus} helperText={t.appStatusHelper} status="working" t={t} control={<StatusValue>Real API · {capabilityLabel(backendCapability, t)}</StatusValue>} />
             </section>
           </div>
         )}
