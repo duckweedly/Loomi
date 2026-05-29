@@ -1,0 +1,15 @@
+- main [ref=e6] [box=0,0,1728,1100]:
+  - complementary [ref=e7] [box=0,0,220,1100]:
+    - button "收起侧边栏" [ref=e9] [cursor=pointer] [box=74,9,42,26]:
+      - img [ref=e11] [box=88,13,15,15]
+    - complementary [ref=e13] [box=0,44,220,1056]:
+      - generic [ref=e14] [box=10,54,200,964]
+      - button "设置" [ref=e128] [cursor=pointer] [box=28,1030,164,40]
+  - separator [ref=e135] [box=220,0,10,1100]
+  - generic [ref=e136] [box=220,0,1508,1100]:
+    - generic [ref=e137] [box=221,1,1506,48]:
+      - generic [ref=e140] [box=933,13,98,24]: New thread 6
+      - button "打开预览" [ref=e142] [cursor=pointer] [box=1677,12,42,26]
+    - generic [ref=e146] [box=221,49,1506,1050]:
+      - generic [ref=e147] [box=221,49,1506,1050]
+      - generic [ref=e365] [box=594,941,760,135]

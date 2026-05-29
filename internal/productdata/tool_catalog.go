@@ -351,6 +351,7 @@ func builtinBrowserCatalogEntry(name string, displayName string, description str
 func builtinArtifactCatalogEntries() []ToolCatalogEntry {
 	return []ToolCatalogEntry{
 		builtinArtifactCatalogEntry(ToolNameArtifactCreateText, "Artifact create text", "Create one bounded non-executable text artifact.", []string{"title", "filename", "mime_type", "display", "content", "max_bytes"}, false),
+		builtinArtifactCatalogEntry(ToolNameArtifactCreateVisual, "Artifact create visual", "Create one bounded SVG or HTML visual artifact for safe preview.", []string{"title", "filename", "mime_type", "display", "content", "max_bytes"}, false),
 		builtinArtifactCatalogEntry(ToolNameArtifactRead, "Artifact read", "Read one bounded text artifact excerpt.", []string{"artifact_id", "max_bytes"}, true),
 		builtinArtifactCatalogEntry(ToolNameArtifactList, "Artifact list", "List bounded safe artifact summaries.", []string{"limit"}, true),
 	}
@@ -369,7 +370,8 @@ func builtinArtifactCatalogEntry(name string, displayName string, description st
 		ExecutionState: ToolExecutionStateExecutable,
 		SafeMetadata: map[string]any{
 			"arguments":      append([]string(nil), arguments...),
-			"non_executable": true,
+			"non_executable": name != ToolNameArtifactCreateVisual,
+			"renderable":     name == ToolNameArtifactCreateVisual,
 			"read_only":      readOnly,
 			"scope":          "artifact",
 		},

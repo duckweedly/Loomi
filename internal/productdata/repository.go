@@ -1177,7 +1177,7 @@ func (r *PostgresRepository) CreateArtifact(ctx context.Context, ident identity.
 	if err != nil {
 		return Artifact{}, err
 	}
-	return scanArtifact(r.Pool.QueryRow(ctx, `insert into artifacts (id, user_id, thread_id, run_id, title, artifact_type, content, content_bytes, text_excerpt, truncated) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) returning id, thread_id, run_id, title, artifact_type, content, content_bytes, text_excerpt, truncated, created_at, updated_at`, NewArtifactID(), user.ID, thread.ID, run.ID, title, "text", content, len([]byte(content)), artifactExcerpt(content, limit), false))
+	return scanArtifact(r.Pool.QueryRow(ctx, `insert into artifacts (id, user_id, thread_id, run_id, title, artifact_type, content, content_bytes, text_excerpt, truncated) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) returning id, thread_id, run_id, title, artifact_type, content, content_bytes, text_excerpt, truncated, created_at, updated_at`, NewArtifactID(), user.ID, thread.ID, run.ID, title, normalizedArtifactType(input.ArtifactType), content, len([]byte(content)), artifactExcerpt(content, limit), false))
 }
 
 func (r *PostgresRepository) ReadArtifact(ctx context.Context, ident identity.LocalIdentity, input ReadArtifactInput) (Artifact, error) {
@@ -2542,6 +2542,57 @@ func (r *PostgresRepository) FailToolCallExecution(ctx context.Context, ident id
 		return ToolCall{}, nil, err
 	}
 	return call, []RunEvent{failed, final}, tx.Commit(ctx)
+}
+
+func (r *PostgresRepository) RecordToolCallExecutionFailure(ctx context.Context, ident identity.LocalIdentity, threadID string, runID string, toolCallID string, errorCode string, errorMessage string) (ToolCall, []RunEvent, error) {
+	user, err := r.ensureUser(ctx, ident)
+	if err != nil {
+		return ToolCall{}, nil, err
+	}
+	tx, err := r.Pool.Begin(ctx)
+	if err != nil {
+		return ToolCall{}, nil, err
+	}
+	defer tx.Rollback(ctx)
+	run, call, err := scopedPostgresToolCall(ctx, tx, user.ID, threadID, runID, toolCallID)
+	if err != nil {
+		return ToolCall{}, nil, err
+	}
+	if call.ExecutionStatus == ToolCallExecutionFailed {
+		return call, nil, tx.Commit(ctx)
+	}
+	if call.ExecutionStatus != ToolCallExecutionExecuting || IsRunTerminal(run.Status) {
+		return ToolCall{}, nil, NewError(CodeInvalidRequest, "Tool call cannot fail.")
+	}
+	code := strings.TrimSpace(errorCode)
+	if code == "" {
+		code = "tool_execution_failed"
+	}
+	message := RedactEventText(strings.TrimSpace(errorMessage))
+	if message == "" {
+		message = "Tool execution failed."
+	}
+	call, err = scanToolCall(tx.QueryRow(ctx, `update tool_calls set execution_status='failed', error_code=$1, error_message=$2, updated_at=now() where id=$3 returning id, thread_id, run_id, tool_call_id, tool_name, candidate_schema_hash, arguments_summary, approval_status, execution_status, result_summary, error_code, error_message, requested_at, updated_at`, code, message, call.ID))
+	if err != nil {
+		return ToolCall{}, nil, err
+	}
+	nextStatus, err := postgresRunStatusAfterToolSuccess(ctx, tx, run.ID)
+	if err != nil {
+		return ToolCall{}, nil, err
+	}
+	running, err := scanRun(tx.QueryRow(ctx, `update runs set status=$1, completed_at=null, updated_at=now() where id=$2 and user_id=$3 returning id, thread_id, user_id, status, source, title, created_at, updated_at, completed_at, stop_requested_at, error_code, error_message`, nextStatus, run.ID, user.ID))
+	if err != nil {
+		return ToolCall{}, nil, err
+	}
+	toolMetadata, err := toolCallEventMetadataForPostgresState(ctx, tx, run, call)
+	if err != nil {
+		return ToolCall{}, nil, err
+	}
+	failed, err := insertRunEvent(ctx, tx, running, RunEventCategoryError, EventToolCallFailed, message, nil, toolMetadata)
+	if err != nil {
+		return ToolCall{}, nil, err
+	}
+	return call, []RunEvent{failed}, tx.Commit(ctx)
 }
 
 func (r *PostgresRepository) ClaimBackgroundJob(ctx context.Context, ident identity.LocalIdentity, input ClaimBackgroundJobInput) (BackgroundJob, Run, bool, error) {

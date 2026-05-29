@@ -609,6 +609,7 @@ const (
 	ToolNameBrowserType                                  = "browser.type"
 	ToolNameBrowserPress                                 = "browser.press"
 	ToolNameArtifactCreateText                           = "artifact.create_text"
+	ToolNameArtifactCreateVisual                         = "artifact.create_visual"
 	ToolNameArtifactRead                                 = "artifact.read"
 	ToolNameArtifactList                                 = "artifact.list"
 	ToolNameAgentSpawn                                   = "agent.spawn"
@@ -661,7 +662,7 @@ const (
 	ToolExecutionStateNotDiscovered  ToolExecutionState  = "not_discovered"
 	ToolExecutionStateNotAllowed     ToolExecutionState  = "not_allowed"
 	ToolExecutionStateNonExecutable  ToolExecutionState  = "non_executable"
-	DefaultMaxBoundedToolCallsPerRun                     = 6
+	DefaultMaxBoundedToolCallsPerRun                     = 24
 	LoopMetadataKeyIndex                                 = "loop_index"
 	LoopMetadataKeyMax                                   = "loop_max"
 	MaxWorkTodoItems                                     = 8
@@ -1518,11 +1519,12 @@ type FailAgentTaskInput struct {
 }
 
 type CreateArtifactInput struct {
-	ThreadID string
-	RunID    string
-	Title    string
-	Content  string
-	MaxBytes int
+	ThreadID     string
+	RunID        string
+	Title        string
+	ArtifactType string
+	Content      string
+	MaxBytes     int
 }
 
 type ReadArtifactInput struct {
@@ -1762,7 +1764,7 @@ func IsBrowserToolName(name string) bool {
 
 func IsArtifactToolName(name string) bool {
 	switch strings.TrimSpace(name) {
-	case ToolNameArtifactCreateText, ToolNameArtifactRead, ToolNameArtifactList:
+	case ToolNameArtifactCreateText, ToolNameArtifactCreateVisual, ToolNameArtifactRead, ToolNameArtifactList:
 		return true
 	default:
 		return false
@@ -2125,9 +2127,10 @@ func validateBrowserToolCallArguments(input RecordToolCallRequestInput) (RecordT
 
 func validateArtifactToolCallArguments(input RecordToolCallRequestInput) (RecordToolCallRequestInput, error) {
 	allowed := map[string]map[string]struct{}{
-		ToolNameArtifactCreateText: {"title": {}, "filename": {}, "mime_type": {}, "display": {}, "content": {}, "max_bytes": {}},
-		ToolNameArtifactRead:       {"artifact_id": {}, "max_bytes": {}},
-		ToolNameArtifactList:       {"limit": {}},
+		ToolNameArtifactCreateText:   {"title": {}, "filename": {}, "mime_type": {}, "display": {}, "content": {}, "max_bytes": {}},
+		ToolNameArtifactCreateVisual: {"title": {}, "filename": {}, "mime_type": {}, "display": {}, "content": {}, "max_bytes": {}},
+		ToolNameArtifactRead:         {"artifact_id": {}, "max_bytes": {}},
+		ToolNameArtifactList:         {"limit": {}},
 	}
 	for key := range input.ArgumentsSummary {
 		if _, ok := allowed[input.ToolName][key]; !ok {
@@ -2135,7 +2138,7 @@ func validateArtifactToolCallArguments(input RecordToolCallRequestInput) (Record
 		}
 	}
 	switch input.ToolName {
-	case ToolNameArtifactCreateText:
+	case ToolNameArtifactCreateText, ToolNameArtifactCreateVisual:
 		title, ok := input.ArgumentsSummary["title"].(string)
 		if !ok || strings.TrimSpace(title) == "" {
 			return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Artifact title is required.")
@@ -2155,6 +2158,14 @@ func validateArtifactToolCallArguments(input RecordToolCallRequestInput) (Record
 				return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Artifact metadata must be strings.")
 			}
 			input.ArgumentsSummary[key] = strings.TrimSpace(text)
+		}
+		if input.ToolName == ToolNameArtifactCreateVisual {
+			mimeType, _ := input.ArgumentsSummary["mime_type"].(string)
+			mimeType = strings.TrimSpace(strings.ToLower(mimeType))
+			if mimeType != "image/svg+xml" && mimeType != "text/html" {
+				return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Visual artifact MIME type is not supported.")
+			}
+			input.ArgumentsSummary["mime_type"] = mimeType
 		}
 		if value, ok := input.ArgumentsSummary["display"]; ok {
 			display, ok := value.(string)

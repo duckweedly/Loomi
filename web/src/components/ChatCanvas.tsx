@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 import { Fragment, useEffect, useRef, useState } from 'react'
-import { Copy, ChevronDown, ChevronRight, FolderOpen, RefreshCcw, RotateCcw } from 'lucide-react'
+import { Copy, ChevronDown, ChevronRight, ExternalLink, FileCode2, FolderOpen, RefreshCcw, RotateCcw } from 'lucide-react'
 import { Typewriter } from 'animal-island-ui'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -12,8 +12,9 @@ import { getProviderUnavailableWarning, shouldShowProviderUnavailableWarning } f
 import { deriveChatCanvasState } from '../runtime/chatCanvasState'
 import type { DesktopReadiness } from '../runtime/desktopReadiness'
 import { normalizeMarkdownContent } from '../runtime/markdownNormalize'
-import { getToolCallArtifact, type PreviewArtifact } from '../runtime/artifactPreview'
+import { getRunPreviewArtifacts, getToolCallArtifact, type PreviewArtifact } from '../runtime/artifactPreview'
 import { extractMessageArtifact, stripMessageArtifactSource } from '../runtime/messageArtifactPreview'
+import { canOpenArtifactNatively, nativeArtifactOpenLabel, openArtifactNatively, type NativeArtifactOpenStatus } from '../runtime/nativeArtifactOpen'
 import { thinkingHintForRun } from '../runtime/thinkingHint'
 import type { ProviderSaveResult } from '../state'
 import { Composer } from './Composer'
@@ -70,6 +71,7 @@ type Props = {
   onApproveToolCall?: (toolCall: NonNullable<Run['toolCalls']>[number]) => Promise<void> | void
   onDenyToolCall?: (toolCall: NonNullable<Run['toolCalls']>[number]) => Promise<void> | void
   onOpenArtifact?: (artifact: PreviewArtifact) => void
+  artifacts?: PreviewArtifact[]
   locale: Locale
 }
 
@@ -225,19 +227,38 @@ function MarkdownMessage({ content, typewriterTrigger }: { content: string; type
 }
 
 function MessageArtifactCard({ artifact, locale, onOpenArtifact }: { artifact: PreviewArtifact; locale: Locale; onOpenArtifact?: (artifact: PreviewArtifact) => void }) {
+  const [nativeStatus, setNativeStatus] = useState<NativeArtifactOpenStatus>('idle')
+  const isVisual = artifact.kind === 'svg' || artifact.kind === 'html' || artifact.kind === 'image'
+  const label = isVisual
+    ? locale === 'zh' ? '可视化产物' : 'Visual artifact'
+    : locale === 'zh' ? 'Markdown 文档' : 'Markdown document'
+  const canOpenNative = canOpenArtifactNatively(artifact)
+  const handleNativeOpen = async (event: React.MouseEvent<HTMLButtonElement>) => {
+    event.stopPropagation()
+    setNativeStatus('opening')
+    setNativeStatus(await openArtifactNatively(artifact) ? 'idle' : 'failed')
+  }
   return (
-    <button
-      type="button"
+    <div
+      role="button"
+      tabIndex={0}
       className="artifact-resource-card message-artifact-card"
       aria-label={locale === 'zh' ? `预览 ${artifact.title}` : `Preview ${artifact.title}`}
       onClick={() => onOpenArtifact?.(artifact)}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') onOpenArtifact?.(artifact)
+      }}
     >
-      <span className="artifact-resource-icon"><Copy size={16} /></span>
+      <span className="artifact-resource-icon">{isVisual ? <FileCode2 size={16} /> : <Copy size={16} />}</span>
       <span className="artifact-resource-copy">
         <strong>{artifact.title}</strong>
-        <small>{locale === 'zh' ? 'Markdown 文档' : 'Markdown document'}</small>
+        <small>{label}</small>
       </span>
-    </button>
+      <button type="button" className="artifact-resource-action" disabled={!canOpenNative || nativeStatus === 'opening'} onClick={handleNativeOpen}>
+        <ExternalLink size={14} />
+        <span>{nativeArtifactOpenLabel(locale, nativeStatus)}</span>
+      </button>
+    </div>
   )
 }
 
@@ -455,16 +476,17 @@ function ConversationDivider() {
   return <div className="conversation-divider" aria-hidden="true" />
 }
 
-function MessageHistory({ messages, run, locale, canRegenerate, onRegenerate, onOpenArtifact, workspaceAccessRequest }: { messages: Message[]; run: Run | null; locale: Locale; canRegenerate?: boolean; onRegenerate?: () => void; onOpenArtifact?: (artifact: PreviewArtifact) => void; workspaceAccessRequest?: WorkspaceAccessRequest | null }) {
+function MessageHistory({ messages, run, locale, canRegenerate, onRegenerate, onOpenArtifact, workspaceAccessRequest, artifacts = [] }: { messages: Message[]; run: Run | null; locale: Locale; canRegenerate?: boolean; onRegenerate?: () => void; onOpenArtifact?: (artifact: PreviewArtifact) => void; workspaceAccessRequest?: WorkspaceAccessRequest | null; artifacts?: PreviewArtifact[] }) {
   const copy = getDictionary(locale).chatCanvas
   const lastAssistant = [...messages].reverse().find((message) => message.role === 'assistant')
   const assistantFingerprintsInTurn = new Set<string>()
+  const knownArtifacts = [...artifacts, ...getRunPreviewArtifacts(run)]
   return messages.map((message, index) => {
     if (message.role === 'user') assistantFingerprintsInTurn.clear()
     if (shouldHideWorkspaceAccessFallback(message, workspaceAccessRequest ?? null)) return null
     const typewriterTrigger = shouldTypewriteHistoryMessage(message, run, message.id === lastAssistant?.id) ? `${message.id}:${run?.id}:${message.content.length}` : undefined
     const showTurnDivider = index > 0 && message.role === 'user'
-    const artifact = message.role === 'assistant' ? extractMessageArtifact(message) : null
+    const artifact = message.role === 'assistant' ? extractMessageArtifact(message, knownArtifacts) : null
     const visibleContent = artifact ? stripMessageArtifactSource(message.content) : message.content
     if (message.role === 'assistant') {
       const fingerprint = assistantMessageFingerprint(visibleContent)
@@ -593,6 +615,14 @@ function isActiveRunStatus(status: Run['status']) {
   return status === 'running' || status === 'queued' || status === 'blocked_on_tool_approval'
 }
 
+function runStatusFeedback(status: Run['status']): AssistantDraftState['status'] | null {
+  if (status === 'failed') return 'failed'
+  if (status === 'stopped' || status === 'cancelled') return 'stopped'
+  if (status === 'recovering' || status === 'retrying') return 'recovering'
+  if (status === 'stopping') return 'stopping'
+  return null
+}
+
 function buildRunTranscriptBlocks(run: Run | null, options: { omitAssistantText?: boolean } = {}): TranscriptBlock[] {
   if (!run?.events.length) return []
   const blocks: TranscriptBlock[] = []
@@ -657,16 +687,22 @@ function buildRunTranscriptBlocks(run: Run | null, options: { omitAssistantText?
 
   flushText(run.assistantDraft?.status ?? (run.status === 'completed' ? 'completed' : 'streaming'))
   const lastBlock = blocks.at(-1)
-  if (lastBlock?.kind === 'tools' && isActiveRunStatus(run.status) && lastBlock.toolCalls.length > 0 && lastBlock.toolCalls.every((toolCall) => isTerminalToolStatus(toolCall.status)) && !run.assistantDraft?.content?.trim()) {
-    blocks.push({ id: `${lastBlock.id}-waiting`, kind: 'waiting' })
+  if (lastBlock?.kind === 'tools' && lastBlock.toolCalls.length > 0 && lastBlock.toolCalls.every((toolCall) => isTerminalToolStatus(toolCall.status)) && !run.assistantDraft?.content?.trim()) {
+    const feedbackStatus = runStatusFeedback(run.status)
+    if (feedbackStatus) {
+      blocks.push({ id: `${lastBlock.id}-${feedbackStatus}`, kind: 'assistant', content: '', status: feedbackStatus, time: run.completedAt ?? run.createdAt ?? new Date().toISOString() })
+    } else if (isActiveRunStatus(run.status)) {
+      blocks.push({ id: `${lastBlock.id}-waiting`, kind: 'waiting' })
+    }
   }
   return blocks
 }
 
-function RunTranscript({ run, locale, omitAssistantText = false, onApproveToolCall, onDenyToolCall, onOpenArtifact }: { run: Run | null; locale: Locale; omitAssistantText?: boolean; onApproveToolCall?: (toolCall: NonNullable<Run['toolCalls']>[number]) => Promise<void> | void; onDenyToolCall?: (toolCall: NonNullable<Run['toolCalls']>[number]) => Promise<void> | void; onOpenArtifact?: (artifact: PreviewArtifact) => void }) {
+function RunTranscript({ run, locale, omitAssistantText = false, onApproveToolCall, onDenyToolCall, onRetry, onOpenArtifact, artifacts = [] }: { run: Run | null; locale: Locale; omitAssistantText?: boolean; onApproveToolCall?: (toolCall: NonNullable<Run['toolCalls']>[number]) => Promise<void> | void; onDenyToolCall?: (toolCall: NonNullable<Run['toolCalls']>[number]) => Promise<void> | void; onRetry?: () => void; onOpenArtifact?: (artifact: PreviewArtifact) => void; artifacts?: PreviewArtifact[] }) {
   const blocks = buildRunTranscriptBlocks(run, { omitAssistantText })
   if (!run || blocks.length === 0) return null
   const copy = getDictionary(locale).chatCanvas
+  const knownArtifacts = [...artifacts, ...getRunPreviewArtifacts(run)]
   return (
     <>
       {blocks.map((block) => (
@@ -674,7 +710,7 @@ function RunTranscript({ run, locale, omitAssistantText = false, onApproveToolCa
           <div className="message-avatar">L</div>
           <div className="message-bubble">
             {block.kind === 'assistant' ? (
-              <RunTranscriptAssistantBlock block={block} locale={locale} onOpenArtifact={onOpenArtifact} />
+              <RunTranscriptAssistantBlock block={block} locale={locale} onRetry={onRetry} onOpenArtifact={onOpenArtifact} artifacts={knownArtifacts} />
             ) : block.kind === 'waiting' ? (
               <>
                 <div className="message-meta">{copy.assistant} · {draftStatusLabel('drafting', locale)}</div>
@@ -691,16 +727,18 @@ function RunTranscript({ run, locale, omitAssistantText = false, onApproveToolCa
   )
 }
 
-function RunTranscriptAssistantBlock({ block, locale, onOpenArtifact }: { block: Extract<TranscriptBlock, { kind: 'assistant' }>; locale: Locale; onOpenArtifact?: (artifact: PreviewArtifact) => void }) {
+function RunTranscriptAssistantBlock({ block, locale, onRetry, onOpenArtifact, artifacts = [] }: { block: Extract<TranscriptBlock, { kind: 'assistant' }>; locale: Locale; onRetry?: () => void; onOpenArtifact?: (artifact: PreviewArtifact) => void; artifacts?: PreviewArtifact[] }) {
   const copy = getDictionary(locale).chatCanvas
-  const draftMessage: Message = { id: block.id, threadId: '', role: 'assistant', content: block.content, createdAt: block.time }
-  const artifact = extractMessageArtifact(draftMessage)
+  const content = block.content || draftFallback(block.status, locale)
+  const draftMessage: Message = { id: block.id, threadId: '', role: 'assistant', content, createdAt: block.time }
+  const artifact = extractMessageArtifact(draftMessage, artifacts)
   const visibleContent = artifact ? stripMessageArtifactSource(block.content) : block.content
   return (
     <>
       <div className="message-meta">{copy.assistant} · {draftStatusLabel(block.status, locale)}</div>
-      {visibleContent.trim() && <MarkdownMessage content={visibleContent} />}
+      {(visibleContent.trim() || content.trim()) && <MarkdownMessage content={visibleContent.trim() ? visibleContent : content} />}
       {artifact && <MessageArtifactCard artifact={artifact} locale={locale} onOpenArtifact={onOpenArtifact} />}
+      {block.status === 'failed' && <MessageActions message={draftMessage} locale={locale} onRetry={onRetry} />}
     </>
   )
 }
@@ -781,7 +819,7 @@ function summarizeToolGroup(toolCalls: NonNullable<Run['toolCalls']>, locale: Lo
     .join(' · ')
 }
 
-function AssistantDraft({ run, locale, onRetry, onOpenArtifact }: { run: Run | null; locale: Locale; onRetry?: () => void; onOpenArtifact?: (artifact: PreviewArtifact) => void }) {
+function AssistantDraft({ run, locale, onRetry, onOpenArtifact, artifacts = [] }: { run: Run | null; locale: Locale; onRetry?: () => void; onOpenArtifact?: (artifact: PreviewArtifact) => void; artifacts?: PreviewArtifact[] }) {
   const copy = getDictionary(locale).chatCanvas
   const draft = run?.assistantDraft
 
@@ -796,7 +834,7 @@ function AssistantDraft({ run, locale, onRetry, onOpenArtifact }: { run: Run | n
 
   const shouldRenderContent = shouldRenderDraftContent(draft.status, draft.content)
   const draftMessage: Message = { id: draft.messageId ?? run.id, threadId: run.threadId, role: 'assistant', content: draft.content || draftFallback(draft.status, locale), createdAt: run.completedAt ?? run.createdAt ?? new Date().toISOString(), runId: run.id }
-  const artifact = extractMessageArtifact(draftMessage)
+  const artifact = extractMessageArtifact(draftMessage, [...artifacts, ...getRunPreviewArtifacts(run)])
   const visibleContent = artifact ? stripMessageArtifactSource(draftMessage.content) : draftMessage.content
   const typewriterTrigger = draft.status === 'completed' && !hasStreamedAssistantRun(run.id) ? `${draftMessage.id}:${draftMessage.content.length}` : undefined
 
@@ -921,7 +959,7 @@ function MissingFinalNotice({ locale }: { locale: Locale }) {
   )
 }
 
-export function ChatCanvas({ thread, messages, run, loading, error, dataSourceMode, backendCapability = 'available', backendUnavailableAttempted = false, providerCapabilities = [], workspaceRootConfig, workspaceRootSaveResult, desktopReadiness, onOpenProviderSettings, onRetryReadiness, onDetectLocalProviders, onEnableLocalProvider, onOpenSkillsSettings, onOpenConnectorsSettings, onOpenPluginsSettings, onChooseWorkspaceFolder, onSendMessage, onStopRun, onRetryRun, onRegenerateRun, onApproveToolCall, onDenyToolCall, onOpenArtifact, locale }: Props) {
+export function ChatCanvas({ thread, messages, run, loading, error, dataSourceMode, backendCapability = 'available', backendUnavailableAttempted = false, providerCapabilities = [], workspaceRootConfig, workspaceRootSaveResult, desktopReadiness, onOpenProviderSettings, onRetryReadiness, onDetectLocalProviders, onEnableLocalProvider, onOpenSkillsSettings, onOpenConnectorsSettings, onOpenPluginsSettings, onChooseWorkspaceFolder, onSendMessage, onStopRun, onRetryRun, onRegenerateRun, onApproveToolCall, onDenyToolCall, onOpenArtifact, artifacts = [], locale }: Props) {
   const messageListRef = useRef<HTMLDivElement | null>(null)
   const messageEndRef = useRef<HTMLDivElement | null>(null)
   const shouldFollowBottomRef = useRef(true)
@@ -1003,11 +1041,12 @@ export function ChatCanvas({ thread, messages, run, loading, error, dataSourceMo
 
   useEffect(() => {
     const list = messageListRef.current
-    const end = messageEndRef.current
-    if (!list || !end) return
+    if (!list) return
     const shouldFollowBottom = shouldFollowBottomRef.current || isNearScrollBottom(list)
     if (!shouldFollowBottom) return
-    end.scrollIntoView({ block: 'end', behavior: 'auto' })
+    window.requestAnimationFrame(() => {
+      list.scrollTop = list.scrollHeight
+    })
   }, [messages.length, runSnapshot, thread?.id])
 
   return (
@@ -1025,20 +1064,20 @@ export function ChatCanvas({ thread, messages, run, loading, error, dataSourceMo
       <div className="message-list" ref={messageListRef}>
         {state === 'history' ? (
           <>
-            <MessageHistory messages={messages} run={visibleRun} locale={locale} canRegenerate={canRegenerateAnswer} onRegenerate={onRegenerateRun} onOpenArtifact={onOpenArtifact} workspaceAccessRequest={workspaceAccessRequest} />
+            <MessageHistory messages={messages} run={visibleRun} locale={locale} canRegenerate={canRegenerateAnswer} onRegenerate={onRegenerateRun} onOpenArtifact={onOpenArtifact} workspaceAccessRequest={workspaceAccessRequest} artifacts={artifacts} />
             {missingFinalContent && <MissingFinalNotice locale={locale} />}
             <WorkspaceAccessRequestCard request={workspaceAccessRequest} onChooseWorkspaceFolder={onChooseWorkspaceFolder} />
-            <RunTranscript run={visibleRun} locale={locale} omitAssistantText={hasPersistedAssistantMessageInCurrentTurn || hasPersistedTranscriptFinal || hasPersistedAssistantForVisibleRun} onApproveToolCall={onApproveToolCall} onDenyToolCall={onDenyToolCall} onOpenArtifact={onOpenArtifact} />
-            {shouldShowAssistantDraft && <AssistantDraft run={visibleRun} locale={locale} onRetry={onRetryRun} onOpenArtifact={onOpenArtifact} />}
+            <RunTranscript run={visibleRun} locale={locale} omitAssistantText={hasPersistedAssistantMessageInCurrentTurn || hasPersistedTranscriptFinal || hasPersistedAssistantForVisibleRun} onApproveToolCall={onApproveToolCall} onDenyToolCall={onDenyToolCall} onRetry={onRetryRun} onOpenArtifact={onOpenArtifact} artifacts={artifacts} />
+            {shouldShowAssistantDraft && <AssistantDraft run={visibleRun} locale={locale} onRetry={onRetryRun} onOpenArtifact={onOpenArtifact} artifacts={artifacts} />}
             {!hasRunTranscript && <ActiveToolCalls run={visibleRun} locale={locale} onApproveToolCall={onApproveToolCall} onDenyToolCall={onDenyToolCall} onOpenArtifact={onOpenArtifact} />}
           </>
         ) : (
           <>
-            {shouldShowHistory && <MessageHistory messages={messages} run={visibleRun} locale={locale} canRegenerate={canRegenerateAnswer} onRegenerate={onRegenerateRun} onOpenArtifact={onOpenArtifact} workspaceAccessRequest={workspaceAccessRequest} />}
+            {shouldShowHistory && <MessageHistory messages={messages} run={visibleRun} locale={locale} canRegenerate={canRegenerateAnswer} onRegenerate={onRegenerateRun} onOpenArtifact={onOpenArtifact} workspaceAccessRequest={workspaceAccessRequest} artifacts={artifacts} />}
             {missingFinalContent && <MissingFinalNotice locale={locale} />}
             {shouldShowHistory && <WorkspaceAccessRequestCard request={workspaceAccessRequest} onChooseWorkspaceFolder={onChooseWorkspaceFolder} />}
-            <RunTranscript run={visibleRun} locale={locale} omitAssistantText={hasPersistedAssistantMessageInCurrentTurn || hasPersistedTranscriptFinal || hasPersistedAssistantForVisibleRun} onApproveToolCall={onApproveToolCall} onDenyToolCall={onDenyToolCall} onOpenArtifact={onOpenArtifact} />
-            {shouldShowAssistantDraft && <AssistantDraft run={visibleRun} locale={locale} onRetry={onRetryRun} onOpenArtifact={onOpenArtifact} />}
+            <RunTranscript run={visibleRun} locale={locale} omitAssistantText={hasPersistedAssistantMessageInCurrentTurn || hasPersistedTranscriptFinal || hasPersistedAssistantForVisibleRun} onApproveToolCall={onApproveToolCall} onDenyToolCall={onDenyToolCall} onRetry={onRetryRun} onOpenArtifact={onOpenArtifact} artifacts={artifacts} />
+            {shouldShowAssistantDraft && <AssistantDraft run={visibleRun} locale={locale} onRetry={onRetryRun} onOpenArtifact={onOpenArtifact} artifacts={artifacts} />}
             {!hasRunTranscript && <ActiveToolCalls run={visibleRun} locale={locale} onApproveToolCall={onApproveToolCall} onDenyToolCall={onDenyToolCall} onOpenArtifact={onOpenArtifact} />}
             {(state === 'no-thread' || state === 'empty-thread' || state === 'loading' || state === 'error' || state === 'backend-unavailable') && <StatePanel state={state} error={state === 'error' ? visibleError : null} locale={locale} />}
           </>

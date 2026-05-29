@@ -104,4 +104,41 @@ describe('messageArtifactPreview', () => {
     })
     expect(stripMessageArtifactSource(message.content)).toBe('已创建 三句话的 Markdown，你可以在右侧预览。')
   })
+
+  test('resolves artifact protocol links from known artifact metadata', () => {
+    const message = {
+      id: 'msg-svg-link',
+      content: '已生成 [LangGraph SVG 讲解图](artifact:art_svg)。',
+    }
+
+    expect(extractMessageArtifact(message, [{
+      id: 'art_svg',
+      title: 'LangGraph SVG 讲解图',
+      filename: 'LangGraph SVG 讲解图.svg',
+      mimeType: 'image/svg+xml',
+      kind: 'svg',
+      content: '<svg viewBox="0 0 10 10"></svg>',
+    }])).toMatchObject({
+      id: 'art_svg',
+      kind: 'svg',
+      mimeType: 'image/svg+xml',
+      content: '<svg viewBox="0 0 10 10"></svg>',
+    })
+  })
+
+  test('extracts raw SVG answers as visual artifacts instead of chat text', () => {
+    const message = {
+      id: 'msg-svg',
+      content: '下面是图：\n```svg\n<svg viewBox="0 0 20 20"><title>流程图</title><rect width="20" height="20"/></svg>\n```',
+    }
+
+    expect(extractMessageArtifact(message)).toMatchObject({
+      id: 'message:msg-svg:svg',
+      title: '流程图',
+      filename: 'visual.svg',
+      mimeType: 'image/svg+xml',
+      kind: 'svg',
+    })
+    expect(stripMessageArtifactSource(message.content)).toBe('下面是图：')
+  })
 })

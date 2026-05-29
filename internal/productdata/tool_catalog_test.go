@@ -245,26 +245,33 @@ func TestToolCatalogIncludesArtifactRuntimeTools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{ToolNameArtifactCreateText, ToolNameArtifactRead, ToolNameArtifactList} {
+	for _, name := range []string{ToolNameArtifactCreateText, ToolNameArtifactCreateVisual, ToolNameArtifactRead, ToolNameArtifactList} {
 		tool := catalogToolByName(tools, name)
 		if tool.Source != ToolCatalogSourceBuiltin || tool.Group != ToolCatalogGroupArtifact || tool.RiskLevel != ToolRiskMedium || tool.ApprovalPolicy != ToolApprovalAlwaysRequired {
 			t.Fatalf("%s metadata = %+v", name, tool)
 		}
-		if !tool.Enabled || tool.ExecutionState != ToolExecutionStateExecutable || tool.SafeMetadata["scope"] != "artifact" || tool.SafeMetadata["non_executable"] != true {
+		if !tool.Enabled || tool.ExecutionState != ToolExecutionStateExecutable || tool.SafeMetadata["scope"] != "artifact" {
 			t.Fatalf("%s safe metadata = %+v", name, tool)
 		}
-		if name == ToolNameArtifactCreateText && tool.SafeMetadata["read_only"] != false {
-			t.Fatalf("create_text should be mutation-like artifact tool: %+v", tool)
+		if name == ToolNameArtifactCreateVisual {
+			if tool.SafeMetadata["renderable"] != true {
+				t.Fatalf("create_visual should be renderable: %+v", tool)
+			}
+		} else if tool.SafeMetadata["non_executable"] != true {
+			t.Fatalf("%s safe metadata = %+v", name, tool)
 		}
-		if name == ToolNameArtifactCreateText {
+		if (name == ToolNameArtifactCreateText || name == ToolNameArtifactCreateVisual) && tool.SafeMetadata["read_only"] != false {
+			t.Fatalf("%s should be mutation-like artifact tool: %+v", name, tool)
+		}
+		if name == ToolNameArtifactCreateText || name == ToolNameArtifactCreateVisual {
 			args, _ := tool.SafeMetadata["arguments"].([]string)
 			for _, want := range []string{"title", "filename", "mime_type", "display", "content", "max_bytes"} {
 				if !stringSliceContains(args, want) {
-					t.Fatalf("create_text arguments missing %s: %+v", want, tool)
+					t.Fatalf("%s arguments missing %s: %+v", name, want, tool)
 				}
 			}
 		}
-		if name != ToolNameArtifactCreateText && tool.SafeMetadata["read_only"] != true {
+		if name != ToolNameArtifactCreateText && name != ToolNameArtifactCreateVisual && tool.SafeMetadata["read_only"] != true {
 			t.Fatalf("%s should be read-only artifact tool: %+v", name, tool)
 		}
 		if strings.Contains(fmt.Sprint(tool), "/Users/") {

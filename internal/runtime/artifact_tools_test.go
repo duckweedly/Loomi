@@ -80,6 +80,25 @@ func TestArtifactCreateTextDefaultsReferenceMetadata(t *testing.T) {
 	}
 }
 
+func TestArtifactCreateVisualReturnsRenderableReference(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	thread, run := artifactTestThreadRun(t, svc)
+	executor := ArtifactToolExecutor{Artifacts: svc}
+	svg := `<svg viewBox="0 0 10 10"><title>Flow</title><circle cx="5" cy="5" r="4"/></svg>`
+
+	created, err := executor.Execute(context.Background(), ToolInvocation{ThreadID: thread.ID, RunID: run.ID, ToolName: productdata.ToolNameArtifactCreateVisual, ArgumentsSummary: map[string]any{"title": "Flow", "filename": "flow.svg", "mime_type": "image/svg+xml", "display": "inline", "content": svg}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created["operation"] != "create_visual" || created["artifact_type"] != "visual" {
+		t.Fatalf("created = %+v", created)
+	}
+	items, _ := created["artifacts"].([]map[string]any)
+	if len(items) != 1 || items[0]["mime_type"] != "image/svg+xml" || items[0]["display"] != "inline" || items[0]["content"] != svg {
+		t.Fatalf("created visual artifacts = %+v", items)
+	}
+}
+
 func TestArtifactRejectsUnsafeInputsAndScope(t *testing.T) {
 	svc := productdata.NewMemoryService()
 	thread, run := artifactTestThreadRun(t, svc)

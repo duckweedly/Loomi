@@ -28,6 +28,7 @@ type artifactDTO struct {
 	ArtifactType string `json:"artifact_type"`
 	ContentBytes int    `json:"content_bytes"`
 	TextExcerpt  string `json:"text_excerpt"`
+	Content      string `json:"content,omitempty"`
 	Truncated    bool   `json:"truncated"`
 	CreatedAt    string `json:"created_at"`
 	UpdatedAt    string `json:"updated_at"`
@@ -91,6 +92,7 @@ func artifactDTOFromArtifact(artifact productdata.Artifact) artifactDTO {
 		ArtifactType: artifact.ArtifactType,
 		ContentBytes: artifact.ContentBytes,
 		TextExcerpt:  artifact.TextExcerpt,
+		Content:      artifact.Content,
 		Truncated:    artifact.Truncated,
 		CreatedAt:    artifact.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
 		UpdatedAt:    artifact.UpdatedAt.UTC().Format("2006-01-02T15:04:05Z"),

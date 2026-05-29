@@ -1,4 +1,5 @@
-import { FileText } from 'lucide-react'
+import { ExternalLink, FileText } from 'lucide-react'
+import { useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { Message, Run } from '../domain'
@@ -6,7 +7,9 @@ import type { Locale } from '../i18n'
 import { getRunPreviewArtifacts, type PreviewArtifact } from '../runtime/artifactPreview'
 import { getMessagePreviewArtifacts } from '../runtime/messageArtifactPreview'
 import { normalizeMarkdownContent } from '../runtime/markdownNormalize'
+import { canOpenArtifactNatively, nativeArtifactOpenLabel, openArtifactNatively, type NativeArtifactOpenStatus } from '../runtime/nativeArtifactOpen'
 import { getRightPanelItemCopy, rightPanelItems, type RightPanelItemId } from '../rightPanelItems'
+import { ArtifactFrame } from './ArtifactFrame'
 
 type Props = {
   open: boolean
@@ -14,6 +17,7 @@ type Props = {
   selectedArtifactId?: string
   run?: Run | null
   messages?: Message[]
+  artifacts?: PreviewArtifact[]
   locale?: Locale
 }
 
@@ -35,6 +39,13 @@ function previewCopy(locale: Locale) {
 
 function ArtifactPreview({ artifact, locale }: { artifact: PreviewArtifact; locale: Locale }) {
   const content = artifact.content || artifact.excerpt || ''
+  const [nativeOpenStatus, setNativeOpenStatus] = useState<NativeArtifactOpenStatus>('idle')
+  const canOpenNative = canOpenArtifactNatively(artifact)
+  const openNative = async () => {
+    if (!canOpenNative) return
+    setNativeOpenStatus('opening')
+    setNativeOpenStatus(await openArtifactNatively(artifact) ? 'idle' : 'failed')
+  }
   return (
     <div className="right-panel-artifact">
       <div className="right-panel-artifact-title">
@@ -43,11 +54,17 @@ function ArtifactPreview({ artifact, locale }: { artifact: PreviewArtifact; loca
           <strong>{artifact.title}</strong>
           <small>{artifact.filename}</small>
         </div>
+        <button type="button" className="artifact-native-open" disabled={!canOpenNative || nativeOpenStatus === 'opening'} onClick={openNative}>
+          <ExternalLink size={14} />
+          <span>{nativeArtifactOpenLabel(locale, nativeOpenStatus)}</span>
+        </button>
       </div>
       {content ? (
         <div className={`right-panel-document kind-${artifact.kind}`}>
           {artifact.kind === 'markdown' ? (
             <ReactMarkdown remarkPlugins={[remarkGfm]}>{normalizeMarkdownContent(content)}</ReactMarkdown>
+          ) : artifact.kind === 'svg' || artifact.kind === 'html' ? (
+            <ArtifactFrame artifact={artifact} />
           ) : (
             <pre>{content}</pre>
           )}
@@ -62,8 +79,18 @@ function ArtifactPreview({ artifact, locale }: { artifact: PreviewArtifact; loca
   )
 }
 
-function PreviewPanel({ run, messages = [], selectedArtifactId, locale }: { run?: Run | null; messages?: Message[]; selectedArtifactId?: string; locale: Locale }) {
-  const artifacts = [...getRunPreviewArtifacts(run), ...getMessagePreviewArtifacts(messages)]
+function mergeArtifacts(...groups: PreviewArtifact[][]) {
+  const byId = new Map<string, PreviewArtifact>()
+  for (const artifact of groups.flat()) {
+    const existing = byId.get(artifact.id)
+    byId.set(artifact.id, existing && !existing.content && artifact.content ? artifact : existing ?? artifact)
+  }
+  return [...byId.values()]
+}
+
+function PreviewPanel({ run, messages = [], selectedArtifactId, locale, artifacts: threadArtifacts = [] }: { run?: Run | null; messages?: Message[]; selectedArtifactId?: string; locale: Locale; artifacts?: PreviewArtifact[] }) {
+  const runArtifacts = getRunPreviewArtifacts(run)
+  const artifacts = mergeArtifacts(threadArtifacts, runArtifacts, getMessagePreviewArtifacts(messages, [...threadArtifacts, ...runArtifacts]))
   const artifact = artifacts.find((item) => item.id === selectedArtifactId) ?? artifacts.at(-1)
   const copy = previewCopy(locale)
   if (artifact) return <ArtifactPreview artifact={artifact} locale={locale} />
@@ -77,10 +104,11 @@ function PreviewPanel({ run, messages = [], selectedArtifactId, locale }: { run?
   )
 }
 
-export function RightToolDrawer({ open, selectedPanelId, selectedArtifactId, run, messages = [], locale = 'en' }: Props) {
+export function RightToolDrawer({ open, selectedPanelId, selectedArtifactId, run, messages = [], artifacts: threadArtifacts = [], locale = 'en' }: Props) {
   const selectedPanel = rightPanelItems.find((item) => item.id === selectedPanelId) ?? rightPanelItems[0]
   const selectedPanelCopy = getRightPanelItemCopy(selectedPanel, locale)
-  const artifacts = [...getRunPreviewArtifacts(run), ...getMessagePreviewArtifacts(messages)]
+  const runArtifacts = getRunPreviewArtifacts(run)
+  const artifacts = mergeArtifacts(threadArtifacts, runArtifacts, getMessagePreviewArtifacts(messages, [...threadArtifacts, ...runArtifacts]))
   const selectedArtifact = artifacts.find((item) => item.id === selectedArtifactId) ?? artifacts.at(-1)
 
   return (
@@ -91,7 +119,7 @@ export function RightToolDrawer({ open, selectedPanelId, selectedArtifactId, run
           <span>{selectedArtifact?.mimeType ?? selectedPanelCopy.description}</span>
         </div>
       </div>
-      <PreviewPanel run={run} messages={messages} selectedArtifactId={selectedArtifactId} locale={locale} />
+      <PreviewPanel run={run} messages={messages} selectedArtifactId={selectedArtifactId} locale={locale} artifacts={threadArtifacts} />
     </aside>
   )
 }

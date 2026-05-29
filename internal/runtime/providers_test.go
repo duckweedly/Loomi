@@ -640,7 +640,7 @@ func TestHTTPProviderSendsEnabledWebSearchToolSchema(t *testing.T) {
 
 func TestHTTPProviderSerializesArtifactToolNamesForOpenAI(t *testing.T) {
 	tools := []ProviderToolDefinition{}
-	for _, name := range []string{productdata.ToolNameArtifactCreateText, productdata.ToolNameArtifactRead, productdata.ToolNameArtifactList} {
+	for _, name := range []string{productdata.ToolNameArtifactCreateText, productdata.ToolNameArtifactCreateVisual, productdata.ToolNameArtifactRead, productdata.ToolNameArtifactList} {
 		tool, ok := builtinProviderToolDefinition(name)
 		if !ok {
 			t.Fatalf("missing tool %s", name)
@@ -657,11 +657,11 @@ func TestHTTPProviderSerializesArtifactToolNamesForOpenAI(t *testing.T) {
 			t.Fatalf("OpenAI tool name contains dot: %q", spec.Function.Name)
 		}
 	}
-	want := []string{"artifact_create_text", "artifact_read", "artifact_list"}
+	want := []string{"artifact_create_text", "artifact_create_visual", "artifact_read", "artifact_list"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("tool names = %v, want %v", got, want)
 	}
-	if internalProviderToolName("artifact_create_text") != productdata.ToolNameArtifactCreateText || internalProviderToolName("artifact_read") != productdata.ToolNameArtifactRead || internalProviderToolName("artifact_list") != productdata.ToolNameArtifactList {
+	if internalProviderToolName("artifact_create_text") != productdata.ToolNameArtifactCreateText || internalProviderToolName("artifact_create_visual") != productdata.ToolNameArtifactCreateVisual || internalProviderToolName("artifact_read") != productdata.ToolNameArtifactRead || internalProviderToolName("artifact_list") != productdata.ToolNameArtifactList {
 		t.Fatalf("artifact reverse mapping failed")
 	}
 }

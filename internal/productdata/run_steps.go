@@ -153,6 +153,8 @@ func RebuildRunStepStateFromSteps(steps []RunStep) RunStepState {
 				}
 				delete(pending, step.ToolCallID)
 			case RunStepStatusFailed:
+				state.CompletedToolResults = append(state.CompletedToolResults, step)
+				state.LastCompletedSequence = step.Sequence
 				delete(pending, step.ToolCallID)
 			}
 		case RunStepKindTerminal:
@@ -215,6 +217,8 @@ func AdvanceRunStepState(state RunStepState, event RunEvent) RunStepState {
 				}
 				state.PendingToolCalls = removeRunStepByToolCallID(state.PendingToolCalls, step.ToolCallID)
 			case RunStepStatusFailed:
+				state.CompletedToolResults = append(state.CompletedToolResults, step)
+				state.LastCompletedSequence = step.Sequence
 				state.PendingToolCalls = removeRunStepByToolCallID(state.PendingToolCalls, step.ToolCallID)
 			}
 		case RunStepKindTerminal:

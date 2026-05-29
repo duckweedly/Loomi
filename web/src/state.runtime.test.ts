@@ -98,7 +98,7 @@ describe('runtime state orchestration helpers', () => {
     const cachedSelection = selectSource.indexOf('if (cached) applyThreadSnapshot(threadId, cached)')
     const fetchMessages = selectSource.indexOf('apiClient.getThreadMessages(threadId)')
     const fetchRun = selectSource.indexOf('apiClient.getThreadRun(threadId)')
-    const applySelection = selectSource.indexOf('applyThreadSnapshot(threadId, { messages: nextMessages, run: reconciledRun })')
+    const applySelection = selectSource.indexOf('applyThreadSnapshot(threadId, { messages: nextMessages, run: reconciledRun, artifacts: nextArtifacts })')
 
     expect(selectSource).toContain('threadSnapshotsRef')
     expect(selectSource).not.toContain('if (!cached) setSelectedThreadId(threadId)')

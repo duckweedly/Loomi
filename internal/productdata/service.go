@@ -753,7 +753,7 @@ func (s *MemoryService) CreateArtifact(_ context.Context, ident identity.LocalId
 		ThreadID:     input.ThreadID,
 		RunID:        input.RunID,
 		Title:        title,
-		ArtifactType: "text",
+		ArtifactType: normalizedArtifactType(input.ArtifactType),
 		Content:      content,
 		ContentBytes: len([]byte(content)),
 		TextExcerpt:  artifactExcerpt(content, limit),
@@ -801,6 +801,15 @@ func (s *MemoryService) ListArtifacts(_ context.Context, ident identity.LocalIde
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].CreatedAt.Before(result[j].CreatedAt) })
 	return result, nil
+}
+
+func normalizedArtifactType(value string) string {
+	switch strings.TrimSpace(strings.ToLower(value)) {
+	case "visual", "svg", "html":
+		return "visual"
+	default:
+		return "text"
+	}
 }
 
 func boundedArtifactBytes(value int) int {
@@ -2447,13 +2456,13 @@ func latestUserIntent(messages []Message) workIntent {
 	if content == "" {
 		return intent
 	}
-	intent.workspaceRead = containsAny(content, []string{"文件", "目录", "folder", "file", "list", "列", "看下", "看看", "读取", "read", "grep", "搜索代码", "查找", "分类", "下载", "downloads", "desktop", "documents", "项目", "仓库", "repo", "github"})
+	intent.workspaceRead = containsAny(content, []string{"文件", "目录", "folder", "file", "list", "列", "看", "查", "读取", "read", "grep", "搜索代码", "查找", "分类", "梳理", "讲解", "解释", "分析", "页面", "源码", "代码", "组件", "仓储", "数据源", "业务流", "下载", "downloads", "desktop", "documents", "项目", "仓库", "repo", "github"})
 	intent.workspaceWrite = containsAny(content, []string{"修改", "编辑", "写入", "创建文件", "保存", "删除文件", "改代码", "edit", "write", "create file", "delete file", "patch"})
 	intent.command = containsAny(content, []string{"运行命令", "执行命令", "终端", "shell", "命令行", "跑测试", "测试", "验证", "verify", "构建", "启动服务", "go test", "bun test", "npm", "pnpm", "build", "lint"})
 	intent.lsp = containsAny(content, []string{"定义", "引用", "符号", "诊断", "lsp", "definition", "references", "symbols", "diagnostics"})
 	intent.web = strings.Contains(content, "http://") || strings.Contains(content, "https://") || containsAny(content, []string{"网页", "联网", "搜索", "新闻", "最新", "web", "search", "fetch", "github"})
 	intent.browser = containsAny(content, []string{"浏览器", "打开网页", "点击", "截图", "browser", "screenshot", "click"})
-	intent.artifact = containsAny(content, []string{"产物", "artifact", "文档", "报告", "生成文件"})
+	intent.artifact = containsAny(content, []string{"产物", "artifact", "文档", "报告", "生成文件", "画图", "图表", "流程图", "svg", "html", "diagram", "chart", "mockup"})
 	intent.agent = containsAny(content, []string{"子任务", "并行", "多agent", "multi-agent", "spawn", "delegate", "delegated", "subagent", "child agent", "reviewer"})
 	intent.memory = containsAny(content, []string{"记忆", "memory", "记住", "偏好"})
 	intent.todo = containsAny(content, []string{"计划", "步骤", "待办", "todo", "plan"})
@@ -3455,6 +3464,42 @@ func (s *MemoryService) FailToolCallExecution(_ context.Context, ident identity.
 	failed := s.appendRunEventLocked(run, RunEventCategoryError, EventToolCallFailed, message, nil, toolCallEventMetadataForState(s.runStepStates[run.ID], call), now)
 	final := s.appendRunEventLocked(run, RunEventCategoryFinal, EventRunFailed, message, nil, map[string]any{"tool_call_id": call.ToolCallID, "error_code": code}, now)
 	return call, []RunEvent{failed, final}, nil
+}
+
+func (s *MemoryService) RecordToolCallExecutionFailure(_ context.Context, ident identity.LocalIdentity, threadID string, runID string, toolCallID string, errorCode string, errorMessage string) (ToolCall, []RunEvent, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user := s.ensureUserLocked(ident)
+	run, call, key, err := s.scopedToolCallLocked(user.ID, threadID, runID, toolCallID)
+	if err != nil {
+		return ToolCall{}, nil, err
+	}
+	if call.ExecutionStatus == ToolCallExecutionFailed {
+		return call, nil, nil
+	}
+	if call.ExecutionStatus != ToolCallExecutionExecuting || IsRunTerminal(run.Status) {
+		return ToolCall{}, nil, NewError(CodeInvalidRequest, "Tool call cannot fail.")
+	}
+	now := s.now()
+	code := strings.TrimSpace(errorCode)
+	if code == "" {
+		code = "tool_execution_failed"
+	}
+	message := RedactEventText(strings.TrimSpace(errorMessage))
+	if message == "" {
+		message = "Tool execution failed."
+	}
+	call.ExecutionStatus = ToolCallExecutionFailed
+	call.ErrorCode = &code
+	call.ErrorMessage = &message
+	call.UpdatedAt = now
+	s.toolCalls[key] = call
+	run.Status = s.runStatusAfterToolSuccessLocked(run.ID)
+	run.CompletedAt = nil
+	run.UpdatedAt = now
+	s.runs[run.ID] = run
+	failed := s.appendRunEventLocked(run, RunEventCategoryError, EventToolCallFailed, message, nil, toolCallEventMetadataForState(s.runStepStates[run.ID], call), now)
+	return call, []RunEvent{failed}, nil
 }
 
 func (s *MemoryService) StopRun(_ context.Context, ident identity.LocalIdentity, runID string) (StopRunOutput, error) {

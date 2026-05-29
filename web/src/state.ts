@@ -7,6 +7,7 @@ import { deriveCapabilitySignalFromEvent } from './runtime/backendCapabilityStat
 import { deriveDesktopReadiness } from './runtime/desktopReadiness'
 import { applyRealRunEvent, mapRealRuntimeCapabilitySignal } from './runtime/realExecutionAdapter'
 import { selectSendProvider } from './realApiClient'
+import type { PreviewArtifact } from './runtime/artifactPreview'
 import { createNextThreadTitle } from './threadTitles'
 
 type RefreshResult = {
@@ -15,11 +16,13 @@ type RefreshResult = {
   threads: Thread[]
   messages: Message[]
   run: Run | null
+  artifacts?: PreviewArtifact[]
 }
 
 type ThreadSnapshot = {
   messages: Message[]
   run: Run | null
+  artifacts?: PreviewArtifact[]
 }
 
 function runSnapshotKey(run: Run | null) {
@@ -45,8 +48,11 @@ function messageSnapshotKey(messages: Message[]) {
 }
 
 export function areThreadSnapshotsEqual(left: ThreadSnapshot, right: ThreadSnapshot) {
+  const leftArtifacts = left.artifacts ?? []
+  const rightArtifacts = right.artifacts ?? []
   return messageSnapshotKey(left.messages) === messageSnapshotKey(right.messages)
     && runSnapshotKey(left.run) === runSnapshotKey(right.run)
+    && leftArtifacts.map((artifact) => `${artifact.id}:${artifact.mimeType}:${artifact.content?.length ?? 0}`).join('\u001e') === rightArtifacts.map((artifact) => `${artifact.id}:${artifact.mimeType}:${artifact.content?.length ?? 0}`).join('\u001e')
 }
 
 export type ProviderCheckStatus = 'idle' | 'checking' | 'success' | 'failed'
@@ -399,6 +405,7 @@ export function createOptimisticSendSnapshot({ threadId, content, model }: { thr
       assistantDraft: { content: '', status: 'pending' },
       createdAt,
     },
+    artifacts: [],
   }
 }
 
@@ -408,6 +415,24 @@ export async function waitForMinimumOptimisticThinking(startedAt: number, minimu
   const remaining = minimumMs - (Date.now() - startedAt)
   if (remaining <= 0) return
   await new Promise((resolve) => window.setTimeout(resolve, remaining))
+}
+
+async function listThreadArtifacts(threadId: string) {
+  if (!threadId || !apiClient.listArtifacts) return []
+  try {
+    return await apiClient.listArtifacts(threadId)
+  } catch {
+    return []
+  }
+}
+
+function mergePreviewArtifacts(current: PreviewArtifact[], next: PreviewArtifact[]) {
+  const byId = new Map(current.map((artifact) => [artifact.id, artifact]))
+  for (const artifact of next) {
+    const existing = byId.get(artifact.id)
+    byId.set(artifact.id, existing && existing.content && !artifact.content ? existing : artifact)
+  }
+  return [...byId.values()]
 }
 
 export function createWorkspaceSettingsState(input: Partial<{ defaultWorkspaceMode: Thread['mode']; selectedRuntimeScript: RuntimeScriptId }> = {}) {
@@ -437,6 +462,7 @@ declare global {
   interface Window {
     loomiDesktop?: {
       selectWorkspaceFolder?: () => Promise<DesktopFolderSelection>
+      openArtifactFile?: (artifact: { title: string; filename: string; mimeType: string; content: string }) => Promise<{ ok: boolean; path?: string; error?: string }>
     }
   }
 }
@@ -446,6 +472,7 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
   const [selectedThreadId, setSelectedThreadId] = useState('thread-brief')
   const [messages, setMessages] = useState<Message[]>([])
   const [run, setRun] = useState<Run | null>(null)
+  const [artifacts, setArtifacts] = useState<PreviewArtifact[]>([])
   const [streamState, setStreamState] = useState<StreamState>('closed')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -497,6 +524,7 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
   const threadsRef = useRef<Thread[]>(threads)
   const messagesRef = useRef<Message[]>(messages)
   const runRef = useRef<Run | null>(run)
+  const artifactsRef = useRef<PreviewArtifact[]>(artifacts)
   const workspaceRefreshRequestRef = useRef(0)
   const threadSelectionRequestRef = useRef(0)
   const skipNextSelectedThreadRefreshRef = useRef(false)
@@ -510,6 +538,7 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
   threadsRef.current = threads
   messagesRef.current = messages
   runRef.current = run
+  artifactsRef.current = artifacts
 
   const selectedThread = useMemo(
     () => threads.find((thread) => thread.id === selectedThreadId) ?? null,
@@ -553,15 +582,16 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
     try {
       const nextThreads = await apiClient.listThreads()
       const nextThreadId = getWorkspaceRefreshThreadId(threadId, nextThreads)
-      const [nextMessages, nextRun] = nextThreadId
-        ? await Promise.all([apiClient.getThreadMessages(nextThreadId), apiClient.getThreadRun(nextThreadId)])
-        : [[], null]
+      const [nextMessages, nextRun, nextArtifacts] = nextThreadId
+        ? await Promise.all([apiClient.getThreadMessages(nextThreadId), apiClient.getThreadRun(nextThreadId), listThreadArtifacts(nextThreadId)])
+        : [[], null, []]
       if (!shouldApplyLatestRequest(requestID, workspaceRefreshRequestRef.current)) return
-      if (!shouldApplyWorkspaceRefresh({ requestedThreadId: threadId, currentSelectedThreadId: selectedThreadIdRef.current, threads: nextThreads, messages: nextMessages, run: nextRun })) return
+      if (!shouldApplyWorkspaceRefresh({ requestedThreadId: threadId, currentSelectedThreadId: selectedThreadIdRef.current, threads: nextThreads, messages: nextMessages, run: nextRun, artifacts: nextArtifacts })) return
       const reconciledRun = nextRun ? reconcileRunWithPersistedAssistant(nextRun, nextMessages) : null
       setThreads(nextThreads)
       setMessages(nextMessages)
       setRun(reconciledRun)
+      setArtifacts(nextArtifacts)
       setApiConnected(true)
       setDBReady(true)
       setCapabilitySignals({ backendUnavailable: false, modelSetupMissing: false, providerUnavailable: false, streamDisconnected: false })
@@ -576,6 +606,7 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
       if (blockingLoading) {
         setMessages([])
         setRun(null)
+        setArtifacts([])
       }
     } finally {
       if (shouldApplyLatestRequest(requestID, workspaceRefreshRequestRef.current)) setLoading(false)
@@ -969,8 +1000,8 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
 
   useEffect(() => {
     if (!selectedThreadId) return
-    threadSnapshotsRef.current.set(selectedThreadId, { messages, run })
-  }, [messages, run, selectedThreadId])
+    threadSnapshotsRef.current.set(selectedThreadId, { messages, run, artifacts })
+  }, [messages, run, artifacts, selectedThreadId])
 
   useEffect(() => {
     if (!apiConnected) return
@@ -1130,14 +1161,16 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
       if (!threadId) return
       try {
         const currentRun = runRef.current
-        const [nextMessages, nextRun] = await Promise.all([
+        const [nextMessages, nextRun, nextArtifacts] = await Promise.all([
           apiClient.getThreadMessages(threadId),
           apiClient.getThreadRun(threadId, currentRun?.id === activeRunID ? { afterSequence: getMaxRunEventSequence(currentRun.events, 0), existingEvents: currentRun.events } : undefined),
+          listThreadArtifacts(threadId),
         ])
         if ((cancelled && !options.allowAfterCleanup) || !nextRun || nextRun.id !== activeRunID || threadId !== selectedThreadIdRef.current) return
         const reconciledRun = reconcileRunWithPersistedAssistant(nextRun, nextMessages)
         setMessages(nextMessages)
         setRun(reconciledRun)
+        setArtifacts((current) => mergePreviewArtifacts(current, nextArtifacts))
         runRef.current = reconciledRun
         if (!shouldBlockRuntimeSubmit(reconciledRun)) {
           setCapabilitySignals((current) => ({ ...current, streamDisconnected: false }))
@@ -1187,11 +1220,12 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
   }, [run?.id, run?.status])
 
   const applyThreadSnapshot = useCallback((threadId: string, snapshot: ThreadSnapshot) => {
-    if (threadId === selectedThreadIdRef.current && areThreadSnapshotsEqual({ messages: messagesRef.current, run: runRef.current }, snapshot)) return
+    if (threadId === selectedThreadIdRef.current && areThreadSnapshotsEqual({ messages: messagesRef.current, run: runRef.current, artifacts: artifactsRef.current }, snapshot)) return
     if (threadId !== selectedThreadIdRef.current) skipNextSelectedThreadRefreshRef.current = true
     setSelectedThreadId(threadId)
     setMessages(snapshot.messages)
     setRun(snapshot.run)
+    setArtifacts(snapshot.artifacts ?? [])
     setStreamState(snapshot.run && shouldBlockRuntimeSubmit(snapshot.run) ? 'connecting' : 'closed')
   }, [])
 
@@ -1205,14 +1239,15 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
     if (cached) applyThreadSnapshot(threadId, cached)
 
     try {
-      const [nextMessages, nextRun] = await Promise.all([
+      const [nextMessages, nextRun, nextArtifacts] = await Promise.all([
         apiClient.getThreadMessages(threadId),
         apiClient.getThreadRun(threadId),
+        listThreadArtifacts(threadId),
       ])
       if (!shouldApplyLatestRequest(requestID, threadSelectionRequestRef.current)) return
       const reconciledRun = nextRun ? reconcileRunWithPersistedAssistant(nextRun, nextMessages) : null
-      threadSnapshotsRef.current.set(threadId, { messages: nextMessages, run: reconciledRun })
-      applyThreadSnapshot(threadId, { messages: nextMessages, run: reconciledRun })
+      threadSnapshotsRef.current.set(threadId, { messages: nextMessages, run: reconciledRun, artifacts: nextArtifacts })
+      applyThreadSnapshot(threadId, { messages: nextMessages, run: reconciledRun, artifacts: nextArtifacts })
       setCapabilitySignals({ backendUnavailable: false, modelSetupMissing: false, providerUnavailable: false, streamDisconnected: false })
     } catch (err) {
       if (!shouldApplyLatestRequest(requestID, threadSelectionRequestRef.current)) return
@@ -1240,11 +1275,15 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
         setThreads((current) => current.map((thread) => thread.id === updated.id ? updated : thread))
       }
       const result = await apiClient.sendMessage(requestedThreadId, trimmed, selectedPersonaId || undefined, options)
-      const nextThreads = await apiClient.listThreads()
+      const [nextThreads, nextArtifacts] = await Promise.all([
+        apiClient.listThreads(),
+        listThreadArtifacts(requestedThreadId),
+      ])
       await waitForMinimumOptimisticThinking(optimisticStartedAt)
       if (!shouldApplySendMessageResult({ requestedThreadId, currentSelectedThreadId: selectedThreadIdRef.current })) return
       setMessages(result.messages)
       setRun(result.run)
+      setArtifacts((current) => mergePreviewArtifacts(current, nextArtifacts))
       setCapabilitySignals({ backendUnavailable: false, modelSetupMissing: false, providerUnavailable: false, streamDisconnected: false })
       setStreamState(shouldBlockRuntimeSubmit(result.run) ? 'connecting' : 'closed')
       setThreads(nextThreads)
@@ -1259,12 +1298,13 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
     setError(null)
     try {
       const thread = await apiClient.createThread(createNextThreadTitle(threads), mode)
-      const [nextThreads, nextMessages, nextRun] = await Promise.all([
+      const [nextThreads, nextMessages, nextRun, nextArtifacts] = await Promise.all([
         apiClient.listThreads(),
         apiClient.getThreadMessages(thread.id),
         apiClient.getThreadRun(thread.id),
+        listThreadArtifacts(thread.id),
       ])
-      const nextSnapshot = { messages: nextMessages, run: nextRun ? reconcileRunWithPersistedAssistant(nextRun, nextMessages) : null }
+      const nextSnapshot = { messages: nextMessages, run: nextRun ? reconcileRunWithPersistedAssistant(nextRun, nextMessages) : null, artifacts: nextArtifacts }
       threadSnapshotsRef.current.set(thread.id, nextSnapshot)
       setThreads(nextThreads.some((item) => item.id === thread.id) ? nextThreads : [thread, ...nextThreads])
       applyThreadSnapshot(thread.id, nextSnapshot)
@@ -1295,18 +1335,19 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
     try {
       await apiClient.archiveThread(threadId)
       if (nextThreadId && !nextSnapshot) {
-        const [nextMessages, nextRun] = await Promise.all([
+        const [nextMessages, nextRun, nextArtifacts] = await Promise.all([
           apiClient.getThreadMessages(nextThreadId),
           apiClient.getThreadRun(nextThreadId),
+          listThreadArtifacts(nextThreadId),
         ])
-        nextSnapshot = { messages: nextMessages, run: nextRun ? reconcileRunWithPersistedAssistant(nextRun, nextMessages) : null }
+        nextSnapshot = { messages: nextMessages, run: nextRun ? reconcileRunWithPersistedAssistant(nextRun, nextMessages) : null, artifacts: nextArtifacts }
         threadSnapshotsRef.current.set(nextThreadId, nextSnapshot)
       }
       threadSnapshotsRef.current.delete(threadId)
       if (archivedSelectedThread) setThreads((current) => current.filter((thread) => thread.id !== threadId))
       if (archivedSelectedThread) {
         if (nextThreadId && nextSnapshot) applyThreadSnapshot(nextThreadId, nextSnapshot)
-        else if (!nextThreadId) applyThreadSnapshot('', { messages: [], run: null })
+        else if (!nextThreadId) applyThreadSnapshot('', { messages: [], run: null, artifacts: [] })
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'API request failed')
@@ -1332,6 +1373,19 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
       runRef.current = next
       return next
     })
+  }, [])
+
+  const openPreviewArtifact = useCallback(async (artifact: PreviewArtifact) => {
+    setArtifacts((current) => mergePreviewArtifacts(current, [artifact]))
+    const threadId = selectedThreadIdRef.current
+    if (!threadId || artifact.content || !apiClient.readArtifact) return
+    try {
+      const fullArtifact = await apiClient.readArtifact(threadId, artifact.id)
+      if (threadId !== selectedThreadIdRef.current) return
+      setArtifacts((current) => mergePreviewArtifacts(current, [fullArtifact]))
+    } catch {
+      setArtifacts((current) => mergePreviewArtifacts(current, [artifact]))
+    }
   }, [])
 
   const approveToolCall = useCallback(async (toolCall: ToolCall) => {
@@ -1504,6 +1558,7 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
     selectedThreadId,
     messages,
     run,
+    artifacts,
     streamState,
     loading,
     error,
@@ -1593,6 +1648,7 @@ export function useWorkspaceState(defaultWorkspaceMode: Thread['mode'] = 'chat')
     stopRun,
     approveToolCall,
     denyToolCall,
+    openPreviewArtifact,
     retryRun,
     regenerateRun,
   }

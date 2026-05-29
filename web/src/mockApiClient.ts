@@ -294,6 +294,17 @@ const mockToolCatalog: ToolCatalogItem[] = [{
   executionState: 'executable',
   safeMetadata: { read_only: false, scope: 'artifact', non_executable: true, arguments: ['title', 'content', 'max_bytes'] },
 }, {
+  name: 'artifact.create_visual',
+  displayName: 'Artifact create visual',
+  description: 'Create one bounded SVG or HTML artifact for safe preview.',
+  source: 'builtin',
+  group: 'artifact',
+  riskLevel: 'medium',
+  approvalPolicy: 'always_required',
+  enabled: true,
+  executionState: 'executable',
+  safeMetadata: { read_only: false, scope: 'artifact', renderable: true, arguments: ['title', 'filename', 'mime_type', 'display', 'content', 'max_bytes'] },
+}, {
   name: 'artifact.read',
   displayName: 'Artifact read',
   description: 'Read one bounded text artifact excerpt.',

@@ -201,17 +201,31 @@ func TestWorkToolResolutionsFollowLatestUserIntent(t *testing.T) {
 	if !hasToolResolution(listFiles, ToolNameWorkspaceListDirectory) || !hasToolResolution(listFiles, ToolNameWorkspaceTreeSummary) || !hasToolResolution(listFiles, ToolNameWorkspaceRead) {
 		t.Fatalf("file listing tools missing: %+v", listFiles)
 	}
-	for _, disallowed := range []string{ToolNameSandboxExecCommand, ToolNameAgentSpawn, ToolNameArtifactCreateText, ToolNameBrowserOpen} {
+	explainProject := workToolResolutionsForLatestIntent(all, []Message{{Role: MessageRoleUser, Content: "帮我梳理 orders / capacity / workbench 页面和源码实现，讲解业务流。"}})
+	if !hasToolResolution(explainProject, ToolNameWorkspaceListDirectory) || !hasToolResolution(explainProject, ToolNameWorkspaceTreeSummary) || !hasToolResolution(explainProject, ToolNameWorkspaceRead) {
+		t.Fatalf("project explanation tools missing: %+v", explainProject)
+	}
+	for _, disallowed := range []string{ToolNameSandboxExecCommand, ToolNameAgentSpawn, ToolNameArtifactCreateText, ToolNameArtifactCreateVisual, ToolNameBrowserOpen} {
+		if hasToolResolution(explainProject, disallowed) {
+			t.Fatalf("project explanation exposed %s: %+v", disallowed, explainProject)
+		}
+	}
+	for _, disallowed := range []string{ToolNameSandboxExecCommand, ToolNameAgentSpawn, ToolNameArtifactCreateText, ToolNameArtifactCreateVisual, ToolNameBrowserOpen} {
 		if hasToolResolution(listFiles, disallowed) {
 			t.Fatalf("file listing exposed %s: %+v", disallowed, listFiles)
 		}
 	}
 
 	hello := workToolResolutionsForLatestIntent(all, []Message{{Role: MessageRoleUser, Content: "你好呀"}})
-	for _, disallowed := range []string{ToolNameWorkspaceGlob, ToolNameSandboxExecCommand, ToolNameAgentSpawn, ToolNameArtifactCreateText, ToolNameBrowserOpen, ToolNameWebSearch} {
+	for _, disallowed := range []string{ToolNameWorkspaceGlob, ToolNameSandboxExecCommand, ToolNameAgentSpawn, ToolNameArtifactCreateText, ToolNameArtifactCreateVisual, ToolNameBrowserOpen, ToolNameWebSearch} {
 		if hasToolResolution(hello, disallowed) {
 			t.Fatalf("casual greeting exposed %s: %+v", disallowed, hello)
 		}
+	}
+
+	diagram := workToolResolutionsForLatestIntent(all, []Message{{Role: MessageRoleUser, Content: "画一个 SVG 流程图"}})
+	if !hasToolResolution(diagram, ToolNameArtifactCreateVisual) || !hasToolResolution(diagram, ToolNameArtifactCreateText) {
+		t.Fatalf("diagram intent missing artifact tools: %+v", diagram)
 	}
 
 	runTests := workToolResolutionsForLatestIntent(all, []Message{{Role: MessageRoleUser, Content: "帮我运行 go test ./..."}})
@@ -898,7 +912,7 @@ func TestWorkModeScopedToolsOnlyEnabledForWorkModeRunContext(t *testing.T) {
 		Description:      "Default persona",
 		SystemPrompt:     "prompt",
 		ModelRoute:       PersonaModelRoute{ProviderID: "custom", Model: "model"},
-		AllowedToolNames: []string{ToolNameCurrentTime, ToolNameWorkspaceGlob, ToolNameWorkspaceGrep, ToolNameWorkspaceRead, ToolNameWorkspaceListDirectory, ToolNameWorkspaceTreeSummary, ToolNameWorkspaceWriteFile, ToolNameWorkspaceEdit, ToolNameWorkspacePatchPreview, ToolNameWorkspacePatchApply, ToolNameSandboxExecCommand, ToolNameSandboxStartProcess, ToolNameSandboxContinueProcess, ToolNameSandboxTerminateProcess, ToolNameLSPDiagnostics, ToolNameLSPSymbols, ToolNameLSPReferences, ToolNameLSPDefinition, ToolNameLSPHover, ToolNameWebFetch, ToolNameBrowserOpen, ToolNameBrowserSnapshot, ToolNameBrowserClickLink, ToolNameBrowserScreenshot, ToolNameBrowserType, ToolNameBrowserPress, ToolNameArtifactCreateText, ToolNameArtifactRead, ToolNameArtifactList, ToolNameAgentSpawn, ToolNameAgentList, ToolNameAgentStart, ToolNameAgentDelegate, ToolNameAgentComplete, ToolNameAgentFail, ToolNameTodoWrite},
+		AllowedToolNames: []string{ToolNameCurrentTime, ToolNameWorkspaceGlob, ToolNameWorkspaceGrep, ToolNameWorkspaceRead, ToolNameWorkspaceListDirectory, ToolNameWorkspaceTreeSummary, ToolNameWorkspaceWriteFile, ToolNameWorkspaceEdit, ToolNameWorkspacePatchPreview, ToolNameWorkspacePatchApply, ToolNameSandboxExecCommand, ToolNameSandboxStartProcess, ToolNameSandboxContinueProcess, ToolNameSandboxTerminateProcess, ToolNameLSPDiagnostics, ToolNameLSPSymbols, ToolNameLSPReferences, ToolNameLSPDefinition, ToolNameLSPHover, ToolNameWebFetch, ToolNameBrowserOpen, ToolNameBrowserSnapshot, ToolNameBrowserClickLink, ToolNameBrowserScreenshot, ToolNameBrowserType, ToolNameBrowserPress, ToolNameArtifactCreateText, ToolNameArtifactCreateVisual, ToolNameArtifactRead, ToolNameArtifactList, ToolNameAgentSpawn, ToolNameAgentList, ToolNameAgentStart, ToolNameAgentDelegate, ToolNameAgentComplete, ToolNameAgentFail, ToolNameTodoWrite},
 		ReasoningMode:    "balanced",
 		BudgetSummary:    "budget",
 		Version:          "1",
@@ -934,15 +948,16 @@ func TestWorkModeScopedToolsOnlyEnabledForWorkModeRunContext(t *testing.T) {
 		hasWebFetch := catalogResolutionByName(ctxData.EnabledTools, ToolNameWebFetch).Name != ""
 		hasBrowserOpen := catalogResolutionByName(ctxData.EnabledTools, ToolNameBrowserOpen).Name != ""
 		hasArtifactCreate := catalogResolutionByName(ctxData.EnabledTools, ToolNameArtifactCreateText).Name != ""
+		hasArtifactCreateVisual := catalogResolutionByName(ctxData.EnabledTools, ToolNameArtifactCreateVisual).Name != ""
 		hasAgentSpawn := catalogResolutionByName(ctxData.EnabledTools, ToolNameAgentSpawn).Name != ""
 		hasTodoWrite := catalogResolutionByName(ctxData.EnabledTools, ToolNameTodoWrite).Name != ""
-		if mode == ThreadModeChat && (hasWorkspaceRead || hasWorkspaceWrite || hasWorkspacePatchPreview || hasWorkspacePatchApply || hasSandboxExec || hasLSPSymbols || hasBrowserOpen || hasArtifactCreate || hasAgentSpawn || hasTodoWrite) {
+		if mode == ThreadModeChat && (hasWorkspaceRead || hasWorkspaceWrite || hasWorkspacePatchPreview || hasWorkspacePatchApply || hasSandboxExec || hasLSPSymbols || hasBrowserOpen || hasArtifactCreate || hasArtifactCreateVisual || hasAgentSpawn || hasTodoWrite) {
 			t.Fatalf("chat enabled work-mode tools: %+v", ctxData.EnabledTools)
 		}
 		if mode == ThreadModeChat && !hasWebFetch {
 			t.Fatalf("chat missing public web fetch tool: %+v", ctxData.EnabledTools)
 		}
-		if mode == ThreadModeWork && (!hasWorkspaceRead || !hasWorkspaceWrite || !hasWorkspacePatchPreview || !hasWorkspacePatchApply || !hasSandboxExec || !hasLSPSymbols || !hasWebFetch || !hasBrowserOpen || !hasArtifactCreate || !hasAgentSpawn || !hasTodoWrite) {
+		if mode == ThreadModeWork && (!hasWorkspaceRead || !hasWorkspaceWrite || !hasWorkspacePatchPreview || !hasWorkspacePatchApply || !hasSandboxExec || !hasLSPSymbols || !hasWebFetch || !hasBrowserOpen || !hasArtifactCreate || !hasArtifactCreateVisual || !hasAgentSpawn || !hasTodoWrite) {
 			t.Fatalf("work missing work-mode tools: %+v", ctxData.EnabledTools)
 		}
 	}

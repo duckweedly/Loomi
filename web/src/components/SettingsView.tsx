@@ -832,6 +832,7 @@ const toolDisplayCopy: Record<string, { zh: { name: string; description: string 
   'browser.snapshot': { zh: { name: '浏览器快照', description: '返回 run 作用域浏览器会话的当前安全快照。' }, en: { name: 'Browser snapshot', description: 'Return the current safe snapshot for a run-scoped browser session.' } },
   'browser.click_link': { zh: { name: '点击浏览器链接', description: '从 run 作用域浏览器会话中导航到一个安全链接。' }, en: { name: 'Browser click link', description: 'Navigate one safe link from a run-scoped browser session.' } },
   'artifact.create_text': { zh: { name: '创建文本 artifact', description: '创建一个有边界、不可执行的文本 artifact。' }, en: { name: 'Artifact create text', description: 'Create one bounded non-executable text artifact.' } },
+  'artifact.create_visual': { zh: { name: '创建可视化 artifact', description: '创建一个有边界、可安全预览的 SVG 或 HTML artifact。' }, en: { name: 'Artifact create visual', description: 'Create one bounded SVG or HTML artifact for safe preview.' } },
   'artifact.read': { zh: { name: '读取 artifact', description: '读取一个有边界的文本 artifact 摘录。' }, en: { name: 'Artifact read', description: 'Read one bounded text artifact excerpt.' } },
   'artifact.list': { zh: { name: '列出 artifacts', description: '列出有边界的安全 artifact 摘要。' }, en: { name: 'Artifact list', description: 'List bounded safe artifact summaries.' } },
   'agent.spawn': { zh: { name: '创建子任务', description: '创建一个有边界的子协调任务。' }, en: { name: 'Agent spawn', description: 'Create one bounded child coordination task.' } },

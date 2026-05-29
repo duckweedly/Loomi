@@ -815,6 +815,8 @@ func internalProviderToolName(name string) string {
 		return productdata.ToolNameBrowserPress
 	case "artifact_create_text":
 		return productdata.ToolNameArtifactCreateText
+	case "artifact_create_visual":
+		return productdata.ToolNameArtifactCreateVisual
 	case "artifact_read":
 		return productdata.ToolNameArtifactRead
 	case "artifact_list":
@@ -1266,6 +1268,8 @@ func providerToolName(name string) string {
 		return "browser_press"
 	case productdata.ToolNameArtifactCreateText:
 		return "artifact_create_text"
+	case productdata.ToolNameArtifactCreateVisual:
+		return "artifact_create_visual"
 	case productdata.ToolNameArtifactRead:
 		return "artifact_read"
 	case productdata.ToolNameArtifactList:

@@ -2,6 +2,7 @@ import type { ApiClient } from './apiClient'
 import type { ApiReadiness, InstalledSkill, LocalProviderDetection, MCPServerConfigInput, MCPServerStatus, MemoryAuditItem, MemoryEntry, MemoryErrorEvent, MemoryFilters, MemoryImpressionSnapshot, MemoryOverviewSnapshot, MemoryProviderStatus, MemoryProviderUpdate, MemoryWriteProposal, Message, Persona, ProviderCapability, ProviderFamily, Run, RunEvent, RunSource, RunStatus, Thread, ToolCall, ToolCatalogItem, WebSearchConfig, WorkerQueueDiagnostics, WorkerQueueStatus, WorkerStatus, WorkspaceRootConfig } from './domain'
 import { isRuntimeActive, isRuntimeTerminal } from './runtime/executionAdapter'
 import { applyRealRunEvent } from './runtime/realExecutionAdapter'
+import type { PreviewArtifact } from './runtime/artifactPreview'
 
 const configuredApiBaseUrl = import.meta.env.VITE_LOOMI_API_BASE_URL ?? ''
 const devApiBaseUrl = import.meta.env.DEV ? 'http://127.0.0.1:18080' : ''
@@ -70,6 +71,15 @@ type ApiMessage = {
   client_message_id?: string | null
   run_id?: string | null
   attempt_of_message_id?: string | null
+}
+
+type ApiArtifact = {
+  id: string
+  title: string
+  artifact_type: string
+  content?: string | null
+  text_excerpt?: string | null
+  content_bytes?: number
 }
 
 export type ApiRun = {
@@ -433,6 +443,38 @@ function mapMessage(message: ApiMessage): Message {
     createdAt: message.created_at,
     runId: message.run_id ?? (typeof metadataRunId === 'string' ? metadataRunId : undefined) ?? undefined,
     attemptOfMessageId: message.attempt_of_message_id ?? (typeof metadataAttemptOfMessageId === 'string' ? metadataAttemptOfMessageId : undefined) ?? undefined,
+  }
+}
+
+function artifactMimeType(artifact: ApiArtifact) {
+  if (artifact.artifact_type === 'visual') {
+    const content = artifact.content?.trim() || artifact.text_excerpt?.trim() || ''
+    if (/^<html[\s>]|<!doctype\s+html/i.test(content)) return 'text/html'
+    return 'image/svg+xml'
+  }
+  return 'text/markdown'
+}
+
+function artifactKind(mimeType: string): PreviewArtifact['kind'] {
+  if (mimeType === 'image/svg+xml') return 'svg'
+  if (mimeType.startsWith('text/html')) return 'html'
+  if (mimeType === 'text/markdown') return 'markdown'
+  if (mimeType.startsWith('text/')) return 'text'
+  if (mimeType.startsWith('image/')) return 'image'
+  return 'unknown'
+}
+
+function mapArtifact(artifact: ApiArtifact): PreviewArtifact {
+  const mimeType = artifactMimeType(artifact)
+  const extension = mimeType === 'image/svg+xml' ? '.svg' : mimeType === 'text/html' ? '.html' : '.md'
+  return {
+    id: artifact.id,
+    title: artifact.title,
+    filename: artifact.title.endsWith(extension) ? artifact.title : `${artifact.title}${extension}`,
+    mimeType,
+    kind: artifactKind(mimeType),
+    content: artifact.content?.trim() || undefined,
+    excerpt: artifact.text_excerpt?.trim() || undefined,
   }
 }
 
@@ -989,6 +1031,16 @@ export const realApiClient: ApiClient = {
     const suffix = afterSequence > 0 ? `?after_sequence=${afterSequence}` : ''
     const body = await requestJSON<unknown>(`/v1/runs/${runId}/events${suffix}`)
     return requireArrayField<ApiRunEvent>(body, 'events', 'Run event response was invalid.').map(mapApiRunEvent)
+  },
+
+  async listArtifacts(threadId: string) {
+    const body = await requestJSON<unknown>(`/v1/threads/${threadId}/artifacts?limit=50`)
+    return requireArrayField<ApiArtifact>(body, 'artifacts', 'Artifact list response was invalid.').map(mapArtifact)
+  },
+
+  async readArtifact(threadId: string, artifactId: string) {
+    const body = await requestJSON<{ artifact: ApiArtifact }>(`/v1/threads/${threadId}/artifacts/${artifactId}?max_bytes=32768`)
+    return mapArtifact(body.artifact)
   },
 
   async listPersonas() {

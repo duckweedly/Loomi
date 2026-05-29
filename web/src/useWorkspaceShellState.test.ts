@@ -129,18 +129,18 @@ describe('createWorkspaceShellState', () => {
     })
   })
 
-  test('starts with a narrow open sidebar and keeps resize bounds tight', () => {
+  test('starts with a readable open sidebar and keeps resize bounds tight', () => {
     const shell = createWorkspaceShellState()
     const appSource = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
 
-    expect(shell.snapshot().sidebarWidth).toBe(136)
+    expect(shell.snapshot().sidebarWidth).toBe(260)
     expect(appSource).toContain('Math.min(sidebarMaxWidth, Math.max(sidebarMinWidth, startWidth + moveEvent.clientX - startX))')
 
     shell.setSidebarWidth(999)
-    expect(shell.snapshot().sidebarWidth).toBe(172)
+    expect(shell.snapshot().sidebarWidth).toBe(340)
 
     shell.setSidebarWidth(120)
-    expect(shell.snapshot().sidebarWidth).toBe(128)
+    expect(shell.snapshot().sidebarWidth).toBe(220)
   })
 
   test('persists user-adjusted sidebar width across shell recreation', () => {
@@ -149,12 +149,58 @@ describe('createWorkspaceShellState', () => {
     expect(source).toContain("const sidebarWidthStorageKey = 'loomi.sidebarWidth'")
     expect(source).toContain('readStoredSidebarWidth()')
     expect(source).toContain('isLegacyDefaultSidebarWidth(storedWidth)')
-    expect(source).toContain('156')
-    expect(source).toContain('148')
-    expect(source).toContain('168')
-    expect(source).toContain('184')
+    expect(source).toContain('128')
+    expect(source).toContain('136')
+    expect(source).toContain('196')
+    expect(source).toContain('216')
+    expect(source).toContain('264')
     expect(source).toContain('writeStoredSidebarWidth(next.sidebarWidth)')
     expect(source).toContain('clampSidebarWidth(action.sidebarWidth)')
+  })
+
+  test('treats missing persisted widths as defaults instead of zero', () => {
+    const previousWindow = globalThis.window
+    const localStorage = {
+      getItem: () => null,
+      setItem: () => undefined,
+      removeItem: () => undefined,
+    }
+
+    Object.defineProperty(globalThis, 'window', {
+      configurable: true,
+      value: {
+        localStorage,
+        matchMedia: () => ({ matches: false }),
+      },
+    })
+
+    try {
+      const shell = createWorkspaceShellState()
+
+      expect(shell.snapshot().sidebarWidth).toBe(260)
+      expect(shell.snapshot().rightPanelWidth).toBe(430)
+    } finally {
+      Object.defineProperty(globalThis, 'window', {
+        configurable: true,
+        value: previousWindow,
+      })
+    }
+  })
+
+  test('keeps the preview drawer resizable within desktop bounds', () => {
+    const shell = createWorkspaceShellState()
+    const appSource = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+    const source = readFileSync(new URL('./useWorkspaceShellState.ts', import.meta.url), 'utf8')
+
+    expect(shell.snapshot().rightPanelWidth).toBe(430)
+    expect(appSource).toContain('shell.setRightPanelWidth(startWidth + startX - moveEvent.clientX)')
+    expect(source).toContain("const rightPanelWidthStorageKey = 'loomi.rightPanelWidth'")
+
+    shell.setRightPanelWidth(999)
+    expect(shell.snapshot().rightPanelWidth).toBe(720)
+
+    shell.setRightPanelWidth(120)
+    expect(shell.snapshot().rightPanelWidth).toBe(360)
   })
 
   test('resolves the default theme from the system before a manual override exists', () => {

@@ -449,10 +449,10 @@ html[data-runtime='electron'] .sidebar-titlebar::before,
 }
 
 .workspace-grid {
-  --right-tools-width: minmax(340px, 390px);
-  --content-column-width: min(780px, calc(100% - (var(--content-gutter) * 2)));
-  --composer-width: min(760px, var(--content-column-width));
-  --content-gutter: clamp(24px, 7vw, 132px);
+  --right-tools-width: clamp(360px, var(--right-panel-width, 430px), min(720px, calc(100vw - var(--sidebar-width) - 560px)));
+  --content-column-width: min(1080px, calc(100% - (var(--content-gutter) * 2)));
+  --composer-width: min(980px, var(--content-column-width));
+  --content-gutter: clamp(24px, 4vw, 72px);
   --composer-offset: 0px;
   position: relative;
   display: grid;
@@ -460,7 +460,7 @@ html[data-runtime='electron'] .sidebar-titlebar::before,
   height: auto;
   min-height: 0;
   flex: 1;
-  grid-template-columns: var(--sidebar-width) minmax(0, 1fr) 0;
+  grid-template-columns: var(--sidebar-width) minmax(0, 1fr) 0 0;
   gap: 0;
   padding: 0;
   overflow: hidden;
@@ -474,7 +474,34 @@ html[data-runtime='electron'] .sidebar-titlebar::before,
 }
 
 .workspace-grid.right-tools-open {
-  grid-template-columns: var(--sidebar-width) minmax(0, 1fr) var(--right-tools-width);
+  --content-column-width: calc(100% - (var(--content-gutter) * 2));
+  --composer-width: var(--content-column-width);
+  --content-gutter: 24px;
+  grid-template-columns: var(--sidebar-width) minmax(0, 1fr) 7px var(--right-tools-width);
+}
+
+.sidebar-shell {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.main-region {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.right-panel-resizer {
+  grid-column: 3;
+  grid-row: 1;
+}
+
+.right-tool-drawer {
+  grid-column: 4;
+  grid-row: 1;
+}
+
+.workspace-grid:not(.right-tools-open) .right-tool-drawer {
+  display: none;
 }
 
 .workspace-grid.right-tools-open .main-region {
@@ -497,9 +524,27 @@ html[data-runtime='electron'] .sidebar-titlebar::before,
 }
 
 .workspace-grid.sidebar-collapsed {
-  grid-template-columns: minmax(0, 1fr) 0;
+  grid-template-columns: minmax(0, 1fr) 0 0;
 }
 
 .workspace-grid.sidebar-collapsed.right-tools-open {
-  grid-template-columns: minmax(0, 1fr) var(--right-tools-width);
+  grid-template-columns: minmax(0, 1fr) 7px var(--right-tools-width);
+}
+
+.workspace-grid.sidebar-collapsed .main-region {
+  grid-column: 1;
+}
+
+.workspace-grid.sidebar-collapsed .right-panel-resizer {
+  grid-column: 2;
+}
+
+.workspace-grid.sidebar-collapsed .right-tool-drawer {
+  grid-column: 3;
+}
+
+.right-panel-resizer {
+  z-index: 20;
+  cursor: col-resize;
+  background: transparent;
 }

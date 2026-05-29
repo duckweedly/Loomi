@@ -169,6 +169,9 @@ func runM21WorkspaceTool(t *testing.T, toolName string, args map[string]any, app
 		if call.ExecutionStatus == productdata.ToolCallExecutionSucceeded {
 			return call.ResultSummary, fetchM21Events(t, srv, runID)
 		}
+		if call.ExecutionStatus == productdata.ToolCallExecutionFailed {
+			return toolCallErrorSummary(call), fetchM21Events(t, srv, runID)
+		}
 		t.Fatalf("pre-execution call = %+v", call)
 	}
 	if ok, err := worker.ProcessOne(context.Background()); err != nil || !ok {
@@ -178,7 +181,21 @@ func runM21WorkspaceTool(t *testing.T, toolName string, args map[string]any, app
 	if err != nil {
 		t.Fatal(err)
 	}
+	if finalCall.ExecutionStatus == productdata.ToolCallExecutionFailed {
+		return toolCallErrorSummary(finalCall), fetchM21Events(t, srv, runID)
+	}
 	return finalCall.ResultSummary, fetchM21Events(t, srv, runID)
+}
+
+func toolCallErrorSummary(call productdata.ToolCall) map[string]any {
+	result := map[string]any{"ok": false}
+	if call.ErrorCode != nil {
+		result["error_code"] = *call.ErrorCode
+	}
+	if call.ErrorMessage != nil {
+		result["error_message"] = *call.ErrorMessage
+	}
+	return result
 }
 
 type m21WorkspaceProvider struct {

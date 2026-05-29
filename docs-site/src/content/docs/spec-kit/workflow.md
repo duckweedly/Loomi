@@ -470,15 +470,15 @@ specs/036-artifact-runtime-foundation/
 
 关键产物：
 
-- `spec.md`：定义 `artifact.create_text`、`artifact.read` 和 `artifact.list` 的 approval-gated、Work-mode-only、non-executable text artifact runtime 和非目标。
+- `spec.md`：定义 `artifact.create_text`、`artifact.create_visual`、`artifact.read` 和 `artifact.list` 的 approval-gated、Work-mode-only artifact runtime 和非目标。
 - `plan.md`：确定复用 ToolCatalog/RunContext/ToolBroker/worker continuation、WorkPlan artifact projection、Settings/RunRail。
-- `research.md`：记录先做 text-only storage、不做执行/渲染/下载的决策。
+- `research.md`：记录先做 bounded artifact storage、不做下载/文件系统导出/浏览器集成的决策。
 - `data-model.md`：定义 Artifact、tool arguments 和 result summary。
 - `contracts/`：定义 catalog、arguments、result 和 rejection contract。
 - `quickstart.md`：记录 focused/full validation 和 manual smoke。
 - `tasks.md`：按 catalog/runtime/read-list/safety/UI/docs/validation 拆分。
 
-状态：M28 PG-backed candidate。Artifact tools 仅 Work mode 启用，always approval required，经 ToolBroker/worker continuation 创建/读取/列出 bounded UTF-8 text artifacts；真实 API 路径使用 PostgreSQL `artifacts`，in-memory 和 PG 均覆盖 create/read/list 与 cross-thread no-leak。Settings > Tools 与 RunRail 显示 artifact scope、medium risk、non-executable。M28 不包含 binary artifacts、downloads、rendered previews、iframe execution、filesystem export、browser integration、shell integration、artifact version graph、marketplace packaging 或 multi-agent orchestration。
+状态：M28 PG-backed candidate。Artifact tools 仅 Work mode 启用，always approval required，经 ToolBroker/worker continuation 创建/读取/列出 bounded UTF-8 text artifacts，并支持 `artifact.create_visual` 创建 bounded SVG/HTML visual artifacts。真实 API 路径使用 PostgreSQL `artifacts`，in-memory 和 PG 均覆盖 create/read/list 与 cross-thread no-leak。Settings > Tools 与 RunRail 显示 artifact scope 和 medium risk；文本 artifact 仍 non-executable，视觉 artifact 仅在 sandboxed Preview frame 中渲染。M28 不包含 binary artifacts、downloads、filesystem export、browser integration、shell integration、artifact version graph、marketplace packaging 或 multi-agent orchestration。
 
 ## 近期已完成：M27 Browser Automation Foundation
 

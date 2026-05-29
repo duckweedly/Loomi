@@ -735,7 +735,8 @@ func TestWorkerExecutesApprovedWorkspaceWriteFileAndContinuesModel(t *testing.T)
 		t.Fatal(err)
 	}
 	if got.Status != productdata.RunStatusCompleted {
-		t.Fatalf("run = %+v", got)
+		events, _ := svc.ListRunEvents(context.Background(), ident, run.ID, 0)
+		t.Fatalf("run = %+v events=%+v provider=%+v", got, events, provider.request)
 	}
 	if len(provider.request.Messages) != 3 || provider.request.Messages[1].Role != ProviderMessageRoleAssistantToolCall || provider.request.Messages[2].Role != ProviderMessageRoleToolResult {
 		t.Fatalf("continuation request = %+v", provider.request.Messages)
@@ -2385,5 +2386,65 @@ func TestWorkerDoesNotContinueAfterToolExecutionFailure(t *testing.T) {
 	}
 	if provider.request.ThreadID != "" {
 		t.Fatalf("provider was called: %+v", provider.request)
+	}
+}
+
+func TestQueuedToolExecutionFailureContinuesAsToolResult(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, productdata.CreateThreadInput{Title: "Recover failed read", Mode: productdata.ThreadModeWork})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _, err := svc.CreateMessage(context.Background(), ident, thread.ID, productdata.CreateMessageInput{Content: "Read the project and summarize."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, productdata.StartRunInput{Source: productdata.RunSourceModelGateway, MessageID: message.ID, ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.RecordToolCallRequest(context.Background(), ident, run.ID, productdata.RecordToolCallRequestInput{ToolCallID: "tc_missing", ToolName: productdata.ToolNameWorkspaceRead, ArgumentsSummary: map[string]any{"path": "missing.ts"}, ArgumentsHash: "hash_missing", ApprovalStatus: productdata.ToolCallApprovalApproved, ExecutionStatus: productdata.ToolCallExecutionNotStarted}); err != nil {
+		t.Fatal(err)
+	}
+	provider := &capturingProvider{config: ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: "https://example.test/v1", APIKey: "key", Model: "model", Enabled: true}, events: []ProviderEvent{{Type: ProviderEventCompleted, Text: "Recovered after missing file."}}}
+	prepared := &productdata.RunContext{
+		ProviderRoute: productdata.ProviderRoute{ProviderID: "custom", Model: "model", Available: true},
+		EnabledTools: []productdata.ToolResolution{{
+			Name:           productdata.ToolNameWorkspaceRead,
+			Source:         string(productdata.ToolCatalogSourceBuiltin),
+			Group:          string(productdata.ToolCatalogGroupWorkspace),
+			ExecutionState: string(productdata.ToolExecutionStateExecutable),
+		}},
+	}
+	router := QueuedRunRouter{Gateway: NewGateway(svc, nil, []Provider{provider}), toolExecutor: failingToolExecutor{err: errors.New("workspace path is unavailable")}}
+
+	if err := router.runApprovedTool(context.Background(), run, productdata.BackgroundJob{}, "tc_missing", prepared, true); err != nil {
+		t.Fatal(err)
+	}
+	got, err := svc.GetRun(context.Background(), ident, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != productdata.RunStatusCompleted {
+		events, _ := svc.ListRunEvents(context.Background(), ident, run.ID, 0)
+		t.Fatalf("run = %+v events=%+v provider=%+v", got, events, provider.request)
+	}
+	call, err := svc.GetToolCall(context.Background(), ident, thread.ID, run.ID, "tc_missing")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if call.ExecutionStatus != productdata.ToolCallExecutionFailed {
+		t.Fatalf("call = %+v", call)
+	}
+	if provider.request.ThreadID != thread.ID {
+		t.Fatalf("provider was not called for recovery continuation: %+v", provider.request)
+	}
+	messages, err := svc.ListMessages(context.Background(), ident, thread.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 2 || messages[1].Content != "Recovered after missing file." {
+		t.Fatalf("messages = %+v", messages)
 	}
 }

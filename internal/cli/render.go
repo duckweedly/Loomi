@@ -500,7 +500,7 @@ func formatToolArguments(toolName string, args map[string]any) string {
 			toolField("text", quoteToolText(metadataStringValue(args, "text"))),
 			toolField("key", metadataStringValue(args, "key")),
 		)
-	case "artifact.create_text", "artifact.read", "artifact.list":
+	case "artifact.create_text", "artifact.create_visual", "artifact.read", "artifact.list":
 		return joinToolFields(
 			toolField("artifact", metadataStringValue(args, "artifact_id")),
 			toolField("title", quoteToolText(metadataStringValue(args, "title"))),

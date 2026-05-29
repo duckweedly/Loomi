@@ -19,6 +19,7 @@ export default function App() {
     selectedThreadId,
     messages,
     run,
+    artifacts,
     streamState,
     loading,
     error,
@@ -43,6 +44,7 @@ export default function App() {
     stopRun,
     approveToolCall,
     denyToolCall,
+    openPreviewArtifact,
     retryRun,
     regenerateRun,
     providerCapabilities,
@@ -109,7 +111,7 @@ export default function App() {
   } = useWorkspaceState(shell.defaultWorkspaceMode)
 
   const dictionary = getDictionary(shell.locale)
-  const workspaceStyle = { '--sidebar-width': `${shell.sidebarWidth}px` } as CSSProperties
+  const workspaceStyle = { '--sidebar-width': `${shell.sidebarWidth}px`, '--right-panel-width': `${shell.rightPanelWidth}px` } as CSSProperties
   const workspaceClass = [
     'workspace-grid',
     shell.sidebarCollapsed ? 'sidebar-collapsed' : '',
@@ -133,6 +135,34 @@ export default function App() {
     window.addEventListener('pointermove', handlePointerMove)
     window.addEventListener('pointerup', handlePointerUp)
   }
+
+  const handleRightPanelResize = (event: PointerEvent<HTMLDivElement>) => {
+    const startX = event.clientX
+    const startWidth = shell.rightPanelWidth
+    event.currentTarget.setPointerCapture(event.pointerId)
+
+    const handlePointerMove = (moveEvent: globalThis.PointerEvent) => {
+      shell.setRightPanelWidth(startWidth + startX - moveEvent.clientX)
+    }
+
+    const handlePointerUp = () => {
+      window.removeEventListener('pointermove', handlePointerMove)
+      window.removeEventListener('pointerup', handlePointerUp)
+    }
+
+    window.addEventListener('pointermove', handlePointerMove)
+    window.addEventListener('pointerup', handlePointerUp)
+  }
+
+  const handleSelectThread = useCallback((threadId: string) => {
+    shell.closeRightPanel()
+    selectThread(threadId)
+  }, [selectThread, shell])
+
+  const handleCreateThread = useCallback(() => {
+    shell.closeRightPanel()
+    void createThread()
+  }, [createThread, shell])
 
   return (
     <ConfigProvider motion={motion}>
@@ -161,8 +191,8 @@ export default function App() {
                   error={error}
                   copy={dictionary.sidebar}
                   onRefresh={() => void refresh()}
-                  onSelectThread={selectThread}
-                  onCreateThread={() => void createThread()}
+                  onSelectThread={handleSelectThread}
+                  onCreateThread={handleCreateThread}
                   onRenameThread={(threadId, title) => void renameThread(threadId, title)}
                   onArchiveThread={(threadId) => void archiveThread(threadId)}
                   onToggleTheme={shell.toggleTheme}
@@ -314,16 +344,22 @@ export default function App() {
                   onStopRun={() => void stopRun()}
                   onApproveToolCall={(toolCall) => approveToolCall(toolCall)}
                   onDenyToolCall={(toolCall) => denyToolCall(toolCall)}
-                  onOpenArtifact={(artifact) => shell.openArtifact(artifact.id)}
+                  artifacts={artifacts}
+                  onOpenArtifact={(artifact) => {
+                    shell.openArtifact(artifact.id)
+                    void openPreviewArtifact(artifact)
+                  }}
                   onRetryRun={retryRun}
                   onRegenerateRun={regenerateRun}
                   locale={shell.locale}
                 />
               )}
             </section>
+            {!shell.settingsOpen && shell.rightPanelOpen && <div className="right-panel-resizer" role="separator" aria-orientation="vertical" onPointerDown={handleRightPanelResize} />}
             <RunTimeline
               run={run}
               messages={messages}
+              artifacts={artifacts}
               rightToolsOpen={!shell.settingsOpen && shell.rightPanelOpen}
               selectedPanelId={shell.selectedRightPanelId}
               selectedArtifactId={shell.previewArtifactId}

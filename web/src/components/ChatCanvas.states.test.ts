@@ -143,7 +143,9 @@ describe('ChatCanvas state copy', () => {
     expect(source).toContain("addEventListener('scroll'")
     expect(source).toContain('passive: true')
     expect(source).not.toContain('shouldStickToBottom = distanceFromBottom < 180 || Boolean')
-    expect(source).toContain("scrollIntoView({ block: 'end', behavior: 'auto' })")
+    expect(source).toContain('window.requestAnimationFrame')
+    expect(source).toContain('list.scrollTop = list.scrollHeight')
+    expect(source).not.toContain('scrollIntoView')
     expect(source).toContain('className="message-end-anchor"')
     expect(css).toContain('.message-end-anchor')
   })
@@ -643,6 +645,29 @@ describe('ChatCanvas state copy', () => {
     expect(html).not.toContain('<h1>项目名称&gt;简短描述')
     expect(html).not.toContain('###项目介绍')
     expect(html).not.toContain('##快速开始')
+  })
+
+  test('renders raw SVG assistant output as a visual artifact card', () => {
+    const html = renderToStaticMarkup(createElement(ChatCanvas, {
+      sidebarCollapsed: false,
+      thread: { id: 'thread-a', title: 'Thread A', project: 'Loomi', mode: 'chat', updatedAt: 'Now', lifecycleStatus: 'active', runStatus: 'completed' },
+      messages: [{ id: 'msg-svg', threadId: 'thread-a', role: 'assistant', content: '下面是图：\n```svg\n<svg viewBox="0 0 20 20"><title>流程图</title><rect width="20" height="20"/></svg>\n```', createdAt: 'Now' }],
+      run: null,
+      loading: false,
+      error: null,
+      dataSourceMode: 'real_api',
+      streamState: 'closed',
+      providerCapabilities: [{ id: 'custom', family: 'openai_compatible' as const, model: 'gpt-5.5', status: 'available' as const }],
+      onSendMessage: () => {},
+      onStopRun: () => {},
+      locale: 'zh',
+    }))
+
+    expect(html).toContain('message-artifact-card')
+    expect(html).toContain('流程图')
+    expect(html).toContain('可视化产物')
+    expect(html).not.toContain('message-code-block-lang">svg')
+    expect(html).not.toContain('&lt;svg')
   })
 
   test('does not render trailing empty fences as blank code cards', () => {
@@ -1427,6 +1452,69 @@ describe('ChatCanvas state copy', () => {
     expect(html).toContain('搜索 1')
     expect(html).toContain('生成中')
     expect(html).toMatch(/组织回复|梳理线索|核对上下文|提炼重点|推敲答案|收束思路|准备回答|再看一眼/)
+  })
+
+  test('keeps failure feedback visible after tool events when no final answer arrives', () => {
+    const html = renderToStaticMarkup(createElement(ChatCanvas, {
+      sidebarCollapsed: false,
+      thread: { id: 'thread-a', title: 'Thread A', project: 'Loomi', mode: 'chat', updatedAt: 'Now', lifecycleStatus: 'active', runStatus: 'failed' },
+      messages: [{ id: 'msg-user', threadId: 'thread-a', role: 'user', content: 'Search first', createdAt: 'Now' }],
+      run: {
+        id: 'run-a',
+        threadId: 'thread-a',
+        status: 'failed',
+        model: 'local_codex',
+        context: 'model_gateway',
+        events: [
+          { id: 'evt-tool-1', runId: 'run-a', threadId: 'thread-a', type: 'tool.call.succeeded', label: 'Tool', detail: 'done', time: 'Now', status: 'completed', sequence: 1, metadata: { tool_call_id: 'tc-1', tool_name: 'web.search', result_summary: { count: 2 }, execution_status: 'succeeded' } },
+          { id: 'evt-failed', runId: 'run-a', threadId: 'thread-a', type: 'run.failed', label: 'Run failed', detail: 'Provider failed', time: 'Now', status: 'failed', sequence: 2 },
+        ],
+      },
+      loading: false,
+      error: null,
+      dataSourceMode: 'real_api',
+      streamState: 'closed',
+      providerCapabilities: [{ id: 'local_codex', family: 'openai_compatible', model: 'gpt-5.5', status: 'available', executionState: 'supported' }],
+      onSendMessage: () => {},
+      onStopRun: () => {},
+      onRetryRun: () => {},
+      locale: 'zh',
+    }))
+
+    expect(html).toContain('完成 1 个工具')
+    expect(html).toContain('执行失败')
+    expect(html).toContain('未生成成功回复')
+    expect(html).toContain('重试')
+  })
+
+  test('keeps recovery feedback visible after terminal tool events before retry output arrives', () => {
+    const html = renderToStaticMarkup(createElement(ChatCanvas, {
+      sidebarCollapsed: false,
+      thread: { id: 'thread-a', title: 'Thread A', project: 'Loomi', mode: 'chat', updatedAt: 'Now', lifecycleStatus: 'active', runStatus: 'recovering' },
+      messages: [{ id: 'msg-user', threadId: 'thread-a', role: 'user', content: 'Search first', createdAt: 'Now' }],
+      run: {
+        id: 'run-a',
+        threadId: 'thread-a',
+        status: 'recovering',
+        model: 'local_codex',
+        context: 'model_gateway',
+        events: [
+          { id: 'evt-tool-1', runId: 'run-a', threadId: 'thread-a', type: 'tool.call.succeeded', label: 'Tool', detail: 'done', time: 'Now', status: 'completed', sequence: 1, metadata: { tool_call_id: 'tc-1', tool_name: 'web.search', result_summary: { count: 2 }, execution_status: 'succeeded' } },
+        ],
+      },
+      loading: false,
+      error: null,
+      dataSourceMode: 'real_api',
+      streamState: 'recoverable_error',
+      providerCapabilities: [{ id: 'local_codex', family: 'openai_compatible', model: 'gpt-5.5', status: 'available', executionState: 'supported' }],
+      onSendMessage: () => {},
+      onStopRun: () => {},
+      locale: 'zh',
+    }))
+
+    expect(html).toContain('完成 1 个工具')
+    expect(html).toContain('恢复中')
+    expect(html).toContain('恢复中…')
   })
 
   test('does not leak stale active tool approval into a newer completed chat turn', () => {

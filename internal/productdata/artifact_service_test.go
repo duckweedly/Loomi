@@ -28,6 +28,14 @@ func TestMemoryServiceCreatesReadsAndListsArtifactsInThreadScope(t *testing.T) {
 		t.Fatalf("artifact = %+v", artifact)
 	}
 
+	visual, err := svc.CreateArtifact(context.Background(), ident, CreateArtifactInput{ThreadID: thread.ID, RunID: run.ID, Title: "Diagram", ArtifactType: "visual", Content: "<svg></svg>", MaxBytes: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if visual.ArtifactType != "visual" {
+		t.Fatalf("visual artifact = %+v", visual)
+	}
+
 	read, err := svc.ReadArtifact(context.Background(), ident, ReadArtifactInput{ThreadID: thread.ID, ArtifactID: artifact.ID, MaxBytes: 5})
 	if err != nil {
 		t.Fatal(err)
@@ -40,7 +48,7 @@ func TestMemoryServiceCreatesReadsAndListsArtifactsInThreadScope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(list) != 1 || list[0].ID != artifact.ID || list[0].Content != "" {
+	if len(list) != 2 || list[0].Content != "" || list[1].Content != "" {
 		t.Fatalf("list = %+v", list)
 	}
 

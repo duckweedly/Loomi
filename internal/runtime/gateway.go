@@ -1463,6 +1463,8 @@ func builtinProviderToolDefinition(name string) (ProviderToolDefinition, bool) {
 		return providerTool(name, "Record one bounded key press in a run-scoped browser session.", map[string]any{"session_id": stringSchema("Browser session id."), "key": map[string]any{"type": "string", "enum": []string{"Enter", "Escape", "Tab", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"}}}, []string{"session_id", "key"}), true
 	case productdata.ToolNameArtifactCreateText:
 		return providerTool(name, "Create one bounded non-executable text artifact for reports, articles, Markdown, or saveable documents. The result returns an artifacts array; cite its returned key only.", map[string]any{"title": stringSchema("Optional artifact title."), "filename": stringSchema("Optional display filename."), "mime_type": stringSchema("Optional MIME type."), "display": map[string]any{"type": "string", "enum": []string{"inline", "panel"}}, "content": stringSchema("Artifact text content."), "max_bytes": integerSchema(1, defaultArtifactMaxBytes)}, []string{"content"}), true
+	case productdata.ToolNameArtifactCreateVisual:
+		return providerTool(name, "Create one bounded renderable SVG or HTML visual artifact for diagrams, charts, mockups, and explanatory drawings. Use this instead of placing raw SVG or HTML in the final answer. The result returns an artifacts array; cite its returned key only.", map[string]any{"title": stringSchema("Short visual artifact title."), "filename": stringSchema("Optional display filename ending in .svg or .html."), "mime_type": map[string]any{"type": "string", "enum": []string{"image/svg+xml", "text/html"}}, "display": map[string]any{"type": "string", "enum": []string{"inline", "panel"}}, "content": stringSchema("Complete SVG or HTML content to render in a sandboxed preview."), "max_bytes": integerSchema(1, defaultArtifactMaxBytes)}, []string{"title", "mime_type", "content"}), true
 	case productdata.ToolNameArtifactRead:
 		return providerTool(name, "Read one bounded text artifact excerpt by id without returning raw full content.", map[string]any{"artifact_id": stringSchema("Artifact id or key."), "max_bytes": integerSchema(1, defaultArtifactMaxBytes)}, []string{"artifact_id"}), true
 	case productdata.ToolNameArtifactList:
@@ -1721,7 +1723,7 @@ func continuationToolResults(events []productdata.RunEvent, toolCallID string) (
 	completed := map[string]bool{}
 	completedResults := map[string]map[string]any{}
 	for _, event := range events {
-		if event.Type != productdata.EventToolCallRequested && event.Type != productdata.EventToolCallSucceeded {
+		if event.Type != productdata.EventToolCallRequested && event.Type != productdata.EventToolCallSucceeded && event.Type != productdata.EventToolCallFailed {
 			continue
 		}
 		eventToolCallID := metadataString(event.Metadata, "tool_call_id")
@@ -1744,6 +1746,9 @@ func continuationToolResults(events []productdata.RunEvent, toolCallID string) (
 		result := metadataMap(event.Metadata, "result_for_model_redacted")
 		if len(result) == 0 {
 			result = metadataMap(event.Metadata, "result_summary")
+		}
+		if len(result) == 0 && event.Type == productdata.EventToolCallFailed {
+			result = failedToolResultForModel(event.Metadata)
 		}
 		if len(result) == 0 {
 			return nil, productdata.NewError(productdata.CodeInvalidRequest, "Tool result was not found.")
@@ -1775,7 +1780,10 @@ func continuationToolResultsFromSteps(steps []productdata.RunStep, toolCallID st
 			}
 			continue
 		}
-		if step.Kind != productdata.RunStepKindToolExecution || step.Status != productdata.RunStepStatusSucceeded || completed[eventToolCallID] {
+		if step.Kind != productdata.RunStepKindToolExecution || completed[eventToolCallID] {
+			continue
+		}
+		if step.Status != productdata.RunStepStatusSucceeded && step.Status != productdata.RunStepStatusFailed {
 			continue
 		}
 		toolCall, ok := requested[eventToolCallID]
@@ -1785,6 +1793,9 @@ func continuationToolResultsFromSteps(steps []productdata.RunStep, toolCallID st
 		result := metadataMap(step.SafeMetadata, "result_for_model_redacted")
 		if len(result) == 0 {
 			result = metadataMap(step.SafeMetadata, "result_summary")
+		}
+		if len(result) == 0 && step.Status == productdata.RunStepStatusFailed {
+			result = failedToolResultForModel(step.SafeMetadata)
 		}
 		if len(result) == 0 {
 			return nil, productdata.NewError(productdata.CodeInvalidRequest, "Tool result was not found.")
@@ -1797,6 +1808,22 @@ func continuationToolResultsFromSteps(steps []productdata.RunStep, toolCallID st
 		completedResults[eventToolCallID] = productdata.RedactEventMetadata(result)
 	}
 	return orderedContinuationToolResults(requestOrder, requested, completedResults, toolCallID)
+}
+
+func failedToolResultForModel(metadata map[string]any) map[string]any {
+	code := metadataString(metadata, "error_code")
+	message := metadataString(metadata, "error_message")
+	if code == "" && message == "" {
+		return nil
+	}
+	result := map[string]any{"ok": false}
+	if code != "" {
+		result["error_code"] = code
+	}
+	if message != "" {
+		result["error_message"] = productdata.RedactEventText(message)
+	}
+	return result
 }
 
 func orderedContinuationToolResults(requestOrder []string, requested map[string]continuationToolCall, completedResults map[string]map[string]any, toolCallID string) ([]continuationToolResultItem, error) {
@@ -1875,7 +1902,7 @@ func runSystemPrompt(prepared *productdata.RunContext) string {
 		if workspaceLabel == "" {
 			workspaceLabel = productdata.WorkspaceDisplayNameFromPath(prepared.WorkspaceRoot.Path)
 		}
-		policy += "\n\nWork mode policy:\n- This is a Work run. File and folder tasks are tool-first: inspect/list/search/classify/summarize files with workspace_list_directory, workspace_tree_summary, workspace_grep, and workspace_read before answering.\n- For folder listing, inventory, or classification, start with workspace_tree_summary or workspace_list_directory using path \".\" and a bounded max_entries/depth. Do not start with grep for directory inventory.\n- Use workspace_grep only for content search. Read specific files with workspace_read only after you have a relative path.\n- Do not tell the user to run shell commands, paste directory listings, export files, or grant oral permission when workspace tools are available. Request the tool and continue from the result.\n- Do not use sandbox commands for file reads, globbing, grep, cat/head/tail/ls-style listing, or simple classification. Use sandbox commands only for build/test/lint or commands that truly need a process.\n- Workspace tool paths are always relative to the selected workspace root. The selected folder is already the root; use \".\" for it and do not repeat the root folder name such as Downloads, Desktop, or Documents in tool paths.\n- If a requested path is outside the selected root, ask the user to choose that folder in the UI.\n- Final output should summarize the work clearly and omit raw tool protocol details."
+		policy += "\n\nWork mode policy:\n- This is a Work run. File and folder tasks are tool-first: inspect/list/search/classify/summarize files with workspace_list_directory, workspace_tree_summary, workspace_grep, and workspace_read before answering.\n- For folder listing, inventory, or classification, start with workspace_tree_summary or workspace_list_directory using path \".\" and a bounded max_entries/depth. Do not start with grep for directory inventory.\n- Use workspace_grep only for content search. Read specific files with workspace_read only after you have a relative path.\n- Do not tell the user to run shell commands, paste directory listings, export files, or grant oral permission when workspace tools are available. Request the tool and continue from the result.\n- Do not stop with a final answer that says you still need to continue reading files, inspect more source, or draw the final diagram later. If the needed workspace tools are available, request the next workspace tool call in the same run.\n- Do not use sandbox commands for file reads, globbing, grep, cat/head/tail/ls-style listing, or simple classification. Use sandbox commands only for build/test/lint or commands that truly need a process.\n- Workspace tool paths are always relative to the selected workspace root. The selected folder is already the root; use \".\" for it and do not repeat the root folder name such as Downloads, Desktop, or Documents in tool paths.\n- If a requested path is outside the selected root, ask the user to choose that folder in the UI.\n- Final output should summarize the work clearly and omit raw tool protocol details."
 		if workspaceLabel != "" {
 			policy += "\n\nWorkspace reference policy:\n- Selected workspace: " + productdata.RedactEventText(workspaceLabel) + "\n- When the user says current directory, this directory, selected directory, just selected directory, 当前目录, 这个目录, 刚选目录, use the selected workspace root and path \".\".\n- When the user says download directory or 下载目录, only treat it as Downloads when the selected workspace label is Downloads; otherwise ask the user to choose Downloads in the UI before using workspace tools.\n- Never infer Loomi, Arkloop, a previous thread folder, or the process working directory as the workspace for this run."
 		} else {
@@ -1883,6 +1910,7 @@ func runSystemPrompt(prepared *productdata.RunContext) string {
 		}
 		policy += "\n\nTool selection strategy:\n- Directory questions: use workspace_tree_summary or workspace_list_directory first with path \".\" and bounded max_entries/depth before summarizing categories.\n- Use workspace_glob only for file-name pattern matching or a narrow follow-up after directory inventory.\n- Content questions: use workspace_grep or workspace_read after you have a relative path; use grep to find candidates, then read the specific file.\n- Modification questions: use workspace_read first, then workspace_patch_preview, then workspace_patch_apply only after approval.\n- Use sandbox commands only when the user explicitly asks for a shell/process action or when verifying a change with build/test/lint."
 		policy += "\n\nArtifact/document contract:\n- Reports, articles, Markdown, and saveable documents should use artifact.create_text instead of placing the full document only in the final reply.\n- Reference saved artifacts as [title](artifact:<key>) using a key returned by artifact.create_text or artifact.list.\n- Do not invent artifact keys."
+		policy += "\n\nVisual artifact contract:\n- Diagrams, SVG drawings, HTML mockups, charts, and visual explanations should use artifact.create_visual when the tool is available.\n- Do not place raw <svg>, <html>, or fenced SVG/HTML blocks directly in the final reply; save them as a visual artifact and cite the returned artifact key.\n- Visual artifacts support only bounded image/svg+xml and text/html previews inside Loomi's sandboxed artifact frame."
 	}
 	return base + memoryPromptContext(prepared) + policy
 }

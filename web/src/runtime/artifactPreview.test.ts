@@ -81,4 +81,26 @@ describe('artifactPreview', () => {
     expect(getRunPreviewArtifacts(run)).toHaveLength(1)
     expect(getRunPreviewArtifacts(run)[0]).toMatchObject({ id: 'art-a', title: 'Plan' })
   })
+
+  test('extracts visual artifact content from create_visual results', () => {
+    const artifact = getToolCallArtifact(toolCall({
+      name: 'artifact.create_visual',
+      resultSummary: {
+        artifacts: [{
+          key: 'art-svg',
+          title: 'Flow',
+          filename: 'flow.svg',
+          mime_type: 'image/svg+xml',
+          content: '<svg viewBox="0 0 10 10"></svg>',
+        }],
+      },
+    }))
+
+    expect(artifact).toMatchObject({
+      id: 'art-svg',
+      title: 'Flow',
+      kind: 'svg',
+      content: '<svg viewBox="0 0 10 10"></svg>',
+    })
+  })
 })

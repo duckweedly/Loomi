@@ -272,8 +272,20 @@ func (r QueuedRunRouter) runApprovedTool(ctx context.Context, run productdata.Ru
 			return nil
 		}
 		code, message := toolExecutionFailure(err)
-		_, failedEvents, _ := r.Gateway.Service.FailToolCallExecution(ctx, identity.LocalDevIdentity(), run.ThreadID, run.ID, toolCallID, code, message)
+		failedEvents := []productdata.RunEvent(nil)
+		if toolExecutionFailureEndsRun(code) {
+			_, failedEvents, _ = r.Gateway.Service.FailToolCallExecution(ctx, identity.LocalDevIdentity(), run.ThreadID, run.ID, toolCallID, code, message)
+		} else if recorder, ok := r.Gateway.Service.(interface {
+			RecordToolCallExecutionFailure(context.Context, identity.LocalIdentity, string, string, string, string, string) (productdata.ToolCall, []productdata.RunEvent, error)
+		}); ok {
+			_, failedEvents, _ = recorder.RecordToolCallExecutionFailure(ctx, identity.LocalDevIdentity(), run.ThreadID, run.ID, toolCallID, code, message)
+		} else {
+			_, failedEvents, _ = r.Gateway.Service.FailToolCallExecution(ctx, identity.LocalDevIdentity(), run.ThreadID, run.ID, toolCallID, code, message)
+		}
 		r.publishRunEvents(failedEvents)
+		if continueAfter && !toolExecutionFailureEndsRun(code) {
+			return r.continueAfterToolBatch(ctx, run, toolCallID, prepared)
+		}
 		return nil
 	}
 	if result.ToolName == productdata.ToolNameAgentDelegate && result.ResultSummary["child_run_id"] != nil {
@@ -380,6 +392,15 @@ func toolExecutionFailure(err error) (string, string) {
 		return "tool_execution_failed", "Tool execution failed: " + message
 	default:
 		return "tool_execution_failed", "Tool execution failed."
+	}
+}
+
+func toolExecutionFailureEndsRun(code string) bool {
+	switch code {
+	case "permission_not_authorized", "workspace_unbound":
+		return true
+	default:
+		return false
 	}
 }
 

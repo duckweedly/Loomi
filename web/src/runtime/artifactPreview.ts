@@ -5,7 +5,7 @@ export type PreviewArtifact = {
   title: string
   filename: string
   mimeType: string
-  kind: 'markdown' | 'text' | 'html' | 'image' | 'unknown'
+  kind: 'markdown' | 'text' | 'html' | 'svg' | 'image' | 'unknown'
   content?: string
   excerpt?: string
   sourceToolCallId?: string
@@ -32,6 +32,7 @@ function mimeFromFilename(filename: string) {
 
 function kindFromMime(mimeType: string): PreviewArtifact['kind'] {
   if (mimeType === 'text/markdown') return 'markdown'
+  if (mimeType === 'image/svg+xml') return 'svg'
   if (mimeType.startsWith('text/html')) return 'html'
   if (mimeType.startsWith('image/')) return 'image'
   if (mimeType.startsWith('text/')) return 'text'
@@ -64,7 +65,7 @@ export function getToolCallArtifact(toolCall: ToolCall): PreviewArtifact | null 
   const nested = Array.isArray(result.artifacts) ? result.artifacts.map(record).find(Boolean) : null
   if (nested) return artifactFromRecord(nested, toolCall)
 
-  if (toolCall.name === 'artifact.create_text' || toolCall.name === 'document_write' || toolCall.name === 'create_artifact') {
+  if (toolCall.name === 'artifact.create_text' || toolCall.name === 'artifact.create_visual' || toolCall.name === 'document_write' || toolCall.name === 'create_artifact') {
     return artifactFromRecord(result, toolCall)
   }
 

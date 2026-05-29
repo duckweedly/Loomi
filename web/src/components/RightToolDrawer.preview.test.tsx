@@ -91,4 +91,68 @@ describe('RightToolDrawer preview panel', () => {
     expect(html).toContain('<h1>')
     expect(html).not.toContain('暂无预览')
   })
+
+  test('renders SVG visual artifacts in the sandbox frame', () => {
+    const html = renderToStaticMarkup(createElement(RightToolDrawer, {
+      open: true,
+      selectedPanelId: 'preview',
+      selectedArtifactId: 'art_svg',
+      locale: 'zh',
+      run: {
+        id: 'run-a',
+        threadId: 'thread-a',
+        status: 'running',
+        model: 'Local simulated',
+        context: 'local_simulated',
+        events: [{
+          id: 'evt-artifact-svg',
+          runId: 'run-a',
+          threadId: 'thread-a',
+          type: 'tool.call.succeeded',
+          label: 'Tool',
+          detail: 'artifact.create_visual completed',
+          time: 'Now',
+          status: 'running',
+          metadata: {
+            tool_call_id: 'tc_visual',
+            tool_name: 'artifact.create_visual',
+            result_summary: { artifacts: [{ key: 'art_svg', title: '流程图', filename: 'flow.svg', mime_type: 'image/svg+xml', content: '<svg viewBox="0 0 10 10"><title>流程图</title></svg>' }] },
+          },
+        }],
+      },
+    }))
+
+    expect(html).toContain('artifact-frame')
+    expect(html).toContain('sandbox="allow-scripts"')
+    expect(html).toContain('image/svg+xml')
+    expect(html).not.toContain('<pre>')
+  })
+
+  test('resolves selected artifact links from thread artifact metadata', () => {
+    const html = renderToStaticMarkup(createElement(RightToolDrawer, {
+      open: true,
+      selectedPanelId: 'preview',
+      selectedArtifactId: 'art_svg',
+      locale: 'zh',
+      messages: [{
+        id: 'msg-a',
+        threadId: 'thread-a',
+        role: 'assistant',
+        content: '已生成 [LangGraph SVG 讲解图](artifact:art_svg)。',
+        createdAt: 'Now',
+      }],
+      artifacts: [{
+        id: 'art_svg',
+        title: 'LangGraph SVG 讲解图',
+        filename: 'LangGraph SVG 讲解图.svg',
+        mimeType: 'image/svg+xml',
+        kind: 'svg',
+        content: '<svg viewBox="0 0 10 10"><title>LangGraph</title></svg>',
+      }],
+    }))
+
+    expect(html).toContain('image/svg+xml')
+    expect(html).toContain('artifact-frame')
+    expect(html).not.toContain('text/markdown')
+  })
 })

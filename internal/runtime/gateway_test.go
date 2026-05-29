@@ -279,6 +279,8 @@ func TestRunSystemPromptGuidesWorkModeToWorkspaceTools(t *testing.T) {
 		"workspace_read",
 		"Do not tell the user to run shell commands",
 		"use \".\" for it and do not repeat the root folder name",
+		"Do not stop with a final answer that says you still need to continue reading files",
+		"request the next workspace tool call in the same run",
 	} {
 		if !strings.Contains(work, expected) {
 			t.Fatalf("work prompt missing %q: %s", expected, work)
@@ -286,6 +288,8 @@ func TestRunSystemPromptGuidesWorkModeToWorkspaceTools(t *testing.T) {
 	}
 	for _, expected := range []string{
 		"Reports, articles, Markdown, and saveable documents should use artifact.create_text",
+		"Diagrams, SVG drawings, HTML mockups, charts, and visual explanations should use artifact.create_visual",
+		"Do not place raw <svg>, <html>, or fenced SVG/HTML blocks directly in the final reply",
 		"Reference saved artifacts as [title](artifact:<key>)",
 		"Do not invent artifact keys",
 	} {
@@ -362,6 +366,30 @@ func TestArtifactCreateTextProviderSchemaIncludesDocumentMetadata(t *testing.T) 
 	required, ok := tool.Parameters["required"].([]string)
 	if !ok || len(required) != 1 || required[0] != "content" {
 		t.Fatalf("artifact.create_text required = %+v", tool.Parameters["required"])
+	}
+}
+
+func TestArtifactCreateVisualProviderSchemaIncludesRenderableMetadata(t *testing.T) {
+	tool, ok := builtinProviderToolDefinition(productdata.ToolNameArtifactCreateVisual)
+	if !ok {
+		t.Fatal("artifact.create_visual provider definition missing")
+	}
+	properties, ok := tool.Parameters["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("properties = %+v", tool.Parameters)
+	}
+	for _, want := range []string{"title", "filename", "mime_type", "display", "content", "max_bytes"} {
+		if _, ok := properties[want]; !ok {
+			t.Fatalf("artifact.create_visual schema missing %s: %+v", want, properties)
+		}
+	}
+	mimeType, _ := properties["mime_type"].(map[string]any)
+	if fmt.Sprint(mimeType["enum"]) != "[image/svg+xml text/html]" {
+		t.Fatalf("mime_type schema = %+v", mimeType)
+	}
+	required, ok := tool.Parameters["required"].([]string)
+	if !ok || strings.Join(required, ",") != "title,mime_type,content" {
+		t.Fatalf("artifact.create_visual required = %+v", tool.Parameters["required"])
 	}
 }
 
@@ -2279,11 +2307,11 @@ func TestGatewayContinuationRejectsOverBudgetToolTurnAtomically(t *testing.T) {
 		}
 	}
 	provider := &capturingProvider{config: ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: "https://example.test/v1", APIKey: "key", Model: "model", Enabled: true}, events: []ProviderEvent{
-		{Type: ProviderEventToolCall, ToolName: productdata.ToolNameWorkspaceRead, Metadata: map[string]any{"tool_call_id": "tc_6", "arguments_summary": map[string]any{"path": "six.txt", "limit": 128}}},
-		{Type: ProviderEventToolCall, ToolName: productdata.ToolNameWorkspaceRead, Metadata: map[string]any{"tool_call_id": "tc_7", "arguments_summary": map[string]any{"path": "seven.txt", "limit": 128}}},
+		{Type: ProviderEventToolCall, ToolName: productdata.ToolNameWorkspaceRead, Metadata: map[string]any{"tool_call_id": fmt.Sprintf("tc_%d", productdata.DefaultMaxBoundedToolCallsPerRun), "arguments_summary": map[string]any{"path": "within-budget.txt", "limit": 128}}},
+		{Type: ProviderEventToolCall, ToolName: productdata.ToolNameWorkspaceRead, Metadata: map[string]any{"tool_call_id": fmt.Sprintf("tc_%d", productdata.DefaultMaxBoundedToolCallsPerRun+1), "arguments_summary": map[string]any{"path": "over-budget.txt", "limit": 128}}},
 	}}
 
-	NewGateway(svc, nil, []Provider{provider}).ContinueAfterToolResult(context.Background(), run, GatewayContinuationInput{ThreadID: thread.ID, MessageID: message.ID, ProviderID: "custom", Model: "model", ToolCallID: "tc_5"})
+	NewGateway(svc, nil, []Provider{provider}).ContinueAfterToolResult(context.Background(), run, GatewayContinuationInput{ThreadID: thread.ID, MessageID: message.ID, ProviderID: "custom", Model: "model", ToolCallID: fmt.Sprintf("tc_%d", productdata.DefaultMaxBoundedToolCallsPerRun-1)})
 
 	got, err := svc.GetRun(context.Background(), ident, run.ID)
 	if err != nil {
@@ -2292,10 +2320,58 @@ func TestGatewayContinuationRejectsOverBudgetToolTurnAtomically(t *testing.T) {
 	if got.Status != productdata.RunStatusFailed || got.ErrorCode == nil || *got.ErrorCode != "tool_loop_limit_reached" {
 		t.Fatalf("run = %+v", got)
 	}
-	for _, toolCallID := range []string{"tc_6", "tc_7"} {
+	for _, toolCallID := range []string{fmt.Sprintf("tc_%d", productdata.DefaultMaxBoundedToolCallsPerRun), fmt.Sprintf("tc_%d", productdata.DefaultMaxBoundedToolCallsPerRun+1)} {
 		if _, err := svc.GetToolCall(context.Background(), ident, thread.ID, run.ID, toolCallID); err == nil {
 			t.Fatalf("over-budget tool call %s was recorded", toolCallID)
 		}
+	}
+}
+
+func TestGatewayContinuationAllowsMoreThanSixProjectSurveyTools(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, productdata.CreateThreadInput{Title: "Project survey", Mode: productdata.ThreadModeWork})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _, err := svc.CreateMessage(context.Background(), ident, thread.ID, productdata.CreateMessageInput{Content: "梳理页面和源码实现"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, productdata.StartRunInput{Source: productdata.RunSourceModelGateway, MessageID: message.ID, ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	enabled := []string{productdata.ToolNameWorkspaceListDirectory, productdata.ToolNameWorkspaceTreeSummary, productdata.ToolNameWorkspaceRead}
+	if _, err := svc.AppendRunEvent(context.Background(), ident, run.ID, productdata.AppendRunEventInput{Category: productdata.RunEventCategoryProgress, Type: productdata.EventPipelineStepCompleted, Summary: "Pipeline step completed", Metadata: map[string]any{"step": string(productdata.PipelineStepResolveTools), "enabled_tools": enabled}}); err != nil {
+		t.Fatal(err)
+	}
+	for index := 0; index < 6; index++ {
+		toolCallID := fmt.Sprintf("tc_%d", index+1)
+		if _, err := svc.AppendRunEvent(context.Background(), ident, run.ID, productdata.AppendRunEventInput{Category: productdata.RunEventCategoryProgress, Type: productdata.EventToolCallRequested, Summary: "Tool call requested", Metadata: map[string]any{"tool_call_id": toolCallID, "tool_name": productdata.ToolNameWorkspaceRead, "arguments_summary": map[string]any{"path": fmt.Sprintf("page-%d.tsx", index+1), "limit": 128}, "loop_index": index + 1}}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := svc.AppendRunEvent(context.Background(), ident, run.ID, productdata.AppendRunEventInput{Category: productdata.RunEventCategoryProgress, Type: productdata.EventToolCallSucceeded, Summary: "Tool call succeeded", Metadata: map[string]any{"tool_call_id": toolCallID, "tool_name": productdata.ToolNameWorkspaceRead, "result_summary": map[string]any{"path": fmt.Sprintf("page-%d.tsx", index+1), "truncated": false}}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	provider := &capturingProvider{config: ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: "https://example.test/v1", APIKey: "key", Model: "model", Enabled: true}, events: []ProviderEvent{{Type: ProviderEventToolCall, ToolName: productdata.ToolNameWorkspaceRead, Metadata: map[string]any{"tool_call_id": "tc_7", "arguments_summary": map[string]any{"path": "page-7.tsx", "limit": 128}}}}}
+
+	NewGateway(svc, nil, []Provider{provider}).ContinueAfterToolResult(context.Background(), run, GatewayContinuationInput{ThreadID: thread.ID, MessageID: message.ID, ProviderID: "custom", Model: "model", ToolCallID: "tc_6"})
+
+	got, err := svc.GetRun(context.Background(), ident, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status == productdata.RunStatusFailed {
+		t.Fatalf("run = %+v error=%s", got, runErrorCodeForTest(got))
+	}
+	call, err := svc.GetToolCall(context.Background(), ident, thread.ID, run.ID, "tc_7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if call.ToolName != productdata.ToolNameWorkspaceRead {
+		t.Fatalf("call = %+v", call)
 	}
 }
 

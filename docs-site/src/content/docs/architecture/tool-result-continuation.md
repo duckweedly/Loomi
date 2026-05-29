@@ -43,6 +43,8 @@ Projection writes are monotonic by `last_sequence`. A catch-up or rebuild path m
 
 The projection tracks continuation request start separately from continuation output. A recovered worker may resume from a completed tool result if only `model_request_started` was recorded for the continuation; once continuation output, a later tool request, or a terminal run event exists, the retry is treated as already handled.
 
+Recoverable tool execution failures follow the same continuation boundary. If an approved tool returns a runtime error such as a missing workspace path, Loomi records `tool_call_failed` with the redacted error metadata and feeds that failed tool result back to the provider so the model can choose a narrower path or alternate file. Safety boundary failures such as unauthorized permissions or an unbound workspace still terminate the run.
+
 M98 adds an atomic continuation claim before the queued runner calls the provider. The claim writes `model_request_started` with `model_phase=continuation`, the completed `tool_call_id`, the current `job_id`, and a short `claim_expires_at` lease. The same job cannot claim the same completed tool result twice, and a different job cannot claim the same frontier while an earlier claim lease is still active. If the worker dies after claim but before output, a later recovery job with a different `job_id` can claim after the lease expires and continue from the same persisted tool result.
 
 The PostgreSQL claim path reads the materialized run-step projection under the run transaction, catches up only events after the projection cursor, and materializes the caught-up state before appending the claim event. Missing or unreadable projections can still rebuild from `run_events`, but the hot continuation path no longer scans the full event stream for every claim.
@@ -116,7 +118,7 @@ Provider context compaction also bounds assistant tool-call argument summaries, 
 
 ## Loop limit
 
-Continuation is bounded to six accepted tool calls per run. If the provider asks for a seventh continuation tool, Loomi records `tool_loop_limit_reached` and fails the run without recording or executing the extra call.
+Continuation is bounded to 24 accepted tool calls per run. This keeps the loop finite while leaving enough room for common project survey and source-reading tasks; if the provider asks for a twenty-fifth continuation tool, Loomi records `tool_loop_limit_reached` and fails the run without recording or executing the extra call.
 
 Continuation tool requests are turn-atomic against that bound. If a single continuation response contains more tool calls than the remaining run budget, Loomi rejects the turn before recording any of those new tool calls, so no approved-but-unexecutable dangling tool call is left behind.
 

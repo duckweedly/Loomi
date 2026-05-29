@@ -22,7 +22,19 @@ Changed:
 - Suppressed assistant-text transcript replay when the final assistant message is already persisted for the current turn, while keeping tool transcript blocks available.
 - Folded duplicate persisted assistant finals within the same user turn when the only difference is whitespace loss from stream restoration.
 - Extended `artifact.create_text` result summaries with safe `artifacts[]` resource refs containing `key`, `filename`, `mime_type`, and `display`.
+- Added `artifact.create_visual` preview extraction so bounded SVG/HTML artifact refs render as visual resource cards and sandboxed Preview frames.
+- Extracted raw assistant SVG output into message-scoped visual artifact cards, preventing SVG XML/CSS from rendering as broken Markdown text.
 - Added assistant `artifact:<key>` link extraction so final replies can cite generated documents without dumping the document body into chat.
+- Loaded thread-scoped artifact metadata into the chat shell and used it to resolve `artifact:<key>` links, so persisted visual artifacts such as SVG previews keep `image/svg+xml` instead of falling back to `text/markdown`; opening a card reads the bounded artifact body before rendering the sandboxed frame.
+- Reworked generated artifact cards into wide file-resource rows with a document thumbnail and explicit preview action.
+- Made the right Preview drawer resizable, with the user-adjusted width persisted in shell state.
+- Widened the chat content column while the Preview drawer is open, so the transcript and composer use the remaining space instead of collapsing into a narrow centered strip.
+- Restored the default sidebar to a readable 260px width and widened the default chat content column, so a closed Preview drawer no longer reads as an empty right-side pane.
+- Fixed missing persisted sidebar/Preview widths being read as `0`, which had clamped fresh desktop sessions down to the minimum 220px/360px layout instead of the intended 260px/430px defaults.
+- Forced the open-preview layout to use the full remaining main column for messages and the composer instead of a centered narrow reading column.
+- Removed the later assistant-bubble, tool-stack, and composer width clamps while the Preview drawer is open, so the inner transcript no longer leaves a large blank band before the right drawer.
+- Forced the late unified workspace layer to own the four-column shell grid, preventing older responsive rules from turning the 7px Preview resize handle into a 380px blank column on 1280px desktop windows.
+- Added a desktop-only artifact titlebar action that writes the bounded artifact body to a temporary file and opens it through the OS default local app.
 - Kept a small waiting-for-model transcript state after terminal tool events and before continuation text arrives.
 - Added a chat-level workspace authorization prompt when the latest user request targets Downloads or local files but the selected workspace is missing or points somewhere else.
 - Paused real sends before starting a model run for those workspace-authorization cases, so Loomi persists the user request and waits for folder selection instead of producing a generic "no local file tool" reply.
@@ -103,6 +115,7 @@ Changed:
 Boundaries:
 
 - This is a frontend projection over existing safe result summaries; it does not expose raw unbounded tool output.
+- The native-open action is desktop-only and uses bounded preview content; the web runtime remains display-only.
 - Approval-required tools still render their confirmation controls.
 - Non-artifact tools keep the existing compact/expandable tool-card path.
 
