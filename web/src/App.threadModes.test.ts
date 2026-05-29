@@ -10,7 +10,8 @@ describe('App thread mode sidebar wiring', () => {
     expect(source).not.toContain('const selectedMode')
     expect(source).toContain('threads={threads}')
     expect(source).toContain('useWorkspaceState(shell.defaultWorkspaceMode)')
-    expect(source).toContain('onCreateThread={() => void createThread()}')
+    expect(source).toContain('const handleCreateThread = useCallback(() => {')
+    expect(source).toContain('onCreateThread={handleCreateThread}')
   })
 
   test('wires the collapsed titlebar compose button to create one default thread kind', () => {
