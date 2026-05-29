@@ -49,12 +49,13 @@ export function LoomiFloatingMenu({ open, className = '', style, ignoreSelector,
 type MenuItemProps = {
   children: ReactNode
   className?: string
+  disabled?: boolean
   onClick?: () => void
 }
 
-export function LoomiMenuItem({ children, className = '', onClick }: MenuItemProps) {
+export function LoomiMenuItem({ children, className = '', disabled = false, onClick }: MenuItemProps) {
   return (
-    <button className={`loomi-menu-item ${className}`.trim()} type="button" role="menuitem" onClick={onClick}>
+    <button aria-disabled={disabled} className={`loomi-menu-item ${className}`.trim()} disabled={disabled} type="button" role="menuitem" onClick={onClick}>
       {children}
     </button>
   )

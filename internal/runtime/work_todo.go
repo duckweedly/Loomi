@@ -16,11 +16,11 @@ func appendWorkTodoSnapshot(ctx context.Context, svc productdata.Service, run pr
 	if err != nil || thread.Mode != productdata.ThreadModeWork {
 		return productdata.RunEvent{}, false
 	}
-	events, err := svc.ListRunEvents(ctx, identity.LocalDevIdentity(), run.ID, 0)
+	state, err := svc.GetRunStepState(ctx, identity.LocalDevIdentity(), run.ID)
 	if err != nil {
 		return productdata.RunEvent{}, false
 	}
-	items := workTodoItemsFromEvents(events)
+	items := workTodoItemsFromSteps(state.Steps)
 	if len(items) == 0 {
 		return productdata.RunEvent{}, false
 	}
@@ -119,6 +119,53 @@ func workTodoItemsFromEvents(events []productdata.RunEvent) []any {
 	return items
 }
 
+func workTodoItemsFromSteps(steps []productdata.RunStep) []any {
+	type todoState struct {
+		id       string
+		toolName string
+		status   string
+		summary  string
+	}
+	order := []string{}
+	byID := map[string]todoState{}
+	for _, step := range steps {
+		if step.Kind != productdata.RunStepKindToolRequested &&
+			step.Kind != productdata.RunStepKindApproval &&
+			step.Kind != productdata.RunStepKindToolExecution {
+			continue
+		}
+		id := strings.TrimSpace(step.ToolCallID)
+		if id == "" {
+			continue
+		}
+		state, ok := byID[id]
+		if !ok {
+			order = append(order, id)
+			state = todoState{id: "tool_" + id, toolName: step.ToolName}
+		}
+		if state.toolName == "" {
+			state.toolName = step.ToolName
+		}
+		state.status = todoStatusForStep(step)
+		state.summary = todoSummaryForStep(step, state.toolName)
+		byID[id] = state
+	}
+	if len(order) > productdata.MaxWorkTodoItems {
+		order = order[len(order)-productdata.MaxWorkTodoItems:]
+	}
+	items := make([]any, 0, len(order))
+	for _, id := range order {
+		state := byID[id]
+		items = append(items, map[string]any{
+			"id":      state.id,
+			"title":   todoTitleForTool(state.toolName),
+			"status":  state.status,
+			"summary": state.summary,
+		})
+	}
+	return items
+}
+
 func todoStatusForToolEvent(eventType string) string {
 	switch eventType {
 	case productdata.EventToolCallSucceeded:
@@ -126,6 +173,19 @@ func todoStatusForToolEvent(eventType string) string {
 	case productdata.EventToolCallFailed, productdata.EventToolCallDenied:
 		return "failed"
 	case productdata.EventToolCallApprovalRequired:
+		return "blocked"
+	default:
+		return "running"
+	}
+}
+
+func todoStatusForStep(step productdata.RunStep) string {
+	switch {
+	case step.Kind == productdata.RunStepKindToolExecution && step.Status == productdata.RunStepStatusSucceeded:
+		return "completed"
+	case step.Status == productdata.RunStepStatusFailed || step.Status == productdata.RunStepStatusDenied:
+		return "failed"
+	case step.Status == productdata.RunStepStatusRequired:
 		return "blocked"
 	default:
 		return "running"
@@ -145,6 +205,28 @@ func todoSummaryForToolEvent(eventType string, toolName string) string {
 	case productdata.EventToolCallFailed:
 		return "Failed"
 	case productdata.EventToolCallDenied:
+		return "Denied"
+	default:
+		if toolName == "" {
+			return "Requested"
+		}
+		return "Requested " + toolName
+	}
+}
+
+func todoSummaryForStep(step productdata.RunStep, toolName string) string {
+	switch {
+	case step.Status == productdata.RunStepStatusRequired:
+		return "Waiting for approval"
+	case step.Status == productdata.RunStepStatusApproved:
+		return "Approved"
+	case step.Kind == productdata.RunStepKindToolExecution && step.Status == productdata.RunStepStatusRunning:
+		return "Executing"
+	case step.Kind == productdata.RunStepKindToolExecution && step.Status == productdata.RunStepStatusSucceeded:
+		return "Completed"
+	case step.Status == productdata.RunStepStatusFailed:
+		return "Failed"
+	case step.Status == productdata.RunStepStatusDenied:
 		return "Denied"
 	default:
 		if toolName == "" {

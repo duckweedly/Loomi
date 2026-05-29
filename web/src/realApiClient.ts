@@ -2,6 +2,7 @@ import type { ApiClient } from './apiClient'
 import type { ApiReadiness, InstalledSkill, LocalProviderDetection, MCPServerConfigInput, MCPServerStatus, MemoryAuditItem, MemoryEntry, MemoryErrorEvent, MemoryFilters, MemoryImpressionSnapshot, MemoryOverviewSnapshot, MemoryProviderStatus, MemoryProviderUpdate, MemoryWriteProposal, Message, Persona, ProviderCapability, ProviderFamily, Run, RunEvent, RunSource, RunStatus, Thread, ToolCall, ToolCatalogItem, WebSearchConfig, WorkerQueueDiagnostics, WorkerQueueStatus, WorkerStatus, WorkspaceRootConfig } from './domain'
 import { isRuntimeActive, isRuntimeTerminal } from './runtime/executionAdapter'
 import { applyRealRunEvent } from './runtime/realExecutionAdapter'
+import type { PreviewArtifact } from './runtime/artifactPreview'
 
 const configuredApiBaseUrl = import.meta.env.VITE_LOOMI_API_BASE_URL ?? ''
 const devApiBaseUrl = import.meta.env.DEV ? 'http://127.0.0.1:18080' : ''
@@ -70,6 +71,15 @@ type ApiMessage = {
   client_message_id?: string | null
   run_id?: string | null
   attempt_of_message_id?: string | null
+}
+
+type ApiArtifact = {
+  id: string
+  title: string
+  artifact_type: string
+  content?: string | null
+  text_excerpt?: string | null
+  content_bytes?: number
 }
 
 export type ApiRun = {
@@ -355,9 +365,11 @@ async function readSSEStream(response: Response, onEvent: (event: RunEvent) => v
   let buffer = ''
   let eventName = ''
   let eventData = ''
+  let closed = false
   const flush = () => {
     if (!eventName && !eventData) return
     if (eventName === 'stream_closed') {
+      closed = true
       onClosed?.()
     } else if (eventName === 'run_event' && eventData.trim()) {
       try {
@@ -395,6 +407,7 @@ async function readSSEStream(response: Response, onEvent: (event: RunEvent) => v
       }
     }
     flush()
+    if (!closed) onError()
   } catch {
     onError()
   }
@@ -430,6 +443,38 @@ function mapMessage(message: ApiMessage): Message {
     createdAt: message.created_at,
     runId: message.run_id ?? (typeof metadataRunId === 'string' ? metadataRunId : undefined) ?? undefined,
     attemptOfMessageId: message.attempt_of_message_id ?? (typeof metadataAttemptOfMessageId === 'string' ? metadataAttemptOfMessageId : undefined) ?? undefined,
+  }
+}
+
+function artifactMimeType(artifact: ApiArtifact) {
+  if (artifact.artifact_type === 'visual') {
+    const content = artifact.content?.trim() || artifact.text_excerpt?.trim() || ''
+    if (/^<html[\s>]|<!doctype\s+html/i.test(content)) return 'text/html'
+    return 'image/svg+xml'
+  }
+  return 'text/markdown'
+}
+
+function artifactKind(mimeType: string): PreviewArtifact['kind'] {
+  if (mimeType === 'image/svg+xml') return 'svg'
+  if (mimeType.startsWith('text/html')) return 'html'
+  if (mimeType === 'text/markdown') return 'markdown'
+  if (mimeType.startsWith('text/')) return 'text'
+  if (mimeType.startsWith('image/')) return 'image'
+  return 'unknown'
+}
+
+function mapArtifact(artifact: ApiArtifact): PreviewArtifact {
+  const mimeType = artifactMimeType(artifact)
+  const extension = mimeType === 'image/svg+xml' ? '.svg' : mimeType === 'text/html' ? '.html' : '.md'
+  return {
+    id: artifact.id,
+    title: artifact.title,
+    filename: artifact.title.endsWith(extension) ? artifact.title : `${artifact.title}${extension}`,
+    mimeType,
+    kind: artifactKind(mimeType),
+    content: artifact.content?.trim() || undefined,
+    excerpt: artifact.text_excerpt?.trim() || undefined,
   }
 }
 
@@ -910,9 +955,36 @@ function deferredRun(threadId: string): Run {
   }
 }
 
-async function loadRunWithEvents(run: ApiRun) {
-  const events = await realApiClient.getRunEvents(run.id)
-  return mapApiRun(run, events)
+function requestsDownloadsWorkspace(content: string) {
+  return /下载目录|下载文件夹|downloads?|download folder|download directory/i.test(content)
+}
+
+function requestsDocumentsWorkspace(content: string) {
+  return /文稿目录|文稿文件夹|documents?|document folder|document directory/i.test(content)
+}
+
+function requestsLocalWorkspace(content: string) {
+  return /文件|目录|文件夹|工作区|workspace|folder|directory|downloads?|documents?/i.test(content)
+}
+
+function isDownloadsWorkspace(config?: WorkspaceRootConfig | null) {
+  return Boolean(config?.configured && /^(downloads?|下载)$/i.test(config.displayName.trim()))
+}
+
+function isDocumentsWorkspace(config?: WorkspaceRootConfig | null) {
+  return Boolean(config?.configured && /^(documents?|文稿)$/i.test(config.displayName.trim()))
+}
+
+function shouldPauseForWorkspaceAuthorization(content: string, config?: WorkspaceRootConfig | null) {
+  if (requestsDownloadsWorkspace(content)) return !isDownloadsWorkspace(config)
+  if (requestsDocumentsWorkspace(content)) return !isDocumentsWorkspace(config)
+  return requestsLocalWorkspace(content) && !config?.configured
+}
+
+async function loadRunWithEvents(run: ApiRun, options: { afterSequence?: number; existingEvents?: RunEvent[] } = {}) {
+  const afterSequence = options.afterSequence ?? 0
+  const events = await realApiClient.getRunEvents(run.id, afterSequence)
+  return mapApiRun(run, afterSequence > 0 ? [...(options.existingEvents ?? []), ...events] : events)
 }
 
 export const realApiClient: ApiClient = {
@@ -945,10 +1017,10 @@ export const realApiClient: ApiClient = {
     return requireArrayField<ApiMessage>(body, 'messages', 'Message list response was invalid.').map(mapMessage)
   },
 
-  async getThreadRun(threadId: string) {
+  async getThreadRun(threadId: string, options: { afterSequence?: number; existingEvents?: RunEvent[] } = {}) {
     try {
       const body = await requestJSON<{ run: ApiRun }>(`/v1/threads/${threadId}/runs/current`)
-      return loadRunWithEvents(body.run)
+      return loadRunWithEvents(body.run, options)
     } catch (err) {
       if (err instanceof ApiRequestError && err.code === 'run_not_found') return deferredRun(threadId)
       throw err
@@ -959,6 +1031,16 @@ export const realApiClient: ApiClient = {
     const suffix = afterSequence > 0 ? `?after_sequence=${afterSequence}` : ''
     const body = await requestJSON<unknown>(`/v1/runs/${runId}/events${suffix}`)
     return requireArrayField<ApiRunEvent>(body, 'events', 'Run event response was invalid.').map(mapApiRunEvent)
+  },
+
+  async listArtifacts(threadId: string) {
+    const body = await requestJSON<unknown>(`/v1/threads/${threadId}/artifacts?limit=50`)
+    return requireArrayField<ApiArtifact>(body, 'artifacts', 'Artifact list response was invalid.').map(mapArtifact)
+  },
+
+  async readArtifact(threadId: string, artifactId: string) {
+    const body = await requestJSON<{ artifact: ApiArtifact }>(`/v1/threads/${threadId}/artifacts/${artifactId}?max_bytes=32768`)
+    return mapArtifact(body.artifact)
   },
 
   async listPersonas() {
@@ -1271,11 +1353,6 @@ export const realApiClient: ApiClient = {
   },
 
   async sendMessage(threadId: string, content: string, personaId?: string, options?: { providerId?: string; model?: string }) {
-    const providers = await this.listModelProviders?.()
-    const provider = options?.providerId
-      ? providers?.find((candidate) => candidate.id === options.providerId && providerCanSend(candidate)) ?? selectSendProvider(providers)
-      : selectSendProvider(providers)
-    if (!provider) throw new ApiRequestError('Model provider is unavailable.', 'provider_unavailable', 503)
     try {
       const currentRun = await this.getThreadRun(threadId)
       if (isRuntimeActive(currentRun.status)) throw new ApiRequestError('当前会话还有任务未结束，请先确认或停止当前任务。', 'active_run_exists', 409)
@@ -1283,10 +1360,27 @@ export const realApiClient: ApiClient = {
       if (err instanceof ApiRequestError && err.code === 'active_run_exists') throw err
       if (err instanceof ApiRequestError && err.status !== 404) throw err
     }
+    const workspaceRoot = await this.getWorkspaceRoot?.()
+    const pauseForWorkspaceAuthorization = shouldPauseForWorkspaceAuthorization(content, workspaceRoot)
+    let provider: ProviderCapability | undefined
+    if (!pauseForWorkspaceAuthorization) {
+      const providers = await this.listModelProviders?.()
+      provider = options?.providerId
+        ? providers?.find((candidate) => candidate.id === options.providerId && providerCanSend(candidate)) ?? selectSendProvider(providers)
+        : selectSendProvider(providers)
+      if (!provider) throw new ApiRequestError('Model provider is unavailable.', 'provider_unavailable', 503)
+    }
     const created = await requestJSON<{ message: ApiMessage }>(`/v1/threads/${threadId}/messages`, {
       method: 'POST',
       body: JSON.stringify({ content, client_message_id: createClientMessageID() }),
     })
+    if (pauseForWorkspaceAuthorization) {
+      return {
+        messages: await this.getThreadMessages(threadId),
+        run: deferredRun(threadId),
+      }
+    }
+    if (!provider) throw new ApiRequestError('Model provider is unavailable.', 'provider_unavailable', 503)
     let run: Run | undefined
     try {
       run = await this.startRun?.(threadId, { messageId: created.message.id, source: 'model_gateway', providerId: provider.id, model: options?.model || provider.model, personaId })

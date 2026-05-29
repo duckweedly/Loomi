@@ -14,7 +14,7 @@ describe('SettingsView navigation contract', () => {
   })
 
   test('groups categories into productized settings sections', () => {
-    expect(getSettingsCategoriesByGroup('primary').map((category) => category.label)).toEqual(['General'])
+    expect(getSettingsCategoriesByGroup('primary').map((category) => category.label)).toEqual(['General', 'Appearance'])
     expect(getSettingsCategoriesByGroup('agent_core').map((category) => category.label)).toEqual(['Model Connections', 'Web Search', 'Skill', 'MCP', 'Memory & Context'])
     expect(getSettingsCategoriesByGroup('management').map((category) => category.label)).toEqual(['Tool Permissions', 'About'])
   })

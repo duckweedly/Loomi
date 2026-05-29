@@ -11,12 +11,16 @@ describe('ThreadSidebar layout CSS', () => {
     ].join('\n')
 
     expect(css).toContain('grid-template-columns: 10px minmax(0, 1fr) 24px;')
+    expect(css).toContain('.sidebar-thread-search')
+    expect(css).toContain('.thread-group-label')
+    expect(css).toContain('.thread-copy')
+    expect(css).toContain('.thread-meta')
     expect(css).toContain('position: absolute;')
     expect(css).toContain('right: 4px;')
     expect(css).toContain('.thread-row.selected > .thread-action')
     expect(css).toContain('.thread-rename-form')
     expect(css).toContain('.thread-rename-form input')
-    expect(css).toContain('.thread-list {\n  display: flex;\n  min-height: 0;\n  flex-direction: column;\n  gap: 3px;\n  overflow: visible;')
+    expect(css).toContain('.thread-list {\n  display: flex;\n  min-height: 0;\n  flex-direction: column;\n  gap: 2px;\n  overflow: visible;')
     expect(css).toContain('.thread-list-section {\n  display: flex;\n  min-height: 0;\n  flex: 1 1 auto;\n  flex-direction: column;\n  overflow: visible;')
     expect(css).toContain('.thread-row > .thread-action')
     expect(css).toContain(".thread-row > .thread-action[aria-expanded='true']")
@@ -36,7 +40,10 @@ describe('ThreadSidebar layout CSS', () => {
   })
 
   test('applies the visible animal island shell to navigation chrome', () => {
-    const css = readFileSync(resolve(import.meta.dir, '../styles/92-unified-workspace.css'), 'utf8')
+    const css = [
+      readFileSync(resolve(import.meta.dir, '../styles/00-base-shell.css'), 'utf8'),
+      readFileSync(resolve(import.meta.dir, '../styles/92-unified-workspace.css'), 'utf8'),
+    ].join('\n')
 
     expect(css).toContain('.sidebar-shell')
     expect(css).toContain('.main-titlebar')
@@ -48,13 +55,17 @@ describe('ThreadSidebar layout CSS', () => {
     expect(css).toContain('.sidebar-settings-label')
     expect(css).toContain('.sidebar-settings-chevron')
     expect(css).toContain('.thread-title')
+    expect(css).toContain('.thread-meta')
+    expect(css).toContain('.sidebar-thread-search')
     expect(css).toContain('.thread-card > span')
     expect(css).toContain('display: flex !important;')
-    expect(css).toContain('grid-template-columns: 10px minmax(0, 1fr) 24px !important;')
+    expect(css).toContain('grid-template-columns: 10px minmax(0, 1fr) !important;')
     expect(css).toContain('overflow: hidden !important;')
+    expect(css).toContain('--sidebar-width: 136px;')
+    expect(css).toContain('animation: none !important;')
     expect(css).toContain('--loomi-status')
-    expect(css).toContain('width: calc(100% - 12px) !important;')
-    expect(css).toContain('margin: 0 6px !important;')
+    expect(css).toContain('width: 100% !important;')
+    expect(css).toContain('margin: 0 !important;')
     expect(css).toContain('top: 50% !important;')
     expect(css).toContain('transform: translateY(-50%) !important;')
     expect(css).toContain(".thread-row > .thread-action[aria-expanded='true'],")

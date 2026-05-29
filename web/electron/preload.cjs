@@ -6,4 +6,5 @@ window.addEventListener('DOMContentLoaded', () => {
 
 contextBridge.exposeInMainWorld('loomiDesktop', {
   selectWorkspaceFolder: () => ipcRenderer.invoke('loomi:select-workspace-folder'),
+  openArtifactFile: (artifact) => ipcRenderer.invoke('loomi:open-artifact-file', artifact),
 })

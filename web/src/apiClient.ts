@@ -1,4 +1,5 @@
 import type { ApiReadiness, InstalledSkill, LocalProviderDetection, MCPServerConfigInput, MCPServerStatus, MemoryAuditItem, MemoryEntry, MemoryErrorEvent, MemoryFilters, MemoryImpressionSnapshot, MemoryOverviewSnapshot, MemoryProviderStatus, MemoryProviderUpdate, MemoryWriteProposal, Message, Persona, ProviderCapability, Run, Thread, ToolCall, ToolCatalogItem, WebSearchConfig, WorkerQueueDiagnostics, WorkspaceRootConfig } from './domain'
+import type { PreviewArtifact } from './runtime/artifactPreview'
 import { realApiClient } from './realApiClient'
 import type { ExecutionAdapter } from './runtime/executionAdapter'
 import { mockExecutionAdapter } from './runtime/mockExecutionAdapter'
@@ -8,8 +9,10 @@ export type ApiClient = {
   mode: 'mock' | 'real_api'
   listThreads(): Promise<Thread[]>
   getThreadMessages(threadId: string): Promise<Message[]>
-  getThreadRun(threadId: string): Promise<Run>
+  getThreadRun(threadId: string, options?: { afterSequence?: number; existingEvents?: Run['events'] }): Promise<Run>
   getRunEvents(runId: string, afterSequence?: number): Promise<Run['events']>
+  listArtifacts?(threadId: string): Promise<PreviewArtifact[]>
+  readArtifact?(threadId: string, artifactId: string): Promise<PreviewArtifact>
   listPersonas?(): Promise<Persona[]>
   listSkills?(): Promise<InstalledSkill[]>
   listModelProviders?(): Promise<ProviderCapability[]>

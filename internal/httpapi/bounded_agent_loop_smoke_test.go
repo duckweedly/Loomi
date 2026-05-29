@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -78,7 +79,7 @@ func TestM22BoundedAgentLoopWorkspaceSmoke(t *testing.T) {
 		t.Fatalf("read call = %+v", readCall)
 	}
 	eventsBody := fetchM21Events(t, srv, runID)
-	for _, expected := range []string{productdata.EventToolCallSucceeded, `"tool_call_id":"tc_read_2"`, `"loop_index":2`, `"loop_max":6`, `"model_phase":"continuation"`, productdata.EventRunCompleted} {
+	for _, expected := range []string{productdata.EventToolCallSucceeded, `"tool_call_id":"tc_read_2"`, `"loop_index":2`, fmt.Sprintf(`"loop_max":%d`, productdata.DefaultMaxBoundedToolCallsPerRun), `"model_phase":"continuation"`, productdata.EventRunCompleted} {
 		if !strings.Contains(eventsBody, expected) {
 			t.Fatalf("events missing %s: %s", expected, eventsBody)
 		}
@@ -184,7 +185,7 @@ func TestM22CodeAgentReadEditExecReadLoopSmoke(t *testing.T) {
 		t.Fatalf("read after call = %+v", readAfter)
 	}
 	eventsBody := fetchM21Events(t, srv, runID)
-	for _, expected := range []string{`"tool_call_id":"tc_read_after_4"`, `"loop_index":4`, `"loop_max":6`, `"tool_name":"sandbox.exec_command"`, productdata.EventWorkTodoUpdated, "Run validation command", productdata.EventRunCompleted} {
+	for _, expected := range []string{`"tool_call_id":"tc_read_after_4"`, `"loop_index":4`, fmt.Sprintf(`"loop_max":%d`, productdata.DefaultMaxBoundedToolCallsPerRun), `"tool_name":"sandbox.exec_command"`, productdata.EventWorkTodoUpdated, "Run validation command", productdata.EventRunCompleted} {
 		if !strings.Contains(eventsBody, expected) {
 			t.Fatalf("events missing %s: %s", expected, eventsBody)
 		}
@@ -322,7 +323,7 @@ func TestM75CodeAgentDailyLoopSmoke(t *testing.T) {
 		`"operation":"patch_apply"`,
 		`"operation":"exec_command"`,
 		`"loop_index":5`,
-		`"loop_max":6`,
+		fmt.Sprintf(`"loop_max":%d`, productdata.DefaultMaxBoundedToolCallsPerRun),
 		`"model_phase":"continuation"`,
 		productdata.EventToolCallApprovalRequired,
 		productdata.EventToolCallApproved,

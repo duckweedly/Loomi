@@ -133,6 +133,67 @@ describe('ToolCallCard M7 approval-required state', () => {
     expect(html).not.toContain('结果')
   })
 
+  test('keeps running tools as a compact activity row by default', () => {
+    const html = renderToStaticMarkup(createElement(ToolCallCard, {
+      locale: 'zh',
+      toolCall: {
+        id: 'tool_running',
+        toolCallId: 'tc_running',
+        name: 'web.search',
+        status: 'running',
+        approvalStatus: 'approved',
+        executionStatus: 'running',
+        summary: 'Search running',
+        input: '',
+        output: '',
+        argumentsSummary: { query: 'latest AI news', provider: 'brave', limit: 5 },
+        resultSummary: null,
+        errorCode: null,
+        errorMessage: null,
+      },
+    }))
+
+    expect(html).toContain('tool-card status-running compact')
+    expect(html).toContain('搜索网页')
+    expect(html).toContain('执行中')
+    expect(html).toContain('搜索词: latest AI news')
+    expect(html).not.toContain('tool-summary')
+    expect(html).not.toContain('工具阶段')
+    expect(html).not.toContain('工具正在执行')
+  })
+
+  test('keeps failed tools compact until expanded', () => {
+    const html = renderToStaticMarkup(createElement(ToolCallCard, {
+      locale: 'zh',
+      toolCall: {
+        id: 'tool_failed',
+        toolCallId: 'tc_failed',
+        name: 'workspace.read',
+        status: 'failed',
+        approvalStatus: 'approved',
+        executionStatus: 'failed',
+        summary: 'Read failed',
+        input: '',
+        output: '',
+        argumentsSummary: { path: '/Users/xuean/Downloads/report.md' },
+        resultSummary: { status_code: 403 },
+        errorCode: 'unsafe_path',
+        errorMessage: 'Cannot read /Users/xuean/Downloads/report.md token=hidden',
+      },
+    }))
+
+    expect(html).toContain('tool-card status-failed compact')
+    expect(html).toContain('读取项目文件')
+    expect(html).toContain('失败')
+    expect(html).toContain('状态: 403')
+    expect(html).not.toContain('tool-summary')
+    expect(html).not.toContain('工具执行失败')
+    expect(html).not.toContain('unsafe_path')
+    expect(html).not.toContain('Cannot read')
+    expect(html).not.toContain('/Users/')
+    expect(html).not.toContain('token=hidden')
+  })
+
   test('renders human-first tool labels without raw names in primary UI', () => {
     const html = renderToStaticMarkup(createElement(ToolCallCard, {
       toolCall: {

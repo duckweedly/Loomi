@@ -39,6 +39,7 @@ function baseSettingsProps(overrides: Partial<Parameters<typeof SettingsView>[0]
     selectedCategoryId: 'mcp',
     defaultWorkspaceMode: 'work',
     theme: 'light',
+    themePreference: 'system',
     backendCapability: 'available',
     streamState: 'closed',
     selectedThreadTitle: 'M25 smoke',

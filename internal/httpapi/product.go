@@ -176,6 +176,10 @@ func (s *Server) handleThreadByID(w http.ResponseWriter, r *http.Request) {
 		s.handleThreadAgentTasks(w, r, threadID, suffix)
 		return
 	}
+	if suffix == "sources" {
+		s.handleThreadContextSources(w, r, threadID, suffix)
+		return
+	}
 	if suffix == "runs" || suffix == "runs/current" {
 		s.handleThreadRuns(w, r, threadID)
 		return

@@ -7,6 +7,8 @@ M20 turns enabled Local Codex from an unsupported route candidate into an execut
 
 The execution bridge uses the existing runtime `Provider` interface. It does not add a second chat path. Chat still creates a normal model gateway run, the worker claims the queued job, the Gateway selects `local_codex`, and timeline/SSE projection receives the same `model_request_started`, `model_output_delta`, `model_output_completed`, `run_completed`, or provider failure events used by other model providers.
 
+The OAuth-backed Local Codex Responses bridge keeps tool handling provider-neutral. It sends `parallel_tool_calls=true`, parses every streamed `function_call` output item until `response.completed`, and maps those calls into Loomi `ProviderEventToolCall` events. Gateway, ToolBroker, approval, worker execution, and continuation batching then handle them exactly like OpenAI-compatible parallel tool calls.
+
 ## Chosen Bridge
 
 M20 uses the auth.json direct bridge.

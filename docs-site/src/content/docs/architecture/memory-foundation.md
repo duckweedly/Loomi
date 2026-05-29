@@ -103,7 +103,7 @@ OpenViking connection routing is URI-specific. When OpenViking is active, `memor
 
 Post-run proposal creation lives in runtime closeout. The runtime helper checks productdata provider status after the runner or gateway writes the final event: memory must be enabled, configured, and `commit_after_run` must be true. Only completed runs with a persisted assistant message for that run are eligible.
 
-For external providers, the same closeout hook calls the external write adapter instead of creating a local proposal. Success/failure is recorded with `memory_provider_commit_completed` or `memory_provider_commit_failed`, which are allowed after terminal run completion and carry only safe metadata.
+For external providers, the same closeout hook calls the external write adapter instead of creating a local proposal. Success/failure is recorded with `memory_provider_commit_completed` or `memory_provider_commit_failed`, which are allowed after terminal run completion and carry only safe metadata. The idempotency check reads the commit-completed marker by event type, avoiding a full event-stream replay at the end of long runs.
 
 Provider detectors are UI conveniences only. Nowledge detection probes the local health path; OpenViking detection probes the local filesystem listing path. Both use short localhost-only requests, return only detected/base URL/message/request id, and do not enable providers, discover keys, or validate remote credentials.
 
@@ -192,6 +192,8 @@ When a proposal references a source run, Loomi stores durable safe audit rows:
 
 Audit metadata includes ids, scope, status, and safety state only. Raw memory content, credentials, provider payloads, file contents, shell output, and browser/desktop captured state must not enter audit events.
 
+Postgres memory mutations and their durable audit rows share one transaction. Proposal creation, approval, denial, and tombstone delete roll back together with the audit insert and optional source-run timeline mirror, so callers do not receive an error after a proposal or entry has already been half-committed without history.
+
 If the source run is still non-terminal, Loomi also writes a related run timeline event. If the run is terminal, audit still succeeds and remains queryable from `/v1/memory/audit`; the run timeline is treated as an associated view, not the audit source of truth.
 
 Post-run proposals are created after the run has reached `completed`, so their durable memory audit row is the source of truth. They are idempotent per run with `post_run_memory:{run_id}` and remain `pending` until the user approves or denies them.
@@ -248,7 +250,7 @@ Settings > Memory reads safe projections from the memory API. List/search share 
 
 Detail/delete authorization follows the memory scope. User-scoped memory is visible to the same user. Thread-scoped memory requires a matching `scope_type=thread&scope_id`, `source_thread_id`, or `source_run_id`; wrong or missing context returns generic not found.
 
-Audit history reads `memory_write_proposed`, `memory_write_approved`, `memory_write_denied`, `memory_deleted`, and `memory_snapshot_loaded` from scoped `memory_audit_events`. Memory audit survives terminal source runs because users still need history after the run completes.
+Audit history reads `memory_write_proposed`, `memory_write_approved`, `memory_write_denied`, `memory_deleted`, and `memory_snapshot_loaded` from scoped `memory_audit_events`. Memory audit survives terminal source runs because users still need history after the run completes. Audit write failures are returned to the mutation caller before the associated Postgres proposal, entry, approval, denial, or tombstone change commits.
 
 ## Redaction
 

@@ -42,4 +42,28 @@ describe('App titlebar controls', () => {
       selectedRightPanelId: 'preview',
     })
   })
+
+  test('keeps long thread titles contained in the titlebar', () => {
+    const css = readFileSync(resolve(import.meta.dir, 'styles/92-unified-workspace.css'), 'utf8')
+
+    expect(css).toContain('.main-thread-title {\n  min-width: 0 !important;')
+    expect(css).toContain('max-width: clamp(120px, 42vw, 420px) !important;')
+    expect(css).not.toContain('calc(100vw - 420px)')
+    expect(css).toContain('.main-thread-title > span:not(.titlebar-brand-icon)')
+    expect(css).toContain('text-overflow: ellipsis !important;')
+    expect(css).toContain('white-space: nowrap !important;')
+  })
+
+  test('uses the full main column when the preview drawer is open', () => {
+    const css = readFileSync(resolve(import.meta.dir, 'styles/92-unified-workspace.css'), 'utf8')
+
+    expect(css).toContain('grid-template-columns: var(--sidebar-width) minmax(0, 1fr) 7px var(--right-tools-width) !important;')
+    expect(css).toContain('.workspace-grid.right-tools-open .message-row')
+    expect(css).toContain('width: var(--content-column-width) !important;')
+    expect(css).toContain('margin-inline: var(--content-gutter) !important;')
+    expect(css).toContain('.workspace-grid.right-tools-open .composer.glass-panel.animal-command-bar')
+    expect(css).toContain('max-width: none !important;')
+    expect(css).toContain('.workspace-grid.right-tools-open .message-row.assistant .message-bubble')
+    expect(css).toContain('width: calc(100% - 42px) !important;')
+  })
 })

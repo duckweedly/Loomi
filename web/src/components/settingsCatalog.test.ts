@@ -5,6 +5,7 @@ describe('settings catalog', () => {
   test('defines every required M5.5 settings category', () => {
     expect(settingsCategories.map((category) => category.label)).toEqual([
       'General',
+      'Appearance',
       'Model Connections',
       'Web Search',
       'Skill',
@@ -32,7 +33,6 @@ describe('settings catalog', () => {
     expect(getLocalizedSettingsCategories('zh').find((category) => category.id === 'general')?.label).toBe('通用')
     expect(generalSettingSections.flatMap((section) => section.rows.map((row) => row.id))).toEqual([
       'default-workspace-mode',
-      'theme',
     ])
   })
 })

@@ -22,11 +22,21 @@ func TestValidateArtifactToolCallArguments(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	visual := RecordToolCallRequestInput{ToolCallID: "tc_visual", ToolName: ToolNameArtifactCreateVisual, ArgumentsSummary: map[string]any{"title": " Diagram ", "filename": " flow.svg ", "mime_type": " image/svg+xml ", "display": " inline ", "content": "<svg></svg>"}, ApprovalStatus: ToolCallApprovalRequired, ExecutionStatus: ToolCallExecutionBlocked}
+	input, err = ValidateToolCallRequestInput(visual)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if input.ArgumentsSummary["title"] != "Diagram" || input.ArgumentsSummary["mime_type"] != "image/svg+xml" {
+		t.Fatalf("visual artifact fields were not normalized: %+v", input.ArgumentsSummary)
+	}
+
 	for _, input := range []RecordToolCallRequestInput{
 		{ToolCallID: "tc_artifact", ToolName: ToolNameArtifactCreateText, ArgumentsSummary: map[string]any{}, ApprovalStatus: ToolCallApprovalRequired, ExecutionStatus: ToolCallExecutionBlocked},
 		{ToolCallID: "tc_artifact", ToolName: ToolNameArtifactCreateText, ArgumentsSummary: map[string]any{"title": "", "content": "hello"}, ApprovalStatus: ToolCallApprovalRequired, ExecutionStatus: ToolCallExecutionBlocked},
 		{ToolCallID: "tc_artifact", ToolName: ToolNameArtifactCreateText, ArgumentsSummary: map[string]any{"title": "Notes", "content": "", "api_key": "sk-secret"}, ApprovalStatus: ToolCallApprovalRequired, ExecutionStatus: ToolCallExecutionBlocked},
 		{ToolCallID: "tc_artifact", ToolName: ToolNameArtifactCreateText, ArgumentsSummary: map[string]any{"title": "Notes", "content": "hello", "display": "drawer"}, ApprovalStatus: ToolCallApprovalRequired, ExecutionStatus: ToolCallExecutionBlocked},
+		{ToolCallID: "tc_visual", ToolName: ToolNameArtifactCreateVisual, ArgumentsSummary: map[string]any{"title": "Diagram", "content": "<svg></svg>", "mime_type": "image/png"}, ApprovalStatus: ToolCallApprovalRequired, ExecutionStatus: ToolCallExecutionBlocked},
 		{ToolCallID: "tc_artifact_read", ToolName: ToolNameArtifactRead, ArgumentsSummary: map[string]any{}, ApprovalStatus: ToolCallApprovalRequired, ExecutionStatus: ToolCallExecutionBlocked},
 		{ToolCallID: "tc_artifact_list", ToolName: ToolNameArtifactList, ArgumentsSummary: map[string]any{"query": "secret"}, ApprovalStatus: ToolCallApprovalRequired, ExecutionStatus: ToolCallExecutionBlocked},
 	} {

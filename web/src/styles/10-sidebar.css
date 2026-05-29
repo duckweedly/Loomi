@@ -117,7 +117,7 @@
   display: flex;
   min-height: 0;
   flex-direction: column;
-  gap: 3px;
+  gap: 2px;
   overflow: visible;
   padding-right: 0;
 }
@@ -222,6 +222,35 @@
   justify-content: space-between;
 }
 
+.sidebar-thread-search {
+  display: grid;
+  min-height: 30px;
+  grid-template-columns: 14px minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  margin: 0 0 8px;
+  border: 1px solid color-mix(in srgb, var(--border-subtle) 72%, transparent);
+  border-radius: 10px;
+  padding: 0 9px;
+  background: color-mix(in srgb, var(--input-bg) 62%, transparent);
+  color: var(--text-muted);
+}
+
+.sidebar-thread-search input {
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 520;
+}
+
+.sidebar-thread-search input::placeholder {
+  color: var(--text-muted);
+}
+
 .thread-create-button {
   display: grid;
   width: 28px;
@@ -242,7 +271,30 @@
 .thread-row {
   position: relative;
   display: block;
-  min-height: 28px;
+  min-height: 38px;
+}
+
+.thread-group {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.thread-group + .thread-group {
+  margin-top: 8px;
+}
+
+.thread-group-label {
+  margin: 7px 4px 3px;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .thread-row:focus-within {
@@ -252,13 +304,19 @@
 .thread-card,
 .thread-rename-form {
   display: grid;
-  min-height: 34px;
+  min-height: 38px;
   grid-template-columns: 10px minmax(0, 1fr) 24px;
   gap: 10px;
   align-items: center;
   border-radius: 14px;
   padding: 6px 7px 6px 10px;
   background: transparent;
+}
+
+.thread-copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
 }
 
 .thread-rename-form {
@@ -316,6 +374,25 @@
   line-height: 1.2;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.thread-meta {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 4px;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 10.5px;
+  font-weight: 500;
+  line-height: 1.1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thread-meta span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .thread-card.selected .thread-title {

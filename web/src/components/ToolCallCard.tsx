@@ -1,9 +1,10 @@
 import { useState } from 'react'
 import { Button } from 'animal-island-ui'
-import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Clock3, FileText, FolderSearch, Search, ShieldCheck, Terminal, XCircle } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Clock3, ExternalLink, FileText, FolderSearch, Search, ShieldCheck, Terminal, XCircle } from 'lucide-react'
 import type { ToolCall } from '../domain'
 import type { Locale } from '../i18n'
 import { getToolCallArtifact, type PreviewArtifact } from '../runtime/artifactPreview'
+import { canOpenArtifactNatively, nativeArtifactOpenLabel, openArtifactNatively, type NativeArtifactOpenStatus } from '../runtime/nativeArtifactOpen'
 import { formatSafeToolPreview, humanToolName, redactPreviewText } from '../runtime/toolPreview'
 
 type ToolAction = (toolCall: ToolCall) => Promise<void> | void
@@ -55,22 +56,39 @@ const copy = {
 }
 
 function ArtifactResourceCard({ artifact, locale, onOpen }: { artifact: PreviewArtifact; locale: Locale; onOpen?: (artifact: PreviewArtifact) => void }) {
+  const [nativeStatus, setNativeStatus] = useState<NativeArtifactOpenStatus>('idle')
   const kind = artifact.kind === 'markdown'
     ? locale === 'zh' ? 'Markdown 文档' : 'Markdown document'
+    : artifact.kind === 'svg' || artifact.kind === 'html' || artifact.kind === 'image'
+      ? locale === 'zh' ? '可视化产物' : 'Visual artifact'
     : locale === 'zh' ? '文档' : 'Document'
+  const canOpenNative = canOpenArtifactNatively(artifact)
+  const handleNativeOpen = async (event: React.MouseEvent<HTMLButtonElement>) => {
+    event.stopPropagation()
+    setNativeStatus('opening')
+    setNativeStatus(await openArtifactNatively(artifact) ? 'idle' : 'failed')
+  }
   return (
-    <button
-      type="button"
+    <div
+      role="button"
+      tabIndex={0}
       className="artifact-resource-card"
       aria-label={locale === 'zh' ? `打开 ${artifact.title}` : `Open ${artifact.title}`}
       onClick={() => onOpen?.(artifact)}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') onOpen?.(artifact)
+      }}
     >
       <span className="artifact-resource-icon"><FileText size={17} /></span>
       <span className="artifact-resource-copy">
         <strong>{artifact.title}</strong>
         <small>{kind}</small>
       </span>
-    </button>
+      <button type="button" className="artifact-resource-action" disabled={!canOpenNative || nativeStatus === 'opening'} onClick={handleNativeOpen}>
+        <ExternalLink size={14} />
+        <span>{nativeArtifactOpenLabel(locale, nativeStatus)}</span>
+      </button>
+    </div>
   )
 }
 
@@ -159,13 +177,13 @@ export function ToolCallCard({ toolCall, onApprove, onDeny, locale = 'en', defau
   const displayName = humanToolName(toolCall.name, locale)
   const approvalRequired = toolCall.status === 'approval_required'
   const hasDetails = Boolean(inputPreview || outputPreview || toolCall.errorMessage)
-  const attentionState = approvalRequired || toolCall.status === 'running' || toolCall.status === 'executing' || toolCall.status === 'failed'
-  const compactPreview = attentionState
+  const attentionState = approvalRequired
+  const compactPreview = attentionState || toolCall.status === 'failed'
     ? toolCall.status === 'failed' ? outputPreview || inputPreview : inputPreview || outputPreview
     : workspacePreview || inputPreview
   const sources = webSearchSources(toolCall)
   const phases = phaseStates(toolCall)
-  const showPhaseStrip = approvalRequired || toolCall.status === 'running' || toolCall.status === 'executing'
+  const showPhaseStrip = approvalRequired
   const summary = approvalRequired
     ? text.waiting
     : toolCall.status === 'succeeded'

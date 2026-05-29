@@ -239,7 +239,7 @@ export function Composer({ disabled, providerUnavailable = false, placeholder, t
                   <Paperclip size={18} />
                   <span>{addFilesAndPhotosLabel}</span>
                 </LoomiMenuItem>
-                <LoomiMenuItem onClick={() => {
+                <LoomiMenuItem disabled={!onChooseWorkspaceFolder} onClick={() => {
                   closeContextMenu()
                   onChooseWorkspaceFolder?.()
                 }}>
@@ -247,7 +247,7 @@ export function Composer({ disabled, providerUnavailable = false, placeholder, t
                   <span>{addFolderLabel}</span>
                 </LoomiMenuItem>
                 <LoomiMenuSeparator />
-                <LoomiMenuItem onClick={() => {
+                <LoomiMenuItem disabled={!onOpenSkills} onClick={() => {
                   closeContextMenu()
                   onOpenSkills?.()
                 }}>
@@ -255,7 +255,7 @@ export function Composer({ disabled, providerUnavailable = false, placeholder, t
                   <span>{skillsLabel}</span>
                   <ChevronRight className="composer-context-chevron" size={17} />
                 </LoomiMenuItem>
-                <LoomiMenuItem onClick={() => {
+                <LoomiMenuItem disabled={!onOpenConnectors} onClick={() => {
                   closeContextMenu()
                   onOpenConnectors?.()
                 }}>
@@ -264,7 +264,7 @@ export function Composer({ disabled, providerUnavailable = false, placeholder, t
                   <ChevronRight className="composer-context-chevron" size={17} />
                 </LoomiMenuItem>
                 <LoomiMenuSeparator />
-                <LoomiMenuItem onClick={() => {
+                <LoomiMenuItem disabled={!onOpenPlugins} onClick={() => {
                   closeContextMenu()
                   onOpenPlugins?.()
                 }}>

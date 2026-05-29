@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/sheridiany/loomi/internal/diagnostics"
 	"github.com/sheridiany/loomi/internal/identity"
@@ -647,12 +648,48 @@ func (s *Server) handleRunEventStream(w http.ResponseWriter, r *http.Request, ru
 		writeSSEClose(w, run.ID)
 		return
 	}
+	backfill := func() bool {
+		missed, err := s.product.ListRunEvents(r.Context(), identity.LocalDevIdentity(), runID, highestSequence)
+		if err != nil {
+			return false
+		}
+		for _, event := range missed {
+			if event.Sequence <= highestSequence {
+				continue
+			}
+			if _, ok := sent[event.ID]; ok {
+				continue
+			}
+			writeSSEEvent(w, event)
+			flushSSE(w)
+			sent[event.ID] = struct{}{}
+			highestSequence = event.Sequence
+			if productdata.IsRunTerminal(statusFromStreamEvent(event)) {
+				writeSSEClose(w, run.ID)
+				return true
+			}
+		}
+		return false
+	}
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	heartbeat := time.NewTicker(sseHeartbeatInterval)
+	defer heartbeat.Stop()
 	for {
 		select {
 		case <-r.Context().Done():
 			return
+		case <-ticker.C:
+			if backfill() {
+				return
+			}
+		case <-heartbeat.C:
+			writeSSEHeartbeat(w)
 		case event, ok := <-live:
 			if !ok {
+				return
+			}
+			if event.Sequence > highestSequence+1 && backfill() {
 				return
 			}
 			if event.Sequence <= highestSequence {
@@ -672,6 +709,8 @@ func (s *Server) handleRunEventStream(w http.ResponseWriter, r *http.Request, ru
 		}
 	}
 }
+
+var sseHeartbeatInterval = 15 * time.Second
 
 func (s *Server) handleStopRun(w http.ResponseWriter, r *http.Request, runID string) {
 	if r.Method != http.MethodPost {
@@ -720,6 +759,11 @@ func statusFromStreamEvent(event productdata.RunEvent) productdata.RunStatus {
 
 func writeSSEClose(w http.ResponseWriter, runID string) {
 	fmt.Fprintf(w, "event: stream_closed\ndata: {\"run_id\":%q,\"reason\":\"terminal\"}\n\n", runID)
+	flushSSE(w)
+}
+
+func writeSSEHeartbeat(w http.ResponseWriter) {
+	fmt.Fprint(w, ": heartbeat\n\n")
 	flushSSE(w)
 }
 

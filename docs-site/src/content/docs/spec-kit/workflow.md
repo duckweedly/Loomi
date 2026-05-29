@@ -5,6 +5,33 @@ description: Loomi 使用 Spec Kit 管理需求、计划、任务和实现。
 
 Loomi 使用 Spec Kit 作为 AI 开发前的对齐层。它的作用不是简单生成代码，而是让每个非平凡功能都有可审查的需求、技术计划和任务拆分。
 
+## 当前候选完成：M31 Child Agent Run Handoff
+
+M31 补齐 Arkloop/Craft 对标中的下一块 agent 能力差距：已有 agent task 可以通过 approval-gated `agent.delegate` 创建独立 child thread 和 queued child model-gateway run。
+
+关键产物：
+
+- Data：`agent_tasks` 增加 `child_thread_id`、`child_run_id` 和 `delegated_at`。
+- Runtime：`agent.delegate` 走现有 ToolBroker/approval/worker continuation，不绕过审批。
+- Productdata：child run 复用现有 `StartRun` 背景 job pipeline，不新增外部队列。
+- Projection：HTTP/CLI agent task list 返回 optional child ids。
+- Safety：终态 task、跨线程 task、重复 delegate 均拒绝；父 run continuation 只得到 safe child ids，不得到 child run raw messages 或工具日志。
+
+状态：candidate。该轮不是 worker pool、swarm scheduler、远端 guest agent、Docker/Firecracker sandbox、OS process 或 Redis queue rewrite。
+
+## 当前候选完成：M32 Context Source Registry
+
+M32 补齐 Arkloop/Craft 对标中的 context/source 边界底座：先把“这个线程有哪些可用来源”持久化登记下来，再在后续 slice 接入 connector 执行、同步或 RunContext source selection。
+
+关键产物：
+
+- Data：新增 `context_sources`，记录 thread-scoped source id、kind、safe title、normalized locator、summary、status 和 redacted metadata。
+- API：新增 `POST /v1/threads/{thread_id}/sources` 和 `GET /v1/threads/{thread_id}/sources`。
+- Safety：URL 去 query/fragment，拒绝 localhost/private host/URL credentials；workspace path 只允许相对路径并拒绝 `.env*`、`.git`、private key、`secrets` 和 `credentials`。
+- Boundary：不抓取、不同步、不调用 GitHub、不做 OAuth、不做 marketplace、不改 UI。
+
+状态：candidate。该轮只是安全来源注册层，不是 connector runtime。
+
 ## 当前候选完成：M89 Unified Conversation Entry
 
 M89 学习 Arkloop 的分层方向，但保留 Loomi 自己的产品表达：用户只看到一个会话入口，深层能力按目录、run metadata 和工具状态浮现。
@@ -423,15 +450,15 @@ specs/037-multi-agent-runtime-foundation/
 
 关键产物：
 
-- `spec.md`：定义 `agent.spawn`、`agent.list` 和 `agent.complete` 的 approval-gated、Work-mode-only、coordination-only agent task runtime 和非目标。
+- `spec.md`：定义 `agent.spawn`、`agent.list`、`agent.start`、`agent.complete` 和 `agent.fail` 的 approval-gated、Work-mode-only、coordination-only agent task runtime 和非目标。
 - `plan.md`：确定复用 ToolCatalog/RunContext/ToolBroker/worker continuation、Settings/RunRail。
 - `research.md`：记录先做 task record coordination、不做 autonomous child runs/cross-thread delegation 的决策。
-- `data-model.md`：定义 Agent Task、tool arguments 和 result summary。
+- `data-model.md`：定义 Agent Task lifecycle、tool arguments 和 result summary。
 - `contracts/`：定义 catalog、arguments、result 和 rejection contract。
 - `quickstart.md`：记录 focused/full validation 和 manual smoke。
-- `tasks.md`：按 catalog/runtime/spawn/list-complete/safety/UI/docs/validation 拆分。
+- `tasks.md`：按 catalog/runtime/spawn/list-start-complete-fail/safety/UI/docs/validation 拆分。
 
-状态：M29 PG-backed candidate。Agent tools 仅 Work mode 启用，always approval required，经 ToolBroker/worker continuation 创建、列出和完成 bounded coordination task records；真实 API 路径使用 PostgreSQL `agent_tasks`，in-memory 和 PG 均覆盖 spawn/list/complete 与 cross-thread no-leak。Settings > Tools 与 RunRail 显示 agent scope、medium risk、coordination-only、no autonomous execution。M29 不包含 autonomous child model runs、cross-thread delegation、external worker pools、process spawning、filesystem access、network calls、shell execution、long-term multi-agent memory、marketplace packaging 或 background swarm orchestration。
+状态：M29/M30 PG-backed candidate。Agent tools 仅 Work mode 启用，always approval required，经 ToolBroker/worker continuation 创建、列出、启动、完成和失败 bounded coordination task records；真实 API 路径使用 PostgreSQL `agent_tasks`，in-memory 和 PG 均覆盖 spawned/in_progress/completed/failed lifecycle 与 cross-thread no-leak。Settings > Tools 与 RunRail 显示 agent scope、medium risk、coordination-only、no autonomous execution。当前 multi-agent runtime 不包含 autonomous child model runs、cross-thread delegation、external worker pools、process spawning、filesystem access、network calls、shell execution、long-term multi-agent memory、marketplace packaging 或 background swarm orchestration。
 
 ## 近期已完成：M28 Artifact Runtime Foundation
 
@@ -443,15 +470,15 @@ specs/036-artifact-runtime-foundation/
 
 关键产物：
 
-- `spec.md`：定义 `artifact.create_text`、`artifact.read` 和 `artifact.list` 的 approval-gated、Work-mode-only、non-executable text artifact runtime 和非目标。
+- `spec.md`：定义 `artifact.create_text`、`artifact.create_visual`、`artifact.read` 和 `artifact.list` 的 approval-gated、Work-mode-only artifact runtime 和非目标。
 - `plan.md`：确定复用 ToolCatalog/RunContext/ToolBroker/worker continuation、WorkPlan artifact projection、Settings/RunRail。
-- `research.md`：记录先做 text-only storage、不做执行/渲染/下载的决策。
+- `research.md`：记录先做 bounded artifact storage、不做下载/文件系统导出/浏览器集成的决策。
 - `data-model.md`：定义 Artifact、tool arguments 和 result summary。
 - `contracts/`：定义 catalog、arguments、result 和 rejection contract。
 - `quickstart.md`：记录 focused/full validation 和 manual smoke。
 - `tasks.md`：按 catalog/runtime/read-list/safety/UI/docs/validation 拆分。
 
-状态：M28 PG-backed candidate。Artifact tools 仅 Work mode 启用，always approval required，经 ToolBroker/worker continuation 创建/读取/列出 bounded UTF-8 text artifacts；真实 API 路径使用 PostgreSQL `artifacts`，in-memory 和 PG 均覆盖 create/read/list 与 cross-thread no-leak。Settings > Tools 与 RunRail 显示 artifact scope、medium risk、non-executable。M28 不包含 binary artifacts、downloads、rendered previews、iframe execution、filesystem export、browser integration、shell integration、artifact version graph、marketplace packaging 或 multi-agent orchestration。
+状态：M28 PG-backed candidate。Artifact tools 仅 Work mode 启用，always approval required，经 ToolBroker/worker continuation 创建/读取/列出 bounded UTF-8 text artifacts，并支持 `artifact.create_visual` 创建 bounded SVG/HTML visual artifacts。真实 API 路径使用 PostgreSQL `artifacts`，in-memory 和 PG 均覆盖 create/read/list 与 cross-thread no-leak。Settings > Tools 与 RunRail 显示 artifact scope 和 medium risk；文本 artifact 仍 non-executable，视觉 artifact 仅在 sandboxed Preview frame 中渲染。M28 不包含 binary artifacts、downloads、filesystem export、browser integration、shell integration、artifact version graph、marketplace packaging 或 multi-agent orchestration。
 
 ## 近期已完成：M27 Browser Automation Foundation
 

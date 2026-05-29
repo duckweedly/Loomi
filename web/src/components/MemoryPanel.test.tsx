@@ -16,6 +16,19 @@ describe('MemoryPanel', () => {
     expect(source).not.toContain('type="checkbox" checked={Boolean(filters.includeTombstoned)}')
   })
 
+  test('unified workspace styles keep memory management row-based', () => {
+    const css = readFileSync(resolve(import.meta.dir, '../styles/92-unified-workspace.css'), 'utf8')
+
+    expect(css).toContain('.memory-panel {')
+    expect(css).toContain('.memory-panel-toolbar {')
+    expect(css).toContain('.memory-manual-add {')
+    expect(css).toContain('.memory-entry,')
+    expect(css).toContain('.memory-empty-card,')
+    expect(css).toContain('border-radius: 0 !important')
+    expect(css).toContain('background: transparent !important')
+    expect(css).toContain('.memory-entry button:hover')
+  })
+
   test('renders safe summaries and delete controls', () => {
     const html = renderToStaticMarkup(
       <MemoryPanel

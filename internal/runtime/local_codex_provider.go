@@ -67,7 +67,7 @@ func buildLocalCodexResponsesRequest(ctx context.Context, snapshot LocalCodexCre
 		"input":               localCodexResponsesInput(request.Messages),
 		"tools":               localCodexTools(request.Tools),
 		"tool_choice":         "auto",
-		"parallel_tool_calls": false,
+		"parallel_tool_calls": true,
 		"reasoning":           nil,
 		"store":               false,
 		"stream":              true,
@@ -181,8 +181,12 @@ func parseLocalCodexResponsesSSE(ctx context.Context, body io.Reader, ch chan<- 
 
 func localCodexDispatchResponsesEvent(ctx context.Context, data string, ch chan<- ProviderEvent) bool {
 	data = strings.TrimSpace(data)
-	if data == "" || data == "[DONE]" {
+	if data == "" {
 		return false
+	}
+	if data == "[DONE]" {
+		_ = sendProviderEvent(ctx, ch, ProviderEvent{Type: ProviderEventCompleted})
+		return true
 	}
 	var event struct {
 		Type  string `json:"type"`
@@ -194,10 +198,20 @@ func localCodexDispatchResponsesEvent(ctx context.Context, data string, ch chan<
 			Arguments string `json:"arguments"`
 		} `json:"item"`
 		Response struct {
+			Output []struct {
+				Type    string `json:"type"`
+				Content []struct {
+					Type string `json:"type"`
+					Text string `json:"text"`
+				} `json:"content"`
+			} `json:"output"`
 			Error struct {
 				Type string `json:"type"`
 				Code any    `json:"code"`
 			} `json:"error"`
+			IncompleteDetails struct {
+				Reason string `json:"reason"`
+			} `json:"incomplete_details"`
 		} `json:"response"`
 	}
 	if err := json.Unmarshal([]byte(data), &event); err != nil {
@@ -219,12 +233,18 @@ func localCodexDispatchResponsesEvent(ctx context.Context, data string, ch chan<
 				metadata["arguments_summary"] = parseToolArgumentsSummary(event.Item.Arguments)
 			}
 			_ = sendProviderEvent(ctx, ch, ProviderEvent{Type: ProviderEventToolCall, ToolName: internalProviderToolName(event.Item.Name), Metadata: metadata})
-			return true
 		}
 	case "response.completed":
-		_ = sendProviderEvent(ctx, ch, ProviderEvent{Type: ProviderEventCompleted})
+		_ = sendProviderEvent(ctx, ch, ProviderEvent{Type: ProviderEventCompleted, Text: localCodexCompletedOutputText(event.Response.Output)})
 		return true
-	case "response.failed", "response.incomplete":
+	case "response.incomplete":
+		metadata := map[string]any{}
+		if reason := sanitizeProviderIncompleteReason(event.Response.IncompleteDetails.Reason); reason != "" {
+			metadata["incomplete_reason"] = reason
+		}
+		_ = sendProviderEvent(ctx, ch, ProviderEvent{Type: ProviderEventError, ErrorCode: "provider_incomplete", Message: "Provider response was truncated before completion.", Metadata: metadata})
+		return true
+	case "response.failed":
 		metadata := map[string]any{}
 		if errorType := sanitizeProviderErrorField(event.Response.Error.Type); errorType != "" {
 			metadata["provider_error_type"] = errorType
@@ -236,6 +256,44 @@ func localCodexDispatchResponsesEvent(ctx context.Context, data string, ch chan<
 		return true
 	}
 	return false
+}
+
+func localCodexCompletedOutputText(output []struct {
+	Type    string `json:"type"`
+	Content []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	} `json:"content"`
+}) string {
+	parts := []string{}
+	for _, item := range output {
+		if item.Type != "" && item.Type != "message" {
+			continue
+		}
+		for _, content := range item.Content {
+			if content.Type != "" && content.Type != "output_text" && content.Type != "text" {
+				continue
+			}
+			if text := strings.TrimSpace(content.Text); text != "" {
+				parts = append(parts, text)
+			}
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
+func sanitizeProviderIncompleteReason(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" || len(value) > 80 {
+		return ""
+	}
+	for _, r := range value {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '-' || r == '.' {
+			continue
+		}
+		return ""
+	}
+	return value
 }
 
 func jsonScalarString(value any) string {

@@ -1,6 +1,9 @@
 package productdata
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strings"
 )
@@ -50,13 +53,26 @@ type RunStep struct {
 }
 
 type RunStepState struct {
-	Steps                    []RunStep         `json:"steps"`
-	PendingToolCalls         []RunStep         `json:"pending_tool_calls"`
-	CompletedToolResults     []RunStep         `json:"completed_tool_results"`
-	Terminal                 *RunStep          `json:"terminal,omitempty"`
-	NextAction               RunStepNextAction `json:"next_action"`
-	lastCompletedSequence    int
-	lastContinuationSequence int
+	Steps                             []RunStep                  `json:"steps"`
+	PendingToolCalls                  []RunStep                  `json:"pending_tool_calls"`
+	CompletedToolResults              []RunStep                  `json:"completed_tool_results"`
+	Terminal                          *RunStep                   `json:"terminal,omitempty"`
+	NextAction                        RunStepNextAction          `json:"next_action"`
+	AcceptedToolCallCount             int                        `json:"accepted_tool_call_count,omitempty"`
+	SeenToolCallIDs                   []string                   `json:"seen_tool_call_ids,omitempty"`
+	EnabledToolNames                  []string                   `json:"enabled_tool_names,omitempty"`
+	TriggerMessageID                  string                     `json:"trigger_message_id,omitempty"`
+	ProviderID                        string                     `json:"provider_id,omitempty"`
+	Model                             string                     `json:"model,omitempty"`
+	MCPToolSchemaHashes               map[string]string          `json:"mcp_tool_schema_hashes,omitempty"`
+	MCPAvailability                   MCPToolAvailabilitySummary `json:"mcp_availability,omitempty"`
+	WorkspaceGlobSucceeded            bool                       `json:"workspace_glob_succeeded,omitempty"`
+	WorkspaceToolRequestCount         int                        `json:"workspace_tool_request_count,omitempty"`
+	WorkspaceArgumentHashesSinceReset []string                   `json:"workspace_argument_hashes_since_reset,omitempty"`
+	LastCompletedSequence             int                        `json:"last_completed_sequence,omitempty"`
+	LastContinuationSequence          int                        `json:"last_continuation_sequence,omitempty"`
+	LastContinuationOutputSequence    int                        `json:"last_continuation_output_sequence,omitempty"`
+	LastEventSequence                 int                        `json:"last_event_sequence,omitempty"`
 }
 
 func BuildRunStepLedger(events []RunEvent) []RunStep {
@@ -86,13 +102,25 @@ func AnnotateRunStepMetadata(eventType string, summary string, metadata map[stri
 
 func RebuildRunStepState(events []RunEvent) RunStepState {
 	steps := BuildRunStepLedger(events)
+	state := RebuildRunStepStateFromSteps(steps)
+	for _, event := range events {
+		state = applyRunStepStateEventFacts(state, event)
+	}
+	if len(events) > 0 {
+		state.LastEventSequence = events[len(events)-1].Sequence
+	}
+	state.NextAction = nextRunStepAction(state)
+	return state
+}
+
+func RebuildRunStepStateFromSteps(steps []RunStep) RunStepState {
 	state := RunStepState{Steps: steps, NextAction: RunStepNextActionStartModel}
 	pending := map[string]RunStep{}
 	order := []string{}
 	for _, step := range steps {
 		switch step.Kind {
 		case RunStepKindContinuation:
-			state.lastContinuationSequence = step.Sequence
+			state.LastContinuationSequence = step.Sequence
 		case RunStepKindToolRequested:
 			if step.ToolCallID != "" {
 				pending[step.ToolCallID] = step
@@ -119,9 +147,14 @@ func RebuildRunStepState(events []RunEvent) RunStepState {
 				order = appendUniqueRunStepID(order, step.ToolCallID)
 			case RunStepStatusSucceeded:
 				state.CompletedToolResults = append(state.CompletedToolResults, step)
-				state.lastCompletedSequence = step.Sequence
+				state.LastCompletedSequence = step.Sequence
+				if step.ToolName == ToolNameWorkspaceGlob {
+					state.WorkspaceGlobSucceeded = true
+				}
 				delete(pending, step.ToolCallID)
 			case RunStepStatusFailed:
+				state.CompletedToolResults = append(state.CompletedToolResults, step)
+				state.LastCompletedSequence = step.Sequence
 				delete(pending, step.ToolCallID)
 			}
 		case RunStepKindTerminal:
@@ -129,6 +162,12 @@ func RebuildRunStepState(events []RunEvent) RunStepState {
 			state.Terminal = &stepCopy
 		}
 	}
+	for _, step := range steps {
+		if step.Kind == RunStepKindToolRequested && step.ToolCallID != "" {
+			state.SeenToolCallIDs = appendUniqueRunStepID(state.SeenToolCallIDs, step.ToolCallID)
+		}
+	}
+	state.AcceptedToolCallCount = len(state.SeenToolCallIDs)
 	for _, id := range order {
 		if step, ok := pending[id]; ok {
 			state.PendingToolCalls = append(state.PendingToolCalls, step)
@@ -136,6 +175,139 @@ func RebuildRunStepState(events []RunEvent) RunStepState {
 	}
 	state.NextAction = nextRunStepAction(state)
 	return state
+}
+
+func AdvanceRunStepState(state RunStepState, event RunEvent) RunStepState {
+	state = applyRunStepStateEventFacts(state, event)
+	steps := runStepsFromEvent(event)
+	if len(steps) == 0 {
+		if event.Sequence > state.LastEventSequence {
+			state.LastEventSequence = event.Sequence
+		}
+		state.NextAction = nextRunStepAction(state)
+		return state
+	}
+	for _, step := range steps {
+		state.Steps = append(state.Steps, step)
+		switch step.Kind {
+		case RunStepKindContinuation:
+			state.LastContinuationSequence = step.Sequence
+		case RunStepKindToolRequested:
+			if step.ToolCallID != "" && !containsString(state.SeenToolCallIDs, step.ToolCallID) {
+				state.SeenToolCallIDs = append(state.SeenToolCallIDs, step.ToolCallID)
+				state.AcceptedToolCallCount = len(state.SeenToolCallIDs)
+			}
+			state.PendingToolCalls = upsertRunStepByToolCallID(state.PendingToolCalls, step)
+		case RunStepKindApproval:
+			switch step.Status {
+			case RunStepStatusApproved:
+				state.PendingToolCalls = upsertRunStepByToolCallID(state.PendingToolCalls, step)
+			case RunStepStatusDenied:
+				state.PendingToolCalls = removeRunStepByToolCallID(state.PendingToolCalls, step.ToolCallID)
+			}
+		case RunStepKindToolExecution:
+			switch step.Status {
+			case RunStepStatusRunning:
+				state.PendingToolCalls = upsertRunStepByToolCallID(state.PendingToolCalls, step)
+			case RunStepStatusSucceeded:
+				state.CompletedToolResults = append(state.CompletedToolResults, step)
+				state.LastCompletedSequence = step.Sequence
+				if step.ToolName == ToolNameWorkspaceGlob {
+					state.WorkspaceGlobSucceeded = true
+				}
+				state.PendingToolCalls = removeRunStepByToolCallID(state.PendingToolCalls, step.ToolCallID)
+			case RunStepStatusFailed:
+				state.CompletedToolResults = append(state.CompletedToolResults, step)
+				state.LastCompletedSequence = step.Sequence
+				state.PendingToolCalls = removeRunStepByToolCallID(state.PendingToolCalls, step.ToolCallID)
+			}
+		case RunStepKindTerminal:
+			stepCopy := step
+			state.Terminal = &stepCopy
+		}
+	}
+	if event.Sequence > state.LastEventSequence {
+		state.LastEventSequence = event.Sequence
+	}
+	state.NextAction = nextRunStepAction(state)
+	return state
+}
+
+func applyRunStepStateEventFacts(state RunStepState, event RunEvent) RunStepState {
+	state.EnabledToolNames = appendUniqueStrings(state.EnabledToolNames, runStepMetadataStringList(event.Metadata, "enabled_tools")...)
+	if event.Type == "run_created" {
+		state.TriggerMessageID = firstNonEmptyRunStepString(state.TriggerMessageID, metadataStringValue(event.Metadata, "message_id"))
+		state.ProviderID = firstNonEmptyRunStepString(state.ProviderID, metadataStringValue(event.Metadata, "provider_id"))
+		state.Model = firstNonEmptyRunStepString(state.Model, metadataStringValue(event.Metadata, "model"))
+	}
+	if metadataStringValue(event.Metadata, "model_phase") == "continuation" && (event.Type == "model_output_delta" || event.Type == "model_output_completed") {
+		state.LastContinuationOutputSequence = event.Sequence
+	}
+	if event.Type == "mcp_discovery_succeeded" || event.Type == "mcp_discovery_failed" || event.Type == "mcp_discovery_rejected" {
+		state.MCPAvailability = advanceMCPAvailabilitySummary(state.MCPAvailability, event)
+	}
+	if event.Type == "mcp_discovery_succeeded" && metadataStringValue(event.Metadata, "status") == "succeeded" {
+		for _, name := range metadataStringSlice(event.Metadata, "candidate_names") {
+			if !IsMCPToolName(name) {
+				continue
+			}
+			if hash := mcpCandidateSchemaHash(event.Metadata, name); hash != "" {
+				if state.MCPToolSchemaHashes == nil {
+					state.MCPToolSchemaHashes = map[string]string{}
+				}
+				state.MCPToolSchemaHashes[name] = hash
+			}
+		}
+	}
+	toolName := metadataStringValue(event.Metadata, "tool_name")
+	if event.Type == EventToolCallSucceeded && workspaceArgumentResetTool(toolName) {
+		state.WorkspaceArgumentHashesSinceReset = nil
+	}
+	if event.Type == EventToolCallRequested && IsWorkspaceToolName(toolName) {
+		state.WorkspaceToolRequestCount++
+		if hash := workspaceToolArgumentHash(toolName, event.Metadata); hash != "" {
+			state.WorkspaceArgumentHashesSinceReset = appendUniqueRunStepID(state.WorkspaceArgumentHashesSinceReset, hash)
+		}
+	}
+	return state
+}
+
+func firstNonEmptyRunStepString(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
+func workspaceArgumentResetTool(toolName string) bool {
+	switch toolName {
+	case ToolNameWorkspaceWriteFile, ToolNameWorkspaceEdit, ToolNameWorkspacePatchApply:
+		return true
+	case ToolNameSandboxExecCommand, ToolNameSandboxStartProcess, ToolNameSandboxContinueProcess, ToolNameSandboxTerminateProcess:
+		return true
+	default:
+		return false
+	}
+}
+
+func workspaceToolArgumentHash(toolName string, metadata map[string]any) string {
+	switch toolName {
+	case ToolNameWorkspaceRead, ToolNameWorkspaceListDirectory, ToolNameWorkspaceGrep, ToolNameWorkspaceGlob, ToolNameWorkspaceTreeSummary:
+	default:
+		return ""
+	}
+	arguments, ok := metadata["arguments_summary"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	raw, err := json.Marshal(RedactEventMetadata(arguments))
+	if err != nil {
+		raw = []byte("{}")
+	}
+	sum := sha256.Sum256(raw)
+	return toolName + ":" + hex.EncodeToString(sum[:])
 }
 
 func runStepsFromEvent(event RunEvent) []RunStep {
@@ -167,6 +339,8 @@ func runStepKindStatus(eventType string, metadata map[string]any) (RunStepKind, 
 	case EventToolCallSucceeded:
 		return RunStepKindToolExecution, RunStepStatusSucceeded, true
 	case EventToolCallFailed:
+		return RunStepKindToolExecution, RunStepStatusFailed, true
+	case EventToolCallCancelled:
 		return RunStepKindToolExecution, RunStepStatusFailed, true
 	case EventRunCompleted:
 		return RunStepKindTerminal, RunStepStatusCompleted, true
@@ -211,12 +385,38 @@ func nextRunStepAction(state RunStepState) RunStepNextAction {
 		}
 	}
 	if len(state.CompletedToolResults) > 0 {
-		if state.lastContinuationSequence > state.lastCompletedSequence {
+		if state.LastContinuationOutputSequence > state.LastCompletedSequence {
 			return RunStepNextActionNone
 		}
 		return RunStepNextActionContinueModel
 	}
 	return RunStepNextActionStartModel
+}
+
+func upsertRunStepByToolCallID(steps []RunStep, step RunStep) []RunStep {
+	if step.ToolCallID == "" {
+		return steps
+	}
+	for index := range steps {
+		if steps[index].ToolCallID == step.ToolCallID {
+			steps[index] = step
+			return steps
+		}
+	}
+	return append(steps, step)
+}
+
+func removeRunStepByToolCallID(steps []RunStep, toolCallID string) []RunStep {
+	if toolCallID == "" {
+		return steps
+	}
+	next := steps[:0]
+	for _, step := range steps {
+		if step.ToolCallID != toolCallID {
+			next = append(next, step)
+		}
+	}
+	return next
 }
 
 func appendUniqueRunStepID(values []string, value string) []string {
@@ -230,4 +430,42 @@ func appendUniqueRunStepID(values []string, value string) []string {
 		}
 	}
 	return append(values, value)
+}
+
+func appendUniqueStrings(values []string, candidates ...string) []string {
+	for _, candidate := range candidates {
+		values = appendUniqueRunStepID(values, candidate)
+	}
+	return values
+}
+
+func containsString(values []string, value string) bool {
+	value = strings.TrimSpace(value)
+	for _, existing := range values {
+		if existing == value {
+			return true
+		}
+	}
+	return false
+}
+
+func runStepMetadataStringList(metadata map[string]any, key string) []string {
+	value, ok := metadata[key]
+	if !ok {
+		return nil
+	}
+	switch typed := value.(type) {
+	case []string:
+		return typed
+	case []any:
+		result := make([]string, 0, len(typed))
+		for _, item := range typed {
+			if text, ok := item.(string); ok && strings.TrimSpace(text) != "" {
+				result = append(result, strings.TrimSpace(text))
+			}
+		}
+		return result
+	default:
+		return nil
+	}
 }

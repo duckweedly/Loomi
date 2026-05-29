@@ -2,8 +2,10 @@ package productdata
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -173,6 +175,9 @@ func TestRepositoryContractCoversM7ToolCallRequestProjection(t *testing.T) {
 	if again.ID != call.ID || len(againEvents) != 0 {
 		t.Fatalf("again=%+v events=%+v", again, againEvents)
 	}
+	if _, _, err := repo.RecordToolCallRequest(context.Background(), ident, run.ID, RecordToolCallRequestInput{ToolCallID: "tc_1", ToolName: ToolNameWorkspaceRead, ArgumentsSummary: map[string]any{"path": "notes.txt"}, ArgumentsHash: "hash_conflict", ApprovalStatus: ToolCallApprovalApproved, ExecutionStatus: ToolCallExecutionNotStarted}); err == nil || ErrorCode(err) != CodeInvalidRequest {
+		t.Fatalf("conflicting duplicate err = %v", err)
+	}
 	got, err := repo.GetToolCall(context.Background(), ident, thread.ID, run.ID, "tc_1")
 	if err != nil {
 		t.Fatal(err)
@@ -183,15 +188,19 @@ func TestRepositoryContractCoversM7ToolCallRequestProjection(t *testing.T) {
 	if _, err := repo.GetToolCall(context.Background(), ident, "wrong-thread", run.ID, "tc_1"); err == nil || ErrorCode(err) != CodeRunNotFound {
 		t.Fatalf("wrong scoped lookup err = %v", err)
 	}
-	if _, _, err := repo.RecordToolCallRequest(context.Background(), ident, run.ID, RecordToolCallRequestInput{ToolCallID: "tc_2", ToolName: "runtime.get_current_time", ArgumentsSummary: map[string]any{"timezone": "UTC"}, ArgumentsHash: "hash_2", ApprovalStatus: ToolCallApprovalRequired, ExecutionStatus: ToolCallExecutionBlocked}); err == nil || ErrorCode(err) != CodeInvalidRequest {
+	second, secondEvents, err := repo.RecordToolCallRequest(context.Background(), ident, run.ID, RecordToolCallRequestInput{ToolCallID: "tc_2", ToolName: "runtime.get_current_time", ArgumentsSummary: map[string]any{"timezone": "UTC"}, ArgumentsHash: "hash_2", ApprovalStatus: ToolCallApprovalRequired, ExecutionStatus: ToolCallExecutionBlocked})
+	if err != nil {
 		t.Fatalf("second tool err = %v", err)
+	}
+	if second.ToolCallID != "tc_2" || len(secondEvents) != 2 || secondEvents[0].Type != EventToolCallRequested || secondEvents[1].Type != EventToolCallApprovalRequired {
+		t.Fatalf("second=%+v events=%+v", second, secondEvents)
 	}
 	diagnostics, err := repo.WorkerQueueDiagnostics(context.Background(), ident)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if diagnostics.BlockedToolApprovalCount != 1 {
-		t.Fatalf("BlockedToolApprovalCount = %d, want 1", diagnostics.BlockedToolApprovalCount)
+	if diagnostics.BlockedToolApprovalCount != 2 {
+		t.Fatalf("BlockedToolApprovalCount = %d, want 2", diagnostics.BlockedToolApprovalCount)
 	}
 }
 
@@ -222,6 +231,78 @@ func TestRepositoryContractCoversMCPToolCallRequestProjection(t *testing.T) {
 	}
 	if again.ID != call.ID || len(againEvents) != 0 {
 		t.Fatalf("again=%+v events=%+v", again, againEvents)
+	}
+}
+
+func TestRepositoryContractCancelsUnresolvedToolCallsWhenRunStops(t *testing.T) {
+	var repo Repository = NewMemoryService()
+	ctx := context.Background()
+	ident := identity.LocalDevIdentity()
+	thread, err := repo.CreateThread(ctx, ident, CreateThreadInput{Title: "Tool cancellation", Mode: ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := repo.StartRun(ctx, ident, thread.ID, StartRunInput{Source: RunSourceModelGateway, MessageID: "msg_1", ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := repo.RecordToolCallRequest(ctx, ident, run.ID, RecordToolCallRequestInput{ToolCallID: "tc_deny", ToolName: ToolNameCurrentTime, ArgumentsSummary: map[string]any{"timezone": "UTC"}, ArgumentsHash: "hash_deny", ApprovalStatus: ToolCallApprovalRequired, ExecutionStatus: ToolCallExecutionBlocked}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := repo.RecordToolCallRequest(ctx, ident, run.ID, RecordToolCallRequestInput{ToolCallID: "tc_sibling", ToolName: ToolNameWebFetch, ArgumentsSummary: map[string]any{"url": "https://example.com"}, ArgumentsHash: "hash_sibling", ApprovalStatus: ToolCallApprovalRequired, ExecutionStatus: ToolCallExecutionBlocked}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := repo.DenyToolCall(ctx, ident, thread.ID, run.ID, "tc_deny"); err != nil {
+		t.Fatal(err)
+	}
+	sibling, err := repo.GetToolCall(ctx, ident, thread.ID, run.ID, "tc_sibling")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sibling.ExecutionStatus != ToolCallExecutionCancelled {
+		t.Fatalf("sibling execution status = %s", sibling.ExecutionStatus)
+	}
+	state, err := repo.GetRunStepState(ctx, ident, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.PendingToolCalls) != 0 || state.NextAction != RunStepNextActionTerminal {
+		t.Fatalf("state = %+v", state)
+	}
+
+	thread2, err := repo.CreateThread(ctx, ident, CreateThreadInput{Title: "Stop executing", Mode: ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run2, err := repo.StartRun(ctx, ident, thread2.ID, StartRunInput{Source: RunSourceModelGateway, MessageID: "msg_2", ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := repo.RecordToolCallRequest(ctx, ident, run2.ID, RecordToolCallRequestInput{ToolCallID: "tc_exec", ToolName: ToolNameCurrentTime, ArgumentsSummary: map[string]any{"timezone": "UTC"}, ArgumentsHash: "hash_exec", ApprovalStatus: ToolCallApprovalRequired, ExecutionStatus: ToolCallExecutionBlocked}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := repo.ApproveToolCall(ctx, ident, thread2.ID, run2.ID, "tc_exec"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := repo.StartToolCallExecution(ctx, ident, thread2.ID, run2.ID, "tc_exec"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.StopRun(ctx, ident, run2.ID); err != nil {
+		t.Fatal(err)
+	}
+	executing, err := repo.GetToolCall(ctx, ident, thread2.ID, run2.ID, "tc_exec")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if executing.ExecutionStatus != ToolCallExecutionCancelled {
+		t.Fatalf("executing status = %s", executing.ExecutionStatus)
+	}
+	state2, err := repo.GetRunStepState(ctx, ident, run2.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state2.PendingToolCalls) != 0 || state2.NextAction != RunStepNextActionTerminal {
+		t.Fatalf("state2 = %+v", state2)
 	}
 }
 
@@ -356,6 +437,40 @@ func TestRepositoryContractRejectsConflictingOrWrongScopeToolDecisions(t *testin
 	}
 }
 
+func TestRepositoryContractRejectsDenyAfterApproveBeforeExecution(t *testing.T) {
+	var repo Repository = NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := repo.CreateThread(context.Background(), ident, CreateThreadInput{Title: "M7 approve then deny", Mode: ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := repo.StartRun(context.Background(), ident, thread.ID, StartRunInput{Source: RunSourceModelGateway, MessageID: "msg_1", ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := repo.RecordToolCallRequest(context.Background(), ident, run.ID, RecordToolCallRequestInput{ToolCallID: "tc_1", ToolName: ToolNameCurrentTime, ArgumentsSummary: map[string]any{"timezone": "UTC"}, ArgumentsHash: "hash_1", ApprovalStatus: ToolCallApprovalRequired, ExecutionStatus: ToolCallExecutionBlocked}); err != nil {
+		t.Fatal(err)
+	}
+	approved, approvedEvents, err := repo.ApproveToolCall(context.Background(), ident, thread.ID, run.ID, "tc_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if approved.ApprovalStatus != ToolCallApprovalApproved || approved.ExecutionStatus != ToolCallExecutionNotStarted || len(approvedEvents) != 1 {
+		t.Fatalf("approved=%+v events=%+v", approved, approvedEvents)
+	}
+
+	if _, _, err := repo.DenyToolCall(context.Background(), ident, thread.ID, run.ID, "tc_1"); err == nil || ErrorCode(err) != CodeInvalidRequest {
+		t.Fatalf("deny after approve err = %v", err)
+	}
+	got, err := repo.GetToolCall(context.Background(), ident, thread.ID, run.ID, "tc_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ApprovalStatus != ToolCallApprovalApproved || got.ExecutionStatus != ToolCallExecutionNotStarted {
+		t.Fatalf("tool call changed after rejected deny: %+v", got)
+	}
+}
+
 func TestRepositoryContractCoversM6JobCreationAndClaim(t *testing.T) {
 	var repo Repository = NewMemoryService()
 	ident := identity.LocalDevIdentity()
@@ -440,6 +555,57 @@ func TestRepositoryContractCoversM6RecoveryAndRetryExhaustion(t *testing.T) {
 	}
 }
 
+func TestRepositoryContractRecoversExecutingToolCallAfterExpiredLease(t *testing.T) {
+	repo := NewMemoryService()
+	var contract Repository = repo
+	ident := identity.LocalDevIdentity()
+	base := time.Date(2026, 5, 28, 10, 0, 0, 0, time.UTC)
+	repo.now = func() time.Time { return base }
+	thread, err := contract.CreateThread(context.Background(), ident, CreateThreadInput{Title: "M6 tool recovery", Mode: ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := contract.StartRun(context.Background(), ident, thread.ID, StartRunInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, _, ok, err := contract.ClaimBackgroundJob(context.Background(), ident, ClaimBackgroundJobInput{WorkerID: "worker_stale_tool", LeaseSeconds: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("claim ok = false")
+	}
+	if _, _, err := contract.RecordToolCallRequest(context.Background(), ident, run.ID, RecordToolCallRequestInput{ToolCallID: "tc_read", ToolName: ToolNameWorkspaceRead, ArgumentsSummary: map[string]any{"path": "notes.txt"}, ArgumentsHash: "hash_read", ApprovalStatus: ToolCallApprovalApproved, ExecutionStatus: ToolCallExecutionNotStarted}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := contract.StartToolCallExecution(context.Background(), ident, thread.ID, run.ID, "tc_read"); err != nil {
+		t.Fatal(err)
+	}
+	base = base.Add(2 * time.Second)
+	recoveries, err := contract.RecoverBackgroundJobs(context.Background(), ident, RecoverBackgroundJobsInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recoveries) != 1 || recoveries[0].Job.ID != job.ID || recoveries[0].Exhausted {
+		t.Fatalf("recoveries = %+v", recoveries)
+	}
+	call, err := contract.GetToolCall(context.Background(), ident, thread.ID, run.ID, "tc_read")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if call.ExecutionStatus != ToolCallExecutionNotStarted {
+		t.Fatalf("tool call = %+v", call)
+	}
+	state, err := contract.GetRunStepState(context.Background(), ident, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.NextAction != RunStepNextActionExecuteTool || len(state.PendingToolCalls) != 1 || state.PendingToolCalls[0].Status != RunStepStatusApproved {
+		t.Fatalf("step state = %+v", state)
+	}
+}
+
 func TestRepositoryContractCoversM6QueueDiagnosticsStates(t *testing.T) {
 	repo := NewMemoryService()
 	var contract Repository = repo
@@ -509,6 +675,14 @@ func TestRepositoryContractCoversM6QueueDiagnosticsStates(t *testing.T) {
 	}
 }
 
+func TestRepositoryContractRecordsMultipleAutoApprovedToolCallsInOneTurn(t *testing.T) {
+	repositoryContractRecordsMultipleAutoApprovedToolCallsInOneTurn(t, NewMemoryService())
+}
+
+func TestRepositoryContractRecordsMixedAutoApprovedAndApprovalRequiredToolCallsInOneTurn(t *testing.T) {
+	repositoryContractRecordsMixedAutoApprovedAndApprovalRequiredToolCallsInOneTurn(t, NewMemoryService())
+}
+
 func TestPostgresRunEventsUseUniqueSequenceOrdering(t *testing.T) {
 	databaseURL := os.Getenv("LOOMI_TEST_DATABASE_URL")
 	if databaseURL == "" {
@@ -544,6 +718,307 @@ func TestPostgresRunEventsUseUniqueSequenceOrdering(t *testing.T) {
 	}
 	if len(events) != 4 {
 		t.Fatalf("events = %+v", events)
+	}
+	for i, event := range events {
+		if event.Sequence != i+1 {
+			t.Fatalf("event[%d].Sequence = %d", i, event.Sequence)
+		}
+	}
+	state, err := repo.GetRunStepState(ctx, ident, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rebuilt := RebuildRunStepState(events)
+	if state.LastEventSequence != rebuilt.LastEventSequence || len(state.Steps) != len(rebuilt.Steps) {
+		t.Fatalf("state = %+v, rebuilt = %+v", state, rebuilt)
+	}
+}
+
+func TestPostgresRecordsMultipleAutoApprovedToolCallsInOneTurn(t *testing.T) {
+	databaseURL := os.Getenv("LOOMI_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("LOOMI_TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	repositoryContractRecordsMultipleAutoApprovedToolCallsInOneTurn(t, NewPostgresRepository(pool))
+}
+
+func TestPostgresRecordsMixedAutoApprovedAndApprovalRequiredToolCallsInOneTurn(t *testing.T) {
+	databaseURL := os.Getenv("LOOMI_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("LOOMI_TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	repositoryContractRecordsMixedAutoApprovedAndApprovalRequiredToolCallsInOneTurn(t, NewPostgresRepository(pool))
+}
+
+func TestPostgresRejectsConflictingDuplicateToolCallID(t *testing.T) {
+	databaseURL := os.Getenv("LOOMI_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("LOOMI_TEST_DATABASE_URL is not set")
+	}
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	repo := NewPostgresRepository(pool)
+	ident := postgresTestIdentity()
+	thread, err := repo.CreateThread(ctx, ident, CreateThreadInput{Title: "Duplicate tool id", Mode: ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := repo.StartRun(ctx, ident, thread.ID, StartRunInput{Source: RunSourceModelGateway, MessageID: "msg_1", ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	call, events, err := repo.RecordToolCallRequest(ctx, ident, run.ID, RecordToolCallRequestInput{ToolCallID: "tc_dup", ToolName: ToolNameCurrentTime, ArgumentsSummary: map[string]any{"timezone": "UTC"}, ArgumentsHash: "hash_same", ApprovalStatus: ToolCallApprovalRequired, ExecutionStatus: ToolCallExecutionBlocked})
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, againEvents, err := repo.RecordToolCallRequest(ctx, ident, run.ID, RecordToolCallRequestInput{ToolCallID: "tc_dup", ToolName: ToolNameCurrentTime, ArgumentsSummary: map[string]any{"timezone": "UTC"}, ArgumentsHash: "hash_same", ApprovalStatus: ToolCallApprovalRequired, ExecutionStatus: ToolCallExecutionBlocked})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.ID != call.ID || len(events) != 2 || len(againEvents) != 0 {
+		t.Fatalf("call=%+v again=%+v events=%+v againEvents=%+v", call, again, events, againEvents)
+	}
+	if _, _, err := repo.RecordToolCallRequest(ctx, ident, run.ID, RecordToolCallRequestInput{ToolCallID: "tc_dup", ToolName: ToolNameWorkspaceRead, ArgumentsSummary: map[string]any{"path": "notes.txt"}, ArgumentsHash: "hash_conflict", ApprovalStatus: ToolCallApprovalApproved, ExecutionStatus: ToolCallExecutionNotStarted}); err == nil || ErrorCode(err) != CodeInvalidRequest {
+		t.Fatalf("conflicting duplicate err = %v", err)
+	}
+}
+
+func TestPostgresClaimToolContinuationUsesRunStepProjection(t *testing.T) {
+	databaseURL := os.Getenv("LOOMI_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("LOOMI_TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	repo := NewPostgresRepository(pool)
+	ident := postgresTestIdentity()
+	thread, err := repo.CreateThread(ctx, ident, CreateThreadInput{Title: "Continuation claim projection", Mode: ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := repo.StartRun(ctx, ident, thread.ID, StartRunInput{Source: RunSourceModelGateway, MessageID: "msg_projection", ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := repo.RecordToolCallRequest(ctx, ident, run.ID, RecordToolCallRequestInput{ToolCallID: "tc_projection", ToolName: ToolNameCurrentTime, ArgumentsSummary: map[string]any{"timezone": "UTC"}, ArgumentsHash: "hash_projection", ApprovalStatus: ToolCallApprovalRequired, ExecutionStatus: ToolCallExecutionBlocked}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := repo.ApproveToolCall(ctx, ident, thread.ID, run.ID, "tc_projection"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := repo.StartToolCallExecution(ctx, ident, thread.ID, run.ID, "tc_projection"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := repo.CompleteToolCallSuccess(ctx, ident, thread.ID, run.ID, "tc_projection", map[string]any{"iso_time": "2026-05-29T00:00:00Z"}); err != nil {
+		t.Fatal(err)
+	}
+	before, err := repo.GetRunStepState(ctx, ident, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before.NextAction != RunStepNextActionContinueModel {
+		t.Fatalf("before state = %+v", before)
+	}
+
+	claimed, ok, err := repo.ClaimToolContinuation(ctx, ident, ClaimToolContinuationInput{ThreadID: thread.ID, RunID: run.ID, ToolCallID: "tc_projection", JobID: "job_projection", ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || claimed.Type != "model_request_started" || claimed.Sequence <= before.LastEventSequence {
+		t.Fatalf("claim ok=%v event=%+v before=%+v", ok, claimed, before)
+	}
+	after, err := repo.GetRunStepState(ctx, ident, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.LastEventSequence != claimed.Sequence || after.LastContinuationSequence != claimed.Sequence {
+		t.Fatalf("after state = %+v, claimed = %+v", after, claimed)
+	}
+	if _, ok, err := repo.ClaimToolContinuation(ctx, ident, ClaimToolContinuationInput{ThreadID: thread.ID, RunID: run.ID, ToolCallID: "tc_projection", JobID: "job_projection", ProviderID: "custom", Model: "model"}); err != nil || ok {
+		t.Fatalf("duplicate claim ok=%v err=%v", ok, err)
+	}
+}
+
+func TestPostgresRunStepProjectionRebuildsSemanticCorruption(t *testing.T) {
+	databaseURL := os.Getenv("LOOMI_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("LOOMI_TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	repo := NewPostgresRepository(pool)
+	ident := postgresTestIdentity()
+	thread, err := repo.CreateThread(ctx, ident, CreateThreadInput{Title: "Corrupt projection", Mode: ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _, err := repo.CreateMessage(ctx, ident, thread.ID, CreateMessageInput{Content: "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := repo.StartRun(ctx, ident, thread.ID, StartRunInput{Source: RunSourceModelGateway, MessageID: message.ID, ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.GetRunStepState(ctx, ident, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `update run_step_state_projections set last_sequence=2, state='{}'::jsonb where run_id=$1`, run.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	state, err := repo.GetRunStepState(ctx, ident, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.LastEventSequence != 2 || state.TriggerMessageID != message.ID || state.ProviderID != "custom" {
+		t.Fatalf("state = %+v", state)
+	}
+}
+
+func repositoryContractRecordsMixedAutoApprovedAndApprovalRequiredToolCallsInOneTurn(t *testing.T, repo Repository) {
+	t.Helper()
+	ctx := context.Background()
+	ident := identity.LocalIdentity{UserID: "user_" + NewThreadID(), DisplayName: "Tool Contract", Source: "test"}
+	thread, err := repo.CreateThread(ctx, ident, CreateThreadInput{Title: "Mixed tools", Mode: ThreadModeWork})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _, err := repo.CreateMessage(ctx, ident, thread.ID, CreateMessageInput{Content: "read then ask approval"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := repo.StartRun(ctx, ident, thread.ID, StartRunInput{Source: RunSourceModelGateway, MessageID: message.ID, ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	autoCall, _, err := repo.RecordToolCallRequest(ctx, ident, run.ID, RecordToolCallRequestInput{
+		ToolCallID:       "tc_read",
+		ToolName:         ToolNameWorkspaceRead,
+		ArgumentsSummary: map[string]any{"path": "notes.txt", "limit": 128},
+		ApprovalStatus:   ToolCallApprovalApproved,
+		ExecutionStatus:  ToolCallExecutionNotStarted,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	blockedCall, _, err := repo.RecordToolCallRequest(ctx, ident, run.ID, RecordToolCallRequestInput{
+		ToolCallID:       "tc_time",
+		ToolName:         ToolNameCurrentTime,
+		ArgumentsSummary: map[string]any{"timezone": "UTC"},
+		ApprovalStatus:   ToolCallApprovalRequired,
+		ExecutionStatus:  ToolCallExecutionBlocked,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if autoCall.ExecutionStatus != ToolCallExecutionNotStarted || blockedCall.ExecutionStatus != ToolCallExecutionBlocked {
+		t.Fatalf("calls = %+v %+v", autoCall, blockedCall)
+	}
+	state, err := repo.GetRunStepState(ctx, ident, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.PendingToolCalls) != 2 {
+		t.Fatalf("pending = %+v", state.PendingToolCalls)
+	}
+}
+
+func TestPostgresConcurrentRunEventInsertsSerializeSequence(t *testing.T) {
+	databaseURL := os.Getenv("LOOMI_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("LOOMI_TEST_DATABASE_URL is not set")
+	}
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	repo := NewPostgresRepository(pool)
+	ident := postgresTestIdentity()
+	thread, err := repo.CreateThread(ctx, ident, CreateThreadInput{Title: "Repository concurrent run events", Mode: ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := repo.StartRun(ctx, ident, thread.ID, StartRunInput{ScriptName: "repository_concurrent_sequence"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const workers = 24
+	start := make(chan struct{})
+	errs := make(chan error, workers)
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func(index int) {
+			defer wg.Done()
+			tx, err := pool.Begin(ctx)
+			if err != nil {
+				errs <- err
+				return
+			}
+			defer tx.Rollback(ctx)
+			<-start
+			if _, err := insertRunEvent(ctx, tx, run, RunEventCategoryProgress, "concurrent_event", "Concurrent event", nil, map[string]any{"index": index}); err != nil {
+				errs <- err
+				return
+			}
+			if err := tx.Commit(ctx); err != nil {
+				errs <- err
+				return
+			}
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	events, err := repo.ListRunEvents(ctx, ident, run.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != workers+2 {
+		t.Fatalf("events = %d, want %d", len(events), workers+2)
 	}
 	for i, event := range events {
 		if event.Sequence != i+1 {
@@ -631,6 +1106,76 @@ func TestPostgresMemoryEntryScopeAndTerminalAudit(t *testing.T) {
 	}
 }
 
+func TestPostgresApproveMemoryWriteRollsBackWhenAuditFails(t *testing.T) {
+	databaseURL := os.Getenv("LOOMI_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("LOOMI_TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	repo := NewPostgresRepository(pool)
+	ident := postgresTestIdentity()
+	thread, err := repo.CreateThread(ctx, ident, CreateThreadInput{Title: "PG memory rollback", Mode: ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := repo.StartRun(ctx, ident, thread.ID, StartRunInput{ScriptName: "pg_memory_rollback"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	proposal, err := repo.ProposeMemoryWrite(ctx, ident, ProposeMemoryWriteInput{ScopeType: MemoryScopeThread, ScopeID: thread.ID, Title: "Rollback", Content: "Keep audit atomic", SourceThreadID: thread.ID, SourceRunID: run.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const triggerName = "loomi_test_fail_memory_audit_insert"
+	const functionName = "loomi_test_fail_memory_audit_insert"
+	_, _ = pool.Exec(ctx, `drop trigger if exists `+triggerName+` on memory_audit_events`)
+	_, _ = pool.Exec(ctx, `drop function if exists `+functionName+`()`)
+	defer pool.Exec(context.Background(), `drop trigger if exists `+triggerName+` on memory_audit_events`)
+	defer pool.Exec(context.Background(), `drop function if exists `+functionName+`()`)
+	_, err = pool.Exec(ctx, fmt.Sprintf(`
+create function %s() returns trigger language plpgsql as $$
+begin
+	if new.type = %q and new.metadata->>'memory_proposal_id' = %q then
+		raise exception 'memory audit insert failed for rollback test';
+	end if;
+	return new;
+end;
+$$`, functionName, EventMemoryWriteApproved, proposal.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `create trigger `+triggerName+` before insert on memory_audit_events for each row execute function `+functionName+`() `); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := repo.ApproveMemoryWrite(ctx, ident, proposal.ID, MemoryWriteDecisionInput{Reason: "approve"}); err == nil {
+		t.Fatal("ApproveMemoryWrite succeeded, want audit failure")
+	}
+	var entryCount int
+	if err := pool.QueryRow(ctx, `select count(*) from memory_entries where user_id=$1 and source_run_id=$2`, ident.UserID, run.ID).Scan(&entryCount); err != nil {
+		t.Fatal(err)
+	}
+	if entryCount != 0 {
+		t.Fatalf("memory_entries count = %d, want rollback to 0", entryCount)
+	}
+	var status string
+	var createdEntryID string
+	if err := pool.QueryRow(ctx, `select status, coalesce(created_entry_id,'') from memory_write_proposals where id=$1`, proposal.ID).Scan(&status, &createdEntryID); err != nil {
+		t.Fatal(err)
+	}
+	if status != string(MemoryWritePending) || createdEntryID != "" {
+		t.Fatalf("proposal status=%q created_entry_id=%q, want pending without entry", status, createdEntryID)
+	}
+}
+
 func TestPostgresArtifactsAndAgentTasksUseThreadScope(t *testing.T) {
 	databaseURL := os.Getenv("LOOMI_TEST_DATABASE_URL")
 	if databaseURL == "" {
@@ -697,6 +1242,13 @@ func TestPostgresArtifactsAndAgentTasksUseThreadScope(t *testing.T) {
 	if len(tasks) != 1 || tasks[0].ID != task.ID || tasks[0].Goal != "Review PG path" {
 		t.Fatalf("tasks = %+v", tasks)
 	}
+	startedTask, err := repo.StartAgentTask(ctx, ident, StartAgentTaskInput{ThreadID: threadA.ID, TaskID: task.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if startedTask.Status != AgentTaskStatusInProgress {
+		t.Fatalf("started task = %+v", startedTask)
+	}
 	completed, err := repo.CompleteAgentTask(ctx, ident, CompleteAgentTaskInput{ThreadID: threadA.ID, TaskID: task.ID, ResultSummary: "PG path works"})
 	if err != nil {
 		t.Fatal(err)
@@ -704,8 +1256,185 @@ func TestPostgresArtifactsAndAgentTasksUseThreadScope(t *testing.T) {
 	if completed.Status != AgentTaskStatusCompleted || completed.ResultSummary != "PG path works" {
 		t.Fatalf("completed = %+v", completed)
 	}
+	if _, err := repo.StartAgentTask(ctx, ident, StartAgentTaskInput{ThreadID: threadA.ID, TaskID: task.ID}); err == nil || ErrorCode(err) != CodeInvalidRequest {
+		t.Fatalf("terminal start err = %v", err)
+	}
+	failedTask, err := repo.SpawnAgentTask(ctx, ident, SpawnAgentTaskInput{ThreadID: threadA.ID, RunID: run.ID, Role: "researcher", Goal: "Research PG path"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed, err := repo.FailAgentTask(ctx, ident, FailAgentTaskInput{ThreadID: threadA.ID, TaskID: failedTask.ID, ResultSummary: "PG path blocked"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if failed.Status != AgentTaskStatusFailed || failed.ResultSummary != "PG path blocked" {
+		t.Fatalf("failed = %+v", failed)
+	}
+	if _, err := repo.CompleteAgentTask(ctx, ident, CompleteAgentTaskInput{ThreadID: threadA.ID, TaskID: failed.ID, ResultSummary: "Wrong terminal transition"}); err == nil || ErrorCode(err) != CodeInvalidRequest {
+		t.Fatalf("terminal complete err = %v", err)
+	}
 	if _, err := repo.CompleteAgentTask(ctx, ident, CompleteAgentTaskInput{ThreadID: threadB.ID, TaskID: task.ID, ResultSummary: "Wrong thread"}); err == nil || ErrorCode(err) != CodeInvalidRequest {
 		t.Fatalf("cross-thread task err = %v", err)
+	}
+}
+
+func TestRepositoryContractDelegateAgentTaskRetryIsIdempotent(t *testing.T) {
+	repositoryContractDelegateAgentTaskRetryIsIdempotent(t, NewMemoryService())
+}
+
+func TestPostgresDelegateAgentTaskRetryIsIdempotent(t *testing.T) {
+	databaseURL := os.Getenv("LOOMI_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("LOOMI_TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	repositoryContractDelegateAgentTaskRetryIsIdempotent(t, NewPostgresRepository(pool))
+}
+
+func TestPostgresReconcilesDelegatedAgentTaskAfterChildRunCompletes(t *testing.T) {
+	databaseURL := os.Getenv("LOOMI_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("LOOMI_TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	repositoryContractReconcilesDelegatedAgentTaskAfterChildRunCompletes(t, NewPostgresRepository(pool))
+}
+
+func repositoryContractReconcilesDelegatedAgentTaskAfterChildRunCompletes(t *testing.T, repo interface {
+	Repository
+	AgentTaskService
+}) {
+	t.Helper()
+	ctx := context.Background()
+	ident := identity.LocalIdentity{UserID: "user_" + NewThreadID(), DisplayName: "Delegate Reconcile", Source: "test"}
+	thread, err := repo.CreateThread(ctx, ident, CreateThreadInput{Title: "Delegate reconcile", Mode: ThreadModeWork})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _, err := repo.CreateMessage(ctx, ident, thread.ID, CreateMessageInput{Content: "Delegate a child review"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := repo.StartRun(ctx, ident, thread.ID, StartRunInput{Source: RunSourceModelGateway, MessageID: message.ID, ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := repo.SpawnAgentTask(ctx, ident, SpawnAgentTaskInput{ThreadID: thread.ID, RunID: run.ID, Role: "reviewer", Goal: "Review delegate reconcile"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := repo.RecordToolCallRequest(ctx, ident, run.ID, RecordToolCallRequestInput{ToolCallID: "tc_delegate_pg", ToolName: ToolNameAgentDelegate, ArgumentsSummary: map[string]any{"task_id": task.ID}, ArgumentsHash: "hash_delegate_pg", ApprovalStatus: ToolCallApprovalRequired, ExecutionStatus: ToolCallExecutionBlocked}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := repo.ApproveToolCall(ctx, ident, thread.ID, run.ID, "tc_delegate_pg"); err != nil {
+		t.Fatal(err)
+	}
+	parentJob, _, ok, err := repo.ClaimBackgroundJob(ctx, ident, ClaimBackgroundJobInput{WorkerID: "worker_parent_delegate_pg", LeaseSeconds: 30})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || parentJob.RunID != run.ID {
+		t.Fatalf("parent claim ok=%v job=%+v", ok, parentJob)
+	}
+	if _, _, err := repo.StartToolCallExecution(ctx, ident, thread.ID, run.ID, "tc_delegate_pg"); err != nil {
+		t.Fatal(err)
+	}
+	if _, changed, err := repo.CompleteBackgroundJob(ctx, ident, CompleteBackgroundJobInput{JobID: parentJob.ID, WorkerID: "worker_parent_delegate_pg", OwnershipVersion: parentJob.OwnershipVersion}); err != nil || !changed {
+		t.Fatalf("complete parent job changed=%v err=%v", changed, err)
+	}
+	delegated, err := repo.DelegateAgentTask(ctx, ident, DelegateAgentTaskInput{ThreadID: thread.ID, TaskID: task.ID, ParentToolCallID: "tc_delegate_pg"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if delegated.ChildThreadID == "" || delegated.ChildRunID == "" || delegated.ChildThreadID == thread.ID || delegated.ChildRunID == run.ID {
+		t.Fatalf("delegated = %+v", delegated)
+	}
+	if _, err := repo.AppendAssistantMessage(ctx, ident, delegated.ChildThreadID, AppendAssistantMessageInput{Content: "Postgres child review: no issues."}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.AppendRunEvent(ctx, ident, delegated.ChildRunID, AppendRunEventInput{Category: RunEventCategoryFinal, Type: EventRunCompleted, Summary: "Child run completed"}); err != nil {
+		t.Fatal(err)
+	}
+
+	reconciled, err := repo.ReconcileAgentTaskChildRuns(ctx, ident, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reconciled) != 1 || reconciled[0].Run.ID != run.ID || reconciled[0].Task.ID != task.ID {
+		t.Fatalf("reconciled = %+v", reconciled)
+	}
+	if len(reconciled[0].Events) != 2 || reconciled[0].Events[0].Type != EventToolCallSucceeded || reconciled[0].Events[1].Type != EventRunQueued {
+		t.Fatalf("reconciled events = %+v", reconciled[0].Events)
+	}
+	call, err := repo.GetToolCall(ctx, ident, thread.ID, run.ID, "tc_delegate_pg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if call.ExecutionStatus != ToolCallExecutionSucceeded || call.ResultSummary["child_status"] != string(RunStatusCompleted) || !strings.Contains(fmt.Sprint(call.ResultSummary["result_summary"]), "no issues") {
+		t.Fatalf("call = %+v", call)
+	}
+	tasks, err := repo.ListAgentTasks(ctx, ident, ListAgentTasksInput{ThreadID: thread.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 1 || tasks[0].Status != AgentTaskStatusCompleted || !strings.Contains(tasks[0].ResultSummary, "no issues") {
+		t.Fatalf("tasks = %+v", tasks)
+	}
+	resumeJob, _, ok, err := repo.ClaimBackgroundJob(ctx, ident, ClaimBackgroundJobInput{WorkerID: "worker_parent_resume_pg", LeaseSeconds: 30})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || resumeJob.RunID != run.ID || resumeJob.Metadata["resume_reason"] != "agent_child_run_completed" || resumeJob.Metadata["child_run_id"] != delegated.ChildRunID {
+		t.Fatalf("resume claim ok=%v job=%+v", ok, resumeJob)
+	}
+}
+
+func repositoryContractDelegateAgentTaskRetryIsIdempotent(t *testing.T, repo interface {
+	Repository
+	AgentTaskService
+}) {
+	t.Helper()
+	ctx := context.Background()
+	ident := identity.LocalIdentity{UserID: "user_" + NewThreadID(), DisplayName: "Delegate Retry", Source: "test"}
+	thread, err := repo.CreateThread(ctx, ident, CreateThreadInput{Title: "Delegate retry", Mode: ThreadModeWork})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := repo.StartRun(ctx, ident, thread.ID, StartRunInput{Source: RunSourceModelGateway, MessageID: "msg_delegate_retry", ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := repo.SpawnAgentTask(ctx, ident, SpawnAgentTaskInput{ThreadID: thread.ID, RunID: run.ID, Role: "reviewer", Goal: "Review retry idempotency"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := repo.DelegateAgentTask(ctx, ident, DelegateAgentTaskInput{ThreadID: thread.ID, TaskID: task.ID, ParentToolCallID: "tc_delegate_retry"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	retry, err := repo.DelegateAgentTask(ctx, ident, DelegateAgentTaskInput{ThreadID: thread.ID, TaskID: task.ID, ParentToolCallID: "tc_delegate_retry"})
+	if err != nil {
+		t.Fatalf("same parent tool-call delegate retry err = %v", err)
+	}
+	if retry.ChildThreadID != first.ChildThreadID || retry.ChildRunID != first.ChildRunID || retry.ParentToolCallID != "tc_delegate_retry" {
+		t.Fatalf("retry delegate = %+v, first = %+v", retry, first)
+	}
+	if _, err := repo.DelegateAgentTask(ctx, ident, DelegateAgentTaskInput{ThreadID: thread.ID, TaskID: task.ID, ParentToolCallID: "tc_delegate_other"}); err == nil || ErrorCode(err) != CodeInvalidRequest {
+		t.Fatalf("different parent tool-call duplicate err = %v", err)
 	}
 }
 
@@ -942,6 +1671,71 @@ func TestPostgresSyncBuiltInPersonasUpdatesExistingVersionDefinition(t *testing.
 	}
 	if !hasToolResolution(context.EnabledTools, ToolNameWorkspaceTreeSummary) || !hasToolResolution(context.EnabledTools, ToolNameWorkspaceListDirectory) {
 		t.Fatalf("enabled tools = %+v", context.EnabledTools)
+	}
+}
+
+func repositoryContractRecordsMultipleAutoApprovedToolCallsInOneTurn(t *testing.T, repo Repository) {
+	t.Helper()
+	ctx := context.Background()
+	ident := identity.LocalIdentity{UserID: "user_" + NewThreadID(), DisplayName: "Tool Contract", Source: "test"}
+	thread, err := repo.CreateThread(ctx, ident, CreateThreadInput{Title: "Parallel tools", Mode: ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _, err := repo.CreateMessage(ctx, ident, thread.ID, CreateMessageInput{Content: "read several things"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := repo.StartRun(ctx, ident, thread.ID, StartRunInput{Source: RunSourceModelGateway, MessageID: message.ID, ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, firstEvents, err := repo.RecordToolCallRequest(ctx, ident, run.ID, RecordToolCallRequestInput{
+		ToolCallID:       "tc_search",
+		ToolName:         ToolNameWebSearch,
+		ArgumentsSummary: map[string]any{"query": "agent runtime"},
+		ApprovalStatus:   ToolCallApprovalApproved,
+		ExecutionStatus:  ToolCallExecutionNotStarted,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, secondEvents, err := repo.RecordToolCallRequest(ctx, ident, run.ID, RecordToolCallRequestInput{
+		ToolCallID:       "tc_fetch",
+		ToolName:         ToolNameWebFetch,
+		ArgumentsSummary: map[string]any{"url": "https://example.com"},
+		ApprovalStatus:   ToolCallApprovalApproved,
+		ExecutionStatus:  ToolCallExecutionNotStarted,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.ToolCallID != "tc_search" || second.ToolCallID != "tc_fetch" {
+		t.Fatalf("tool calls = %+v %+v", first, second)
+	}
+	if len(firstEvents) != 2 || len(secondEvents) != 2 {
+		t.Fatalf("events = %+v %+v", firstEvents, secondEvents)
+	}
+	got, err := repo.GetRun(ctx, ident, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != RunStatusQueued {
+		t.Fatalf("run = %+v", got)
+	}
+	state, err := repo.GetRunStepState(ctx, ident, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.NextAction != RunStepNextActionExecuteTool || len(state.PendingToolCalls) != 2 {
+		t.Fatalf("state = %+v", state)
+	}
+	pending := map[string]string{}
+	for _, call := range state.PendingToolCalls {
+		pending[call.ToolCallID] = eventValueString(call.SafeMetadata["execution_status"])
+	}
+	if pending["tc_search"] != string(ToolCallExecutionNotStarted) || pending["tc_fetch"] != string(ToolCallExecutionNotStarted) {
+		t.Fatalf("pending = %+v", state.PendingToolCalls)
 	}
 }
 

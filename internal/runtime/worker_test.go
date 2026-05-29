@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/sheridiany/loomi/internal/identity"
 	"github.com/sheridiany/loomi/internal/productdata"
 )
@@ -42,6 +44,120 @@ func TestWorkerRecoversExpiredLeaseBeforeProcessingRetry(t *testing.T) {
 	}
 }
 
+func TestWorkerReturnsBackgroundJobFailPersistenceError(t *testing.T) {
+	runnerErr := errors.New("runner failed")
+	persistErr := errors.New("fail job write failed")
+	svc := &workerOrderService{failErr: persistErr}
+	worker := NewWorker(svc, nil, workerRunnerFunc(func(context.Context, productdata.Run, productdata.BackgroundJob) error {
+		return runnerErr
+	}))
+	worker.WorkerID = "worker_fail_persist"
+	worker.LeaseSeconds = 1
+
+	ok, err := worker.ProcessOne(context.Background())
+	if !ok {
+		t.Fatal("ProcessOne() ok = false")
+	}
+	if !errors.Is(err, persistErr) {
+		t.Fatalf("ProcessOne() err = %v, want fail persistence error", err)
+	}
+	expected := []string{"recover", "claim", "renew", "fail"}
+	if len(svc.calls) != len(expected) {
+		t.Fatalf("calls = %+v", svc.calls)
+	}
+	for index, call := range expected {
+		if svc.calls[index] != call {
+			t.Fatalf("calls = %+v", svc.calls)
+		}
+	}
+}
+
+func TestWorkerRenewsLeaseWhileRunnerIsStillRunning(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, productdata.CreateThreadInput{Title: "Worker lease", Mode: productdata.ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.StartRun(context.Background(), ident, thread.ID, productdata.StartRunInput{ScriptName: "long_worker_run"}); err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	firstDone := make(chan error, 1)
+	firstWorker := NewWorker(svc, nil, workerRunnerFunc(func(ctx context.Context, run productdata.Run, job productdata.BackgroundJob) error {
+		close(started)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-release:
+			return nil
+		}
+	}))
+	firstWorker.WorkerID = "worker_long_owner"
+	firstWorker.LeaseSeconds = 1
+	go func() {
+		_, err := firstWorker.ProcessOne(context.Background())
+		firstDone <- err
+	}()
+	<-started
+	time.Sleep(1200 * time.Millisecond)
+
+	diagnostics, err := svc.WorkerQueueDiagnostics(context.Background(), ident)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diagnostics.StaleCount != 0 {
+		t.Fatalf("worker lease went stale while runner was still active: %+v", diagnostics)
+	}
+	close(release)
+	if err := <-firstDone; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWorkerCancelsRunnerSoonAfterStopRun(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, productdata.CreateThreadInput{Title: "Worker stop", Mode: productdata.ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, productdata.StartRunInput{ScriptName: "long_worker_run"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{})
+	cancelled := make(chan struct{})
+	worker := NewWorker(svc, nil, workerRunnerFunc(func(ctx context.Context, run productdata.Run, job productdata.BackgroundJob) error {
+		close(started)
+		<-ctx.Done()
+		close(cancelled)
+		return ctx.Err()
+	}))
+	worker.WorkerID = "worker_stop_watch"
+	worker.LeaseSeconds = 30
+	done := make(chan error, 1)
+	go func() {
+		_, err := worker.ProcessOne(context.Background())
+		done <- err
+	}()
+	<-started
+	if _, err := svc.StopRun(context.Background(), ident, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-cancelled:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("runner context was not cancelled soon after StopRun")
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("worker did not return after StopRun cancellation")
+	}
+}
+
 type workerRunnerFunc func(context.Context, productdata.Run, productdata.BackgroundJob) error
 
 func (f workerRunnerFunc) Run(ctx context.Context, run productdata.Run, job productdata.BackgroundJob) error {
@@ -54,6 +170,8 @@ type workerOrderService struct {
 	claim    productdata.ClaimBackgroundJobInput
 	renew    productdata.RenewBackgroundJobLeaseInput
 	complete productdata.CompleteBackgroundJobInput
+	fail     productdata.FailBackgroundJobInput
+	failErr  error
 }
 
 func (s *workerOrderService) RecoverBackgroundJobs(_ context.Context, _ identity.LocalIdentity, _ productdata.RecoverBackgroundJobsInput) ([]productdata.BackgroundJobRecovery, error) {
@@ -77,6 +195,98 @@ func (s *workerOrderService) CompleteBackgroundJob(_ context.Context, _ identity
 	s.calls = append(s.calls, "complete")
 	s.complete = input
 	return productdata.BackgroundJob{ID: input.JobID}, true, nil
+}
+
+func (s *workerOrderService) FailBackgroundJob(_ context.Context, _ identity.LocalIdentity, input productdata.FailBackgroundJobInput) (productdata.BackgroundJob, bool, error) {
+	s.calls = append(s.calls, "fail")
+	s.fail = input
+	if s.failErr != nil {
+		return productdata.BackgroundJob{}, false, s.failErr
+	}
+	return productdata.BackgroundJob{ID: input.JobID}, true, nil
+}
+
+type workerProjectionEnsureOrderService struct {
+	workerOrderService
+	ensuredRunID string
+}
+
+func (s *workerProjectionEnsureOrderService) EnsureRunStepStateProjection(_ context.Context, _ identity.LocalIdentity, runID string) error {
+	s.calls = append(s.calls, "ensure_projection")
+	s.ensuredRunID = runID
+	return nil
+}
+
+func TestWorkerEnsuresClaimedRunStepStateProjectionBeforeRenew(t *testing.T) {
+	svc := &workerProjectionEnsureOrderService{}
+	worker := NewWorker(svc, nil, workerRunnerFunc(func(context.Context, productdata.Run, productdata.BackgroundJob) error { return nil }))
+	worker.WorkerID = "worker_projection_ensure"
+	worker.LeaseSeconds = 1
+
+	ok, err := worker.ProcessOne(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("ProcessOne() ok = false")
+	}
+	expected := []string{"recover", "claim", "ensure_projection", "renew", "complete"}
+	if len(svc.calls) != len(expected) {
+		t.Fatalf("calls = %+v", svc.calls)
+	}
+	for index, call := range expected {
+		if svc.calls[index] != call {
+			t.Fatalf("calls = %+v", svc.calls)
+		}
+	}
+	if svc.ensuredRunID != "run_1" {
+		t.Fatalf("ensured run id = %q", svc.ensuredRunID)
+	}
+}
+
+func TestWorkerDoesNotReplayFullRunHistoryOnClaim(t *testing.T) {
+	svc := &workerProjectedPublishService{state: productdata.RunStepState{LastEventSequence: 100}}
+	worker := NewWorker(svc, NewBroadcaster(), workerRunnerFunc(func(context.Context, productdata.Run, productdata.BackgroundJob) error { return nil }))
+	worker.WorkerID = "worker_incremental_publish"
+	worker.LeaseSeconds = 1
+
+	ok, err := worker.ProcessOne(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("ProcessOne() ok = false")
+	}
+	if len(svc.listAfterSequences) == 0 {
+		t.Fatal("ListRunEvents was not called")
+	}
+	for _, afterSequence := range svc.listAfterSequences {
+		if afterSequence == 0 {
+			t.Fatalf("worker replayed full run history: after sequences = %+v", svc.listAfterSequences)
+		}
+	}
+	if svc.listAfterSequences[0] != 99 {
+		t.Fatalf("first publish cursor = %d, want 99; all = %+v", svc.listAfterSequences[0], svc.listAfterSequences)
+	}
+}
+
+type workerProjectedPublishService struct {
+	workerProjectionEnsureOrderService
+	state              productdata.RunStepState
+	listAfterSequences []int
+}
+
+func (s *workerProjectedPublishService) GetRunStepState(_ context.Context, _ identity.LocalIdentity, _ string) (productdata.RunStepState, error) {
+	s.calls = append(s.calls, "get_projection")
+	return s.state, nil
+}
+
+func (s *workerProjectedPublishService) ListRunEvents(_ context.Context, _ identity.LocalIdentity, runID string, afterSequence int) ([]productdata.RunEvent, error) {
+	s.listAfterSequences = append(s.listAfterSequences, afterSequence)
+	if runID != "run_1" || afterSequence >= s.state.LastEventSequence {
+		return nil, nil
+	}
+	return []productdata.RunEvent{{ID: "evt_job_claimed", RunID: runID, ThreadID: "thread_1", Sequence: s.state.LastEventSequence, Type: productdata.EventJobClaimed}}, nil
 }
 
 func TestLocalRunnerStopsWhenRunIsStoppedAtSafeBoundary(t *testing.T) {
@@ -179,19 +389,16 @@ func TestWorkerPublishesServiceCreatedJobEvents(t *testing.T) {
 	if !ok {
 		t.Fatal("ProcessOne() ok = false")
 	}
-	var found bool
-	for i := 0; i < 4; i++ {
+	deadline := time.After(time.Second)
+	for {
 		select {
 		case event := <-live:
 			if event.Type == productdata.EventJobClaimed {
-				found = true
+				return
 			}
-		case <-time.After(time.Second):
+		case <-deadline:
 			t.Fatal("timed out waiting for live event")
 		}
-	}
-	if !found {
-		t.Fatal("job_claimed was not published")
 	}
 }
 
@@ -528,7 +735,8 @@ func TestWorkerExecutesApprovedWorkspaceWriteFileAndContinuesModel(t *testing.T)
 		t.Fatal(err)
 	}
 	if got.Status != productdata.RunStatusCompleted {
-		t.Fatalf("run = %+v", got)
+		events, _ := svc.ListRunEvents(context.Background(), ident, run.ID, 0)
+		t.Fatalf("run = %+v events=%+v provider=%+v", got, events, provider.request)
 	}
 	if len(provider.request.Messages) != 3 || provider.request.Messages[1].Role != ProviderMessageRoleAssistantToolCall || provider.request.Messages[2].Role != ProviderMessageRoleToolResult {
 		t.Fatalf("continuation request = %+v", provider.request.Messages)
@@ -1120,6 +1328,348 @@ func TestWorkerExecutesApprovedAgentSpawnAndContinuesModel(t *testing.T) {
 	}
 }
 
+func TestWorkerWaitsForDelegatedChildRunBeforeParentContinuation(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	if _, err := svc.SyncBuiltInPersonas(context.Background(), ident, productdata.BuiltInPersonas()); err != nil {
+		t.Fatal(err)
+	}
+	thread, err := svc.CreateThread(context.Background(), ident, productdata.CreateThreadInput{Title: "Agent delegate", Mode: productdata.ThreadModeWork})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _, err := svc.CreateMessage(context.Background(), ident, thread.ID, productdata.CreateMessageInput{Content: "delegate reviewer"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, productdata.StartRunInput{Source: productdata.RunSourceModelGateway, MessageID: message.ID, ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := svc.SpawnAgentTask(context.Background(), ident, productdata.SpawnAgentTaskInput{ThreadID: thread.ID, RunID: run.ID, Role: "reviewer", Goal: "Review the patch"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.RecordToolCallRequest(context.Background(), ident, run.ID, productdata.RecordToolCallRequestInput{ToolCallID: "tc_agent_delegate", ToolName: productdata.ToolNameAgentDelegate, ArgumentsSummary: map[string]any{"task_id": task.ID}, ArgumentsHash: "hash_agent_delegate", ApprovalStatus: productdata.ToolCallApprovalRequired, ExecutionStatus: productdata.ToolCallExecutionBlocked}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.ApproveToolCall(context.Background(), ident, thread.ID, run.ID, "tc_agent_delegate"); err != nil {
+		t.Fatal(err)
+	}
+	provider := &sequencedProvider{config: ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: "https://example.test/v1", APIKey: "key", Model: "model", Enabled: true}, eventSets: [][]ProviderEvent{{{Type: ProviderEventCompleted, Text: "Parent resumed after child result."}}}}
+	worker := NewWorker(svc, nil, QueuedRunRouter{Gateway: NewGateway(svc, nil, []Provider{provider})})
+	worker.WorkerID = "worker_agent_delegate"
+
+	ok, err := worker.ProcessOne(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("ProcessOne() ok = false")
+	}
+	call, err := svc.GetToolCall(context.Background(), ident, thread.ID, run.ID, "tc_agent_delegate")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if call.ExecutionStatus != productdata.ToolCallExecutionExecuting {
+		t.Fatalf("delegate call completed before child run result: %+v", call)
+	}
+	if len(provider.requests) != 0 {
+		t.Fatalf("parent provider continued before child result: %+v", provider.requests)
+	}
+	tasks, err := svc.ListAgentTasks(context.Background(), ident, productdata.ListAgentTasksInput{ThreadID: thread.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 1 || tasks[0].ChildRunID == "" {
+		t.Fatalf("tasks = %+v", tasks)
+	}
+	events, err := svc.ListRunEvents(context.Background(), ident, run.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var handoff map[string]any
+	for _, event := range events {
+		if event.Type == productdata.EventAgentChildRunStarted {
+			handoff = event.Metadata
+			break
+		}
+	}
+	if handoff == nil || handoff["child_run_id"] != tasks[0].ChildRunID || handoff["child_thread_id"] != tasks[0].ChildThreadID || handoff["parent_tool_call_id"] != "tc_agent_delegate" {
+		t.Fatalf("handoff event = %+v, events = %+v", handoff, events)
+	}
+	if _, err := svc.AppendAssistantMessage(context.Background(), ident, tasks[0].ChildThreadID, productdata.AppendAssistantMessageInput{Content: "Child review result: no issues."}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.AppendRunEvent(context.Background(), ident, tasks[0].ChildRunID, productdata.AppendRunEventInput{Category: productdata.RunEventCategoryFinal, Type: productdata.EventRunCompleted, Summary: "Child run completed"}); err != nil {
+		t.Fatal(err)
+	}
+
+	ok, err = worker.ProcessOne(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("ProcessOne() did not pick resumed parent job")
+	}
+	call, err = svc.GetToolCall(context.Background(), ident, thread.ID, run.ID, "tc_agent_delegate")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if call.ExecutionStatus != productdata.ToolCallExecutionSucceeded || call.ResultSummary["child_status"] != string(productdata.RunStatusCompleted) || !strings.Contains(fmt.Sprint(call.ResultSummary["result_summary"]), "no issues") {
+		t.Fatalf("delegate call after child result = %+v", call)
+	}
+	if len(provider.requests) != 1 {
+		t.Fatalf("provider requests = %d, want 1", len(provider.requests))
+	}
+	got, err := svc.GetRun(context.Background(), ident, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != productdata.RunStatusCompleted {
+		t.Fatalf("parent run = %+v", got)
+	}
+}
+
+func TestPostgresWorkerWaitsForDelegatedChildRunBeforeParentContinuation(t *testing.T) {
+	databaseURL := os.Getenv("LOOMI_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("LOOMI_TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	svc := productdata.NewPostgresRepository(pool)
+	ident := identity.LocalDevIdentity()
+	if _, err := svc.SyncBuiltInPersonas(ctx, ident, productdata.BuiltInPersonas()); err != nil {
+		t.Fatal(err)
+	}
+	thread, err := svc.CreateThread(ctx, ident, productdata.CreateThreadInput{Title: "PG agent delegate " + productdata.NewThreadID(), Mode: productdata.ThreadModeWork})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _, err := svc.CreateMessage(ctx, ident, thread.ID, productdata.CreateMessageInput{Content: "delegate reviewer"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartRun(ctx, ident, thread.ID, productdata.StartRunInput{Source: productdata.RunSourceModelGateway, MessageID: message.ID, ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := svc.SpawnAgentTask(ctx, ident, productdata.SpawnAgentTaskInput{ThreadID: thread.ID, RunID: run.ID, Role: "reviewer", Goal: "Review the patch in Postgres"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.RecordToolCallRequest(ctx, ident, run.ID, productdata.RecordToolCallRequestInput{ToolCallID: "tc_agent_delegate_pg_worker", ToolName: productdata.ToolNameAgentDelegate, ArgumentsSummary: map[string]any{"task_id": task.ID}, ArgumentsHash: "hash_agent_delegate_pg_worker", ApprovalStatus: productdata.ToolCallApprovalRequired, ExecutionStatus: productdata.ToolCallExecutionBlocked}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.ApproveToolCall(ctx, ident, thread.ID, run.ID, "tc_agent_delegate_pg_worker"); err != nil {
+		t.Fatal(err)
+	}
+	provider := &sequencedProvider{config: ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: "https://example.test/v1", APIKey: "key", Model: "model", Enabled: true}, eventSets: [][]ProviderEvent{{{Type: ProviderEventCompleted, Text: "Parent resumed after PG child result."}}}}
+	worker := NewWorker(svc, nil, QueuedRunRouter{Gateway: NewGateway(svc, nil, []Provider{provider})})
+	worker.WorkerID = "worker_agent_delegate_pg"
+
+	ok, err := worker.ProcessOne(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("ProcessOne() ok = false")
+	}
+	call, err := svc.GetToolCall(ctx, ident, thread.ID, run.ID, "tc_agent_delegate_pg_worker")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if call.ExecutionStatus != productdata.ToolCallExecutionExecuting {
+		t.Fatalf("delegate call completed before child run result: %+v", call)
+	}
+	if len(provider.requests) != 0 {
+		t.Fatalf("parent provider continued before child result: %+v", provider.requests)
+	}
+	tasks, err := svc.ListAgentTasks(ctx, ident, productdata.ListAgentTasksInput{ThreadID: thread.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 1 || tasks[0].ChildRunID == "" || tasks[0].ChildThreadID == "" {
+		t.Fatalf("tasks = %+v", tasks)
+	}
+	events, err := svc.ListRunEvents(ctx, ident, run.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var handoff map[string]any
+	for _, event := range events {
+		if event.Type == productdata.EventAgentChildRunStarted {
+			handoff = event.Metadata
+			break
+		}
+	}
+	if handoff == nil || handoff["child_run_id"] != tasks[0].ChildRunID || handoff["child_thread_id"] != tasks[0].ChildThreadID || handoff["parent_tool_call_id"] != "tc_agent_delegate_pg_worker" {
+		t.Fatalf("handoff event = %+v, events = %+v", handoff, events)
+	}
+	if _, err := svc.AppendAssistantMessage(ctx, ident, tasks[0].ChildThreadID, productdata.AppendAssistantMessageInput{Content: "PG child review result: no issues."}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.AppendRunEvent(ctx, ident, tasks[0].ChildRunID, productdata.AppendRunEventInput{Category: productdata.RunEventCategoryFinal, Type: productdata.EventRunCompleted, Summary: "Child run completed"}); err != nil {
+		t.Fatal(err)
+	}
+
+	ok, err = worker.ProcessOne(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("ProcessOne() did not pick resumed parent job")
+	}
+	call, err = svc.GetToolCall(ctx, ident, thread.ID, run.ID, "tc_agent_delegate_pg_worker")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if call.ExecutionStatus != productdata.ToolCallExecutionSucceeded || call.ResultSummary["child_status"] != string(productdata.RunStatusCompleted) || !strings.Contains(fmt.Sprint(call.ResultSummary["result_summary"]), "no issues") {
+		t.Fatalf("delegate call after child result = %+v", call)
+	}
+	if len(provider.requests) != 1 {
+		t.Fatalf("provider requests = %d, want 1", len(provider.requests))
+	}
+	got, err := svc.GetRun(ctx, ident, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != productdata.RunStatusCompleted {
+		t.Fatalf("parent run = %+v", got)
+	}
+}
+
+func TestPostgresAgentDelegateChildWorkerTerminalResumesParent(t *testing.T) {
+	databaseURL := os.Getenv("LOOMI_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("LOOMI_TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	svc := productdata.NewPostgresRepository(pool)
+	ident := identity.LocalDevIdentity()
+	if _, err := svc.SyncBuiltInPersonas(ctx, ident, productdata.BuiltInPersonas()); err != nil {
+		t.Fatal(err)
+	}
+	thread, err := svc.CreateThread(ctx, ident, productdata.CreateThreadInput{Title: "PG agent delegate terminal " + productdata.NewThreadID(), Mode: productdata.ThreadModeWork})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _, err := svc.CreateMessage(ctx, ident, thread.ID, productdata.CreateMessageInput{Content: "delegate reviewer and wait for child"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartRun(ctx, ident, thread.ID, productdata.StartRunInput{Source: productdata.RunSourceModelGateway, MessageID: message.ID, ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := svc.SpawnAgentTask(ctx, ident, productdata.SpawnAgentTaskInput{ThreadID: thread.ID, RunID: run.ID, Role: "reviewer", Goal: "Review the patch through a real child worker"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.RecordToolCallRequest(ctx, ident, run.ID, productdata.RecordToolCallRequestInput{ToolCallID: "tc_agent_delegate_pg_terminal", ToolName: productdata.ToolNameAgentDelegate, ArgumentsSummary: map[string]any{"task_id": task.ID}, ArgumentsHash: "hash_agent_delegate_pg_terminal", ApprovalStatus: productdata.ToolCallApprovalRequired, ExecutionStatus: productdata.ToolCallExecutionBlocked}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.ApproveToolCall(ctx, ident, thread.ID, run.ID, "tc_agent_delegate_pg_terminal"); err != nil {
+		t.Fatal(err)
+	}
+	provider := &sequencedProvider{
+		config: ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: "https://example.test/v1", APIKey: "key", Model: "model", Enabled: true},
+		eventSets: [][]ProviderEvent{
+			{{Type: ProviderEventCompleted, Text: "PG child review result: no issues."}},
+			{{Type: ProviderEventCompleted, Text: "Parent resumed after PG child result."}},
+		},
+	}
+	worker := NewWorker(svc, nil, QueuedRunRouter{Gateway: NewGateway(svc, nil, []Provider{provider})})
+	worker.WorkerID = "worker_agent_delegate_pg_terminal"
+
+	ok, err := worker.ProcessOne(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("ProcessOne() did not execute parent delegate")
+	}
+	if len(provider.requests) != 0 {
+		t.Fatalf("provider continued before child worker terminal: %+v", provider.requests)
+	}
+	tasks, err := svc.ListAgentTasks(ctx, ident, productdata.ListAgentTasksInput{ThreadID: thread.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 1 || tasks[0].ChildRunID == "" || tasks[0].ChildThreadID == "" {
+		t.Fatalf("tasks = %+v", tasks)
+	}
+	call, err := svc.GetToolCall(ctx, ident, thread.ID, run.ID, "tc_agent_delegate_pg_terminal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if call.ExecutionStatus != productdata.ToolCallExecutionExecuting {
+		t.Fatalf("delegate call after parent step = %+v", call)
+	}
+
+	ok, err = worker.ProcessOne(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("ProcessOne() did not execute child run")
+	}
+	if len(provider.requests) != 1 || provider.requests[0].ThreadID != tasks[0].ChildThreadID {
+		t.Fatalf("child provider request = %+v, child thread = %s", provider.requests, tasks[0].ChildThreadID)
+	}
+	childRun, err := svc.GetRun(ctx, ident, tasks[0].ChildRunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if childRun.Status != productdata.RunStatusCompleted {
+		t.Fatalf("child run = %+v", childRun)
+	}
+	call, err = svc.GetToolCall(ctx, ident, thread.ID, run.ID, "tc_agent_delegate_pg_terminal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if call.ExecutionStatus != productdata.ToolCallExecutionExecuting {
+		t.Fatalf("delegate call completed before reconciliation: %+v", call)
+	}
+
+	ok, err = worker.ProcessOne(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("ProcessOne() did not reconcile child and resume parent")
+	}
+	if len(provider.requests) != 2 || provider.requests[1].ThreadID != thread.ID {
+		t.Fatalf("parent continuation request = %+v, parent thread = %s", provider.requests, thread.ID)
+	}
+	call, err = svc.GetToolCall(ctx, ident, thread.ID, run.ID, "tc_agent_delegate_pg_terminal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if call.ExecutionStatus != productdata.ToolCallExecutionSucceeded || call.ResultSummary["child_status"] != string(productdata.RunStatusCompleted) || !strings.Contains(fmt.Sprint(call.ResultSummary["result_summary"]), "no issues") {
+		t.Fatalf("delegate call after reconciliation = %+v", call)
+	}
+	got, err := svc.GetRun(ctx, ident, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != productdata.RunStatusCompleted {
+		t.Fatalf("parent run = %+v", got)
+	}
+}
+
 func TestWorkerExecutesApprovedTodoWriteAndContinuesModel(t *testing.T) {
 	svc := productdata.NewMemoryService()
 	ident := identity.LocalDevIdentity()
@@ -1573,7 +2123,7 @@ func TestQueuedRunRouterDoesNotExecuteApprovedToolAfterStop(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if call.ExecutionStatus != productdata.ToolCallExecutionNotStarted {
+	if call.ExecutionStatus != productdata.ToolCallExecutionCancelled {
 		t.Fatalf("call = %+v", call)
 	}
 	if provider.request.ThreadID != "" {
@@ -1595,6 +2145,161 @@ func TestQueuedRunRouterDoesNotExecuteApprovedToolAfterStop(t *testing.T) {
 			t.Fatalf("stopped approved tool path wrote execution/failure event: %+v", events)
 		}
 	}
+}
+
+func TestQueuedRunRouterDoesNotExecuteToolWhenStartReturnsCancelled(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, productdata.CreateThreadInput{Title: "Tool race", Mode: productdata.ThreadModeWork})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, productdata.StartRunInput{Source: productdata.RunSourceModelGateway, MessageID: "msg_1", ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.RecordToolCallRequest(context.Background(), ident, run.ID, productdata.RecordToolCallRequestInput{ToolCallID: "tc_race", ToolName: productdata.ToolNameWorkspaceRead, ArgumentsSummary: map[string]any{"path": "safe.txt"}, ArgumentsHash: "hash_race", ApprovalStatus: productdata.ToolCallApprovalRequired, ExecutionStatus: productdata.ToolCallExecutionBlocked}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.ApproveToolCall(context.Background(), ident, thread.ID, run.ID, "tc_race"); err != nil {
+		t.Fatal(err)
+	}
+	cancelled := productdata.ToolCall{ThreadID: thread.ID, RunID: run.ID, ToolCallID: "tc_race", ToolName: productdata.ToolNameWorkspaceRead, ApprovalStatus: productdata.ToolCallApprovalApproved, ExecutionStatus: productdata.ToolCallExecutionCancelled}
+	service := &startCancelledService{Service: svc, call: cancelled}
+	executor := &countingToolExecutor{}
+	router := QueuedRunRouter{Gateway: NewGateway(service, nil, nil), toolExecutor: executor}
+
+	if err := router.runApprovedTool(context.Background(), run, productdata.BackgroundJob{}, "tc_race", nil, false); err != nil {
+		t.Fatal(err)
+	}
+	if executor.calls != 0 {
+		t.Fatalf("executor calls = %d", executor.calls)
+	}
+	if service.failCalls != 0 {
+		t.Fatalf("fail calls = %d", service.failCalls)
+	}
+}
+
+func TestQueuedRunRouterDropsToolResultWhenJobOwnershipIsLost(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, productdata.CreateThreadInput{Title: "Tool owner", Mode: productdata.ThreadModeWork})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, productdata.StartRunInput{Source: productdata.RunSourceModelGateway, MessageID: "msg_1", ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.RecordToolCallRequest(context.Background(), ident, run.ID, productdata.RecordToolCallRequestInput{ToolCallID: "tc_owner", ToolName: productdata.ToolNameWorkspaceRead, ArgumentsSummary: map[string]any{"path": "safe.txt"}, ArgumentsHash: "hash_owner", ApprovalStatus: productdata.ToolCallApprovalRequired, ExecutionStatus: productdata.ToolCallExecutionBlocked}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.ApproveToolCall(context.Background(), ident, thread.ID, run.ID, "tc_owner"); err != nil {
+		t.Fatal(err)
+	}
+	job, _, ok, err := svc.ClaimBackgroundJob(context.Background(), ident, productdata.ClaimBackgroundJobInput{WorkerID: "worker_old", LeaseSeconds: 30})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("claim ok = false")
+	}
+	service := &lostOwnershipService{Service: svc}
+	router := QueuedRunRouter{Gateway: NewGateway(service, nil, nil), toolExecutor: scriptedToolExecutor{results: map[string]map[string]any{"tc_owner": {"ok": true}}}}
+
+	if err := router.runApprovedTool(context.Background(), run, job, "tc_owner", nil, false); err != nil {
+		t.Fatal(err)
+	}
+	if service.completeCalls != 0 || service.failCalls != 0 {
+		t.Fatalf("complete=%d fail=%d", service.completeCalls, service.failCalls)
+	}
+}
+
+func TestQueuedRunRouterDropsToolFailureWhenJobOwnershipIsLost(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, productdata.CreateThreadInput{Title: "Tool owner failure", Mode: productdata.ThreadModeWork})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, productdata.StartRunInput{Source: productdata.RunSourceModelGateway, MessageID: "msg_1", ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.RecordToolCallRequest(context.Background(), ident, run.ID, productdata.RecordToolCallRequestInput{ToolCallID: "tc_owner_fail", ToolName: productdata.ToolNameWorkspaceRead, ArgumentsSummary: map[string]any{"path": "safe.txt"}, ArgumentsHash: "hash_owner_fail", ApprovalStatus: productdata.ToolCallApprovalRequired, ExecutionStatus: productdata.ToolCallExecutionBlocked}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.ApproveToolCall(context.Background(), ident, thread.ID, run.ID, "tc_owner_fail"); err != nil {
+		t.Fatal(err)
+	}
+	job, _, ok, err := svc.ClaimBackgroundJob(context.Background(), ident, productdata.ClaimBackgroundJobInput{WorkerID: "worker_old", LeaseSeconds: 30})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("claim ok = false")
+	}
+	service := &lostOwnershipService{Service: svc}
+	router := QueuedRunRouter{Gateway: NewGateway(service, nil, nil), toolExecutor: failingToolExecutor{err: errors.New("workspace read failed")}}
+
+	if err := router.runApprovedTool(context.Background(), run, job, "tc_owner_fail", nil, false); err != nil {
+		t.Fatal(err)
+	}
+	if service.completeCalls != 0 || service.failCalls != 0 {
+		t.Fatalf("complete=%d fail=%d", service.completeCalls, service.failCalls)
+	}
+}
+
+type startCancelledService struct {
+	productdata.Service
+	call      productdata.ToolCall
+	failCalls int
+}
+
+func (s *startCancelledService) StartToolCallExecution(context.Context, identity.LocalIdentity, string, string, string) (productdata.ToolCall, []productdata.RunEvent, error) {
+	return s.call, nil, nil
+}
+
+func (s *startCancelledService) FailToolCallExecution(context.Context, identity.LocalIdentity, string, string, string, string, string) (productdata.ToolCall, []productdata.RunEvent, error) {
+	s.failCalls++
+	return productdata.ToolCall{}, nil, nil
+}
+
+type countingToolExecutor struct {
+	calls int
+}
+
+func (e *countingToolExecutor) ExecuteTool(_ context.Context, invocation ToolInvocation) (ToolResult, error) {
+	e.calls++
+	return ToolResult{ToolName: invocation.ToolName, ResultSummary: map[string]any{"ok": true}}, nil
+}
+
+type failingToolExecutor struct {
+	err error
+}
+
+func (e failingToolExecutor) ExecuteTool(_ context.Context, _ ToolInvocation) (ToolResult, error) {
+	return ToolResult{}, e.err
+}
+
+type lostOwnershipService struct {
+	productdata.Service
+	completeCalls int
+	failCalls     int
+}
+
+func (s *lostOwnershipService) RenewBackgroundJobLease(context.Context, identity.LocalIdentity, productdata.RenewBackgroundJobLeaseInput) (productdata.BackgroundJob, bool, error) {
+	return productdata.BackgroundJob{}, false, nil
+}
+
+func (s *lostOwnershipService) CompleteToolCallSuccess(ctx context.Context, ident identity.LocalIdentity, threadID string, runID string, toolCallID string, result map[string]any) (productdata.ToolCall, []productdata.RunEvent, error) {
+	s.completeCalls++
+	return s.Service.CompleteToolCallSuccess(ctx, ident, threadID, runID, toolCallID, result)
+}
+
+func (s *lostOwnershipService) FailToolCallExecution(ctx context.Context, ident identity.LocalIdentity, threadID string, runID string, toolCallID string, code string, message string) (productdata.ToolCall, []productdata.RunEvent, error) {
+	s.failCalls++
+	return s.Service.FailToolCallExecution(ctx, ident, threadID, runID, toolCallID, code, message)
 }
 
 func TestWorkerDoesNotContinueAfterDeniedToolCall(t *testing.T) {
@@ -1681,5 +2386,65 @@ func TestWorkerDoesNotContinueAfterToolExecutionFailure(t *testing.T) {
 	}
 	if provider.request.ThreadID != "" {
 		t.Fatalf("provider was called: %+v", provider.request)
+	}
+}
+
+func TestQueuedToolExecutionFailureContinuesAsToolResult(t *testing.T) {
+	svc := productdata.NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, productdata.CreateThreadInput{Title: "Recover failed read", Mode: productdata.ThreadModeWork})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _, err := svc.CreateMessage(context.Background(), ident, thread.ID, productdata.CreateMessageInput{Content: "Read the project and summarize."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, productdata.StartRunInput{Source: productdata.RunSourceModelGateway, MessageID: message.ID, ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.RecordToolCallRequest(context.Background(), ident, run.ID, productdata.RecordToolCallRequestInput{ToolCallID: "tc_missing", ToolName: productdata.ToolNameWorkspaceRead, ArgumentsSummary: map[string]any{"path": "missing.ts"}, ArgumentsHash: "hash_missing", ApprovalStatus: productdata.ToolCallApprovalApproved, ExecutionStatus: productdata.ToolCallExecutionNotStarted}); err != nil {
+		t.Fatal(err)
+	}
+	provider := &capturingProvider{config: ProviderConfig{ID: "custom", Family: ProviderFamilyOpenAICompatible, BaseURL: "https://example.test/v1", APIKey: "key", Model: "model", Enabled: true}, events: []ProviderEvent{{Type: ProviderEventCompleted, Text: "Recovered after missing file."}}}
+	prepared := &productdata.RunContext{
+		ProviderRoute: productdata.ProviderRoute{ProviderID: "custom", Model: "model", Available: true},
+		EnabledTools: []productdata.ToolResolution{{
+			Name:           productdata.ToolNameWorkspaceRead,
+			Source:         string(productdata.ToolCatalogSourceBuiltin),
+			Group:          string(productdata.ToolCatalogGroupWorkspace),
+			ExecutionState: string(productdata.ToolExecutionStateExecutable),
+		}},
+	}
+	router := QueuedRunRouter{Gateway: NewGateway(svc, nil, []Provider{provider}), toolExecutor: failingToolExecutor{err: errors.New("workspace path is unavailable")}}
+
+	if err := router.runApprovedTool(context.Background(), run, productdata.BackgroundJob{}, "tc_missing", prepared, true); err != nil {
+		t.Fatal(err)
+	}
+	got, err := svc.GetRun(context.Background(), ident, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != productdata.RunStatusCompleted {
+		events, _ := svc.ListRunEvents(context.Background(), ident, run.ID, 0)
+		t.Fatalf("run = %+v events=%+v provider=%+v", got, events, provider.request)
+	}
+	call, err := svc.GetToolCall(context.Background(), ident, thread.ID, run.ID, "tc_missing")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if call.ExecutionStatus != productdata.ToolCallExecutionFailed {
+		t.Fatalf("call = %+v", call)
+	}
+	if provider.request.ThreadID != thread.ID {
+		t.Fatalf("provider was not called for recovery continuation: %+v", provider.request)
+	}
+	messages, err := svc.ListMessages(context.Background(), ident, thread.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 2 || messages[1].Content != "Recovered after missing file." {
+		t.Fatalf("messages = %+v", messages)
 	}
 }

@@ -88,6 +88,47 @@ func TestThreadLifecycleForCurrentIdentity(t *testing.T) {
 	}
 }
 
+func TestMemoryServiceThreadContextSources(t *testing.T) {
+	svc := NewMemoryService()
+	var _ ContextSourceService = svc
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, CreateThreadInput{Title: "Sources", Mode: ThreadModeWork})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := svc.CreateContextSource(context.Background(), ident, CreateContextSourceInput{ThreadID: thread.ID, Kind: ContextSourceKindURL, Title: "Docs", Locator: " https://example.com/docs?token=secret "})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if source.ID == "" || source.ThreadID != thread.ID || source.Kind != ContextSourceKindURL || source.Title != "Docs" || source.Locator != "https://example.com/docs" || source.Status != ContextSourceStatusRegistered {
+		t.Fatalf("source = %+v", source)
+	}
+	listed, err := svc.ListContextSources(context.Background(), ident, ListContextSourcesInput{ThreadID: thread.ID, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 1 || listed[0].ID != source.ID {
+		t.Fatalf("listed = %+v", listed)
+	}
+	if _, err := svc.CreateContextSource(context.Background(), ident, CreateContextSourceInput{ThreadID: thread.ID, Kind: ContextSourceKindURL, Title: "Bad", Locator: "http://127.0.0.1/private"}); err == nil || ErrorCode(err) != CodeInvalidRequest {
+		t.Fatalf("private url err = %v", err)
+	}
+	if _, err := svc.CreateContextSource(context.Background(), ident, CreateContextSourceInput{ThreadID: thread.ID, Kind: ContextSourceKindWorkspacePath, Title: "Secret", Locator: ".env"}); err == nil || ErrorCode(err) != CodeInvalidRequest {
+		t.Fatalf("sensitive path err = %v", err)
+	}
+	other, err := svc.CreateThread(context.Background(), ident, CreateThreadInput{Title: "Other", Mode: ThreadModeWork})
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherSources, err := svc.ListContextSources(context.Background(), ident, ListContextSourcesInput{ThreadID: other.ID, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(otherSources) != 0 {
+		t.Fatalf("otherSources = %+v", otherSources)
+	}
+}
+
 func TestThreadValidation(t *testing.T) {
 	svc := NewMemoryService()
 	_, err := svc.CreateThread(context.Background(), identity.LocalDevIdentity(), CreateThreadInput{Title: " ", Mode: ThreadModeChat})
@@ -100,23 +141,91 @@ func TestThreadValidation(t *testing.T) {
 	}
 }
 
+func TestPrepareRunContextLoadsThreadContextSources(t *testing.T) {
+	svc := NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, CreateThreadInput{Title: "Sources", Mode: ThreadModeWork})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _, err := svc.CreateMessage(context.Background(), ident, thread.ID, CreateMessageInput{Content: "Read the linked docs"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := svc.CreateContextSource(context.Background(), ident, CreateContextSourceInput{ThreadID: thread.ID, Kind: ContextSourceKindURL, Title: "Docs", Locator: "https://example.com/docs?token=secret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.StartRun(context.Background(), ident, thread.ID, StartRunInput{Source: RunSourceModelGateway, MessageID: message.ID, ProviderID: "custom", Model: "model"}); err != nil {
+		t.Fatal(err)
+	}
+	job, _, ok, err := svc.ClaimBackgroundJob(context.Background(), ident, ClaimBackgroundJobInput{WorkerID: "worker-1", LeaseSeconds: 30})
+	if err != nil || !ok {
+		t.Fatalf("claim ok=%v err=%v", ok, err)
+	}
+	ctxData, err := svc.PrepareRunContext(context.Background(), ident, job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ctxData.ContextSources) != 1 || ctxData.ContextSources[0].ID != source.ID || ctxData.ContextSources[0].Locator != "https://example.com/docs" {
+		t.Fatalf("context sources = %+v", ctxData.ContextSources)
+	}
+	summary := ctxData.SafeSummary()
+	if summary["context_source_count"] != 1 || summary["context_source_kinds"].([]string)[0] != string(ContextSourceKindURL) {
+		t.Fatalf("summary = %+v", summary)
+	}
+	events, err := svc.ListRunEvents(context.Background(), ident, job.RunID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, event := range events {
+		if event.Type == EventContextSourcesLoaded {
+			found = true
+			if event.Metadata["context_source_count"] != 1 {
+				t.Fatalf("source event metadata = %+v", event.Metadata)
+			}
+			if strings.Contains(event.Summary, "token") {
+				t.Fatalf("unsafe event summary = %q", event.Summary)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("missing %s event in %+v", EventContextSourcesLoaded, events)
+	}
+}
+
 func TestWorkToolResolutionsFollowLatestUserIntent(t *testing.T) {
 	all := toolResolutionsForNamesAndEvents(BuiltInPersonas()[0].AllowedToolNames, nil)
 	listFiles := workToolResolutionsForLatestIntent(all, []Message{{Role: MessageRoleUser, Content: "列一下当前工作目录里的文件，简单分类。"}})
 	if !hasToolResolution(listFiles, ToolNameWorkspaceListDirectory) || !hasToolResolution(listFiles, ToolNameWorkspaceTreeSummary) || !hasToolResolution(listFiles, ToolNameWorkspaceRead) {
 		t.Fatalf("file listing tools missing: %+v", listFiles)
 	}
-	for _, disallowed := range []string{ToolNameSandboxExecCommand, ToolNameAgentSpawn, ToolNameArtifactCreateText, ToolNameBrowserOpen} {
+	explainProject := workToolResolutionsForLatestIntent(all, []Message{{Role: MessageRoleUser, Content: "帮我梳理 orders / capacity / workbench 页面和源码实现，讲解业务流。"}})
+	if !hasToolResolution(explainProject, ToolNameWorkspaceListDirectory) || !hasToolResolution(explainProject, ToolNameWorkspaceTreeSummary) || !hasToolResolution(explainProject, ToolNameWorkspaceRead) {
+		t.Fatalf("project explanation tools missing: %+v", explainProject)
+	}
+	for _, disallowed := range []string{ToolNameSandboxExecCommand, ToolNameAgentSpawn, ToolNameArtifactCreateText, ToolNameArtifactCreateVisual, ToolNameBrowserOpen} {
+		if hasToolResolution(explainProject, disallowed) {
+			t.Fatalf("project explanation exposed %s: %+v", disallowed, explainProject)
+		}
+	}
+	for _, disallowed := range []string{ToolNameSandboxExecCommand, ToolNameAgentSpawn, ToolNameArtifactCreateText, ToolNameArtifactCreateVisual, ToolNameBrowserOpen} {
 		if hasToolResolution(listFiles, disallowed) {
 			t.Fatalf("file listing exposed %s: %+v", disallowed, listFiles)
 		}
 	}
 
 	hello := workToolResolutionsForLatestIntent(all, []Message{{Role: MessageRoleUser, Content: "你好呀"}})
-	for _, disallowed := range []string{ToolNameWorkspaceGlob, ToolNameSandboxExecCommand, ToolNameAgentSpawn, ToolNameArtifactCreateText, ToolNameBrowserOpen, ToolNameWebSearch} {
+	for _, disallowed := range []string{ToolNameWorkspaceGlob, ToolNameSandboxExecCommand, ToolNameAgentSpawn, ToolNameArtifactCreateText, ToolNameArtifactCreateVisual, ToolNameBrowserOpen, ToolNameWebSearch} {
 		if hasToolResolution(hello, disallowed) {
 			t.Fatalf("casual greeting exposed %s: %+v", disallowed, hello)
 		}
+	}
+
+	diagram := workToolResolutionsForLatestIntent(all, []Message{{Role: MessageRoleUser, Content: "画一个 SVG 流程图"}})
+	if !hasToolResolution(diagram, ToolNameArtifactCreateVisual) || !hasToolResolution(diagram, ToolNameArtifactCreateText) {
+		t.Fatalf("diagram intent missing artifact tools: %+v", diagram)
 	}
 
 	runTests := workToolResolutionsForLatestIntent(all, []Message{{Role: MessageRoleUser, Content: "帮我运行 go test ./..."}})
@@ -329,6 +438,80 @@ func TestApprovedToolResumePreservesRunScopedWorkspaceRootSnapshot(t *testing.T)
 
 	if ctxData.WorkspaceRoot.Path != firstRoot {
 		t.Fatalf("resume workspace root snapshot = %q, want %q", ctxData.WorkspaceRoot.Path, firstRoot)
+	}
+}
+
+func TestAgentDelegateReconcilePreservesRunScopedWorkspaceRootSnapshot(t *testing.T) {
+	svc := NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	firstRoot := t.TempDir()
+	secondRoot := t.TempDir()
+	if _, err := svc.SaveWorkspaceRootConfig(context.Background(), ident, WorkspaceRootConfig{Path: firstRoot}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.SyncBuiltInPersonas(context.Background(), ident, BuiltInPersonas()); err != nil {
+		t.Fatal(err)
+	}
+	thread, err := svc.CreateThread(context.Background(), ident, CreateThreadInput{Title: "Delegate workspace", Mode: ThreadModeWork})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _, err := svc.CreateMessage(context.Background(), ident, thread.ID, CreateMessageInput{Content: "delegate"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, StartRunInput{Source: RunSourceModelGateway, MessageID: message.ID, ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.RecordToolCallRequest(context.Background(), ident, run.ID, RecordToolCallRequestInput{ToolCallID: "tc_delegate", ToolName: ToolNameAgentDelegate, ArgumentsSummary: map[string]any{"task_id": "task"}, ArgumentsHash: "hash_delegate", ApprovalStatus: ToolCallApprovalRequired, ExecutionStatus: ToolCallExecutionBlocked}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.ApproveToolCall(context.Background(), ident, thread.ID, run.ID, "tc_delegate"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.StartToolCallExecution(context.Background(), ident, thread.ID, run.ID, "tc_delegate"); err != nil {
+		t.Fatal(err)
+	}
+	task, err := svc.SpawnAgentTask(context.Background(), ident, SpawnAgentTaskInput{ThreadID: thread.ID, RunID: run.ID, Role: "reviewer", Goal: "Review workspace resume"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	delegated, err := svc.DelegateAgentTask(context.Background(), ident, DelegateAgentTaskInput{ThreadID: thread.ID, TaskID: task.ID, ParentToolCallID: "tc_delegate"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.SaveWorkspaceRootConfig(context.Background(), ident, WorkspaceRootConfig{Path: secondRoot}); err != nil {
+		t.Fatal(err)
+	}
+	svc.mu.Lock()
+	childRun := svc.runs[delegated.ChildRunID]
+	now := svc.now()
+	childRun.Status = RunStatusCompleted
+	childRun.CompletedAt = &now
+	childRun.UpdatedAt = now
+	svc.runs[childRun.ID] = childRun
+	svc.messages[childRun.ThreadID] = append(svc.messages[childRun.ThreadID], Message{ID: NewMessageID(), ThreadID: childRun.ThreadID, UserID: childRun.UserID, Role: MessageRoleAssistant, Content: "Child done", CreatedAt: now})
+	svc.mu.Unlock()
+	if _, err := svc.ReconcileAgentTaskChildRuns(context.Background(), ident, 1); err != nil {
+		t.Fatal(err)
+	}
+	var resumeJob BackgroundJob
+	for _, job := range svc.backgroundJobs {
+		if job.RunID == run.ID && metadataStringValue(job.Metadata, "resume_reason") == "agent_child_run_completed" {
+			resumeJob = job
+			break
+		}
+	}
+	if resumeJob.ID == "" {
+		t.Fatal("resume job not found")
+	}
+	ctxData, err := svc.PrepareRunContext(context.Background(), ident, resumeJob)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ctxData.WorkspaceRoot.Path != firstRoot {
+		t.Fatalf("delegate resume workspace root snapshot = %q, want %q", ctxData.WorkspaceRoot.Path, firstRoot)
 	}
 }
 
@@ -729,7 +912,7 @@ func TestWorkModeScopedToolsOnlyEnabledForWorkModeRunContext(t *testing.T) {
 		Description:      "Default persona",
 		SystemPrompt:     "prompt",
 		ModelRoute:       PersonaModelRoute{ProviderID: "custom", Model: "model"},
-		AllowedToolNames: []string{ToolNameCurrentTime, ToolNameWorkspaceGlob, ToolNameWorkspaceGrep, ToolNameWorkspaceRead, ToolNameWorkspaceListDirectory, ToolNameWorkspaceTreeSummary, ToolNameWorkspaceWriteFile, ToolNameWorkspaceEdit, ToolNameWorkspacePatchPreview, ToolNameWorkspacePatchApply, ToolNameSandboxExecCommand, ToolNameSandboxStartProcess, ToolNameSandboxContinueProcess, ToolNameSandboxTerminateProcess, ToolNameLSPDiagnostics, ToolNameLSPSymbols, ToolNameLSPReferences, ToolNameLSPDefinition, ToolNameLSPHover, ToolNameWebFetch, ToolNameBrowserOpen, ToolNameBrowserSnapshot, ToolNameBrowserClickLink, ToolNameBrowserScreenshot, ToolNameBrowserType, ToolNameBrowserPress, ToolNameArtifactCreateText, ToolNameArtifactRead, ToolNameArtifactList, ToolNameAgentSpawn, ToolNameAgentList, ToolNameAgentComplete, ToolNameTodoWrite},
+		AllowedToolNames: []string{ToolNameCurrentTime, ToolNameWorkspaceGlob, ToolNameWorkspaceGrep, ToolNameWorkspaceRead, ToolNameWorkspaceListDirectory, ToolNameWorkspaceTreeSummary, ToolNameWorkspaceWriteFile, ToolNameWorkspaceEdit, ToolNameWorkspacePatchPreview, ToolNameWorkspacePatchApply, ToolNameSandboxExecCommand, ToolNameSandboxStartProcess, ToolNameSandboxContinueProcess, ToolNameSandboxTerminateProcess, ToolNameLSPDiagnostics, ToolNameLSPSymbols, ToolNameLSPReferences, ToolNameLSPDefinition, ToolNameLSPHover, ToolNameWebFetch, ToolNameBrowserOpen, ToolNameBrowserSnapshot, ToolNameBrowserClickLink, ToolNameBrowserScreenshot, ToolNameBrowserType, ToolNameBrowserPress, ToolNameArtifactCreateText, ToolNameArtifactCreateVisual, ToolNameArtifactRead, ToolNameArtifactList, ToolNameAgentSpawn, ToolNameAgentList, ToolNameAgentStart, ToolNameAgentDelegate, ToolNameAgentComplete, ToolNameAgentFail, ToolNameTodoWrite},
 		ReasoningMode:    "balanced",
 		BudgetSummary:    "budget",
 		Version:          "1",
@@ -765,15 +948,16 @@ func TestWorkModeScopedToolsOnlyEnabledForWorkModeRunContext(t *testing.T) {
 		hasWebFetch := catalogResolutionByName(ctxData.EnabledTools, ToolNameWebFetch).Name != ""
 		hasBrowserOpen := catalogResolutionByName(ctxData.EnabledTools, ToolNameBrowserOpen).Name != ""
 		hasArtifactCreate := catalogResolutionByName(ctxData.EnabledTools, ToolNameArtifactCreateText).Name != ""
+		hasArtifactCreateVisual := catalogResolutionByName(ctxData.EnabledTools, ToolNameArtifactCreateVisual).Name != ""
 		hasAgentSpawn := catalogResolutionByName(ctxData.EnabledTools, ToolNameAgentSpawn).Name != ""
 		hasTodoWrite := catalogResolutionByName(ctxData.EnabledTools, ToolNameTodoWrite).Name != ""
-		if mode == ThreadModeChat && (hasWorkspaceRead || hasWorkspaceWrite || hasWorkspacePatchPreview || hasWorkspacePatchApply || hasSandboxExec || hasLSPSymbols || hasBrowserOpen || hasArtifactCreate || hasAgentSpawn || hasTodoWrite) {
+		if mode == ThreadModeChat && (hasWorkspaceRead || hasWorkspaceWrite || hasWorkspacePatchPreview || hasWorkspacePatchApply || hasSandboxExec || hasLSPSymbols || hasBrowserOpen || hasArtifactCreate || hasArtifactCreateVisual || hasAgentSpawn || hasTodoWrite) {
 			t.Fatalf("chat enabled work-mode tools: %+v", ctxData.EnabledTools)
 		}
 		if mode == ThreadModeChat && !hasWebFetch {
 			t.Fatalf("chat missing public web fetch tool: %+v", ctxData.EnabledTools)
 		}
-		if mode == ThreadModeWork && (!hasWorkspaceRead || !hasWorkspaceWrite || !hasWorkspacePatchPreview || !hasWorkspacePatchApply || !hasSandboxExec || !hasLSPSymbols || !hasWebFetch || !hasBrowserOpen || !hasArtifactCreate || !hasAgentSpawn || !hasTodoWrite) {
+		if mode == ThreadModeWork && (!hasWorkspaceRead || !hasWorkspaceWrite || !hasWorkspacePatchPreview || !hasWorkspacePatchApply || !hasSandboxExec || !hasLSPSymbols || !hasWebFetch || !hasBrowserOpen || !hasArtifactCreate || !hasArtifactCreateVisual || !hasAgentSpawn || !hasTodoWrite) {
 			t.Fatalf("work missing work-mode tools: %+v", ctxData.EnabledTools)
 		}
 	}
@@ -1095,6 +1279,182 @@ func TestPrepareRunContextFailsBeforeRuntimeForMissingProviderRoute(t *testing.T
 	_, err = svc.PrepareRunContext(context.Background(), ident, job)
 	if err == nil || ErrorCode(err) != CodeInvalidRequest {
 		t.Fatalf("PrepareRunContext() err = %v", err)
+	}
+}
+
+func TestBuildRunContextFromRunStepStateHydratesApprovedToolResume(t *testing.T) {
+	run := Run{ID: "run_1", ThreadID: "thread_1", UserID: "user_1", Source: RunSourceModelGateway}
+	thread := Thread{ID: "thread_1", UserID: "user_1", Mode: ThreadModeWork}
+	message := Message{ID: "msg_1", ThreadID: thread.ID, Role: MessageRoleUser, Content: "read files"}
+	job := BackgroundJob{ID: "job_1", RunID: run.ID, ThreadID: thread.ID, UserID: run.UserID, Metadata: map[string]any{"tool_call_id": "tc_read"}}
+	state := RunStepState{
+		TriggerMessageID:      message.ID,
+		ProviderID:            "custom",
+		Model:                 "model-a",
+		EnabledToolNames:      []string{ToolNameWorkspaceRead, ToolNameWebFetch},
+		LastCompletedSequence: 7,
+		CompletedToolResults: []RunStep{{
+			ToolCallID: "tc_read",
+			ToolName:   ToolNameWorkspaceRead,
+			SafeMetadata: map[string]any{
+				"tool_call_id":      "tc_read",
+				"tool_name":         ToolNameWorkspaceRead,
+				"arguments_summary": map[string]any{"path": "notes.txt"},
+				"result_summary":    map[string]any{"path": "notes.txt", "content": "hello"},
+			},
+		}},
+	}
+
+	context, err := buildRunContextFromState(run, thread, []Message{message}, job, state)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if context.ProviderRoute.ProviderID != "custom" || context.ProviderRoute.Model != "model-a" || !context.ProviderRoute.Available {
+		t.Fatalf("provider route = %+v", context.ProviderRoute)
+	}
+	if !context.ContinuationProjection.Available || context.ContinuationProjection.ToolCallID != "tc_read" {
+		t.Fatalf("continuation = %+v", context.ContinuationProjection)
+	}
+	if len(context.EnabledTools) != 2 || context.EnabledTools[0].Name != ToolNameWorkspaceRead || context.EnabledTools[1].Name != ToolNameWebFetch {
+		t.Fatalf("enabled tools = %+v", context.EnabledTools)
+	}
+}
+
+func TestRunStepStateCanPrepareInitialModelContext(t *testing.T) {
+	run := Run{ID: "run_1", Source: RunSourceModelGateway}
+	state := RunStepState{TriggerMessageID: "msg_1", ProviderID: "custom", Model: "model-a"}
+
+	if !runStepStateCanPrepareContext(run, state) {
+		t.Fatal("initial model context should be prepared from run-step state")
+	}
+	state.ProviderID = ""
+	if runStepStateCanPrepareContext(run, state) {
+		t.Fatal("model gateway context without provider route should not prepare")
+	}
+	state.ProviderID = "custom"
+	state.EnabledToolNames = []string{"mcp.local-search.search"}
+	if runStepStateCanPrepareContext(run, state) {
+		t.Fatal("MCP context without schema hash should not prepare")
+	}
+	state.MCPToolSchemaHashes = map[string]string{"mcp.local-search.search": "hash_1"}
+	if !runStepStateCanPrepareContext(run, state) {
+		t.Fatal("MCP context with schema hash should prepare")
+	}
+}
+
+func TestClaimToolContinuationIsSingleUsePerJobAndRecoverableByNewJob(t *testing.T) {
+	svc := NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	now := time.Date(2026, 5, 29, 0, 0, 0, 0, time.UTC)
+	svc.now = func() time.Time { return now }
+	thread, err := svc.CreateThread(context.Background(), ident, CreateThreadInput{Title: "Continuation claim", Mode: ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, StartRunInput{Source: RunSourceModelGateway, MessageID: "msg_1", ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.RecordToolCallRequest(context.Background(), ident, run.ID, RecordToolCallRequestInput{ToolCallID: "tc_1", ToolName: ToolNameCurrentTime, ArgumentsSummary: map[string]any{"timezone": "UTC"}, ArgumentsHash: "hash_1", ApprovalStatus: ToolCallApprovalRequired, ExecutionStatus: ToolCallExecutionBlocked}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.ApproveToolCall(context.Background(), ident, thread.ID, run.ID, "tc_1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.StartToolCallExecution(context.Background(), ident, thread.ID, run.ID, "tc_1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.CompleteToolCallSuccess(context.Background(), ident, thread.ID, run.ID, "tc_1", map[string]any{"iso_time": "2026-05-29T00:00:00Z"}); err != nil {
+		t.Fatal(err)
+	}
+
+	first, ok, err := svc.ClaimToolContinuation(context.Background(), ident, ClaimToolContinuationInput{ThreadID: thread.ID, RunID: run.ID, ToolCallID: "tc_1", JobID: "job_1", ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || first.Type != "model_request_started" || first.Metadata["model_phase"] != "continuation" || first.Metadata["job_id"] != "job_1" {
+		t.Fatalf("first claim ok=%v event=%+v", ok, first)
+	}
+	if _, ok, err := svc.ClaimToolContinuation(context.Background(), ident, ClaimToolContinuationInput{ThreadID: thread.ID, RunID: run.ID, ToolCallID: "tc_1", JobID: "job_1", ProviderID: "custom", Model: "model"}); err != nil || ok {
+		t.Fatalf("same job claim ok=%v err=%v", ok, err)
+	}
+	if _, ok, err := svc.ClaimToolContinuation(context.Background(), ident, ClaimToolContinuationInput{ThreadID: thread.ID, RunID: run.ID, ToolCallID: "tc_1", JobID: "job_2", ProviderID: "custom", Model: "model"}); err != nil || ok {
+		t.Fatalf("active claim should block recovery ok=%v err=%v", ok, err)
+	}
+	now = now.Add(31 * time.Second)
+	recovery, ok, err := svc.ClaimToolContinuation(context.Background(), ident, ClaimToolContinuationInput{ThreadID: thread.ID, RunID: run.ID, ToolCallID: "tc_1", JobID: "job_2", ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || recovery.Metadata["job_id"] != "job_2" {
+		t.Fatalf("recovery claim ok=%v event=%+v", ok, recovery)
+	}
+	delta := "hello"
+	if _, err := svc.AppendRunEvent(context.Background(), ident, run.ID, AppendRunEventInput{Category: RunEventCategoryMessage, Type: "model_output_delta", Summary: "Model output delta", Content: &delta, Metadata: map[string]any{"model_phase": "continuation"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := svc.ClaimToolContinuation(context.Background(), ident, ClaimToolContinuationInput{ThreadID: thread.ID, RunID: run.ID, ToolCallID: "tc_1", JobID: "job_3", ProviderID: "custom", Model: "model"}); err != nil || ok {
+		t.Fatalf("post-output claim ok=%v err=%v", ok, err)
+	}
+}
+
+func TestClaimToolContinuationBlocksDifferentJobWhilePreviousClaimJobIsActive(t *testing.T) {
+	svc := NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	now := time.Date(2026, 5, 29, 1, 0, 0, 0, time.UTC)
+	svc.now = func() time.Time { return now }
+	thread, err := svc.CreateThread(context.Background(), ident, CreateThreadInput{Title: "Continuation claim active job", Mode: ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, StartRunInput{Source: RunSourceModelGateway, MessageID: "msg_1", ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, _, ok, err := svc.ClaimBackgroundJob(context.Background(), ident, ClaimBackgroundJobInput{WorkerID: "worker_1", LeaseSeconds: 30})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("claim job ok = false")
+	}
+	if _, _, err := svc.RecordToolCallRequest(context.Background(), ident, run.ID, RecordToolCallRequestInput{ToolCallID: "tc_1", ToolName: ToolNameCurrentTime, ArgumentsSummary: map[string]any{"timezone": "UTC"}, ArgumentsHash: "hash_1", ApprovalStatus: ToolCallApprovalRequired, ExecutionStatus: ToolCallExecutionBlocked}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.ApproveToolCall(context.Background(), ident, thread.ID, run.ID, "tc_1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.StartToolCallExecution(context.Background(), ident, thread.ID, run.ID, "tc_1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.CompleteToolCallSuccess(context.Background(), ident, thread.ID, run.ID, "tc_1", map[string]any{"iso_time": "2026-05-29T01:00:00Z"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := svc.ClaimToolContinuation(context.Background(), ident, ClaimToolContinuationInput{ThreadID: thread.ID, RunID: run.ID, ToolCallID: "tc_1", JobID: job.ID, ProviderID: "custom", Model: "model"}); err != nil || !ok {
+		t.Fatalf("first claim ok=%v err=%v", ok, err)
+	}
+	if _, ok, err := svc.ClaimToolContinuation(context.Background(), ident, ClaimToolContinuationInput{ThreadID: thread.ID, RunID: run.ID, ToolCallID: "tc_1", JobID: "job_recovery", ProviderID: "custom", Model: "model"}); err != nil || ok {
+		t.Fatalf("active previous job should block recovery claim ok=%v err=%v", ok, err)
+	}
+	now = now.Add(31 * time.Second)
+	if _, ok, err := svc.ClaimToolContinuation(context.Background(), ident, ClaimToolContinuationInput{ThreadID: thread.ID, RunID: run.ID, ToolCallID: "tc_1", JobID: "job_recovery", ProviderID: "custom", Model: "model"}); err != nil || !ok {
+		t.Fatalf("expired previous job should allow recovery claim ok=%v err=%v", ok, err)
+	}
+}
+
+func TestToolCallEventMetadataForStatePreservesLoopIndex(t *testing.T) {
+	call := ToolCall{ToolCallID: "tc_2", ToolName: ToolNameCurrentTime, ArgumentsSummary: map[string]any{"timezone": "UTC"}}
+	state := RunStepState{SeenToolCallIDs: []string{"tc_1", "tc_2"}}
+	metadata := toolCallEventMetadataForState(state, call)
+	if metadata[LoopMetadataKeyIndex] != 2 || metadata[LoopMetadataKeyMax] != DefaultMaxBoundedToolCallsPerRun {
+		t.Fatalf("metadata = %+v", metadata)
+	}
+
+	next := ToolCall{ToolCallID: "tc_3", ToolName: ToolNameCurrentTime, ArgumentsSummary: map[string]any{"timezone": "UTC"}}
+	nextMetadata := toolCallEventMetadataForState(state, next)
+	if nextMetadata[LoopMetadataKeyIndex] != 3 {
+		t.Fatalf("next metadata = %+v", nextMetadata)
 	}
 }
 
@@ -1643,6 +2003,143 @@ func TestRunStepLedgerSeparatesPendingToolFromCompletedResult(t *testing.T) {
 	}
 	if state.NextAction != RunStepNextActionWaitForToolApproval {
 		t.Fatalf("next action = %q", state.NextAction)
+	}
+}
+
+func TestAdvanceRunStepStateMatchesFullRebuild(t *testing.T) {
+	events := []RunEvent{
+		{Sequence: 1, Type: "model_request_started", Summary: "Model request started", Metadata: map[string]any{"model_phase": "initial"}},
+		{Sequence: 2, Type: EventToolCallRequested, Summary: "Tool call requested", Metadata: map[string]any{"tool_call_id": "tc_1", "tool_name": ToolNameCurrentTime}},
+		{Sequence: 3, Type: EventToolCallApproved, Summary: "Tool call approved", Metadata: map[string]any{"tool_call_id": "tc_1", "tool_name": ToolNameCurrentTime}},
+		{Sequence: 4, Type: EventToolCallExecuting, Summary: "Tool call executing", Metadata: map[string]any{"tool_call_id": "tc_1", "tool_name": ToolNameCurrentTime}},
+		{Sequence: 5, Type: EventToolCallSucceeded, Summary: "Tool call succeeded", Metadata: map[string]any{"tool_call_id": "tc_1", "tool_name": ToolNameCurrentTime}},
+		{Sequence: 6, Type: "model_request_started", Summary: "Model request started", Metadata: map[string]any{"model_phase": "continuation"}},
+		{Sequence: 7, Type: EventRunCompleted, Summary: "Run completed"},
+	}
+	incremental := RunStepState{}
+	for _, event := range events {
+		incremental = AdvanceRunStepState(incremental, event)
+	}
+	rebuilt := RebuildRunStepState(events)
+
+	if incremental.NextAction != rebuilt.NextAction || incremental.LastEventSequence != rebuilt.LastEventSequence || incremental.LastCompletedSequence != rebuilt.LastCompletedSequence || incremental.LastContinuationSequence != rebuilt.LastContinuationSequence {
+		t.Fatalf("incremental = %+v, rebuilt = %+v", incremental, rebuilt)
+	}
+	if strings.Join(runStepKindsAndStatuses(incremental.Steps), ",") != strings.Join(runStepKindsAndStatuses(rebuilt.Steps), ",") {
+		t.Fatalf("incremental steps = %+v, rebuilt steps = %+v", incremental.Steps, rebuilt.Steps)
+	}
+}
+
+func TestRunStepStateAllowsResumeAfterContinuationStartedWithoutOutput(t *testing.T) {
+	events := []RunEvent{
+		{Sequence: 1, Type: "run_created", Summary: "Run created", Metadata: map[string]any{"message_id": "msg_1", "provider_id": "custom", "model": "model"}},
+		{Sequence: 2, Type: EventToolCallRequested, Summary: "Tool call requested", Metadata: map[string]any{"tool_call_id": "tc_1", "tool_name": ToolNameWorkspaceRead}},
+		{Sequence: 3, Type: EventToolCallApproved, Summary: "Tool call approved", Metadata: map[string]any{"tool_call_id": "tc_1", "tool_name": ToolNameWorkspaceRead}},
+		{Sequence: 4, Type: EventToolCallExecuting, Summary: "Tool call executing", Metadata: map[string]any{"tool_call_id": "tc_1", "tool_name": ToolNameWorkspaceRead}},
+		{Sequence: 5, Type: EventToolCallSucceeded, Summary: "Tool call succeeded", Metadata: map[string]any{"tool_call_id": "tc_1", "tool_name": ToolNameWorkspaceRead, "result_summary": map[string]any{"path": "notes.txt"}}},
+		{Sequence: 6, Type: "model_request_started", Summary: "Model request started", Metadata: map[string]any{"model_phase": "continuation"}},
+	}
+
+	state := RebuildRunStepState(events)
+	if state.NextAction != RunStepNextActionContinueModel {
+		t.Fatalf("next action after start-only continuation = %q", state.NextAction)
+	}
+
+	events = append(events, RunEvent{Sequence: 7, Type: "model_output_delta", Summary: "Model output delta", Metadata: map[string]any{"model_phase": "continuation"}})
+	state = RebuildRunStepState(events)
+	if state.NextAction != RunStepNextActionNone {
+		t.Fatalf("next action after continuation output = %q", state.NextAction)
+	}
+}
+
+func TestRunStepStateCapturesMCPDiscoverySchemaHashes(t *testing.T) {
+	state := RebuildRunStepState([]RunEvent{
+		{Sequence: 1, Type: "mcp_discovery_succeeded", Summary: "MCP discovery succeeded", Metadata: map[string]any{
+			"status":                  "succeeded",
+			"server_slug":             "local-search",
+			"candidate_names":         []any{"mcp.local-search.search"},
+			"candidate_schema_hashes": map[string]any{"mcp.local-search.search": "sha256:search"},
+		}},
+		{Sequence: 2, Type: EventPipelineStepCompleted, Summary: "Pipeline step completed", Metadata: map[string]any{
+			"enabled_tools": []any{"mcp.local-search.search"},
+		}},
+	})
+
+	if state.MCPToolSchemaHashes["mcp.local-search.search"] != "sha256:search" {
+		t.Fatalf("mcp hashes = %+v", state.MCPToolSchemaHashes)
+	}
+}
+
+func TestBuildRunContextFromRunStepStateHydratesMCPTools(t *testing.T) {
+	run := Run{ID: "run_1", ThreadID: "thread_1", UserID: "user_1", Source: RunSourceModelGateway}
+	thread := Thread{ID: "thread_1", UserID: "user_1", Mode: ThreadModeChat}
+	message := Message{ID: "msg_1", ThreadID: thread.ID, Role: MessageRoleUser, Content: "search"}
+	job := BackgroundJob{ID: "job_1", RunID: run.ID, ThreadID: thread.ID, UserID: run.UserID, Metadata: map[string]any{"tool_call_id": "tc_mcp"}}
+	state := RunStepState{
+		TriggerMessageID:    message.ID,
+		ProviderID:          "custom",
+		Model:               "model-a",
+		EnabledToolNames:    []string{"mcp.local-search.search"},
+		MCPToolSchemaHashes: map[string]string{"mcp.local-search.search": "sha256:search"},
+		CompletedToolResults: []RunStep{{
+			ToolCallID: "tc_mcp",
+			ToolName:   "mcp.local-search.search",
+			SafeMetadata: map[string]any{
+				"tool_call_id":   "tc_mcp",
+				"tool_name":      "mcp.local-search.search",
+				"result_summary": map[string]any{"items": []any{"one"}},
+			},
+		}},
+	}
+
+	context, err := buildRunContextFromState(run, thread, []Message{message}, job, state)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(context.EnabledTools) != 1 || context.EnabledTools[0].Name != "mcp.local-search.search" || context.EnabledTools[0].InputSchemaHash != "sha256:search" {
+		t.Fatalf("enabled tools = %+v", context.EnabledTools)
+	}
+	if !context.MCPAvailability.ExecutionEnabled || context.MCPAvailability.ServersSucceeded != 1 || len(context.MCPAvailability.CandidateNames) != 1 {
+		t.Fatalf("mcp availability = %+v", context.MCPAvailability)
+	}
+}
+
+func TestMemoryServiceMaintainsRunStepStateProjection(t *testing.T) {
+	svc := NewMemoryService()
+	ident := identity.LocalDevIdentity()
+	thread, err := svc.CreateThread(context.Background(), ident, CreateThreadInput{Title: "Projection", Mode: ThreadModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _, err := svc.CreateMessage(context.Background(), ident, thread.ID, CreateMessageInput{Content: "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartRun(context.Background(), ident, thread.ID, StartRunInput{Source: RunSourceModelGateway, MessageID: message.ID, ProviderID: "custom", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial, err := svc.GetRunStepState(context.Background(), ident, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if initial.LastEventSequence != 2 || initial.TriggerMessageID != message.ID || initial.ProviderID != "custom" || initial.Model != "model" {
+		t.Fatalf("initial state = %+v", initial)
+	}
+	if _, _, err := svc.RecordToolCallRequest(context.Background(), ident, run.ID, RecordToolCallRequestInput{ToolCallID: "tc_1", ToolName: ToolNameCurrentTime, ApprovalStatus: ToolCallApprovalRequired, ExecutionStatus: ToolCallExecutionBlocked}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.ApproveToolCall(context.Background(), ident, thread.ID, run.ID, "tc_1"); err != nil {
+		t.Fatal(err)
+	}
+
+	state, err := svc.GetRunStepState(context.Background(), ident, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.NextAction != RunStepNextActionExecuteTool || len(state.PendingToolCalls) != 1 || state.PendingToolCalls[0].ToolCallID != "tc_1" {
+		t.Fatalf("state = %+v", state)
 	}
 }
 

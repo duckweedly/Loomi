@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
-import { Fragment, useEffect, useState } from 'react'
-import { Copy, ChevronDown, ChevronRight, RefreshCcw, RotateCcw } from 'lucide-react'
-import { Divider, Typewriter } from 'animal-island-ui'
+import { Fragment, useEffect, useRef, useState } from 'react'
+import { Copy, ChevronDown, ChevronRight, ExternalLink, FileCode2, FolderOpen, RefreshCcw, RotateCcw } from 'lucide-react'
+import { Typewriter } from 'animal-island-ui'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { Components } from 'react-markdown'
@@ -12,16 +12,25 @@ import { getProviderUnavailableWarning, shouldShowProviderUnavailableWarning } f
 import { deriveChatCanvasState } from '../runtime/chatCanvasState'
 import type { DesktopReadiness } from '../runtime/desktopReadiness'
 import { normalizeMarkdownContent } from '../runtime/markdownNormalize'
-import type { PreviewArtifact } from '../runtime/artifactPreview'
+import { getRunPreviewArtifacts, getToolCallArtifact, type PreviewArtifact } from '../runtime/artifactPreview'
 import { extractMessageArtifact, stripMessageArtifactSource } from '../runtime/messageArtifactPreview'
+import { canOpenArtifactNatively, nativeArtifactOpenLabel, openArtifactNatively, type NativeArtifactOpenStatus } from '../runtime/nativeArtifactOpen'
 import { thinkingHintForRun } from '../runtime/thinkingHint'
-import { humanToolName } from '../runtime/toolPreview'
 import type { ProviderSaveResult } from '../state'
 import { Composer } from './Composer'
 import type { ComposerAttachment, ComposerModelOption } from './Composer'
 import { ToolCallCard } from './ToolCallCard'
 
 const activeRunStatuses = new Set<Run['status']>(['pending', 'queued', 'running', 'recovering', 'blocked_on_tool_approval', 'stopping', 'retrying'])
+const bottomFollowThreshold = 96
+
+function distanceFromScrollBottom(element: HTMLElement) {
+  return element.scrollHeight - element.scrollTop - element.clientHeight
+}
+
+function isNearScrollBottom(element: HTMLElement) {
+  return distanceFromScrollBottom(element) < bottomFollowThreshold
+}
 
 type Props = {
   sidebarCollapsed: boolean
@@ -62,6 +71,7 @@ type Props = {
   onApproveToolCall?: (toolCall: NonNullable<Run['toolCalls']>[number]) => Promise<void> | void
   onDenyToolCall?: (toolCall: NonNullable<Run['toolCalls']>[number]) => Promise<void> | void
   onOpenArtifact?: (artifact: PreviewArtifact) => void
+  artifacts?: PreviewArtifact[]
   locale: Locale
 }
 
@@ -104,6 +114,7 @@ function codeLanguageLabel(className?: string) {
 
 function MarkdownCodeBlock({ className, children }: { className?: string; children?: ReactNode }) {
   const text = textFromChildren(children).replace(/\n$/, '')
+  if (!text.trim()) return null
   const language = codeLanguageLabel(className)
   return (
     <div className="message-code-block">
@@ -216,19 +227,38 @@ function MarkdownMessage({ content, typewriterTrigger }: { content: string; type
 }
 
 function MessageArtifactCard({ artifact, locale, onOpenArtifact }: { artifact: PreviewArtifact; locale: Locale; onOpenArtifact?: (artifact: PreviewArtifact) => void }) {
+  const [nativeStatus, setNativeStatus] = useState<NativeArtifactOpenStatus>('idle')
+  const isVisual = artifact.kind === 'svg' || artifact.kind === 'html' || artifact.kind === 'image'
+  const label = isVisual
+    ? locale === 'zh' ? '可视化产物' : 'Visual artifact'
+    : locale === 'zh' ? 'Markdown 文档' : 'Markdown document'
+  const canOpenNative = canOpenArtifactNatively(artifact)
+  const handleNativeOpen = async (event: React.MouseEvent<HTMLButtonElement>) => {
+    event.stopPropagation()
+    setNativeStatus('opening')
+    setNativeStatus(await openArtifactNatively(artifact) ? 'idle' : 'failed')
+  }
   return (
-    <button
-      type="button"
+    <div
+      role="button"
+      tabIndex={0}
       className="artifact-resource-card message-artifact-card"
       aria-label={locale === 'zh' ? `预览 ${artifact.title}` : `Preview ${artifact.title}`}
       onClick={() => onOpenArtifact?.(artifact)}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') onOpenArtifact?.(artifact)
+      }}
     >
-      <span className="artifact-resource-icon"><Copy size={16} /></span>
+      <span className="artifact-resource-icon">{isVisual ? <FileCode2 size={16} /> : <Copy size={16} />}</span>
       <span className="artifact-resource-copy">
         <strong>{artifact.title}</strong>
-        <small>{locale === 'zh' ? 'Markdown 文档' : 'Markdown document'}</small>
+        <small>{label}</small>
       </span>
-    </button>
+      <button type="button" className="artifact-resource-action" disabled={!canOpenNative || nativeStatus === 'opening'} onClick={handleNativeOpen}>
+        <ExternalLink size={14} />
+        <span>{nativeArtifactOpenLabel(locale, nativeStatus)}</span>
+      </button>
+    </div>
   )
 }
 
@@ -247,20 +277,25 @@ function runMessageId(run: Run | null) {
   return ''
 }
 
-function visibleRunForTranscript(run: Run | null, messages: Message[]) {
+function visibleRunForTranscript(run: Run | null, messages: Message[], selectedThreadId?: string | null) {
   if (!run) return null
+  if (selectedThreadId && run.threadId !== selectedThreadId) return null
   let latestUserIndex = -1
   for (let index = messages.length - 1; index >= 0; index -= 1) {
-    if (messages[index].role === 'user') {
+    if (messages[index].role === 'user' && (!selectedThreadId || messages[index].threadId === selectedThreadId)) {
       latestUserIndex = index
       break
     }
   }
-  if (latestUserIndex < 0) return run
+  if (latestUserIndex < 0) {
+    if (messages.some((message) => !selectedThreadId || message.threadId === selectedThreadId)) return run
+    if (run.assistantDraft?.content.trim() || run.toolCalls?.length || activeRunStatuses.has(run.status)) return run
+    return null
+  }
   const latestUser = messages[latestUserIndex]
   const sourceMessageId = runMessageId(run)
   if (sourceMessageId && latestUser.id && sourceMessageId !== latestUser.id) return null
-  const messagesAfterLatestUser = messages.slice(latestUserIndex + 1)
+  const messagesAfterLatestUser = messages.slice(latestUserIndex + 1).filter((message) => !selectedThreadId || message.threadId === selectedThreadId)
   const persistedAssistantAfterLatestUser = messagesAfterLatestUser.some((message) => message.role === 'assistant')
   const persistedAssistantFromAnotherRun = messagesAfterLatestUser.some((message) => message.role === 'assistant' && message.runId && message.runId !== run.id)
   const hasPendingApproval = run.toolCalls?.some((toolCall) => toolCall.status === 'approval_required') ?? false
@@ -301,22 +336,163 @@ function shouldTypewriteHistoryMessage(message: Message, run: Run | null, isLast
   return Boolean(run.assistantDraft?.status === 'completed' && message.content === run.assistantDraft.content)
 }
 
-function ConversationDivider() {
+function hasAssistantMessageAfterLatestUser(messages: Message[], threadId?: string) {
+  let latestUserIndex = -1
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index].role === 'user' && (!threadId || messages[index].threadId === threadId)) {
+      latestUserIndex = index
+      break
+    }
+  }
+  if (latestUserIndex < 0) return false
+  return messages.slice(latestUserIndex + 1).some((message) => message.role === 'assistant' && (!threadId || message.threadId === threadId) && message.content.trim())
+}
+
+type WorkspaceAccessRequest = {
+  title: string
+  detail: string
+  action: string
+}
+
+function latestUserMessage(messages: Message[], threadId?: string) {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]
+    if (message.role === 'user' && (!threadId || message.threadId === threadId)) return message
+  }
+  return null
+}
+
+function requestsDownloads(content: string) {
+  return /下载目录|下载文件夹|downloads?|download folder|download directory/i.test(content)
+}
+
+function requestsDocuments(content: string) {
+  return /文稿目录|文稿文件夹|documents?|document folder|document directory/i.test(content)
+}
+
+function requestsLocalWorkspace(content: string) {
+  return /文件|目录|文件夹|工作区|workspace|folder|directory|downloads?|documents?/i.test(content)
+}
+
+function isDownloadsWorkspace(config?: WorkspaceRootConfig | null) {
+  return Boolean(config?.configured && /^(downloads?|下载)$/i.test(config.displayName.trim()))
+}
+
+function isDocumentsWorkspace(config?: WorkspaceRootConfig | null) {
+  return Boolean(config?.configured && /^(documents?|文稿)$/i.test(config.displayName.trim()))
+}
+
+function workspaceAccessRequestForLatestUser(messages: Message[], threadId: string | undefined, config: WorkspaceRootConfig | null | undefined, locale: Locale): WorkspaceAccessRequest | null {
+  const message = latestUserMessage(messages, threadId)
+  if (!message) return null
+  const content = message.content.trim()
+  if (!content) return null
+  const wantsDownloads = requestsDownloads(content)
+  if (wantsDownloads && !isDownloadsWorkspace(config)) {
+    if (locale === 'zh') {
+      const current = config?.configured ? `当前工作区是 ${config.displayName}，不是 Downloads。` : '当前还没有授权工作区。'
+      return {
+        title: '授权下载目录',
+        detail: `${current} 选择下载目录后，Loomi 才能读取并整理里面的文件。`,
+        action: '选择下载目录',
+      }
+    }
+    const current = config?.configured ? `Current workspace is ${config.displayName}, not Downloads.` : 'No workspace is authorized yet.'
+    return {
+      title: 'Authorize Downloads',
+      detail: `${current} Choose the Downloads folder so Loomi can read and organize its files.`,
+      action: 'Choose Downloads',
+    }
+  }
+  const wantsDocuments = requestsDocuments(content)
+  if (wantsDocuments && !isDocumentsWorkspace(config)) {
+    if (locale === 'zh') {
+      const current = config?.configured ? `当前工作区是 ${config.displayName}，不是 Documents。` : '当前还没有授权工作区。'
+      return {
+        title: '授权文稿目录',
+        detail: `${current} 选择文稿目录后，Loomi 才能读取并分类里面的内容。`,
+        action: '选择文稿目录',
+      }
+    }
+    const current = config?.configured ? `Current workspace is ${config.displayName}, not Documents.` : 'No workspace is authorized yet.'
+    return {
+      title: 'Authorize Documents',
+      detail: `${current} Choose the Documents folder so Loomi can read and classify it.`,
+      action: 'Choose Documents',
+    }
+  }
+  if (!config?.configured && requestsLocalWorkspace(content)) {
+    return locale === 'zh'
+      ? { title: '授权工作区', detail: '选择要让 Loomi 访问的文件夹后，我才能继续处理本地文件。', action: '选择目录' }
+      : { title: 'Authorize Workspace', detail: 'Choose the folder Loomi can access before it handles local files.', action: 'Choose folder' }
+  }
+  return null
+}
+
+function shouldHideWorkspaceAccessFallback(message: Message, request: WorkspaceAccessRequest | null) {
+  if (!request || message.role !== 'assistant') return false
+  return /没有可用的本地文件\/目录访问工具|不能直接查看或整理你的下载目录|把下载目录的文件列表|不能直接查看[“"]?文稿|不能直接查看.*Documents/.test(message.content)
+}
+
+function assistantMessageFingerprint(content: string) {
+  return normalizeMarkdownContent(content).replace(/\s+/g, '').toLowerCase()
+}
+
+function hasPersistedTranscriptContent(messages: Message[], run: Run | null) {
+  if (!run) return false
+  const persistedAssistantFingerprints = new Set(
+    messages
+      .filter((message) => message.role === 'assistant' && message.threadId === run.threadId && message.content.trim())
+      .map((message) => assistantMessageFingerprint(message.content)),
+  )
+  if (persistedAssistantFingerprints.size === 0) return false
+  return run.events.some((event) => {
+    const content = finalEventText(event)
+    return Boolean(content.trim() && persistedAssistantFingerprints.has(assistantMessageFingerprint(content)))
+  })
+}
+
+function WorkspaceAccessRequestCard({ request, onChooseWorkspaceFolder }: { request: WorkspaceAccessRequest | null; onChooseWorkspaceFolder?: () => void }) {
+  if (!request) return null
   return (
-    <div className="conversation-divider" aria-hidden="true">
-      <Divider type="wave-yellow" />
-    </div>
+    <article className="message-row assistant workspace-access-request">
+      <div className="message-avatar">L</div>
+      <div className="workspace-access-card" role="status">
+        <div className="workspace-access-icon"><FolderOpen size={17} /></div>
+        <div className="workspace-access-copy">
+          <strong>{request.title}</strong>
+          <span>{request.detail}</span>
+        </div>
+        <button type="button" onClick={onChooseWorkspaceFolder} title={request.action}>
+          <span>{request.action}</span>
+          <ChevronRight size={14} aria-hidden="true" />
+        </button>
+      </div>
+    </article>
   )
 }
 
-function MessageHistory({ messages, run, locale, canRegenerate, onRegenerate, onOpenArtifact }: { messages: Message[]; run: Run | null; locale: Locale; canRegenerate?: boolean; onRegenerate?: () => void; onOpenArtifact?: (artifact: PreviewArtifact) => void }) {
+function ConversationDivider() {
+  return <div className="conversation-divider" aria-hidden="true" />
+}
+
+function MessageHistory({ messages, run, locale, canRegenerate, onRegenerate, onOpenArtifact, workspaceAccessRequest, artifacts = [] }: { messages: Message[]; run: Run | null; locale: Locale; canRegenerate?: boolean; onRegenerate?: () => void; onOpenArtifact?: (artifact: PreviewArtifact) => void; workspaceAccessRequest?: WorkspaceAccessRequest | null; artifacts?: PreviewArtifact[] }) {
   const copy = getDictionary(locale).chatCanvas
   const lastAssistant = [...messages].reverse().find((message) => message.role === 'assistant')
+  const assistantFingerprintsInTurn = new Set<string>()
+  const knownArtifacts = [...artifacts, ...getRunPreviewArtifacts(run)]
   return messages.map((message, index) => {
+    if (message.role === 'user') assistantFingerprintsInTurn.clear()
+    if (shouldHideWorkspaceAccessFallback(message, workspaceAccessRequest ?? null)) return null
     const typewriterTrigger = shouldTypewriteHistoryMessage(message, run, message.id === lastAssistant?.id) ? `${message.id}:${run?.id}:${message.content.length}` : undefined
     const showTurnDivider = index > 0 && message.role === 'user'
-    const artifact = message.role === 'assistant' ? extractMessageArtifact(message) : null
+    const artifact = message.role === 'assistant' ? extractMessageArtifact(message, knownArtifacts) : null
     const visibleContent = artifact ? stripMessageArtifactSource(message.content) : message.content
+    if (message.role === 'assistant') {
+      const fingerprint = assistantMessageFingerprint(visibleContent)
+      if (fingerprint && assistantFingerprintsInTurn.has(fingerprint)) return null
+      if (fingerprint) assistantFingerprintsInTurn.add(fingerprint)
+    }
     return (
       <Fragment key={`${message.id}-${index}`}>
         {showTurnDivider && <ConversationDivider />}
@@ -324,7 +500,7 @@ function MessageHistory({ messages, run, locale, canRegenerate, onRegenerate, on
           <div className="message-avatar">{message.role === 'assistant' ? 'L' : 'U'}</div>
           <div className="message-bubble">
             <div className="message-meta">{message.role === 'assistant' ? copy.assistant : copy.user} · {displayMessageTime(message.createdAt, locale)}</div>
-            <MarkdownMessage content={visibleContent} typewriterTrigger={typewriterTrigger} />
+            {visibleContent.trim() && <MarkdownMessage content={visibleContent} typewriterTrigger={typewriterTrigger} />}
             {artifact && <MessageArtifactCard artifact={artifact} locale={locale} onOpenArtifact={onOpenArtifact} />}
             {message.toolCalls?.length ? <ToolCallList toolCalls={message.toolCalls} locale={locale} onOpenArtifact={onOpenArtifact} /> : null}
             <MessageActions message={message} locale={locale} canRegenerate={canRegenerate && message.id === lastAssistant?.id} onRegenerate={onRegenerate} />
@@ -368,6 +544,15 @@ type TranscriptBlock =
 function eventText(event: RunEvent) {
   if (event.type !== 'model.delta' && event.type !== 'message.model_output_delta' && event.type !== 'assistant.drafting') return ''
   return event.assistantDelta ?? event.content ?? ''
+}
+
+function finalEventText(event: RunEvent) {
+  if (event.type !== 'assistant.message.completed' && event.type !== 'message.model_output_completed' && event.type !== 'model.final') return ''
+  return event.content ?? ''
+}
+
+function isDeferredWorkspaceAuthorizationRun(run: Run | null) {
+  return Boolean(run?.id.startsWith('deferred-') && run.context === 'M3 thread/message only' && run.events.length === 0)
 }
 
 function toolStatusForEvent(event: RunEvent): ToolCall['status'] | null {
@@ -430,7 +615,15 @@ function isActiveRunStatus(status: Run['status']) {
   return status === 'running' || status === 'queued' || status === 'blocked_on_tool_approval'
 }
 
-function buildRunTranscriptBlocks(run: Run | null): TranscriptBlock[] {
+function runStatusFeedback(status: Run['status']): AssistantDraftState['status'] | null {
+  if (status === 'failed') return 'failed'
+  if (status === 'stopped' || status === 'cancelled') return 'stopped'
+  if (status === 'recovering' || status === 'retrying') return 'recovering'
+  if (status === 'stopping') return 'stopping'
+  return null
+}
+
+function buildRunTranscriptBlocks(run: Run | null, options: { omitAssistantText?: boolean } = {}): TranscriptBlock[] {
   if (!run?.events.length) return []
   const blocks: TranscriptBlock[] = []
   const toolBlockIndex = new Map<string, { blockIndex: number; toolIndex: number }>()
@@ -441,13 +634,23 @@ function buildRunTranscriptBlocks(run: Run | null): TranscriptBlock[] {
 
   const flushText = (status: AssistantDraftState['status'] = 'streaming') => {
     if (!text.trim()) return
-    blocks.push({ id: textStartId || `assistant-${blocks.length}`, kind: 'assistant', content: text, status, time: textTime })
+    if (!options.omitAssistantText) blocks.push({ id: textStartId || `assistant-${blocks.length}`, kind: 'assistant', content: text, status, time: textTime })
     text = ''
     textStartId = ''
     currentToolGroupIndex = null
   }
 
   for (const event of [...run.events].sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0))) {
+    const finalText = finalEventText(event)
+    if (finalText.trim()) {
+      if (text.trim() && finalText.trim() !== text.trim()) flushText('streaming')
+      text = finalText
+      textStartId = event.id
+      textTime = event.time
+      flushText('completed')
+      continue
+    }
+
     const delta = eventText(event)
     if (delta) {
       if (!text) {
@@ -482,18 +685,24 @@ function buildRunTranscriptBlocks(run: Run | null): TranscriptBlock[] {
     }
   }
 
-  flushText(run.assistantDraft?.status ?? 'streaming')
+  flushText(run.assistantDraft?.status ?? (run.status === 'completed' ? 'completed' : 'streaming'))
   const lastBlock = blocks.at(-1)
-  if (lastBlock?.kind === 'tools' && isActiveRunStatus(run.status) && lastBlock.toolCalls.length > 0 && lastBlock.toolCalls.every((toolCall) => isTerminalToolStatus(toolCall.status)) && !run.assistantDraft?.content?.trim()) {
-    blocks.push({ id: `${lastBlock.id}-waiting`, kind: 'waiting' })
+  if (lastBlock?.kind === 'tools' && lastBlock.toolCalls.length > 0 && lastBlock.toolCalls.every((toolCall) => isTerminalToolStatus(toolCall.status)) && !run.assistantDraft?.content?.trim()) {
+    const feedbackStatus = runStatusFeedback(run.status)
+    if (feedbackStatus) {
+      blocks.push({ id: `${lastBlock.id}-${feedbackStatus}`, kind: 'assistant', content: '', status: feedbackStatus, time: run.completedAt ?? run.createdAt ?? new Date().toISOString() })
+    } else if (isActiveRunStatus(run.status)) {
+      blocks.push({ id: `${lastBlock.id}-waiting`, kind: 'waiting' })
+    }
   }
   return blocks
 }
 
-function RunTranscript({ run, locale, onApproveToolCall, onDenyToolCall, onOpenArtifact }: { run: Run | null; locale: Locale; onApproveToolCall?: (toolCall: NonNullable<Run['toolCalls']>[number]) => Promise<void> | void; onDenyToolCall?: (toolCall: NonNullable<Run['toolCalls']>[number]) => Promise<void> | void; onOpenArtifact?: (artifact: PreviewArtifact) => void }) {
-  const blocks = buildRunTranscriptBlocks(run)
+function RunTranscript({ run, locale, omitAssistantText = false, onApproveToolCall, onDenyToolCall, onRetry, onOpenArtifact, artifacts = [] }: { run: Run | null; locale: Locale; omitAssistantText?: boolean; onApproveToolCall?: (toolCall: NonNullable<Run['toolCalls']>[number]) => Promise<void> | void; onDenyToolCall?: (toolCall: NonNullable<Run['toolCalls']>[number]) => Promise<void> | void; onRetry?: () => void; onOpenArtifact?: (artifact: PreviewArtifact) => void; artifacts?: PreviewArtifact[] }) {
+  const blocks = buildRunTranscriptBlocks(run, { omitAssistantText })
   if (!run || blocks.length === 0) return null
   const copy = getDictionary(locale).chatCanvas
+  const knownArtifacts = [...artifacts, ...getRunPreviewArtifacts(run)]
   return (
     <>
       {blocks.map((block) => (
@@ -501,10 +710,7 @@ function RunTranscript({ run, locale, onApproveToolCall, onDenyToolCall, onOpenA
           <div className="message-avatar">L</div>
           <div className="message-bubble">
             {block.kind === 'assistant' ? (
-              <>
-                <div className="message-meta">{copy.assistant} · {draftStatusLabel(block.status, locale)}</div>
-                <MarkdownMessage content={block.content} />
-              </>
+              <RunTranscriptAssistantBlock block={block} locale={locale} onRetry={onRetry} onOpenArtifact={onOpenArtifact} artifacts={knownArtifacts} />
             ) : block.kind === 'waiting' ? (
               <>
                 <div className="message-meta">{copy.assistant} · {draftStatusLabel('drafting', locale)}</div>
@@ -521,11 +727,99 @@ function RunTranscript({ run, locale, onApproveToolCall, onDenyToolCall, onOpenA
   )
 }
 
+function RunTranscriptAssistantBlock({ block, locale, onRetry, onOpenArtifact, artifacts = [] }: { block: Extract<TranscriptBlock, { kind: 'assistant' }>; locale: Locale; onRetry?: () => void; onOpenArtifact?: (artifact: PreviewArtifact) => void; artifacts?: PreviewArtifact[] }) {
+  const copy = getDictionary(locale).chatCanvas
+  const content = block.content || draftFallback(block.status, locale)
+  const draftMessage: Message = { id: block.id, threadId: '', role: 'assistant', content, createdAt: block.time }
+  const artifact = extractMessageArtifact(draftMessage, artifacts)
+  const visibleContent = artifact ? stripMessageArtifactSource(block.content) : block.content
+  return (
+    <>
+      <div className="message-meta">{copy.assistant} · {draftStatusLabel(block.status, locale)}</div>
+      {(visibleContent.trim() || content.trim()) && <MarkdownMessage content={visibleContent.trim() ? visibleContent : content} />}
+      {artifact && <MessageArtifactCard artifact={artifact} locale={locale} onOpenArtifact={onOpenArtifact} />}
+      {block.status === 'failed' && <MessageActions message={draftMessage} locale={locale} onRetry={onRetry} />}
+    </>
+  )
+}
+
 function shouldRenderDraftContent(status: AssistantDraftState['status'], content: string) {
   return status === 'completed' || status === 'failed' || status === 'stopped' || Boolean(content.trim())
 }
 
-function AssistantDraft({ run, locale, onRetry, onOpenArtifact }: { run: Run | null; locale: Locale; onRetry?: () => void; onOpenArtifact?: (artifact: PreviewArtifact) => void }) {
+type ToolGroupIntent = 'agent' | 'artifact' | 'edit' | 'execute' | 'inspect' | 'plan' | 'read' | 'search' | 'tool'
+
+function toolIntent(name: string): ToolGroupIntent {
+  if (name === 'web.search' || name.endsWith('.grep')) return 'search'
+  if (name.endsWith('.glob') || name.endsWith('.list_directory') || name.endsWith('.tree_summary') || name.startsWith('web.') || name.startsWith('browser.')) return 'inspect'
+  if (name.endsWith('.read') || name.endsWith('.read_file') || name.startsWith('lsp.')) return 'read'
+  if (name.endsWith('.write_file') || name.endsWith('.edit') || name.includes('patch_')) return 'edit'
+  if (name.startsWith('sandbox.') || name === 'runtime.get_current_time') return 'execute'
+  if (name.startsWith('artifact.')) return 'artifact'
+  if (name.startsWith('agent.')) return 'agent'
+  if (name === 'todo.write') return 'plan'
+  return 'tool'
+}
+
+function toolIntentLabel(intent: ToolGroupIntent, locale: Locale) {
+  const labels = {
+    zh: {
+      agent: '协作',
+      artifact: '产物',
+      edit: '修改',
+      execute: '执行',
+      inspect: '查看',
+      plan: '计划',
+      read: '读取',
+      search: '搜索',
+      tool: '工具',
+    },
+    en: {
+      agent: 'coordinated',
+      artifact: 'handled artifacts',
+      edit: 'changed',
+      execute: 'ran',
+      inspect: 'inspected',
+      plan: 'planned',
+      read: 'read',
+      search: 'searched',
+      tool: 'used tools',
+    },
+  }
+  return labels[locale][intent]
+}
+
+function toolGroupStatus(toolCalls: NonNullable<Run['toolCalls']>, locale: Locale) {
+  const failed = toolCalls.filter((toolCall) => toolCall.status === 'failed').length
+  const waiting = toolCalls.filter((toolCall) => toolCall.status === 'approval_required').length
+  const running = toolCalls.filter((toolCall) => toolCall.status === 'running' || toolCall.status === 'executing').length
+  const count = toolCalls.length
+  if (locale === 'zh') {
+    if (waiting > 0) return `等待确认 ${waiting} 个工具`
+    if (running > 0) return `正在执行 ${running} / ${count} 个工具`
+    if (failed > 0) return `失败 ${failed} / ${count} 个工具`
+    return `完成 ${count} 个工具`
+  }
+  if (waiting > 0) return `${waiting} tool${waiting === 1 ? '' : 's'} waiting`
+  if (running > 0) return `${running}/${count} tools running`
+  if (failed > 0) return `${failed}/${count} tools failed`
+  return `${count} tools completed`
+}
+
+function summarizeToolGroup(toolCalls: NonNullable<Run['toolCalls']>, locale: Locale) {
+  const counts = new Map<ToolGroupIntent, number>()
+  for (const toolCall of toolCalls) {
+    const intent = toolIntent(toolCall.name)
+    counts.set(intent, (counts.get(intent) ?? 0) + 1)
+  }
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 3)
+    .map(([intent, count]) => `${toolIntentLabel(intent, locale)} ${count}`)
+    .join(' · ')
+}
+
+function AssistantDraft({ run, locale, onRetry, onOpenArtifact, artifacts = [] }: { run: Run | null; locale: Locale; onRetry?: () => void; onOpenArtifact?: (artifact: PreviewArtifact) => void; artifacts?: PreviewArtifact[] }) {
   const copy = getDictionary(locale).chatCanvas
   const draft = run?.assistantDraft
 
@@ -540,7 +834,7 @@ function AssistantDraft({ run, locale, onRetry, onOpenArtifact }: { run: Run | n
 
   const shouldRenderContent = shouldRenderDraftContent(draft.status, draft.content)
   const draftMessage: Message = { id: draft.messageId ?? run.id, threadId: run.threadId, role: 'assistant', content: draft.content || draftFallback(draft.status, locale), createdAt: run.completedAt ?? run.createdAt ?? new Date().toISOString(), runId: run.id }
-  const artifact = extractMessageArtifact(draftMessage)
+  const artifact = extractMessageArtifact(draftMessage, [...artifacts, ...getRunPreviewArtifacts(run)])
   const visibleContent = artifact ? stripMessageArtifactSource(draftMessage.content) : draftMessage.content
   const typewriterTrigger = draft.status === 'completed' && !hasStreamedAssistantRun(run.id) ? `${draftMessage.id}:${draftMessage.content.length}` : undefined
 
@@ -551,7 +845,7 @@ function AssistantDraft({ run, locale, onRetry, onOpenArtifact }: { run: Run | n
         <div className="message-meta">{copy.assistant} · {draftStatusLabel(draft.status, locale)}</div>
         {shouldRenderContent ? (
           <>
-            <MarkdownMessage content={visibleContent} typewriterTrigger={typewriterTrigger} />
+            {visibleContent.trim() && <MarkdownMessage content={visibleContent} typewriterTrigger={typewriterTrigger} />}
             {artifact && <MessageArtifactCard artifact={artifact} locale={locale} onOpenArtifact={onOpenArtifact} />}
           </>
         ) : (
@@ -569,15 +863,16 @@ function AssistantDraft({ run, locale, onRetry, onOpenArtifact }: { run: Run | n
 function ToolCallGroup({ toolCalls, locale, onOpenArtifact }: { toolCalls: NonNullable<Run['toolCalls']>; locale: Locale; onOpenArtifact?: (artifact: PreviewArtifact) => void }) {
   const [expanded, setExpanded] = useState(false)
   const copy = locale === 'zh'
-    ? { title: `完成 ${toolCalls.length} 个工具`, details: '查看工具详情' }
-    : { title: `${toolCalls.length} tools completed`, details: 'View tool details' }
-  const names = [...new Set(toolCalls.map((toolCall) => humanToolName(toolCall.name, locale)))].slice(0, 3).join(' · ')
+    ? { details: '查看工具详情' }
+    : { details: 'View tool details' }
+  const title = toolGroupStatus(toolCalls, locale)
+  const summary = summarizeToolGroup(toolCalls, locale)
 
   return (
     <div className="tool-stack">
       <button className="tool-stack-toggle" type="button" aria-expanded={expanded} onClick={() => setExpanded((value) => !value)}>
-        <span>{copy.title}</span>
-        {names && <em>{names}</em>}
+        <span>{title}</span>
+        {summary && <em>{summary}</em>}
         <small>{copy.details}</small>
         {expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
       </button>
@@ -592,12 +887,14 @@ function ToolCallGroup({ toolCalls, locale, onOpenArtifact }: { toolCalls: NonNu
 
 function ToolCallList({ toolCalls, locale, onApproveToolCall, onDenyToolCall, onOpenArtifact }: { toolCalls: NonNullable<Run['toolCalls']>; locale: Locale; onApproveToolCall?: (toolCall: NonNullable<Run['toolCalls']>[number]) => Promise<void> | void; onDenyToolCall?: (toolCall: NonNullable<Run['toolCalls']>[number]) => Promise<void> | void; onOpenArtifact?: (artifact: PreviewArtifact) => void }) {
   const approvalCalls = toolCalls.filter((toolCall) => toolCall.status === 'approval_required')
-  const completedCalls = toolCalls.filter((toolCall) => toolCall.status !== 'approval_required')
+  const artifactCalls = toolCalls.filter((toolCall) => toolCall.status !== 'approval_required' && getToolCallArtifact(toolCall))
+  const completedCalls = toolCalls.filter((toolCall) => toolCall.status !== 'approval_required' && !getToolCallArtifact(toolCall))
   return (
     <>
-      {completedCalls.length > 1 ? (
+      {completedCalls.length > 0 ? (
         <ToolCallGroup toolCalls={completedCalls} locale={locale} onOpenArtifact={onOpenArtifact} />
-      ) : completedCalls.map((toolCall, index) => <ToolCallCard key={`${toolCall.toolCallId ?? toolCall.id}-${index}`} toolCall={toolCall} locale={locale} onOpenArtifact={onOpenArtifact} />)}
+      ) : null}
+      {artifactCalls.map((toolCall, index) => <ToolCallCard key={`${toolCall.toolCallId ?? toolCall.id}-artifact-${index}`} toolCall={toolCall} locale={locale} onOpenArtifact={onOpenArtifact} />)}
       {approvalCalls.map((toolCall, index) => <ToolCallCard key={`${toolCall.toolCallId ?? toolCall.id}-approval-${index}`} toolCall={toolCall} locale={locale} onApprove={onApproveToolCall} onDeny={onDenyToolCall} onOpenArtifact={onOpenArtifact} />)}
     </>
   )
@@ -618,20 +915,6 @@ function ActiveToolCalls({ run, locale, onApproveToolCall, onDenyToolCall, onOpe
 function ToolBoundaryNotice({ run, locale }: { run: Run | null; locale: Locale }) {
   if (!run?.events.some((event) => event.type === 'progress.tool_call_blocked')) return null
   return <div className="api-error">{getDictionary(locale).chatCanvas.toolBoundaryNotice}</div>
-}
-
-function ApprovalNotice({ run, locale, onStopRun }: { run: Run | null; locale: Locale; onStopRun: () => void }) {
-  if (run?.status !== 'blocked_on_tool_approval' && !run?.toolCalls?.some((toolCall) => toolCall.status === 'approval_required')) return null
-  const copy = getDictionary(locale).chatCanvas
-  return (
-    <div className="approval-notice" role="status">
-      <div>
-        <strong>{locale === 'zh' ? '等待你确认' : 'Waiting for your confirmation'}</strong>
-        <span>{locale === 'zh' ? '确认下面的工具请求后，Loomi 才会继续。' : 'Review the tool request below before Loomi continues.'}</span>
-      </div>
-      <button type="button" onClick={onStopRun}>{copy.stop}</button>
-    </div>
-  )
 }
 
 function StatePanel({ state, error, locale }: { state: Exclude<ChatCanvasState, 'history'>; error?: string | null; locale: Locale }) {
@@ -669,17 +952,20 @@ function DesktopReadinessPanel({ readiness, onRetry, onOpenSettings, onDetectLoc
 function MissingFinalNotice({ locale }: { locale: Locale }) {
   const copy = getDictionary(locale).chatCanvas
   return (
-    <div className="runtime-final-warning" role="status">
+    <div className="run-inline-notice final-missing" role="status">
       <strong>{copy.missingFinalTitle}</strong>
       <span>{copy.missingFinalDetail}</span>
     </div>
   )
 }
 
-export function ChatCanvas({ thread, messages, run, loading, error, dataSourceMode, backendCapability = 'available', backendUnavailableAttempted = false, providerCapabilities = [], workspaceRootConfig, workspaceRootSaveResult, desktopReadiness, onOpenProviderSettings, onRetryReadiness, onDetectLocalProviders, onEnableLocalProvider, onOpenSkillsSettings, onOpenConnectorsSettings, onOpenPluginsSettings, onChooseWorkspaceFolder, onSendMessage, onStopRun, onRetryRun, onRegenerateRun, onApproveToolCall, onDenyToolCall, onOpenArtifact, locale }: Props) {
+export function ChatCanvas({ thread, messages, run, loading, error, dataSourceMode, backendCapability = 'available', backendUnavailableAttempted = false, providerCapabilities = [], workspaceRootConfig, workspaceRootSaveResult, desktopReadiness, onOpenProviderSettings, onRetryReadiness, onDetectLocalProviders, onEnableLocalProvider, onOpenSkillsSettings, onOpenConnectorsSettings, onOpenPluginsSettings, onChooseWorkspaceFolder, onSendMessage, onStopRun, onRetryRun, onRegenerateRun, onApproveToolCall, onDenyToolCall, onOpenArtifact, artifacts = [], locale }: Props) {
+  const messageListRef = useRef<HTMLDivElement | null>(null)
+  const messageEndRef = useRef<HTMLDivElement | null>(null)
+  const shouldFollowBottomRef = useRef(true)
   const readinessError = desktopReadiness && desktopReadiness.primary.code !== 'ready'
   const visibleError = readinessError ? null : error
-  const visibleRun = visibleRunForTranscript(run, messages)
+  const visibleRun = visibleRunForTranscript(run, messages, thread?.id ?? null)
   const state = deriveChatCanvasState({
     loading,
     error: visibleError,
@@ -700,16 +986,29 @@ export function ChatCanvas({ thread, messages, run, loading, error, dataSourceMo
     message.role === 'assistant' && (
       message.id === visibleRun.assistantDraft?.messageId ||
       message.runId === visibleRun.id ||
-      (message.threadId === visibleRun.threadId && message.content === visibleRun.assistantDraft?.content)
+      (message.threadId === visibleRun.threadId && assistantMessageFingerprint(message.content) === assistantMessageFingerprint(visibleRun.assistantDraft?.content ?? ''))
     )
   ))
+  const hasPersistedAssistantForVisibleRun = Boolean(visibleRun && messages.some((message) => (
+    message.role === 'assistant'
+    && message.threadId === visibleRun.threadId
+    && message.content.trim()
+    && (message.runId === visibleRun.id || message.id === visibleRun.assistantDraft?.messageId)
+  )))
+  const hasPersistedAssistantMessageInCurrentTurn = Boolean(visibleRun && hasAssistantMessageAfterLatestUser(messages, visibleRun.threadId))
+  const hasPersistedAssistantInCurrentTurn = visibleRun?.assistantDraft?.status === 'completed' && hasPersistedAssistantMessageInCurrentTurn
+  const hasPersistedTranscriptFinal = hasPersistedTranscriptContent(messages, visibleRun)
+  const runTranscriptBlocks = buildRunTranscriptBlocks(visibleRun, { omitAssistantText: hasPersistedAssistantMessageInCurrentTurn || hasPersistedTranscriptFinal || hasPersistedAssistantForVisibleRun })
+  const hasTranscriptAssistantContent = runTranscriptBlocks.some((block) => block.kind === 'assistant' && block.content.trim())
   const hasAssistantFinalContent = Boolean(visibleRun?.status === 'completed' && (
-    messages.some((message) => message.role === 'assistant' && message.content.trim() && (!message.runId || message.runId === visibleRun.id)) ||
-    (visibleRun.assistantDraft?.status === 'completed' && visibleRun.assistantDraft.content.trim())
+    messages.some((message) => message.role === 'assistant' && message.threadId === visibleRun.threadId && message.content.trim() && (!message.runId || message.runId === visibleRun.id)) ||
+    (visibleRun.assistantDraft?.status === 'completed' && visibleRun.assistantDraft.content.trim()) ||
+    hasTranscriptAssistantContent
   ))
-  const missingFinalContent = dataSourceMode === 'real_api' && visibleRun?.status === 'completed' && !hasAssistantFinalContent
-  const hasRunTranscript = buildRunTranscriptBlocks(visibleRun).length > 0
-  const shouldShowAssistantDraft = Boolean(visibleRun && !hasPersistedCompletedDraftMessage && !hasRunTranscript)
+  const hasCurrentTurnUserMessage = Boolean(thread && latestUserMessage(messages, thread.id))
+  const missingFinalContent = dataSourceMode === 'real_api' && hasCurrentTurnUserMessage && visibleRun?.status === 'completed' && !isDeferredWorkspaceAuthorizationRun(visibleRun) && !hasAssistantFinalContent
+  const hasRunTranscript = runTranscriptBlocks.length > 0
+  const shouldShowAssistantDraft = Boolean(visibleRun && !hasPersistedCompletedDraftMessage && !hasPersistedAssistantInCurrentTurn && !hasPersistedTranscriptFinal && !hasPersistedAssistantForVisibleRun && !hasRunTranscript)
   const shouldShowHistory = state === 'history' || state === 'waiting-run' || state === 'running' || state === 'completed' || state === 'failed' || state === 'stopped' || state === 'recovering' || state === 'stopping'
   const composerModelOptions: ComposerModelOption[] = providerCapabilities
     .filter((provider) => ['available', 'configured', 'reachable', 'completion-ok'].includes(provider.status) && provider.executionState !== 'unsupported')
@@ -720,14 +1019,41 @@ export function ChatCanvas({ thread, messages, run, loading, error, dataSourceMo
       label: `${provider.model} · ${provider.localProvider ? 'Local' : provider.family}`,
     }))
   const canRegenerateAnswer = Boolean(thread && visibleRun && !activeRunStatuses.has(visibleRun.status) && messages.some((message) => message.role === 'assistant'))
+  const workspaceAccessRequest = workspaceAccessRequestForLatestUser(messages, thread?.id, workspaceRootConfig, locale)
+  const runSnapshot = visibleRun ? `${visibleRun.id}:${visibleRun.status}:${visibleRun.events.length}:${visibleRun.assistantDraft?.status ?? ''}:${visibleRun.assistantDraft?.content.length ?? 0}:${visibleRun.toolCalls?.length ?? 0}` : ''
+
+  useEffect(() => {
+    shouldFollowBottomRef.current = true
+  }, [thread?.id])
+
+  useEffect(() => {
+    const list = messageListRef.current
+    if (!list) return
+
+    const updateFollowState = () => {
+      shouldFollowBottomRef.current = isNearScrollBottom(list)
+    }
+
+    updateFollowState()
+    list.addEventListener('scroll', updateFollowState, { passive: true })
+    return () => list.removeEventListener('scroll', updateFollowState)
+  }, [thread?.id])
+
+  useEffect(() => {
+    const list = messageListRef.current
+    if (!list) return
+    const shouldFollowBottom = shouldFollowBottomRef.current || isNearScrollBottom(list)
+    if (!shouldFollowBottom) return
+    window.requestAnimationFrame(() => {
+      list.scrollTop = list.scrollHeight
+    })
+  }, [messages.length, runSnapshot, thread?.id])
 
   return (
     <section className="chat-shell glass-panel" data-chat-state={state}>
       <DesktopReadinessPanel readiness={desktopReadiness} onRetry={onRetryReadiness} onOpenSettings={onOpenProviderSettings} onDetectLocalProviders={onDetectLocalProviders} onEnableLocalProvider={onEnableLocalProvider} onChooseWorkspaceFolder={onChooseWorkspaceFolder} />
       {visibleError && <div className="api-error">{visibleError}</div>}
       <ToolBoundaryNotice run={visibleRun} locale={locale} />
-      <ApprovalNotice run={visibleRun} locale={locale} onStopRun={onStopRun} />
-      {missingFinalContent && <MissingFinalNotice locale={locale} />}
       {providerUnavailableBeforeSend && (
         <div className="provider-warning" role="status">
           <span>{providerUnavailableWarning}</span>
@@ -735,23 +1061,28 @@ export function ChatCanvas({ thread, messages, run, loading, error, dataSourceMo
         </div>
       )}
 
-      <div className="message-list">
+      <div className="message-list" ref={messageListRef}>
         {state === 'history' ? (
           <>
-            <MessageHistory messages={messages} run={visibleRun} locale={locale} canRegenerate={canRegenerateAnswer} onRegenerate={onRegenerateRun} onOpenArtifact={onOpenArtifact} />
-            <RunTranscript run={visibleRun} locale={locale} onApproveToolCall={onApproveToolCall} onDenyToolCall={onDenyToolCall} onOpenArtifact={onOpenArtifact} />
-            {shouldShowAssistantDraft && <AssistantDraft run={visibleRun} locale={locale} onRetry={onRetryRun} onOpenArtifact={onOpenArtifact} />}
+            <MessageHistory messages={messages} run={visibleRun} locale={locale} canRegenerate={canRegenerateAnswer} onRegenerate={onRegenerateRun} onOpenArtifact={onOpenArtifact} workspaceAccessRequest={workspaceAccessRequest} artifacts={artifacts} />
+            {missingFinalContent && <MissingFinalNotice locale={locale} />}
+            <WorkspaceAccessRequestCard request={workspaceAccessRequest} onChooseWorkspaceFolder={onChooseWorkspaceFolder} />
+            <RunTranscript run={visibleRun} locale={locale} omitAssistantText={hasPersistedAssistantMessageInCurrentTurn || hasPersistedTranscriptFinal || hasPersistedAssistantForVisibleRun} onApproveToolCall={onApproveToolCall} onDenyToolCall={onDenyToolCall} onRetry={onRetryRun} onOpenArtifact={onOpenArtifact} artifacts={artifacts} />
+            {shouldShowAssistantDraft && <AssistantDraft run={visibleRun} locale={locale} onRetry={onRetryRun} onOpenArtifact={onOpenArtifact} artifacts={artifacts} />}
             {!hasRunTranscript && <ActiveToolCalls run={visibleRun} locale={locale} onApproveToolCall={onApproveToolCall} onDenyToolCall={onDenyToolCall} onOpenArtifact={onOpenArtifact} />}
           </>
         ) : (
           <>
-            {shouldShowHistory && <MessageHistory messages={messages} run={visibleRun} locale={locale} canRegenerate={canRegenerateAnswer} onRegenerate={onRegenerateRun} onOpenArtifact={onOpenArtifact} />}
-            <RunTranscript run={visibleRun} locale={locale} onApproveToolCall={onApproveToolCall} onDenyToolCall={onDenyToolCall} onOpenArtifact={onOpenArtifact} />
-            {shouldShowAssistantDraft && <AssistantDraft run={visibleRun} locale={locale} onRetry={onRetryRun} onOpenArtifact={onOpenArtifact} />}
+            {shouldShowHistory && <MessageHistory messages={messages} run={visibleRun} locale={locale} canRegenerate={canRegenerateAnswer} onRegenerate={onRegenerateRun} onOpenArtifact={onOpenArtifact} workspaceAccessRequest={workspaceAccessRequest} artifacts={artifacts} />}
+            {missingFinalContent && <MissingFinalNotice locale={locale} />}
+            {shouldShowHistory && <WorkspaceAccessRequestCard request={workspaceAccessRequest} onChooseWorkspaceFolder={onChooseWorkspaceFolder} />}
+            <RunTranscript run={visibleRun} locale={locale} omitAssistantText={hasPersistedAssistantMessageInCurrentTurn || hasPersistedTranscriptFinal || hasPersistedAssistantForVisibleRun} onApproveToolCall={onApproveToolCall} onDenyToolCall={onDenyToolCall} onRetry={onRetryRun} onOpenArtifact={onOpenArtifact} artifacts={artifacts} />
+            {shouldShowAssistantDraft && <AssistantDraft run={visibleRun} locale={locale} onRetry={onRetryRun} onOpenArtifact={onOpenArtifact} artifacts={artifacts} />}
             {!hasRunTranscript && <ActiveToolCalls run={visibleRun} locale={locale} onApproveToolCall={onApproveToolCall} onDenyToolCall={onDenyToolCall} onOpenArtifact={onOpenArtifact} />}
             {(state === 'no-thread' || state === 'empty-thread' || state === 'loading' || state === 'error' || state === 'backend-unavailable') && <StatePanel state={state} error={state === 'error' ? visibleError : null} locale={locale} />}
           </>
         )}
+        <div className="message-end-anchor" ref={messageEndRef} aria-hidden="true" />
       </div>
 
       <Composer

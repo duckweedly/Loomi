@@ -25,7 +25,7 @@ bun run --cwd docs-site build
 
 前端 render regression 覆盖真实 smoke 的 UI 投影，不再只依赖截图：
 
-- completed real API run 如果没有任何 assistant final 内容，Chat Canvas 会显示 `Final assistant message missing` / `最终回复缺失`，不能静默展示成完成。
+- completed real API run 如果没有任何 assistant final 内容，Chat Canvas 会显示用户可理解的 `No reply generated` / `未生成回复` 重试提示，不能暴露内部持久化术语，也不能静默展示成完成。
 - failed run 的 RunRail 仍保留工具历史，包括成功和失败的 workspace tool rows。
 - persisted final assistant message 的 Markdown table、inline code、fenced code block 在当前轮就渲染，不依赖刷新。
 

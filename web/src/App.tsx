@@ -9,7 +9,7 @@ import { SettingsView } from './components/SettingsView'
 import { ThreadSidebar } from './components/ThreadSidebar'
 import { getDictionary } from './i18n'
 import { useWorkspaceState } from './state'
-import { useWorkspaceShellState } from './useWorkspaceShellState'
+import { sidebarMaxWidth, sidebarMinWidth, useWorkspaceShellState } from './useWorkspaceShellState'
 
 export default function App() {
   const shell = useWorkspaceShellState()
@@ -19,6 +19,7 @@ export default function App() {
     selectedThreadId,
     messages,
     run,
+    artifacts,
     streamState,
     loading,
     error,
@@ -43,6 +44,7 @@ export default function App() {
     stopRun,
     approveToolCall,
     denyToolCall,
+    openPreviewArtifact,
     retryRun,
     regenerateRun,
     providerCapabilities,
@@ -109,7 +111,7 @@ export default function App() {
   } = useWorkspaceState(shell.defaultWorkspaceMode)
 
   const dictionary = getDictionary(shell.locale)
-  const workspaceStyle = { '--sidebar-width': `${shell.sidebarWidth}px` } as CSSProperties
+  const workspaceStyle = { '--sidebar-width': `${shell.sidebarWidth}px`, '--right-panel-width': `${shell.rightPanelWidth}px` } as CSSProperties
   const workspaceClass = [
     'workspace-grid',
     shell.sidebarCollapsed ? 'sidebar-collapsed' : '',
@@ -122,7 +124,7 @@ export default function App() {
     event.currentTarget.setPointerCapture(event.pointerId)
 
     const handlePointerMove = (moveEvent: globalThis.PointerEvent) => {
-      shell.setSidebarWidth(Math.min(420, Math.max(300, startWidth + moveEvent.clientX - startX)))
+      shell.setSidebarWidth(Math.min(sidebarMaxWidth, Math.max(sidebarMinWidth, startWidth + moveEvent.clientX - startX)))
     }
 
     const handlePointerUp = () => {
@@ -133,6 +135,34 @@ export default function App() {
     window.addEventListener('pointermove', handlePointerMove)
     window.addEventListener('pointerup', handlePointerUp)
   }
+
+  const handleRightPanelResize = (event: PointerEvent<HTMLDivElement>) => {
+    const startX = event.clientX
+    const startWidth = shell.rightPanelWidth
+    event.currentTarget.setPointerCapture(event.pointerId)
+
+    const handlePointerMove = (moveEvent: globalThis.PointerEvent) => {
+      shell.setRightPanelWidth(startWidth + startX - moveEvent.clientX)
+    }
+
+    const handlePointerUp = () => {
+      window.removeEventListener('pointermove', handlePointerMove)
+      window.removeEventListener('pointerup', handlePointerUp)
+    }
+
+    window.addEventListener('pointermove', handlePointerMove)
+    window.addEventListener('pointerup', handlePointerUp)
+  }
+
+  const handleSelectThread = useCallback((threadId: string) => {
+    shell.closeRightPanel()
+    selectThread(threadId)
+  }, [selectThread, shell])
+
+  const handleCreateThread = useCallback(() => {
+    shell.closeRightPanel()
+    void createThread()
+  }, [createThread, shell])
 
   return (
     <ConfigProvider motion={motion}>
@@ -161,8 +191,8 @@ export default function App() {
                   error={error}
                   copy={dictionary.sidebar}
                   onRefresh={() => void refresh()}
-                  onSelectThread={selectThread}
-                  onCreateThread={() => void createThread()}
+                  onSelectThread={handleSelectThread}
+                  onCreateThread={handleCreateThread}
                   onRenameThread={(threadId, title) => void renameThread(threadId, title)}
                   onArchiveThread={(threadId) => void archiveThread(threadId)}
                   onToggleTheme={shell.toggleTheme}
@@ -205,6 +235,7 @@ export default function App() {
                   selectedCategoryId={shell.settingsCategoryId}
                   defaultWorkspaceMode={shell.defaultWorkspaceMode}
                   theme={shell.theme}
+                  themePreference={shell.themePreference}
                   backendCapability={backendCapability}
                   providerCapabilities={providerCapabilities}
                   workspaceRootConfig={workspaceRootConfig}
@@ -247,9 +278,7 @@ export default function App() {
                   onSelectLocale={shell.setLocale}
                   onSelectCategory={shell.setSettingsCategory}
                   onSelectDefaultWorkspaceMode={shell.setDefaultWorkspaceMode}
-                  onSelectTheme={(theme) => {
-                    if (theme !== shell.theme) shell.toggleTheme()
-                  }}
+                  onSelectTheme={shell.setThemePreference}
                   onProviderDraftSettingsChange={shell.setProviderDraftSettings}
                   onSaveProvider={(settings) => {
                     void saveProvider({ baseUrl: settings.baseUrl, model: settings.model, apiKey: settings.apiKey })
@@ -315,16 +344,22 @@ export default function App() {
                   onStopRun={() => void stopRun()}
                   onApproveToolCall={(toolCall) => approveToolCall(toolCall)}
                   onDenyToolCall={(toolCall) => denyToolCall(toolCall)}
-                  onOpenArtifact={(artifact) => shell.openArtifact(artifact.id)}
+                  artifacts={artifacts}
+                  onOpenArtifact={(artifact) => {
+                    shell.openArtifact(artifact.id)
+                    void openPreviewArtifact(artifact)
+                  }}
                   onRetryRun={retryRun}
                   onRegenerateRun={regenerateRun}
                   locale={shell.locale}
                 />
               )}
             </section>
+            {!shell.settingsOpen && shell.rightPanelOpen && <div className="right-panel-resizer" role="separator" aria-orientation="vertical" onPointerDown={handleRightPanelResize} />}
             <RunTimeline
               run={run}
               messages={messages}
+              artifacts={artifacts}
               rightToolsOpen={!shell.settingsOpen && shell.rightPanelOpen}
               selectedPanelId={shell.selectedRightPanelId}
               selectedArtifactId={shell.previewArtifactId}

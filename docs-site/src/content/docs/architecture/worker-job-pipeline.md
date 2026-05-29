@@ -38,11 +38,21 @@ The worker loop performs:
 2. claim the next queued job and increment its ownership version
 3. mark the run as running
 4. record `job_claimed`
-5. renew the lease before invoking the runtime boundary
+5. renew the lease before invoking the runtime boundary and keep renewing it while the runner is active
 6. prepare `RunContext` from durable run, thread, message, job, provider route, and MVP tool state
 7. record linear pipeline stage events for context, tool resolution, runtime invocation, and finalization
 8. verify ownership before each local simulated runtime step writes events
 9. complete or fail the job only when the worker still owns the current lease version
+
+Long-running provider streams and tool executions keep their job lease alive through a worker heartbeat. If renewal fails or ownership is lost, the worker cancels the active runner context so the stale owner stops writing events instead of racing a recovered worker.
+
+If a worker dies while a tool call is already `executing`, stale lease recovery also repairs the tool state. Retryable recovery moves those executing calls back to approved/not-started and records a safe tool lifecycle event so the next worker can execute them again. Retry exhaustion marks the in-flight tool calls failed before the run is failed, preventing a dead job from leaving invisible executing tools behind. When multiple executing tools belong to the same recovered run, recovery reuses one run-step projection snapshot and advances it locally while writing events, avoiding repeated projection reads for the same batch.
+
+Before the queued runner enters a tool executor, it re-checks the state returned by `StartToolCallExecution`. If a stop or deny race has already moved the tool to `cancelled`, `failed`, or another non-executing state, the runner exits without invoking the broker or writing a worker failure over the terminal run.
+
+After a tool executor returns, the queued runner renews the claimed job lease with the same owner and ownership version before recording either tool success or tool failure. If the lease is gone or belongs to a newer worker, the stale result is dropped instead of overwriting the recovered owner.
+
+The worker also watches the claimed run for stop state while the runner is active. `StopRun` still writes the durable stop events through product data, and the watcher cancels the runner context promptly instead of waiting for the next lease heartbeat.
 
 Local simulated runs are executed through `LocalRunner`, which persists the simulated assistant message before recording final completion. Model-gateway runs route through the same worker boundary and hydrate `message_id`, `provider_id`, and model override from the durable job metadata snapshot.
 
@@ -56,7 +66,13 @@ Local simulated runs are executed through `LocalRunner`, which persists the simu
 - enabled MVP tool summary, currently limited to `runtime.get_current_time`
 - approved-tool resume facts when a job is queued after tool approval
 
-If required model-gateway context is missing, the worker records a failed `prepare_context` stage and fails the run through the existing job ownership guard. Provider credentials, raw provider payloads, raw tool results, file contents, shell output, and hidden local state are never written into stage metadata.
+After claiming a job and before renewing the lease into runtime execution, a PostgreSQL-backed worker ensures the claimed run has a readable run-step projection. The ensure step is scoped to the run being processed, so an unrelated historical run with a missing or corrupt projection cannot block the worker from claiming current work.
+
+Live event publication after claim is also projection-cursor aware. The worker reads the claimed run's materialized step state and publishes only events after `last_sequence - 1`, which keeps the just-written `job_claimed` event visible without replaying the entire run history on every worker claim.
+
+If required model-gateway context is missing, the worker records a failed `prepare_context` stage and fails the run through the existing job ownership guard. Prepare-context hydrates initial model jobs and tool-resume jobs from the run-step projection when it contains route metadata; if that projection cannot provide a complete context, the worker fails the missing context path instead of falling back to a sequence-0 event replay. Tool-result continuation input also uses prepared job metadata or the run-step projection only. Provider credentials, raw provider payloads, raw tool results, file contents, shell output, and hidden local state are never written into stage metadata.
+
+When a claimed worker run fails, Postgres updates the owned job, terminal run state, `job_attempt_failed`, and final `run_failed` event in one transaction. If that persistence path fails, the worker returns the persistence error instead of silently reporting only the runner error, so operators can see that durable failure recording did not complete.
 
 ## Observable pipeline events
 

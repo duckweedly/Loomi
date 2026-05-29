@@ -14,7 +14,7 @@ Implement the smallest real search slice by extending the existing M26 web tool 
 
 ## Safety
 
-Search is public-network read-only but still approval-gated. API keys stay in env/config only; events and UI receive only safe summaries. Raw provider responses are parsed into bounded title/url/snippet items and discarded.
+Search is public-network read-only and auto-approved through the same read-only tool policy as `web.fetch`. API keys stay in env/config only; events and UI receive only safe summaries. Raw provider responses are parsed into bounded title/url/snippet items and discarded.
 
 ## Validation
 

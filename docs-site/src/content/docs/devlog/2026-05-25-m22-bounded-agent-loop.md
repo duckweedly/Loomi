@@ -9,7 +9,7 @@ Implemented:
 
 - Continuation can request later enabled Work-mode workspace, bounded command, LSP, web, browser, artifact, coordination, or todo tools after the previous tool call reaches terminal execution.
 - Every later tool call is persisted as approval-required and remains blocked until explicit approval.
-- The run keeps a hard limit of six accepted tool calls.
+- The run keeps a hard limit of 24 accepted tool calls, enough for project survey/source-reading runs while still preventing unbounded autonomy.
 - Over-limit continuation fails with `tool_loop_limit_reached` without recording the extra tool call.
 - Repeated continuation `tool_call_id` fails with `duplicate_tool_call_id` without duplicating approval events.
 - Unsupported or disabled continuation remains guarded by `unsupported_tool_loop`.

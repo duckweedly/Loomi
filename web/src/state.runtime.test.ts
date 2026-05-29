@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import type { Message, Run } from './domain'
 import { createRuntimeEvent, getRuntimeScriptSteps } from './runtime/runtimeScripts'
-import { appendRuntimeEventToRun, applyAssistantDeltaToRun, applyModelGatewayEventToRun, applyRunStreamEventToRun, createRegenerateAttemptRun, createRetryAttemptRun, createWorkspaceSettingsState, reconcileRunWithPersistedAssistant, shouldApplyIncomingRunEvent, shouldBlockRuntimeSubmit, shouldIgnoreTerminalRuntimeEvent, shouldUpdateStreamStateForRunEvent } from './state'
+import { appendRuntimeEventToRun, applyAssistantDeltaToRun, applyModelGatewayEventToRun, applyRunStreamEventToRun, createOptimisticSendSnapshot, createRegenerateAttemptRun, createRetryAttemptRun, createWorkspaceSettingsState, isOptimisticSendRun, minimumOptimisticThinkingMs, reconcileRunWithPersistedAssistant, shouldApplyIncomingRunEvent, shouldBlockRuntimeSubmit, shouldIgnoreTerminalRuntimeEvent, shouldPromoteThreadForWorkspaceSend, shouldReconcileTerminalStreamEvent, shouldUpdateStreamStateForRunEvent } from './state'
 
 const run: Run = {
   id: 'run-a',
@@ -25,6 +25,129 @@ describe('runtime state orchestration helpers', () => {
   test('creates session-local settings defaults', () => {
     expect(createWorkspaceSettingsState()).toEqual({ defaultWorkspaceMode: 'chat', selectedRuntimeScript: 'success' })
     expect(createWorkspaceSettingsState({ defaultWorkspaceMode: 'work', selectedRuntimeScript: 'failure' })).toEqual({ defaultWorkspaceMode: 'work', selectedRuntimeScript: 'failure' })
+  })
+
+  test('creates an optimistic user message and pending draft before the backend run returns', () => {
+    const snapshot = createOptimisticSendSnapshot({ threadId: 'thread-a', content: '继续', model: 'gpt-5.5' })
+
+    expect(snapshot.messages).toMatchObject([{ threadId: 'thread-a', role: 'user', content: '继续' }])
+    expect(snapshot.run).toMatchObject({
+      threadId: 'thread-a',
+      status: 'pending',
+      model: 'gpt-5.5',
+      assistantDraft: { content: '', status: 'pending' },
+    })
+    expect(isOptimisticSendRun(snapshot.run)).toBe(true)
+    expect(shouldBlockRuntimeSubmit(snapshot.run)).toBe(true)
+  })
+
+  test('keeps the optimistic thinking state visible briefly before applying a fast final result', async () => {
+    const source = await Bun.file(new URL('./state.ts', import.meta.url)).text()
+    const sendStart = source.indexOf('const sendMessage = useCallback(async')
+    const sendSource = source.slice(sendStart)
+
+    expect(minimumOptimisticThinkingMs).toBeGreaterThanOrEqual(500)
+    expect(sendSource).toContain('const optimisticStartedAt = Date.now()')
+    expect(sendSource).toContain('await waitForMinimumOptimisticThinking(optimisticStartedAt)')
+    expect(sendSource.indexOf('await waitForMinimumOptimisticThinking(optimisticStartedAt)')).toBeLessThan(sendSource.indexOf('setMessages(result.messages)'))
+  })
+
+  test('desktop workspace authorization promotes the current thread to work mode', async () => {
+    const source = await Bun.file(new URL('./state.ts', import.meta.url)).text()
+    const chooseFolder = source.indexOf('const chooseWorkspaceFolder = useCallback(async () => {')
+    const saveWorkspace = source.indexOf('const config = await apiClient.saveWorkspaceRoot({ path: selected.path })', chooseFolder)
+    const promoteThread = source.indexOf("await apiClient.updateThread(threadId, { mode: 'work' })", saveWorkspace)
+
+    expect(chooseFolder).toBeGreaterThan(0)
+    expect(saveWorkspace).toBeGreaterThan(chooseFolder)
+    expect(promoteThread).toBeGreaterThan(saveWorkspace)
+  })
+
+  test('keeps sidebar thread changes from flashing through stale refreshes', async () => {
+    const source = await Bun.file(new URL('./state.ts', import.meta.url)).text()
+
+    expect(source).toContain('const workspaceRefreshRequestRef = useRef(0)')
+    expect(source).toContain('const requestID = workspaceRefreshRequestRef.current + 1')
+    expect(source).toContain('workspaceRefreshRequestRef.current = requestID')
+    expect(source).toContain('if (!shouldApplyLatestRequest(requestID, workspaceRefreshRequestRef.current)) return')
+    expect(source).toContain('if (shouldApplyLatestRequest(requestID, workspaceRefreshRequestRef.current)) setLoading(false)')
+  })
+
+  test('archives selected threads without issuing a duplicate refresh before selection settles', async () => {
+    const source = await Bun.file(new URL('./state.ts', import.meta.url)).text()
+    const archiveStart = source.indexOf('const archiveThread = useCallback(async (threadId: string) => {')
+    const archiveEnd = source.indexOf('const stopRun = useCallback(async () => {', archiveStart)
+    const archiveSource = source.slice(archiveStart, archiveEnd)
+
+    expect(archiveSource).toContain('if (!archivedSelectedThread) setThreads((current) => current.filter((thread) => thread.id !== threadId))')
+    expect(archiveSource).toContain('threadSelectionRequestRef.current += 1')
+    expect(archiveSource).toContain('apiClient.getThreadMessages(nextThreadId)')
+    expect(archiveSource).toContain('apiClient.getThreadRun(nextThreadId)')
+    expect(archiveSource).toContain('applyThreadSnapshot(nextThreadId, nextSnapshot)')
+    expect(archiveSource.indexOf('if (archivedSelectedThread) setThreads((current) => current.filter((thread) => thread.id !== threadId))')).toBeGreaterThan(archiveSource.indexOf('await apiClient.archiveThread(threadId)'))
+    expect(archiveSource).toContain('if (nextThreadId && !nextSnapshot)')
+    expect(archiveSource).not.toContain('nextThreadId !== selectedThreadIdRef.current && !nextSnapshot')
+    expect(archiveSource).not.toContain('await refresh(nextThreadId)')
+  })
+
+  test('defers uncached thread selection until the target snapshot is ready', async () => {
+    const source = await Bun.file(new URL('./state.ts', import.meta.url)).text()
+    const selectStart = source.indexOf('const selectThread = useCallback(async (threadId: string) => {')
+    const selectEnd = source.indexOf('const sendMessage = useCallback(async', selectStart)
+    const selectSource = source.slice(selectStart, selectEnd)
+    const cachedSelection = selectSource.indexOf('if (cached) applyThreadSnapshot(threadId, cached)')
+    const fetchMessages = selectSource.indexOf('apiClient.getThreadMessages(threadId)')
+    const fetchRun = selectSource.indexOf('apiClient.getThreadRun(threadId)')
+    const applySelection = selectSource.indexOf('applyThreadSnapshot(threadId, { messages: nextMessages, run: reconciledRun, artifacts: nextArtifacts })')
+
+    expect(selectSource).toContain('threadSnapshotsRef')
+    expect(selectSource).not.toContain('if (!cached) setSelectedThreadId(threadId)')
+    expect(selectSource).not.toContain('skipNextSelectedThreadRefreshRef.current = true')
+    expect(cachedSelection).toBeGreaterThan(0)
+    expect(cachedSelection).toBeLessThan(fetchMessages)
+    expect(fetchMessages).toBeGreaterThan(0)
+    expect(fetchRun).toBeGreaterThan(fetchMessages)
+    expect(applySelection).toBeGreaterThan(fetchRun)
+  })
+
+  test('creates a new thread only after its initial snapshot is ready', async () => {
+    const source = await Bun.file(new URL('./state.ts', import.meta.url)).text()
+    const createStart = source.indexOf("const createThread = useCallback(async (mode: Thread['mode'] = defaultWorkspaceMode) => {")
+    const createEnd = source.indexOf('const renameThread = useCallback(async', createStart)
+    const createSource = source.slice(createStart, createEnd)
+    const fetchMessages = createSource.indexOf('apiClient.getThreadMessages(thread.id)')
+    const fetchRun = createSource.indexOf('apiClient.getThreadRun(thread.id)')
+    const cacheSnapshot = createSource.indexOf('threadSnapshotsRef.current.set(thread.id, nextSnapshot)')
+    const applySnapshot = createSource.indexOf('applyThreadSnapshot(thread.id, nextSnapshot)')
+
+    expect(createSource).not.toContain('setSelectedThreadId(thread.id)')
+    expect(createSource).not.toContain('await refresh(thread.id)')
+    expect(fetchMessages).toBeGreaterThan(0)
+    expect(fetchRun).toBeGreaterThan(fetchMessages)
+    expect(cacheSnapshot).toBeGreaterThan(fetchRun)
+    expect(applySnapshot).toBeGreaterThan(cacheSnapshot)
+  })
+
+  test('skips the follow-up selected-thread refresh after applying a ready snapshot', async () => {
+    const source = await Bun.file(new URL('./state.ts', import.meta.url)).text()
+
+    expect(source).toContain('const skipNextSelectedThreadRefreshRef = useRef(false)')
+    expect(source).toContain('skipNextSelectedThreadRefreshRef.current = true')
+    expect(source).toContain('if (skipNextSelectedThreadRefreshRef.current) {')
+    expect(source).toContain('skipNextSelectedThreadRefreshRef.current = false')
+    expect(source).toContain('return')
+  })
+
+  test('continues a workspace authorization flow in work mode after the folder is already granted', () => {
+    expect(shouldPromoteThreadForWorkspaceSend({
+      thread: { id: 'thread-chat', title: 'Downloads', project: 'Loomi', mode: 'chat', updatedAt: 'Now', lifecycleStatus: 'active' },
+      workspaceRootConfig: { configured: true, displayName: 'Downloads' },
+      content: '现在呢',
+      messages: [
+        { ...message, content: '看下我下载目录整理一下' },
+        { ...message, id: 'msg-b', role: 'assistant', content: '请选择下载目录授权后我继续。' },
+      ],
+    })).toBe(true)
   })
 
   test('blocks a second submit while a selected run is pending, running, retrying, or recovering', () => {
@@ -138,6 +261,17 @@ describe('runtime state orchestration helpers', () => {
     const lateEvent = { id: 'evt-late', runId: run.id, threadId: run.threadId, type: 'message.model_output_delta', label: 'message', detail: 'Late delta', content: 'late', assistantDelta: 'late', time: 'Now', status: 'running' } as const
 
     expect(shouldUpdateStreamStateForRunEvent(current, lateEvent)).toBe(false)
+  })
+
+  test('reconciles persisted final messages when the stream reaches a terminal event', async () => {
+    expect(shouldReconcileTerminalStreamEvent({ id: 'evt-running', runId: run.id, threadId: run.threadId, type: 'message.model_output_delta', label: 'message', detail: 'delta', content: 'hello', assistantDelta: 'hello', time: 'Now', status: 'running' })).toBe(false)
+    expect(shouldReconcileTerminalStreamEvent({ id: 'evt-completed', runId: run.id, threadId: run.threadId, type: 'run.completed', label: 'run', detail: 'completed', time: 'Now', status: 'completed' })).toBe(true)
+
+    const source = await Bun.file(new URL('./state.ts', import.meta.url)).text()
+
+    expect(source).toContain('reconcileActiveRun({ allowAfterCleanup: true })')
+    expect(source).toContain('cancelled && !options.allowAfterCleanup')
+    expect(source).toContain('threadId !== selectedThreadIdRef.current')
   })
 
   test('ignores later script events after a terminal run event', () => {

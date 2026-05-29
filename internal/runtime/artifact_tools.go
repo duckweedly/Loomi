@@ -19,6 +19,7 @@ type ArtifactToolExecutor struct {
 func ArtifactToolDefinitions() []ToolDefinition {
 	return []ToolDefinition{
 		{Name: productdata.ToolNameArtifactCreateText, ApprovalPolicy: ToolApprovalAlwaysRequired, SafetyClass: ToolSafetyWorkspaceMutation, Source: ToolSourceInternal, ExecutionState: ToolExecutionAllowlisted},
+		{Name: productdata.ToolNameArtifactCreateVisual, ApprovalPolicy: ToolApprovalAlwaysRequired, SafetyClass: ToolSafetyWorkspaceMutation, Source: ToolSourceInternal, ExecutionState: ToolExecutionAllowlisted},
 		{Name: productdata.ToolNameArtifactRead, ApprovalPolicy: ToolApprovalAlwaysRequired, SafetyClass: ToolSafetyNoSideEffectInternal, Source: ToolSourceInternal, ExecutionState: ToolExecutionAllowlisted},
 		{Name: productdata.ToolNameArtifactList, ApprovalPolicy: ToolApprovalAlwaysRequired, SafetyClass: ToolSafetyNoSideEffectInternal, Source: ToolSourceInternal, ExecutionState: ToolExecutionAllowlisted},
 	}
@@ -30,7 +31,9 @@ func (e ArtifactToolExecutor) Execute(ctx context.Context, invocation ToolInvoca
 	}
 	switch invocation.ToolName {
 	case productdata.ToolNameArtifactCreateText:
-		return e.createText(ctx, invocation)
+		return e.create(ctx, invocation, "text", "create_text")
+	case productdata.ToolNameArtifactCreateVisual:
+		return e.create(ctx, invocation, "visual", "create_visual")
 	case productdata.ToolNameArtifactRead:
 		return e.read(ctx, invocation)
 	case productdata.ToolNameArtifactList:
@@ -40,20 +43,21 @@ func (e ArtifactToolExecutor) Execute(ctx context.Context, invocation ToolInvoca
 	}
 }
 
-func (e ArtifactToolExecutor) createText(ctx context.Context, invocation ToolInvocation) (map[string]any, error) {
+func (e ArtifactToolExecutor) create(ctx context.Context, invocation ToolInvocation, artifactType string, operation string) (map[string]any, error) {
 	title, _ := invocation.ArgumentsSummary["title"].(string)
 	content, _ := invocation.ArgumentsSummary["content"].(string)
 	artifact, err := e.Artifacts.CreateArtifact(ctx, identity.LocalDevIdentity(), productdata.CreateArtifactInput{
-		ThreadID: invocation.ThreadID,
-		RunID:    invocation.RunID,
-		Title:    title,
-		Content:  content,
-		MaxBytes: boundedInt(invocation.ArgumentsSummary, "max_bytes", defaultArtifactMaxBytes, defaultArtifactMaxBytes),
+		ThreadID:     invocation.ThreadID,
+		RunID:        invocation.RunID,
+		Title:        title,
+		ArtifactType: artifactType,
+		Content:      content,
+		MaxBytes:     boundedInt(invocation.ArgumentsSummary, "max_bytes", defaultArtifactMaxBytes, defaultArtifactMaxBytes),
 	})
 	if err != nil {
 		return nil, err
 	}
-	summary := artifactSummary(productdata.ToolNameArtifactCreateText, "create_text", artifact)
+	summary := artifactSummary(invocation.ToolName, operation, artifact)
 	summary["artifacts"] = []map[string]any{artifactRefSummary(artifact, artifactRefMetadataFromArguments(invocation.ArgumentsSummary))}
 	return summary, nil
 }
@@ -143,7 +147,7 @@ func artifactRefSummary(artifact productdata.Artifact, metadata artifactRefMetad
 	}
 	mimeType := metadata.MIMEType
 	if mimeType == "" {
-		mimeType = defaultArtifactMIMEType(metadata.Filename)
+		mimeType = defaultArtifactMIMEType(metadata.Filename, artifact.ArtifactType)
 	}
 	item := map[string]any{
 		"key":           artifact.ID,
@@ -158,13 +162,25 @@ func artifactRefSummary(artifact productdata.Artifact, metadata artifactRefMetad
 	if metadata.Filename != "" {
 		item["filename"] = metadata.Filename
 	}
+	if artifact.ArtifactType == "visual" {
+		item["content"] = artifact.Content
+	}
 	return item
 }
 
-func defaultArtifactMIMEType(filename string) string {
+func defaultArtifactMIMEType(filename string, artifactType string) string {
 	lower := strings.ToLower(strings.TrimSpace(filename))
 	if strings.HasSuffix(lower, ".md") || strings.HasSuffix(lower, ".markdown") {
 		return "text/markdown"
+	}
+	if strings.HasSuffix(lower, ".svg") {
+		return "image/svg+xml"
+	}
+	if strings.HasSuffix(lower, ".html") || strings.HasSuffix(lower, ".htm") {
+		return "text/html"
+	}
+	if artifactType == "visual" {
+		return "image/svg+xml"
 	}
 	return "text/plain"
 }

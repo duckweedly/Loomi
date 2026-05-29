@@ -162,10 +162,10 @@ describe('ChatCanvas Work mode integration', () => {
       locale: 'zh',
     }))
 
-    expect(html).toContain('等待你确认')
-    expect(html).toContain('停止</button>')
+    expect(html).toContain('等待确认')
+    expect(html).toContain('aria-label="停止"')
     expect(html).not.toContain('工作计划')
-    expect(html).not.toContain('Waiting for your confirmation')
+    expect(html).not.toContain('Awaiting approval')
   })
 
   test('keeps Stop visible while Work mode is blocked on tool approval', () => {
@@ -196,11 +196,11 @@ describe('ChatCanvas Work mode integration', () => {
     }))
 
     expect(html).not.toContain('Work plan')
-    expect(html).toContain('Waiting for your confirmation')
+    expect(html).toContain('Awaiting approval')
     expect(html).toContain('<textarea class="composer-input" disabled=""')
     expect(html).toContain('Approve')
     expect(html).toContain('Deny')
-    expect(html).toContain('Stop</button>')
+    expect(html).toContain('aria-label="Stop"')
   })
 
   test('allows Work mode Composer when provider is available and no run is active', () => {

@@ -31,11 +31,43 @@ describe('markdownNormalize', () => {
     expect(normalized).not.toContain('markdown#')
   })
 
+  test('repairs dense README-like markdown with no spaces after headings', () => {
+    const normalized = normalizeMarkdownContent('markdown#项目名称>简短描述：这个项目用于解决什么问题，适合什么场景。###项目介绍这里填写项目的背景、目标和主要用途。##主要功能-功能一：说明功能用途-功能二：说明功能用途-支持快速部署###技术栈-前端：React/Vue/HTML-后端：Node.js/Python/Java##快速开始#### 1. 克隆项目#### 2. 安装依赖### 3. 启动开发环境## 使用说明打开浏览器访问：## 项目结构## 环境变量## 常用命令')
+
+    expect(normalized).toContain('# 项目名称\n\n> 简短描述')
+    expect(normalized).toContain('\n\n### 项目介绍\n\n这里填写项目的背景')
+    expect(normalized).toContain('\n\n## 主要功能\n- 功能一')
+    expect(normalized).toContain('\n\n### 技术栈\n- 前端：React/Vue/HTML')
+    expect(normalized).toContain('\n\n## 快速开始')
+    expect(normalized).toContain('\n1. 克隆项目')
+    expect(normalized).toContain('\n2. 安装依赖')
+    expect(normalized).toContain('\n3. 启动开发环境')
+    expect(normalized).toContain('\n\n## 使用说明\n\n打开浏览器访问：')
+    expect(normalized).not.toContain('###项目介绍')
+    expect(normalized).not.toContain('##快速开始')
+  })
+
+  test('repairs collapsed pipe tables from dense assistant summaries', () => {
+    const normalized = normalizeMarkdownContent('##按文件类型分类|类型|数量||---|---:||Markdown文档|35||Excel表格|2||图片|1|##按大类分类|大类|数量||---|---:||文档|37||图片|2|')
+
+    expect(normalized).toContain('## 按文件类型分类\n|类型|数量|\n|---|---:|\n|Markdown文档|35|')
+    expect(normalized).toContain('\n\n## 按大类分类\n|大类|数量|\n|---|---:|\n|文档|37|')
+    expect(normalized).not.toContain('||---')
+  })
+
   test('unwraps whole markdown fences so generated documents render as prose', () => {
     const normalized = normalizeMarkdownContent('```markdown\n# 项目名称\n\n一句话介绍。\n\n## 目录\n- [功能](#功能)\n```')
 
     expect(normalized).toContain('# 项目名称')
     expect(normalized).toContain('\n\n## 目录\n- [功能](#功能)')
+    expect(normalized).not.toContain('```markdown')
+  })
+
+  test('unwraps markdown envelopes without breaking inner code fences', () => {
+    const normalized = normalizeMarkdownContent('```markdown\n# 标题\n\n正文。\n\n```bash\necho "Hello"\n```\n```')
+
+    expect(normalized).toContain('# 标题')
+    expect(normalized).toContain('```bash\necho "Hello"\n```')
     expect(normalized).not.toContain('```markdown')
   })
 
@@ -45,6 +77,12 @@ describe('markdownNormalize', () => {
     expect(normalized).toContain('## 许可证')
     expect(normalized).toContain('MIT')
     expect(normalized).not.toContain('```')
+  })
+
+  test('keeps real fenced code block closing fences', () => {
+    const normalized = normalizeMarkdownContent('```bash\necho "Hello"\n```')
+
+    expect(normalized).toBe('```bash\necho "Hello"\n```')
   })
 
   test('does not repair markdown-looking text inside fenced code blocks', () => {

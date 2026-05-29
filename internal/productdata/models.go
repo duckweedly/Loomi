@@ -5,6 +5,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"time"
@@ -15,6 +17,10 @@ type ThreadMode string
 type ThreadLifecycleStatus string
 
 type MessageRole string
+
+type ContextSourceKind string
+
+type ContextSourceStatus string
 
 type RunStatus string
 
@@ -449,6 +455,13 @@ const (
 	MessageRoleUser      MessageRole = "user"
 	MessageRoleAssistant MessageRole = "assistant"
 
+	ContextSourceKindURL           ContextSourceKind = "url"
+	ContextSourceKindGitHubRepo    ContextSourceKind = "github_repo"
+	ContextSourceKindWorkspacePath ContextSourceKind = "workspace_path"
+	ContextSourceKindNote          ContextSourceKind = "note"
+
+	ContextSourceStatusRegistered ContextSourceStatus = "registered"
+
 	RunStatusPending               RunStatus = "pending"
 	RunStatusQueued                RunStatus = "queued"
 	RunStatusRunning               RunStatus = "running"
@@ -541,11 +554,13 @@ const (
 	EventMemorySnapshotLoaded         = "memory_snapshot_loaded"
 	EventMemoryExternalSnapshotLoaded = "memory_external_snapshot_loaded"
 	EventMemoryExternalSnapshotFailed = "memory_external_snapshot_failed"
+	EventContextSourcesLoaded         = "context_sources_loaded"
 	EventMemoryWriteProposed          = "memory_write_proposed"
 	EventMemoryWriteApproved          = "memory_write_approved"
 	EventMemoryWriteDenied            = "memory_write_denied"
 	EventMemoryEntryDeleted           = "memory_entry_deleted"
 	EventWorkTodoUpdated              = "work.todo.updated"
+	EventAgentChildRunStarted         = "agent_child_run_started"
 
 	CodeInvalidRequest        Code = "invalid_request"
 	CodeThreadNotFound        Code = "thread_not_found"
@@ -562,6 +577,8 @@ const (
 const (
 	MaxThreadTitleLength                                 = 120
 	MaxClientMessageIDLength                             = 120
+	MaxContextSourceTitleLength                          = 160
+	MaxContextSourceSummaryLength                        = 1000
 	ToolNameCurrentTime                                  = "runtime.get_current_time"
 	ToolNameLoadTools                                    = "tool.load_tools"
 	ToolNameLoadSkill                                    = "skill.load_skill"
@@ -592,11 +609,15 @@ const (
 	ToolNameBrowserType                                  = "browser.type"
 	ToolNameBrowserPress                                 = "browser.press"
 	ToolNameArtifactCreateText                           = "artifact.create_text"
+	ToolNameArtifactCreateVisual                         = "artifact.create_visual"
 	ToolNameArtifactRead                                 = "artifact.read"
 	ToolNameArtifactList                                 = "artifact.list"
 	ToolNameAgentSpawn                                   = "agent.spawn"
 	ToolNameAgentList                                    = "agent.list"
+	ToolNameAgentStart                                   = "agent.start"
+	ToolNameAgentDelegate                                = "agent.delegate"
 	ToolNameAgentComplete                                = "agent.complete"
+	ToolNameAgentFail                                    = "agent.fail"
 	ToolNameMemorySearch                                 = "memory.search"
 	ToolNameMemoryList                                   = "memory.list"
 	ToolNameMemoryRead                                   = "memory.read"
@@ -641,7 +662,7 @@ const (
 	ToolExecutionStateNotDiscovered  ToolExecutionState  = "not_discovered"
 	ToolExecutionStateNotAllowed     ToolExecutionState  = "not_allowed"
 	ToolExecutionStateNonExecutable  ToolExecutionState  = "non_executable"
-	DefaultMaxBoundedToolCallsPerRun                     = 6
+	DefaultMaxBoundedToolCallsPerRun                     = 24
 	LoopMetadataKeyIndex                                 = "loop_index"
 	LoopMetadataKeyMax                                   = "loop_max"
 	MaxWorkTodoItems                                     = 8
@@ -717,6 +738,34 @@ type Message struct {
 	Metadata        map[string]any `json:"metadata"`
 	ClientMessageID *string        `json:"client_message_id,omitempty"`
 	CreatedAt       time.Time      `json:"created_at"`
+}
+
+type ContextSource struct {
+	ID        string              `json:"id"`
+	ThreadID  string              `json:"thread_id"`
+	UserID    string              `json:"-"`
+	Kind      ContextSourceKind   `json:"kind"`
+	Title     string              `json:"title"`
+	Locator   string              `json:"locator"`
+	Summary   string              `json:"summary,omitempty"`
+	Status    ContextSourceStatus `json:"status"`
+	Metadata  map[string]any      `json:"metadata,omitempty"`
+	CreatedAt time.Time           `json:"created_at"`
+	UpdatedAt time.Time           `json:"updated_at"`
+}
+
+type CreateContextSourceInput struct {
+	ThreadID string            `json:"thread_id"`
+	Kind     ContextSourceKind `json:"kind"`
+	Title    string            `json:"title"`
+	Locator  string            `json:"locator"`
+	Summary  string            `json:"summary"`
+	Metadata map[string]any    `json:"metadata"`
+}
+
+type ListContextSourcesInput struct {
+	ThreadID string
+	Limit    int
 }
 
 type Run struct {
@@ -895,6 +944,7 @@ type RunContext struct {
 	MCPAvailability        MCPToolAvailabilitySummary
 	ContinuationProjection ContinuationProjection
 	Persona                PersonaSnapshot
+	ContextSources         []ContextSource
 	MemorySnapshot         MemorySnapshot
 	NotebookSnapshot       MemorySnapshot
 	MemoryReadiness        MemoryProviderStatus
@@ -1154,6 +1204,11 @@ func (c RunContext) SafeSummary() map[string]any {
 			summary["memory_provider_diagnostic_code"] = c.MemoryReadiness.Diagnostic.Code
 		}
 	}
+	if len(c.ContextSources) > 0 {
+		summary["context_source_count"] = len(c.ContextSources)
+		summary["context_source_kinds"] = contextSourceKinds(c.ContextSources)
+		summary["context_sources_loaded"] = true
+	}
 	for key, value := range c.Persona.SafeSummary() {
 		summary[key] = value
 	}
@@ -1161,6 +1216,19 @@ func (c RunContext) SafeSummary() map[string]any {
 		summary[key] = value
 	}
 	return RedactEventMetadata(summary)
+}
+
+func contextSourceKinds(sources []ContextSource) []string {
+	seen := map[string]bool{}
+	kinds := []string{}
+	for _, source := range sources {
+		kind := string(source.Kind)
+		if kind != "" && !seen[kind] {
+			seen[kind] = true
+			kinds = append(kinds, kind)
+		}
+	}
+	return kinds
 }
 
 func (m MCPToolAvailabilitySummary) SafeSummary() map[string]any {
@@ -1272,6 +1340,15 @@ type AppendRunEventInput struct {
 	ErrorMessage string
 }
 
+type ClaimToolContinuationInput struct {
+	ThreadID   string
+	RunID      string
+	ToolCallID string
+	JobID      string
+	ProviderID string
+	Model      string
+}
+
 type CreateMemoryEntryInput struct {
 	ScopeType      MemoryScopeType
 	ScopeID        string
@@ -1378,20 +1455,26 @@ type Artifact struct {
 type AgentTaskStatus string
 
 const (
-	AgentTaskStatusSpawned   AgentTaskStatus = "spawned"
-	AgentTaskStatusCompleted AgentTaskStatus = "completed"
+	AgentTaskStatusSpawned    AgentTaskStatus = "spawned"
+	AgentTaskStatusInProgress AgentTaskStatus = "in_progress"
+	AgentTaskStatusCompleted  AgentTaskStatus = "completed"
+	AgentTaskStatusFailed     AgentTaskStatus = "failed"
 )
 
 type AgentTask struct {
-	ID            string
-	ThreadID      string
-	RunID         string
-	Role          string
-	Goal          string
-	Status        AgentTaskStatus
-	ResultSummary string
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
+	ID               string
+	ThreadID         string
+	RunID            string
+	Role             string
+	Goal             string
+	Status           AgentTaskStatus
+	ResultSummary    string
+	ChildThreadID    string
+	ChildRunID       string
+	ParentToolCallID string
+	DelegatedAt      *time.Time
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
 }
 
 type SpawnAgentTaskInput struct {
@@ -1406,18 +1489,42 @@ type ListAgentTasksInput struct {
 	Limit    int
 }
 
+type StartAgentTaskInput struct {
+	ThreadID string
+	TaskID   string
+}
+
+type DelegateAgentTaskInput struct {
+	ThreadID         string
+	TaskID           string
+	ParentToolCallID string
+}
+
+type AgentTaskChildRunReconciliation struct {
+	Task   AgentTask
+	Run    Run
+	Events []RunEvent
+}
+
 type CompleteAgentTaskInput struct {
 	ThreadID      string
 	TaskID        string
 	ResultSummary string
 }
 
+type FailAgentTaskInput struct {
+	ThreadID      string
+	TaskID        string
+	ResultSummary string
+}
+
 type CreateArtifactInput struct {
-	ThreadID string
-	RunID    string
-	Title    string
-	Content  string
-	MaxBytes int
+	ThreadID     string
+	RunID        string
+	Title        string
+	ArtifactType string
+	Content      string
+	MaxBytes     int
 }
 
 type ReadArtifactInput struct {
@@ -1462,6 +1569,7 @@ func NewMemoryEntryID() string    { return prefixedID("mem") }
 func NewMemoryProposalID() string { return prefixedID("memprop") }
 func NewArtifactID() string       { return prefixedID("art") }
 func NewAgentTaskID() string      { return prefixedID("agt") }
+func NewContextSourceID() string  { return prefixedID("src") }
 
 func prefixedID(prefix string) string {
 	buf := make([]byte, 6)
@@ -1518,7 +1626,7 @@ func ValidateToolCallRequestInput(input RecordToolCallRequestInput) (RecordToolC
 	if input.ToolName != ToolNameCurrentTime && !IsDiscoveryToolName(input.ToolName) && !IsWorkspaceToolName(input.ToolName) && !IsSandboxToolName(input.ToolName) && !IsLSPToolName(input.ToolName) && !IsWebToolName(input.ToolName) && !IsBrowserToolName(input.ToolName) && !IsArtifactToolName(input.ToolName) && !IsAgentToolName(input.ToolName) && !IsMemoryToolName(input.ToolName) && !IsTodoToolName(input.ToolName) && !IsMCPToolName(input.ToolName) {
 		return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Tool is not supported.")
 	}
-	if ((input.ToolName == ToolNameWebSearch || input.ToolName == ToolNameWebFetch) || IsDiscoveryToolName(input.ToolName) || IsWorkspaceReadOnlyToolName(input.ToolName)) && input.ApprovalStatus == ToolCallApprovalApproved && input.ExecutionStatus == ToolCallExecutionNotStarted {
+	if ToolCallRequestInputStartsAutoApproved(input) {
 		// Bounded read tools may enter the queue without a manual approval row.
 	} else if input.ApprovalStatus != ToolCallApprovalRequired || input.ExecutionStatus != ToolCallExecutionBlocked {
 		return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Tool call must start blocked on approval.")
@@ -1583,6 +1691,12 @@ func ValidateToolCallRequestInput(input RecordToolCallRequestInput) (RecordToolC
 		return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Tool call timezone must be UTC.")
 	}
 	return input, nil
+}
+
+func ToolCallRequestInputStartsAutoApproved(input RecordToolCallRequestInput) bool {
+	return ((input.ToolName == ToolNameWebSearch || input.ToolName == ToolNameWebFetch) || IsDiscoveryToolName(input.ToolName) || IsWorkspaceReadOnlyToolName(input.ToolName)) &&
+		input.ApprovalStatus == ToolCallApprovalApproved &&
+		input.ExecutionStatus == ToolCallExecutionNotStarted
 }
 
 func IsWorkspaceToolName(name string) bool {
@@ -1650,7 +1764,7 @@ func IsBrowserToolName(name string) bool {
 
 func IsArtifactToolName(name string) bool {
 	switch strings.TrimSpace(name) {
-	case ToolNameArtifactCreateText, ToolNameArtifactRead, ToolNameArtifactList:
+	case ToolNameArtifactCreateText, ToolNameArtifactCreateVisual, ToolNameArtifactRead, ToolNameArtifactList:
 		return true
 	default:
 		return false
@@ -1659,7 +1773,7 @@ func IsArtifactToolName(name string) bool {
 
 func IsAgentToolName(name string) bool {
 	switch strings.TrimSpace(name) {
-	case ToolNameAgentSpawn, ToolNameAgentList, ToolNameAgentComplete:
+	case ToolNameAgentSpawn, ToolNameAgentList, ToolNameAgentStart, ToolNameAgentDelegate, ToolNameAgentComplete, ToolNameAgentFail:
 		return true
 	default:
 		return false
@@ -2013,9 +2127,10 @@ func validateBrowserToolCallArguments(input RecordToolCallRequestInput) (RecordT
 
 func validateArtifactToolCallArguments(input RecordToolCallRequestInput) (RecordToolCallRequestInput, error) {
 	allowed := map[string]map[string]struct{}{
-		ToolNameArtifactCreateText: {"title": {}, "filename": {}, "mime_type": {}, "display": {}, "content": {}, "max_bytes": {}},
-		ToolNameArtifactRead:       {"artifact_id": {}, "max_bytes": {}},
-		ToolNameArtifactList:       {"limit": {}},
+		ToolNameArtifactCreateText:   {"title": {}, "filename": {}, "mime_type": {}, "display": {}, "content": {}, "max_bytes": {}},
+		ToolNameArtifactCreateVisual: {"title": {}, "filename": {}, "mime_type": {}, "display": {}, "content": {}, "max_bytes": {}},
+		ToolNameArtifactRead:         {"artifact_id": {}, "max_bytes": {}},
+		ToolNameArtifactList:         {"limit": {}},
 	}
 	for key := range input.ArgumentsSummary {
 		if _, ok := allowed[input.ToolName][key]; !ok {
@@ -2023,7 +2138,7 @@ func validateArtifactToolCallArguments(input RecordToolCallRequestInput) (Record
 		}
 	}
 	switch input.ToolName {
-	case ToolNameArtifactCreateText:
+	case ToolNameArtifactCreateText, ToolNameArtifactCreateVisual:
 		title, ok := input.ArgumentsSummary["title"].(string)
 		if !ok || strings.TrimSpace(title) == "" {
 			return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Artifact title is required.")
@@ -2043,6 +2158,14 @@ func validateArtifactToolCallArguments(input RecordToolCallRequestInput) (Record
 				return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Artifact metadata must be strings.")
 			}
 			input.ArgumentsSummary[key] = strings.TrimSpace(text)
+		}
+		if input.ToolName == ToolNameArtifactCreateVisual {
+			mimeType, _ := input.ArgumentsSummary["mime_type"].(string)
+			mimeType = strings.TrimSpace(strings.ToLower(mimeType))
+			if mimeType != "image/svg+xml" && mimeType != "text/html" {
+				return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Visual artifact MIME type is not supported.")
+			}
+			input.ArgumentsSummary["mime_type"] = mimeType
 		}
 		if value, ok := input.ArgumentsSummary["display"]; ok {
 			display, ok := value.(string)
@@ -2069,7 +2192,10 @@ func validateAgentToolCallArguments(input RecordToolCallRequestInput) (RecordToo
 	allowed := map[string]map[string]struct{}{
 		ToolNameAgentSpawn:    {"role": {}, "goal": {}},
 		ToolNameAgentList:     {"limit": {}},
+		ToolNameAgentStart:    {"task_id": {}},
+		ToolNameAgentDelegate: {"task_id": {}},
 		ToolNameAgentComplete: {"task_id": {}, "result_summary": {}},
+		ToolNameAgentFail:     {"task_id": {}, "result_summary": {}},
 	}
 	for key := range input.ArgumentsSummary {
 		if _, ok := allowed[input.ToolName][key]; !ok {
@@ -2096,7 +2222,13 @@ func validateAgentToolCallArguments(input RecordToolCallRequestInput) (RecordToo
 		}
 		input.ArgumentsSummary["role"] = role
 		input.ArgumentsSummary["goal"] = goal
-	case ToolNameAgentComplete:
+	case ToolNameAgentStart, ToolNameAgentDelegate:
+		taskID, ok := input.ArgumentsSummary["task_id"].(string)
+		if !ok || strings.TrimSpace(taskID) == "" {
+			return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Agent task id is required.")
+		}
+		input.ArgumentsSummary["task_id"] = strings.TrimSpace(taskID)
+	case ToolNameAgentComplete, ToolNameAgentFail:
 		taskID, ok := input.ArgumentsSummary["task_id"].(string)
 		if !ok || strings.TrimSpace(taskID) == "" {
 			return RecordToolCallRequestInput{}, NewError(CodeInvalidRequest, "Agent task id is required.")
@@ -2895,4 +3027,117 @@ func RedactEventText(value string) string {
 		return "[redacted]"
 	}
 	return value
+}
+
+func NormalizeContextSourceInput(input CreateContextSourceInput) (CreateContextSourceInput, error) {
+	title := strings.Join(strings.Fields(input.Title), " ")
+	if title == "" {
+		return CreateContextSourceInput{}, NewError(CodeInvalidRequest, "Context source title is required.")
+	}
+	if len([]rune(title)) > MaxContextSourceTitleLength {
+		return CreateContextSourceInput{}, NewError(CodeInvalidRequest, "Context source title is too long.")
+	}
+	summary := strings.TrimSpace(RedactEventText(input.Summary))
+	if len([]rune(summary)) > MaxContextSourceSummaryLength {
+		return CreateContextSourceInput{}, NewError(CodeInvalidRequest, "Context source summary is too long.")
+	}
+	locator, err := normalizeContextSourceLocator(input.Kind, input.Locator)
+	if err != nil {
+		return CreateContextSourceInput{}, err
+	}
+	return CreateContextSourceInput{
+		ThreadID: strings.TrimSpace(input.ThreadID),
+		Kind:     input.Kind,
+		Title:    title,
+		Locator:  locator,
+		Summary:  summary,
+		Metadata: RedactEventMetadata(input.Metadata),
+	}, nil
+}
+
+func normalizeContextSourceLocator(kind ContextSourceKind, value string) (string, error) {
+	switch kind {
+	case ContextSourceKindURL:
+		return normalizeExternalURL(value, false)
+	case ContextSourceKindGitHubRepo:
+		return normalizeExternalURL(value, true)
+	case ContextSourceKindWorkspacePath:
+		return normalizeWorkspaceSourcePath(value)
+	case ContextSourceKindNote:
+		return strings.TrimSpace(RedactEventText(value)), nil
+	default:
+		return "", NewError(CodeInvalidRequest, "Unsupported context source kind.")
+	}
+}
+
+func normalizeExternalURL(value string, githubRepo bool) (string, error) {
+	raw := strings.TrimSpace(value)
+	if githubRepo && !strings.Contains(raw, "://") {
+		raw = "https://" + raw
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return "", NewError(CodeInvalidRequest, "Context source URL is invalid.")
+	}
+	if parsed.User != nil {
+		return "", NewError(CodeInvalidRequest, "Context source URL credentials are not allowed.")
+	}
+	scheme := strings.ToLower(parsed.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return "", NewError(CodeInvalidRequest, "Context source URL must use HTTP or HTTPS.")
+	}
+	host := strings.ToLower(parsed.Hostname())
+	if host == "localhost" || host == "" || privateContextSourceHost(host) {
+		return "", NewError(CodeInvalidRequest, "Context source URL host is not allowed.")
+	}
+	parsed.Scheme = scheme
+	parsed.Host = strings.ToLower(parsed.Host)
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	if githubRepo {
+		if host != "github.com" {
+			return "", NewError(CodeInvalidRequest, "GitHub source must use github.com.")
+		}
+		parts := strings.Split(strings.Trim(parsed.Path, "/"), "/")
+		if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
+			return "", NewError(CodeInvalidRequest, "GitHub source must include owner and repo.")
+		}
+		parsed.Path = "/" + parts[0] + "/" + strings.TrimSuffix(parts[1], ".git")
+	}
+	return parsed.String(), nil
+}
+
+func privateContextSourceHost(host string) bool {
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast()
+}
+
+func normalizeWorkspaceSourcePath(value string) (string, error) {
+	raw := strings.TrimSpace(value)
+	if raw == "" || filepath.IsAbs(raw) {
+		return "", NewError(CodeInvalidRequest, "Workspace source path is invalid.")
+	}
+	cleaned := filepath.ToSlash(filepath.Clean(raw))
+	if cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, "../") || contextSourceSensitivePath(cleaned) {
+		return "", NewError(CodeInvalidRequest, "Workspace source path is not allowed.")
+	}
+	return cleaned, nil
+}
+
+func contextSourceSensitivePath(path string) bool {
+	lower := strings.ToLower(path)
+	base := strings.ToLower(filepath.Base(lower))
+	if base == ".env" || strings.HasPrefix(base, ".env.") || strings.HasSuffix(base, ".pem") || strings.HasPrefix(base, "id_rsa") || strings.HasPrefix(base, "id_ed25519") {
+		return true
+	}
+	for _, part := range strings.Split(lower, "/") {
+		switch part {
+		case ".git", ".ssh", "secrets", "credentials":
+			return true
+		}
+	}
+	return false
 }

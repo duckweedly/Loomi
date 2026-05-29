@@ -45,7 +45,7 @@ M61 extends runtime tool execution for approved mutations. Configured OpenViking
 
 M62 extends Nowledge runtime reads: configured Nowledge can back `memory.connections`, `memory.timeline`, `memory.thread_search`, and `memory.thread_fetch`.
 
-M63 changes `commit_after_run` behavior for external providers. Local memory still creates a pending write proposal; OpenViking and Nowledge use the provider write adapter and record a safe run event.
+M63 changes `commit_after_run` behavior for external providers. Local memory still creates a pending write proposal; OpenViking and Nowledge use the provider write adapter and record a safe run event. The external closeout path checks the commit-completed marker by event type instead of replaying the full run event stream.
 
 M65 extends OpenViking runtime reads: configured OpenViking can back `memory.connections` for `viking://...` IDs by reading direct child resources from `/api/v1/fs/ls`.
 
@@ -425,7 +425,7 @@ Post-run proposals use the same write-proposal contract. They are thread-scoped,
 
 ## Events
 
-Memory audit is durably stored in `memory_audit_events`. When the source run can accept events, Loomi may also write a related `run_events` row for timeline context, but run events are no longer the only audit store. Memory audit remains available after the source run has completed or failed.
+Memory audit is durably stored in `memory_audit_events`. When the source run exists, Loomi writes the audit row and related `run_events` timeline row in one transaction using the run-event sequence guard; failures are returned instead of silently dropping the timeline mirror. Run events are not the only audit store, so memory audit remains available after the source run has completed or failed.
 
 | Event type | Meaning |
 | --- | --- |
